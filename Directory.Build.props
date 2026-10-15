@@ -1,0 +1,13 @@
+<!--
+  Repo-wide build settings for our own projects (src/, tests/). Projects under third_party/ do
+  not inherit this file — the submodule has its own Directory.Build.props there.
+
+  NuGet audit: keep auditing our direct dependencies, but do not surface advisories that arrive
+  transitively through the vendored PSO2-Aqua-Library graph (packages such as ImageSharp 3.1.6 are
+  pinned by the library, not by us).
+-->
+<Project>
+  <PropertyGroup>
+    <NuGetAuditMode>direct</NuGetAuditMode>
+  </PropertyGroup>
+</Project>

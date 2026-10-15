@@ -15,4 +15,18 @@
     <_NetFx48RefAssemblyRoot>$(HOME)/.nuget/packages/microsoft.netframework.referenceassemblies.net48/1.0.3/build</_NetFx48RefAssemblyRoot>
     <TargetFrameworkRootPath Condition="Exists('$(_NetFx48RefAssemblyRoot)/.NETFramework/v4.8')">$(_NetFx48RefAssemblyRoot)</TargetFrameworkRootPath>
   </PropertyGroup>
+
+  <!--
+    The library is third-party code that we build but do not maintain. Silence its compiler and
+    analyzer warnings so that build output for our solution stays clean. Scoped to this directory:
+    src/ and tests/ are unaffected. NuGet audit is off here too (its pinned dependencies carry
+    advisories we cannot fix); our own projects audit direct dependencies only (repo-root props).
+  -->
+  <PropertyGroup>
+    <WarningLevel>0</WarningLevel>
+    <RunAnalyzers>false</RunAnalyzers>
+    <NuGetAudit>false</NuGetAudit>
+    <!-- ArchiveLib (net6.0) pulls System.Text.Encoding.CodePages 9.0.0, whose targets warn about net6.0. -->
+    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+  </PropertyGroup>
 </Project>

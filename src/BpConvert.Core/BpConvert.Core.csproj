@@ -1,5 +1,18 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\third_party\PSO2-Aqua-Library\AquaModelLibrary.Data\AquaModelLibrary.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Official RAD Oodle macOS decoder (vendored, personal use only — see tools/native/NOTICE.md).
+      Copied next to the binaries of this project and of everything that references it (CLI, tests)
+      so the library's `oo2core_8_win64_` P/Invoke resolves in-process.
+    -->
+    <Content Include="..\..\tools\native\liboo2core_8_win64_.dylib" Link="liboo2core_8_win64_.dylib" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
