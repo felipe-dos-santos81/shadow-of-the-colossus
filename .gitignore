@@ -15,3 +15,6 @@ export_presets.cfg
 # scratch
 out/
 scratch/
+
+# SDD workspace
+.superpowers/

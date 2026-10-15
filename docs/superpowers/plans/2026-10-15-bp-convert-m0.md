@@ -4,9 +4,9 @@
 
 **Goal:** Build `bp-convert`, the headless macOS toolchain that converts SOTC (2018) models, materials and textures from the extracted game tree into a glTF 2.0 + PNG asset library with a resumable catalog.
 
-**Architecture:** A .NET 10 solution — a thin CLI over a core library. All AquaModelLibrary.Core touchpoints are isolated behind one adapter (`Aqua/`); the rest of the codebase works only on our own DTOs. We write `.glb` ourselves (minimal in-house glTF writer) and convert `.ctxr → .png` via the library's decode path (portable Oodle decoder if needed). The game tree is read-only; the output library mirrors the source tree so texture references stay relative and collision-free.
+**Architecture:** A .NET 10 solution — a thin CLI over a core library. All `AquaModelLibrary.Data` touchpoints are isolated behind one adapter (`Aqua/`); the rest of the codebase works only on our own DTOs. We write `.glb` ourselves (minimal in-house glTF writer) and convert `.ctxr → .png` via the library's decode path (vendored Oodle dylib; see Task 0 amendment). The game tree is read-only; the output library mirrors the source tree so texture references stay relative and collision-free.
 
-**Tech Stack:** C# / .NET 10 (arm64), xUnit, SharpGLTF (test-only, NuGet), AquaModelLibrary.Core (GPL-3.0, git submodule, parse-only), minimal in-house glTF writer.
+**Tech Stack:** C# / .NET 10 (arm64), xUnit, SharpGLTF (test-only, NuGet), AquaModelLibrary.Data (GPL-3.0, git submodule, parse-only), minimal in-house glTF writer.
 
 **Spec:** `docs/superpowers/specs/2026-10-15-sotc-native-rebuild-design.md`
 
@@ -16,7 +16,7 @@
 - Game tree is **read-only** at `$SOTC_GAME_ROOT`; default for this machine:
   `/Users/felipe.dos.santos/Downloads/SOTC-extract/extracted/game`. Tests fail fast with a clear message if the env var is unset.
 - Repo `~/Downloads/sotc-native`; game data (and anything derived from it) is **never committed** (spec A4).
-- License: GPL-3.0 (we link GPL-3.0 AquaModelLibrary.Core). `LICENSE` file at repo root.
+- License: GPL-3.0 (we link GPL-3.0 AquaModelLibrary.Data). `LICENSE` file at repo root.
 - Offline-first: nothing in this plan parses game containers at runtime; this is a build-time tool (design §8).
 - Output layout: `<out>/<source-relative-dir>/<basename>.glb` plus mirrored `<out>/<texture-relative-path>.png`; default `<out>` = `out/library/` (gitignored).
 - Any NuGet dependency added to the product must be arm64-macOS-safe and MIT/Apache-2.0 (or GPL-compatible), and recorded in the commit message. SharpGLTF is test-only.
@@ -35,7 +35,7 @@ Failure modes the spec implies but no single feature test covers — each line h
 
 ---
 
-### Task 0: Repository scaffold + AquaModelLibrary.Core build spike (gate)
+### Task 0: Repository scaffold + AquaModelLibrary.Data build spike (gate)
 
 **Files:**
 - Create: `BpConvert.sln`, `src/BpConvert.Core/BpConvert.Core.csproj`, `src/BpConvert.Cli/BpConvert.Cli.csproj`, `tests/BpConvert.Tests/BpConvert.Tests.csproj`, `tests/BpConvert.Tests/TestAssets.cs`, `tests/BpConvert.Tests/InspectTests.cs`, `docs/notes/aqua-core-api.md`, `LICENSE` (download GPL-3.0 text)
@@ -50,6 +50,13 @@ namespace BpConvert.Core;
 public static class Inspect { public static InspectSummary Summarize(string absolutePath); }
 public sealed record InspectSummary(bool Parsed, int MeshCount, string? Error);
 ```
+
+**Amendment (2026-10-15 — gate outcome; partner-approved; supersedes Step 2's *outcome*):**
+
+- The prescribed `AquaModelLibrary.Core` build **can't work on macOS** (Windows-only C++/CLI FBX native project, MSB4278). **Ruling: parsing links `AquaModelLibrary.Data`** — it contains the complete BluePoint parse layer, builds clean on arm64 (via `third_party/Directory.Build.props` net48 shim), and `Core`'s only delta is the FBX export we bypass. Every "Core" parsing reference in this plan means `Data`.
+- The parse path's only true blocker was Oodle: all pinned samples are `8C0A`-compressed and the library's decoder P/Invokes a Windows-only DLL. **Resolved (partner-approved):** vendor the official RAD Oodle **2.9.16** macOS universal dylib at `tools/native/liboo2core_8_win64_.dylib` (sha256 `47269bc3c9f7ef7948775be2c018ce674d1ab8a8526b6935e9d1033b0b47e8b7`; provenance `WorkingRobot/OodleUE` mirror of Epic's UE-distributed Oodle SDK; UE-EULA; **personal use only — never redistribute**) + `tools/native/NOTICE.md`; copy the file from `/Users/felipe.dos.santos/Downloads/SOTC-extract/tools/oodleue/liboo2coremac64.2.9.16.dylib`. Make it resolvable from CLI/tests/publish. Verified end-to-end on this machine: obj_plank 1 mesh/980 verts; wander 12/62,466; mino_a_statue_broke 3/44,333.
+- Resumed Task 0 scope = **Steps 1/3–6** (Step 2's answer is recorded above) **plus**: vendor dylib + NOTICE, runtime resolution, extended integration samples (one `8C0A` cmdl; one `8C06` cmsh — find by 2-byte magic scan), and update `docs/notes/aqua-core-api.md` §0 to "gate resolved" (keep the history).
+- Behavior to encode: `OodleLZ_Decompress` needs `rawLen` == **exact** decompressed size (larger fails); the library already passes the exact size from the 12-byte footer trailer.
 
 - [ ] **Step 1: Add the library submodule and scaffold projects**
 
@@ -263,7 +270,7 @@ public sealed record CtxrResult(int Width, int Height, string Variant);  // "png
 ```
 
 - [ ] **Step 2: Verify fail.**  
-- [ ] **Step 3: Implement** — route by container header: PNG payload → strip to file; `8C 0A`/`CC 0A` → the library's decode path (per `docs/notes/aqua-core-api.md`); encode w/ alpha to PNG. **Oodle decision point:** if the library shells out to a Windows DLL for Mermaid blocks, integrate a portable decoder that builds from source on macOS arm64 with a permissive license (verify the license text first; e.g. powzix/ooz if its terms allow), pin its commit, and note the choice in the commit message; if no compliant decoder is found, **stop and escalate** (this is a spec-listed high risk).
+- [ ] **Step 3: Implement** — route by container header: PNG payload → strip to file; `8C 0A`/`CC 0A` → the library's decode path (per `docs/notes/aqua-core-api.md`); encode w/ alpha to PNG. **Oodle decision (resolved 2026-10-15, partner-approved):** the vendored official dylib from Task 0 is the decoder (personal use, do-not-redistribute); no source build or license hunt needed.
 - [ ] **Step 4: Find + record a `CC 0A` sample for the notes**
 
 ```bash

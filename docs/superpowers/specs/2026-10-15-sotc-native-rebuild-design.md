@@ -72,7 +72,7 @@ perfection in early milestones; rewriting existing community parsing tooling.
 | D2 | Engine = **Godot 4.x** | User (builder proposal) | arm64-native, Metal renderer, glTF-native import, fast iteration |
 | D3 | Target hardware = **Apple Silicon, M3+** | User | |
 | D4 | Conversion emits **glTF 2.0 (.glb) + PNG** — not FBX | Builder | avoids Autodesk FBX SDK native dependency; Godot/Blender/Unity import glTF natively |
-| D5 | Model parsing = **AquaModelLibrary.Core** `BluePoint` module (community-proven for `cmdl/cmsh`); our tools wrap it and write glTF ourselves | Builder | don't rewrite parsers; bypass their FBX/FBX-SDK export path |
+| D5 | Model parsing = **AquaModelLibrary.Data** `BluePoint` module (community-proven for `cmdl/cmsh`); our tools wrap it and write glTF ourselves. *(Amended 2026-10-15 after the T0 spike: `Core` can't build on macOS — its only delta is the Windows-only FBX native exporter we bypass; `Data` builds clean on arm64.)* | Builder | don't rewrite parsers; bypass their FBX/FBX-SDK export path |
 | D6 | Unknown formats (`.anb`, terrain/`virtualgeometry`, resource maps) = reverse-engineer with Ghidra/REA as needed | Builder | user-supplied toolboxes |
 | D7 | Gameplay fidelity = reference-tuned re-implementation; the game's own data/scripts mined first; binary-level RE only where data runs out; M3 bar = "recognizably SOTC", not frame-exact | User | keeps M3 achievable |
 | D8 | Texture remaster = staged AI upscale (hero content first, world later) | User | visible remaster wins early; GPU cost staged |
@@ -112,7 +112,7 @@ perfection in early milestones; rewriting existing community parsing tooling.
 [native app on Apple Silicon]
 ```
 
-- **bp-convert**: wraps `AquaModelLibrary.Core` (pinned commit) for parsing; resolves
+- **bp-convert**: wraps `AquaModelLibrary.Data` (pinned commit) for parsing; resolves
   `cmat/cskl/ctxr` references by path within the game root; writes `.glb` (geometry, skinning,
   materials, multi-UV) + `.png` textures; per-file status in `catalog.json`; verification output
   (counts, sizes, screenshot sheets).
@@ -121,9 +121,12 @@ perfection in early milestones; rewriting existing community parsing tooling.
   categories (animations, collision, arena composition, game tables) each get an offline
   converter; a runtime loader for an original format requires an explicit documented exception.
   *(Builder call after reviewer check.)*
-- **Oodle**: payloads may embed Oodle *Mermaid* blocks. Must decode on macOS without Windows
-  DLLs: validate early on a Wander file; integrate a portable decoder (ooz-class C/C++) if the
-  library can't handle it.
+- **Oodle**: payloads may embed Oodle blocks. **Resolved 2026-10-15 (partner-approved):** vendor
+  the official RAD Oodle **2.9.16** macOS universal dylib at `tools/native/liboo2core_8_win64_.dylib`
+  (sha256 `47269bc3c9f7ef7948775be2c018ce674d1ab8a8526b6935e9d1033b0b47e8b7`; provenance:
+  `WorkingRobot/OodleUE` mirror of Epic's UE-distributed Oodle SDK; UE-EULA; **personal use only —
+  never redistribute**); the library's existing P/Invoke resolves to it. Verified: Wander + pinned
+  samples decode and parse on arm64.
 - **Godot project**: import `.glb`; materials mapped to Godot shading; review scenes with
   free-fly camera + perf HUD; later streaming/LOD/impostors.
 - **Recon workstream (parallel)**: R1 arena composition (`fs`/`cwks`); R2 `.anb` animation
@@ -162,8 +165,8 @@ gallery, stats) are an optional post-campaign stretch. *(Builder call.)*
 
 | Risk | Level | Mitigation |
 |------|-------|------------|
-| Oodle Mermaid decode on macOS | **high** | validate on Wander `ctxr/cmsh` first; portable decoder integration (ooz-class); RE fallback |
-| AquaModelLibrary.Core builds/runs on arm64 | medium | parse-only subset; build spike first; upstream fixes |
+| Oodle decode on macOS | **resolved 2026-10-15** | official RAD Oodle 2.9.16 macOS dylib vendored (personal use; UE-EULA provenance); validated on pinned cmsh/cmdl |
+| AquaModelLibrary.Data builds/runs on arm64 | **resolved 2026-10-15** | `Data` builds clean; full parse verified on pinned samples (`Core` unusable: Windows-only FBX native project) |
 | `.anb` animations lack a public parser | **high** | R2: Ghidra/REA on `eboot.bin` + libraries; community tooling hunt; R2 is time-boxed and scheduled before M3 content work; if unsolved at M3, ship best-available animation fidelity clearly labeled |
 | Terrain/`virtualgeometry` format unknown | **high** | R3 recon; fallback: heightfield re-mesh for the M1 slice |
 | Godot performance on dense arena | medium | LODs/impostors; M2 as the gate |
