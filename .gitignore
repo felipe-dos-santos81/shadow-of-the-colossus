@@ -1,0 +1,17 @@
+# .NET
+bin/
+obj/
+*.user
+
+# Godot
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+
+# macOS
+.DS_Store
+
+# scratch
+out/
+scratch/
