@@ -41,6 +41,8 @@ perfection in early milestones; rewriting existing community parsing tooling.
 - **A1** Endless converter polish before anything renders — M1 must land early.
 - **A2** Building "the whole game" before the vertical slice proves itself.
 - **A3** Long-lived x64/Rosetta or Windows-only dependencies anywhere in the product path.
+  (Dev-time, one-off use of such tools as verification oracles is allowed — see §5. The product
+  must build, run and update without them.)
 - **A4** Distributing game assets — personal use only; this repo carries code + docs, never game
   data.
 - **A5** Silent scope creep (engine rewrites, new features) — Godot is the tool, not the project.
@@ -53,6 +55,9 @@ perfection in early milestones; rewriting existing community parsing tooling.
   integrity manifests in `SOTC-extract/logs/*.sha256`. **Read-only.**
 - Tooling allowed: community libraries (parse-only), Ghidra (+ MCP), REA, Context7; up to
   **4 parallel subagents** for independent workstreams.
+- Dev-only tooling: x64/Windows tools are allowed **one-off** for development, verification and
+  comparisons (e.g., community-converted reference assets, Windows-only utilities in a VM). They
+  are never required by the product path (A3).
 - Legal: personal use; no redistribution of assets or derivatives; code licensing stays
   GPL-compatible where we link GPL code (PSO2-Aqua-Library is GPL-3.0).
 
@@ -83,6 +88,10 @@ perfection in early milestones; rewriting existing community parsing tooling.
 - Resource mapping worth parsing early: `workspaces/*` (`.cwks` dependency manifests, referenced
   from the game's command line) + `cp3shadow/data/fs/stage/*.fs` — the road to "what composes
   arena #1".
+- Data-driven hints worth mining: colossus entity scripts
+  (`scripts/…/colossi/colossus_01_minotaur_a*.cgpr`), path data (`cp3shadow/path/*.path`),
+  camera data (`camdata/`), character data (`.cchr`) — much of the game's behavior may be
+  data-convertible rather than binary-only.
 
 ## 8 · Architecture
 
@@ -100,6 +109,11 @@ perfection in early milestones; rewriting existing community parsing tooling.
   `cmat/cskl/ctxr` references by path within the game root; writes `.glb` (geometry, skinning,
   materials, multi-UV) + `.png` textures; per-file status in `catalog.json`; verification output
   (counts, sizes, screenshot sheets).
+- **Pipeline contract (offline-first):** everything the runtime needs is converted offline to
+  engine-native assets; the app never parses original game containers at runtime. New data
+  categories (animations, collision, arena composition, game tables) each get an offline
+  converter; a runtime loader for an original format requires an explicit documented exception.
+  *(Builder call after reviewer check.)*
 - **Oodle**: payloads may embed Oodle *Mermaid* blocks. Must decode on macOS without Windows
   DLLs: validate early on a Wander file; integrate a portable decoder (ooz-class C/C++) if the
   library can't handle it.
@@ -131,8 +145,10 @@ perfection in early milestones; rewriting existing community parsing tooling.
   weak point, death) + camera; minimal HUD.
 - Done = you can defeat the first colossus natively.
 
-**M4+ — The long road**: remaining colossi, Agro, world traversal/streaming, audio, menus/save,
-intro/outro.
+**M4+ — The long road**: remaining colossi, Agro, world traversal/streaming, audio (own recon
+workstream — formats unknown, see §10), menus/save, intro/outro. Content target = the story
+campaign (start→credits) of APP_VER **01.00** as extracted; extra modes (photo mode, time attack,
+gallery, stats) are an optional post-campaign stretch. *(Builder call.)*
 
 ## 10 · Risks
 
@@ -140,9 +156,10 @@ intro/outro.
 |------|-------|------------|
 | Oodle Mermaid decode on macOS | **high** | validate on Wander `ctxr/cmsh` first; portable decoder integration (ooz-class); RE fallback |
 | AquaModelLibrary.Core builds/runs on arm64 | medium | parse-only subset; build spike first; upstream fixes |
-| `.anb` animations lack a public parser | **high** | R2: Ghidra/REA on `eboot.bin` + libraries; community tooling hunt |
+| `.anb` animations lack a public parser | **high** | R2: Ghidra/REA on `eboot.bin` + libraries; community tooling hunt; R2 is time-boxed and scheduled before M3 content work; if unsolved at M3, ship best-available animation fidelity clearly labeled |
 | Terrain/`virtualgeometry` format unknown | **high** | R3 recon; fallback: heightfield re-mesh for the M1 slice |
 | Godot performance on dense arena | medium | LODs/impostors; M2 as the gate |
+| Audio formats (`sound/`, ~1.9 GB: `sxd`, `sxd1/2`, `crmp`, `calt`) have no decoder path yet | medium | recon workstream at M4 entry; requirement & fallback pending user decision |
 | (legal) personal-use scope | note | no asset distribution |
 
 ## 11 · Workstreams & agents
