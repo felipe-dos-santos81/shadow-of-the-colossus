@@ -1,0 +1,18 @@
+<!--
+  Build shim for the PSO2-Aqua-Library submodule on macOS/Linux.
+
+  The submodule's NvTriStripDotNet project (pulled in by AquaModelLibrary.Data) is an
+  old-style csproj targeting .NET Framework 4.8. .NET Framework reference assemblies are
+  not installed on macOS/Linux, so MSBuild fails with MSB3644 unless it is pointed at the
+  copy that NuGet vendors in the global package cache (the SDK-style net4x project in the
+  class library graph, ZamboniLib, restores this package automatically).
+
+  This file changes nothing for the SDK-style projects or for Windows builds: the condition
+  simply does not fire there.
+-->
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'NvTriStripDotNet' and '$(TargetFrameworkRootPath)' == ''">
+    <_NetFx48RefAssemblyRoot>$(HOME)/.nuget/packages/microsoft.netframework.referenceassemblies.net48/1.0.3/build</_NetFx48RefAssemblyRoot>
+    <TargetFrameworkRootPath Condition="Exists('$(_NetFx48RefAssemblyRoot)/.NETFramework/v4.8')">$(_NetFx48RefAssemblyRoot)</TargetFrameworkRootPath>
+  </PropertyGroup>
+</Project>
