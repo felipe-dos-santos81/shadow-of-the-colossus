@@ -8,15 +8,76 @@ Machine: macOS arm64, .NET SDK 10.0.401. All line numbers refer to that commit.
 > load `.cmsh`/`.cmdl` files and produce meshes, vertices, materials, texture references and
 > skeleton data is documented here, from the library sources only. Line numbers pin the
 > exact members so later tasks do not need to re-read the library.
+>
+> **Gate status: resolved 2026-10-15** — the parse path runs on this machine, including
+> Oodle-compressed files; see §0 for the decisions (link target, vendored decoder, semantics).
 
 ---
 
-## 0. GATE RESULT (Task 0, Step 2) — read this first
+## 0. GATE RESOLVED (2026-10-15) — decision record; original failure history at the end of this section
 
-**The prescribed build command fails on this machine, and the pinned samples cannot be parsed
-yet. Root cause is *Windows-only native dependencies*, not arm64 managed code.** Details:
+Task 0's spike now passes end-to-end on this machine (macOS arm64, .NET SDK 10.0.401). The three
+rulings that resolved the original gate, and what they mean for later tasks:
 
-### 0.1 `AquaModelLibrary.Core` does not build on macOS (any CPU)
+### R-A — Link target is `AquaModelLibrary.Data`, not `Core`
+
+`AquaModelLibrary.Core` cannot build on macOS (Windows-only C++/CLI FBX project, MSB4278). All of the
+BluePoint *parse* layer lives in `AquaModelLibrary.Data` (`net9.0`, consumable from our `net10.0`
+projects) and builds clean on arm64 via `third_party/Directory.Build.props` (the `NvTriStripDotNet`
+net48 shim). **Every later task links `Data`.** `Core` remains useful only as a *reference
+implementation* to read (`Core/BluePoint/BluePointConvert.cs`).
+
+### R-B — Oodle decoder: vendored official RAD Oodle 2.9.16 macOS dylib
+
+- File: `tools/native/liboo2core_8_win64_.dylib` — macOS universal binary (x86_64 + arm64), 1,206,880 bytes.
+- sha256: `47269bc3c9f7ef7948775be2c018ce674d1ab8a8526b6935e9d1033b0b47e8b7`.
+- Provenance: `WorkingRobot/OodleUE` mirror of the Oodle SDK shipped in Epic's Unreal Engine.
+  **Oodle is proprietary (RAD Game Tools / Epic Games), UE EULA, personal use only — never
+  redistribute.** See `tools/native/NOTICE.md`.
+- Resolution mechanism: `src/BpConvert.Core/BpConvert.Core.csproj` carries the file as a `Content`
+  item (`Link="liboo2core_8_win64_.dylib"`, `CopyToOutputDirectory="PreserveNewest"`), so it is
+  copied beside every consumer's binaries — CLI (`dotnet run`), test host, and `dotnet publish`
+  output (verified in a scratch publish). The library's
+  `[DllImport("oo2core_8_win64_")]` then resolves through the default .NET probing rules
+  (`<appdir>/liboo2core_8_win64_.dylib`). Submodule and P/Invoke string untouched; no
+  `SetDllImportResolver` hook needed.
+- Proof the decoder is actually exercised: with the dylib removed from the test output dir,
+  `dotnet test --no-build --filter Inspect_RunsOnWanderCmsh` fails with
+  `DllNotFoundException: Unable to load shared library 'oo2core_8_win64_'` (exit 1); restored, green.
+
+### R-C — Decode semantics: `OodleLZ_Decompress` needs the exact `rawLen`
+
+A larger output buffer than the true decompressed size **fails**. `CompressionHandler.CheckCompression`
+already passes exactly the size read from the container's 12-byte footer trailer
+(`last4Bytes - 0x60000000` / `0x80000000`), so the library is compatible as-is — do not "fix" it by
+padding buffers.
+
+### Verified sample results (env-gated integration tests, run in-process by `dotnet test`)
+
+| sample (relative to `$SOTC_GAME_ROOT`) | magic | result |
+|---|---|---|
+| `models/shadow/characters/wander/_cmn/wander.cmsh` | `8c0a` | `Parsed`, **meshes=12**, vertices=62,466 |
+| `models/objects/props/_cmn/obj_plank_01.cmsh` | `8c0a` | `Parsed`, **meshes=1**, vertices=980 |
+| `models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn/mino_a_statue_broke.cmsh` | `8c0a` | `Parsed`, **meshes=3**, vertices=44,333 |
+| `models/shadow/objects/home/entrance_pillars_01/_cmn/entrance_pillar_01_b_7e761f48.cmdl` | `8c0a` | `Parsed` (3 cmsh references) |
+| `models/test/mak/_cmn/rock_slide_01.cmsh` | `8c06` | `Parsed`, meshes=1, vertices=389 |
+| `models/test/mthrush/_cmn/unit_uv_quad.cmsh` | `0002` | `Parsed`, meshes=1, vertices=4 |
+| `models/test/mthrush/_cmn/unit_uv_quad_400fbd6c.cmsh` | `0005` | reference-mesh stub: `Parsed`, 0 meshes, note |
+
+*Colossus filename note:* `colossus_01_minotaur_a.cmsh` does not exist in the game tree; per the
+Task 0 brief the **largest `*.cmsh` in that directory** is used and pinned:
+`mino_a_statue_broke.cmsh` (589,291 bytes, next largest 160,646).
+
+### Environment quirk (Homebrew .NET)
+
+Bare apphost execution (`./bin/.../bp-convert`, `./out/bin/bp-convert`) fails on this machine with
+`.NET app-launch-failed` (exit 131) unless `DOTNET_ROOT=/opt/homebrew/Cellar/dotnet/10.0.401_1/libexec`
+is exported. `dotnet run`, `dotnet exec <dll>` and `dotnet test` are unaffected. Worth remembering
+for Task 7's published `out/bin/bp-convert`.
+
+### History — original gate record (superseded; kept for the trail)
+
+#### H1. `AquaModelLibrary.Core` does not build on macOS (any CPU)
 
 ```
 $ dotnet build third_party/PSO2-Aqua-Library/AquaModelLibrary.Core/AquaModelLibrary.Core.csproj
@@ -41,7 +102,7 @@ assemblies NuGet already vendors in `~/.nuget/packages/microsoft.netframework.re
 The shim fires only for that one project (`Condition="'$(MSBuildProjectName)' == 'NvTriStripDotNet'"`),
 so nothing else in the graph changes.
 
-### 0.2 The BluePoint parse layer lives in `AquaModelLibrary.Data` — and it builds clean
+#### H2. The BluePoint parse layer lives in `AquaModelLibrary.Data` — and it builds clean
 
 ```
 $ dotnet build third_party/PSO2-Aqua-Library/AquaModelLibrary.Data/AquaModelLibrary.Data.csproj
@@ -55,7 +116,7 @@ $ dotnet build third_party/PSO2-Aqua-Library/AquaModelLibrary.Data/AquaModelLibr
 on macOS; it remains useful as a *reference implementation* to read (file paths and line numbers
 cited below are from `Core/BluePoint/BluePointConvert.cs`).
 
-### 0.3 Parsing the pinned samples is blocked by a Windows-only Oodle decoder
+#### H3. Parsing the pinned samples was blocked by a Windows-only Oodle decoder
 
 All three pinned `.cmsh` files start with the Oodle-compressed container marker `8C 0A`:
 
@@ -100,26 +161,32 @@ OK  models/test/mthrush/_cmn/unit_uv_quad.cmsh                         meshes=1 
 OK  models/objects/props/_cmn/obj_plank_01_52f8cc91.cmdl               meshRefs=1 mats=1 cpid=
 ```
 
-### 0.4 Consequences / decision needed (recorded for the controller)
+#### H4. Original consequences list (all items now resolved)
 
 1. A **portable Oodle decompressor** is now on the critical path for *models* as well as textures
    (the M0 plan anticipated this only inside Task 3's "Oodle decision point").
+   → **Resolved by R-B** (vendored RAD 2.9.16 dylib); note it also covers Task 3's texture path.
 2. The plan's candidate `powzix/ooz` (C++; Kraken/Mermaid/Selkie/Leviathan/LZNA/Bitknit) has
    **no LICENSE file and no license statement in its README** (checked 2026-10-15) → it does not
    meet the plan's "permissive license" bar without the author's permission. Per the plan's T3
    rule ("if no compliant decoder is found, stop and escalate"), this needs an explicit decision:
    e.g. (a) obtain written permission / find a licensed fork of ooz; (b) RAD Oodle SDK (proprietary,
    local-use only); (c) a managed C# decoder written/adapted for this project.
+   → **Moot**: the partner approved option (b)-equivalent — the official RAD 2.9.16 macOS binary,
+   personal use only (R-B).
 3. **Integration seam (cheap option):** the existing P/Invoke name is the *string* `"oo2core_8_win64_"`.
    A permissively-licensed decoder built as `liboo2core_8_win64_.dylib` exporting `OodleLZ_Decompress`
    and placed next to the app (or in `runtimes/osx-arm64/native/`) would satisfy the library's
    P/Invoke unchanged — no fork or patch of the submodule needed.
+   → **Adopted**: side-by-side copy via the `Content` item (R-B); no resolver hook required.
 4. `AquaModelLibrary.Data` is otherwise fully usable: build with `third_party/Directory.Build.props`
    in place. Manual override if the NuGet cache ever moves:
    `dotnet build … -p:TargetFrameworkRootPath=~/.nuget/packages/microsoft.netframework.referenceassemblies.net48/1.0.3/build`.
+   → Still accurate; the shim is committed.
 5. Task 0 Steps 3–6 (the pinned `Inspect` API, `inspect` verb, integration test) were **not
    implemented** — the brief's Step 2 stop condition is met. The pinned API design remains valid;
    it will report `Parsed=false` for compressed inputs until (3) above is in place.
+   → **Superseded**: all implemented during the resumed fix round (see §2.1).
 
 ---
 
@@ -172,7 +239,38 @@ The CMSH body is conditional (`CMSH.cs:125-149`): `footerData` → `new CMSHHead
 then `if (header.variantFlag2 != 0x41)` reads `vertData` + `faceData` (+ morph data if
 `variantFlag2 & 0x20`, + `boneData` if `variantFlag & 0x1`).
 
-## 3. Meshes and vertices
+### 2.1 `Inspect` wrapper + `inspect` verb (Task 0 Steps 3–5) — implemented
+
+`src/BpConvert.Core/Inspect.cs` is the thin wrapper the integration tests and CLI use. It is the
+only file outside `Aqua/` that touches library types (Task 4 adds the adapter itself):
+
+```csharp
+var bytes = File.ReadAllBytes(absolutePath);        // Inspect.Describe
+var cmsh  = new CMSH(bytes);                        // decompresses 8C0A/8C06 via the vendored dylib (R-B)
+cmsh.header.meshCount                               // → InspectSummary.MeshCount (0 for skipped variants)
+cmsh.vertData?.positionList.Count                   // → InspectDetail.VertexCount
+var cmdl  = new CMDL(bytes);                        // .cmdl: MeshCount = cmdl.GetCMeshReferences().Count
+```
+
+Exact surface (the first two lines are the Task 0 pin; `Describe` is additive for the CLI):
+
+```csharp
+public static InspectSummary Summarize(string absolutePath);
+public static InspectDetail  Describe (string absolutePath);
+public sealed record InspectSummary(bool Parsed, int MeshCount, string? Error);        // pinned
+public sealed record InspectDetail (bool Parsed, int MeshCount, int VertexCount, string? Error);
+```
+
+Semantics: `Parsed=false` only when reading/parsing threw, or the extension is unsupported; `Error`
+then holds `"<ExceptionType>: <first line of message>"`. Reference-mesh/LOD variants (the
+`CMSH.cs:28-37` early return, e.g. `00 05` stubs) report `Parsed=true, MeshCount=0` with an
+explanatory `Error` note — the brief's "0 meshes with a recorded reason" shape.
+
+CLI (`src/BpConvert.Cli/Program.cs`, assembly `bp-convert`): `bp-convert inspect <file>` prints the
+absolute path, size, the first 32 bytes hex, and the parse summary; exit `0` = parsed (notes still
+printed), `1` = parse failure, `2` = usage error / file not found.
+
+
 
 Per-file mesh list: `cmsh.header.meshCount` (`CMSHHeader.cs:29`) and
 `cmsh.header.meshList : List<CMSHMeshReference>` (`CMSHMeshReference.cs`):
@@ -319,10 +417,16 @@ handle demon's-souls-style length-prefixed strings.
 
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/SOTC-extract/extracted/game
-dotnet build BpConvert.sln                                    # our projects — clean
-dotnet build third_party/PSO2-Aqua-Library/AquaModelLibrary.Data/AquaModelLibrary.Data.csproj
-dotnet test tests/BpConvert.Tests -v q                        # SharpGLTF.Core 1.0.7 resolved
+dotnet build BpConvert.sln                                    # 0 warnings, 0 errors
+dotnet test tests/BpConvert.Tests -v q                        # all 7 integration tests run + pass
+dotnet run --project src/BpConvert.Cli -- inspect "$SOTC_GAME_ROOT/models/objects/props/_cmn/obj_plank_01.cmsh"
+dotnet publish src/BpConvert.Cli -c Release -o out/bin        # dylib lands beside bp-convert.dll (Task 7)
 ```
 
+Notes: `dotnet test` resolves the vendored dylib from the test output directory; if you run a bare
+apphost (`./out/bin/bp-convert`) on this machine, export
+`DOTNET_ROOT=/opt/homebrew/Cellar/dotnet/10.0.401_1/libexec` first (see §0, environment quirk).
+
 Resolved tool versions: .NET SDK 10.0.401 (arm64), SharpGLTF.Core **1.0.7** (test-only),
-submodule commit **5dcf37a815bf683852bbfd283834c1e8d23f38ad**.
+submodule commit **5dcf37a815bf683852bbfd283834c1e8d23f38ad**, vendored Oodle dylib sha256
+**47269bc3c9f7ef7948775be2c018ce674d1ab8a8526b6935e9d1033b0b47e8b7**.

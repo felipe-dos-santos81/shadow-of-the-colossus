@@ -18,8 +18,12 @@ dotnet test tests/BpConvert.Tests -v q
 
 - `third_party/PSO2-Aqua-Library` (GPL-3.0, pinned submodule, parse-only);
   `third_party/Directory.Build.props` lets its `.NET Framework 4.8` helper project build on macOS.
+- `tools/native/liboo2core_8_win64_.dylib` — official RAD Oodle 2.9.16 decoder (macOS universal),
+  vendored so Oodle-compressed game data can be read. **Personal use only — never redistribute**
+  (Unreal Engine EULA); see [`tools/native/NOTICE.md`](tools/native/NOTICE.md). It is copied next to
+  the built binaries automatically.
 - Library API notes the converter is written against:
-  [`docs/notes/aqua-core-api.md`](docs/notes/aqua-core-api.md) — its section 0 records the current
-  spike result (compressed game files need a portable Oodle decoder on macOS).
+  [`docs/notes/aqua-core-api.md`](docs/notes/aqua-core-api.md) — section 0 records the gate outcome
+  (link target `AquaModelLibrary.Data`, vendored decoder, decode semantics) and the verified samples.
 
 Personal-use fan project. No game assets are distributed in this repository.
