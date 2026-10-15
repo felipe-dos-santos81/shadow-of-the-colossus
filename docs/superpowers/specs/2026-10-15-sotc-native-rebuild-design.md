@@ -1,6 +1,6 @@
 # Shadow of the Colossus — Native Apple-Silicon Rebuild (SOTC-Native)
 
-**Design document · 2026-10-15 · v1 (draft for approval)**
+**Design document · 2026-10-15 · v1.1 (reviewer-checked — awaiting your approval)**
 Repo: `~/Downloads/sotc-native` · Game data: `~/Downloads/SOTC-extract/` (read-only)
 
 ---
@@ -24,8 +24,8 @@ what "remaster" means here. *(User decision.)*
 
 - **G1 — Native runtime.** arm64-only, Apple Silicon, no Rosetta / x86 components in the product
   path. Engine: **Godot 4.x** (Metal). Approved.
-- **G2 — Remaster presentation.** ≥60 fps, high resolution, upscaled textures, modern
-  lighting/shadows/AA — visibly beyond the PS4 original.
+- **G2 — Remaster presentation.** ≥60 fps, high resolution, upscaled textures (staged: hero
+  content first — D8), modern lighting/shadows/AA — visibly beyond the PS4 original.
 - **G3 — The same game.** 16 colossi, the map, Agro, stamina/climbing, HUD, music — 1:1 intent,
   no new gameplay concepts.
 - **G4 — Something real at every step.** Each milestone ends with a runnable, visible artifact on
@@ -58,6 +58,9 @@ perfection in early milestones; rewriting existing community parsing tooling.
 - Dev-only tooling: x64/Windows tools are allowed **one-off** for development, verification and
   comparisons (e.g., community-converted reference assets, Windows-only utilities in a VM). They
   are never required by the product path (A3).
+- Reference rig: shadPS4 runs on the target Mac as a **dev-only reference player** for look/feel
+  tuning and capture comparisons; user-provided captures add ground truth. Never part of the
+  product path.
 - Legal: personal use; no redistribution of assets or derivatives; code licensing stays
   GPL-compatible where we link GPL code (PSO2-Aqua-Library is GPL-3.0).
 
@@ -71,6 +74,10 @@ perfection in early milestones; rewriting existing community parsing tooling.
 | D4 | Conversion emits **glTF 2.0 (.glb) + PNG** — not FBX | Builder | avoids Autodesk FBX SDK native dependency; Godot/Blender/Unity import glTF natively |
 | D5 | Model parsing = **AquaModelLibrary.Core** `BluePoint` module (community-proven for `cmdl/cmsh`); our tools wrap it and write glTF ourselves | Builder | don't rewrite parsers; bypass their FBX/FBX-SDK export path |
 | D6 | Unknown formats (`.anb`, terrain/`virtualgeometry`, resource maps) = reverse-engineer with Ghidra/REA as needed | Builder | user-supplied toolboxes |
+| D7 | Gameplay fidelity = reference-tuned re-implementation; the game's own data/scripts mined first; binary-level RE only where data runs out; M3 bar = "recognizably SOTC", not frame-exact | User | keeps M3 achievable |
+| D8 | Texture remaster = staged AI upscale (hero content first, world later) | User | visible remaster wins early; GPU cost staged |
+| D9 | Original audio required (own recon workstream; labeled capture-grade fallback if formats resist) | User | |
+| D10 | Dev reference rig = shadPS4, dev-only, + user captures if provided | User (default) | tuning/verification ground truth; never in product path |
 
 ## 7 · Source material facts (for the builder)
 
@@ -143,7 +150,8 @@ perfection in early milestones; rewriting existing community parsing tooling.
 **M3 — Playable slice** *(months)*
 - Character controller (move/run/climb/stamina/grab) + the full colossus #1 encounter (climb,
   weak point, death) + camera; minimal HUD.
-- Done = you can defeat the first colossus natively.
+- Done = you can defeat the first colossus natively — an experience recognizably SOTC,
+  reference-tuned (per D7), not frame-exact.
 
 **M4+ — The long road**: remaining colossi, Agro, world traversal/streaming, audio (own recon
 workstream — formats unknown, see §10), menus/save, intro/outro. Content target = the story
@@ -159,7 +167,7 @@ gallery, stats) are an optional post-campaign stretch. *(Builder call.)*
 | `.anb` animations lack a public parser | **high** | R2: Ghidra/REA on `eboot.bin` + libraries; community tooling hunt; R2 is time-boxed and scheduled before M3 content work; if unsolved at M3, ship best-available animation fidelity clearly labeled |
 | Terrain/`virtualgeometry` format unknown | **high** | R3 recon; fallback: heightfield re-mesh for the M1 slice |
 | Godot performance on dense arena | medium | LODs/impostors; M2 as the gate |
-| Audio formats (`sound/`, ~1.9 GB: `sxd`, `sxd1/2`, `crmp`, `calt`) have no decoder path yet | medium | recon workstream at M4 entry; requirement & fallback pending user decision |
+| Audio formats (`sound/`, ~1.9 GB: `sxd`, `sxd1/2`, `crmp`, `calt`) have no decoder path yet | medium | original audio required (D9); recon workstream at M4 entry; labeled capture-grade fallback if formats resist |
 | (legal) personal-use scope | note | no asset distribution |
 
 ## 11 · Workstreams & agents
