@@ -43,7 +43,13 @@ Failure modes the spec implies but no single feature test covers — each line h
 
 **Interfaces:**
 - Consumes: nothing (first task).
-- Produces: the solution/projects every later task builds in; `TestAssets.Root` / `TestAssets.Sample(string rel)` (test helper); `docs/notes/aqua-core-api.md` — the exact library types/methods used by Task 4's adapter. CLI verb `inspect`.
+- Produces: the solution/projects every later task builds in; `TestAssets.Root` / `TestAssets.Sample(string rel)` (test helper); `docs/notes/aqua-core-api.md` — the exact library types/methods used by Task 4's adapter; CLI verb `inspect`; and this pinned core API:
+
+```csharp
+namespace BpConvert.Core;
+public static class Inspect { public static InspectSummary Summarize(string absolutePath); }
+public sealed record InspectSummary(bool Parsed, int MeshCount, string? Error);
+```
 
 - [ ] **Step 1: Add the library submodule and scaffold projects**
 
@@ -306,8 +312,8 @@ Output mapping (pinned): `models/shadow/characters/wander/_cmn/wander.cmsh` → 
 [Fact] public void Convert_Wander_ProducesMeshAndTextureRefs()
     // wander.cmsh → meshes >= 1; result.PngPaths.Count >= 1; each png exists
 [Fact] public void Convert_TwoSameBasenames_DistinctOutputs()      // Review Focus #2
-    // convert obj_plank_01.cmsh and a second file with same basename from another dir;
-    // assert both glbs exist at their mirrored paths and differ
+    // synthetic fixture game root (temp dir): copy obj_plank_01.cmsh to a/x.cmsh and b/x.cmsh;
+    // convert both; assert both glbs exist at their mirrored paths (a/x.glb, b/x.glb) and differ
 ```
 
 - [ ] **Step 2: Verify fail.**
@@ -395,10 +401,11 @@ Catalog `catalog.json` (pinned schema; written atomically as `catalog.json.tmp` 
 
 - [ ] **Step 1: Pre-flight on the pinned 10 characters** (wander + 9 others from `models/shadow/characters/`), assert each: glb loads via SharpGLTF, meshes ≥ 1, and record sizes.
 - [ ] **Step 2: Largest-model check (Review Focus #4)** — convert the largest `*.cmsh` under `models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn/`; assert it completes and the glb loads.
-- [ ] **Step 3: Launch the full batch** over `--under models --under characters --ext cmsh,cmdl` (≈46k files) in the background:
+- [ ] **Step 3: Publish the CLI and launch the full batch** over `--under models --under characters --ext cmsh,cmdl` (≈46k files) in the background:
 
 ```bash
-nohup bp-convert convert --root "$SOTC_GAME_ROOT" --out out/library --under models --under characters --ext cmsh,cmdl --jobs 8 \
+dotnet publish src/BpConvert.Cli -c Release -o out/bin
+nohup ./out/bin/bp-convert convert --root "$SOTC_GAME_ROOT" --out out/library --under models --under characters --ext cmsh,cmdl --jobs 8 \
   > out/m0-run.log 2>&1 &
 ```
 
