@@ -34,31 +34,34 @@ dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/li
 ```
 
 Then the SharpGLTF assertion (the checker is generated into `out/glbcheck/` by the script; it reads
-the catalog, loads each glb and compares counts):
+the catalog, loads each glb, compares counts, and asserts every material carries an explicit
+`metallicFactor` of 0):
 
 ```bash
 dotnet exec out/glbcheck/bin/Release/net10.0/glbcheck.dll --lib out/library --require-meshes \
   --prefix models/shadow/characters/wander … --prefix models/shadow/characters/colossus_16_mega_maid
-#   summary files=121 loaded=121 failed=0 mismatches=0 bytes=205840260 meshes=1080 vertices=3314835
-#           groups=10 failures=0
+#   summary files=121 loaded=121 failed=0 mismatches=0 materials=389 badMaterials=0 bytes=205847616
+#           meshes=1080 vertices=3314835 groups=10 failures=0
 ```
+
+Numbers below are re-measured after the post-review fix wave (§4a; +19 bytes per material of JSON).
 
 Per-character result (aggregated over the character's `cmsh` set; `mismatches=0` everywhere means
 the glb's own mesh/vertex counts equal the catalog's for all 121 files):
 
 | character (`models/shadow/characters/…`) | files | glb bytes | meshes | vertices | load |
 |---|---:|---:|---:|---:|---|
-| `wander` | 30 | 19,439,104 | 62 | 302,340 | ✓ |
-| `agro` | 10 | 12,558,128 | 36 | 154,674 | ✓ |
-| `mono` | 3 | 8,251,060 | 18 | 101,820 | ✓ |
-| `girl_b` | 2 | 3,610,424 | 7 | 51,729 | ✓ |
-| `hawk` | 1 | 487,180 | 1 | 10,264 | ✓ |
-| `colossus_01_minotaur_a` | 7 | 41,227,908 | 246 | 523,865 | ✓ |
-| `colossus_04_kirin` | 8 | 38,416,436 | 214 | 588,391 | ✓ |
-| `colossus_09_desert_tortoise` | 4 | 11,626,848 | 245 | 128,318 | ✓ |
-| `colossus_14_cerberus` | 25 | 11,484,364 | 34 | 198,921 | ✓ |
-| `colossus_16_mega_maid` | 31 | 58,738,808 | 217 | 1,254,513 | ✓ |
-| **total** | **121** | **205,840,260** | **1,080** | **3,314,835** | **10/10** |
+| `wander` | 30 | 19,440,248 | 62 | 302,340 | ✓ |
+| `agro` | 10 | 12,558,704 | 36 | 154,674 | ✓ |
+| `mono` | 3 | 8,251,212 | 18 | 101,820 | ✓ |
+| `girl_b` | 2 | 3,610,552 | 7 | 51,729 | ✓ |
+| `hawk` | 1 | 487,196 | 1 | 10,264 | ✓ |
+| `colossus_01_minotaur_a` | 7 | 41,228,248 | 246 | 523,865 | ✓ |
+| `colossus_04_kirin` | 8 | 38,416,772 | 214 | 588,391 | ✓ |
+| `colossus_09_desert_tortoise` | 4 | 11,627,076 | 245 | 128,318 | ✓ |
+| `colossus_14_cerberus` | 25 | 11,484,904 | 34 | 198,921 | ✓ |
+| `colossus_16_mega_maid` | 31 | 58,742,704 | 217 | 1,254,513 | ✓ |
+| **total** | **121** | **205,847,616** | **1,080** | **3,314,835** | **10/10** |
 
 Notes: 121 files in 2:41 (8 jobs) — dominated by the co-skinned skirt meshes of the mega maid
 (33–43 s each). A few `cmsh` in these directories are geometry-free reference-mesh stubs
@@ -78,19 +81,25 @@ dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/li
 # the pinned directory …
 dotnet exec out/glbcheck/bin/Release/net10.0/glbcheck.dll --lib out/library --require-meshes \
   --prefix models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn
-#   group …/_cmn files=6 loaded=6 bytes=2566868 meshes=6 vertices=59871 mismatches=0
-#   summary files=6 loaded=6 failed=0 mismatches=0 bytes=2566868 meshes=6 vertices=59871 groups=1 failures=0
+#   group …/_cmn files=6 loaded=6 bytes=2566972 meshes=6 vertices=59871 mismatches=0
+#   summary files=6 loaded=6 failed=0 mismatches=0 materials=6 badMaterials=0 bytes=2566972
+#           meshes=6 vertices=59871 groups=1 failures=0
 
 # … then the pinned largest source itself (separate invocation: the first matching prefix owns a
 # source, so nested prefixes in one call would leave the file's group empty)
 dotnet exec out/glbcheck/bin/Release/net10.0/glbcheck.dll --lib out/library --require-meshes \
   --prefix models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn/mino_a_statue_broke.cmsh
-#   file …/mino_a_statue_broke.cmsh bytes=1974872 cat=3m/44333v glb=3m/44333v ok
-#   summary files=1 loaded=1 failed=0 mismatches=0 bytes=1974872 meshes=3 vertices=44333 groups=1 failures=0
+#   file …/mino_a_statue_broke.cmsh bytes=1974928 cat=3m/44333v glb=3m/44333v ok
+#   summary files=1 loaded=1 failed=0 mismatches=0 materials=3 badMaterials=0 bytes=1974928
+#           meshes=3 vertices=44333 groups=1 failures=0
 ```
 
-`mino_a_statue_broke.cmsh` (589,291 B) → `mino_a_statue_broke.glb` 1,974,872 B, 3 meshes,
-44,333 vertices, loads in SharpGLTF with counts matching the catalog. **PASS.**
+(Checker outputs re-measured in the post-review fix wave, §4a; the convert transcript above is the
+original acceptance run.)
+
+`mino_a_statue_broke.cmsh` (589,291 B) → `mino_a_statue_broke.glb` 1,974,928 B, 3 meshes,
+44,333 vertices, loads in SharpGLTF with counts matching the catalog and all 3 materials pinned
+to an explicit `metallicFactor` of 0. **PASS.**
 
 ## 3 · Full batch
 
@@ -126,6 +135,8 @@ in scope: 16782  skipped: 127  converted: 16631  failed: 24  elapsed: 32:57.656
 
 `skipped: 127` is exactly the pre-flight (121) + largest-model (6) entries the earlier steps had
 already converted into the same library — i.e. the batch picked up where the pre-flight stopped.
+(The library was later reconverted in place by the post-review fix wave, §4a: every count below was
+reconfirmed; only glb byte sizes grew, by `+19 B` per material of JSON.)
 
 Fastest section by far: the rocks family (`models/objects/rocks` + `models/objects/rocks_desert`,
 **12,372** in-scope `cmsh`, 11,835 of them reference-mesh stubs — see §5, class 2): 11,126 were
@@ -167,16 +178,63 @@ on every run) and failed again with the same reason in 0.8 s. The pre-flight (12
 (6) steps of the script also converged at `converted: 0` on this re-run.
 
 Third line of evidence: loading every produced glb in the library with SharpGLTF (the checker
-without `--prefix`, 21 groups — output kept in `out/m0-glbcheck-all.log`):
+without `--prefix`, 21 groups — output kept in `out/m0-glbcheck-all-fixed.log`; re-measured in the
+post-review fix wave, §4a):
 
 ```
-summary files=16758 loaded=16758 failed=0 mismatches=0 bytes=3140291956 meshes=23583 vertices=64085954 groups=21 failures=0
+summary files=16758 loaded=16758 failed=0 mismatches=0 materials=7147 badMaterials=0 bytes=3140427688 meshes=23583 vertices=64085954 groups=21 failures=0
 ```
 
-— i.e. **all 16,758 produced glbs load, and every one's mesh/vertex counts match the catalog**
-(0 mismatches). 13,381 of them are empty stub containers (§5, class 2); the other 3,377 carry 23,583
-meshes / 64.1 M vertices / 3.14 GB of glb data (plus 23,761 PNGs on the 1,499 entries that
-reference decodable textures; library total 12 GB).
+— i.e. **all 16,758 produced glbs load, every one's mesh/vertex counts match the catalog**
+(0 mismatches) **and every one of the 7,147 materials carries an explicit `metallicFactor` of 0**.
+13,381 of them are empty stub containers (§5, class 2); the other 3,377 carry 23,583 meshes /
+64.1 M vertices / 3.14 GB of glb data (plus 23,761 PNGs on the 1,499 entries that reference
+decodable textures; library total 12 GB).
+
+## 4a · Post-review fix wave (dielectric materials, 2026-10-16)
+
+A whole-branch review found that materials were written without `metallicFactor` — glTF's default
+is **1.0**, so every output rendered fully metallic in conformant loaders. The writer now emits
+`"metallicFactor": 0` (dielectric; `roughnessFactor` stays at its 1.0 default as the accepted
+approximation — §7). The same wave (`600f36b`) fixed `report`'s I/O error handling, pinned
+`<IsPackable>false</IsPackable>` on the core project, corrected the ImageSharp license/dependency
+notes, and taught the acceptance checker to assert the explicit factor. The 12 GB library was then
+reconverted in place so the artifacts match the fixed code:
+
+```bash
+dotnet publish src/BpConvert.Cli -c Release -o out/bin
+nohup dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models --under characters --ext cmsh --jobs 8 --force > out/m0-force-run.log 2>&1 &
+#   launched 2026-10-16T18:24:25Z (pid recorded in out/m0-force-run.pid)
+#   in scope: 16782  skipped: 0  converted: 16758  failed: 24  elapsed: 33:06.194
+#   (summary written ≈18:57:31Z; the same 24 grass-family OverflowException failures as §5,
+#    logged as `fail  <source>: OverflowException …` lines)
+
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models --under characters --ext cmsh --jobs 8        # second invocation, no --force
+#   in scope: 16782  skipped: 16758  converted: 0  failed: 24  elapsed: 00:00.936
+#   (log: out/m0-force-convergence.log)
+```
+
+**Reconfirmed: 16,758 `ok` / 24 failed, and `converted: 0` on the second invocation.** The
+acceptance script was re-run end to end (`./scripts/m0-acceptance.sh`, exit 0; log
+`out/m0-acceptance-run3.log`) — its pre-flight (121 files, `materials=389 badMaterials=0`) and
+largest-model checks (6 + 1 files, `materials=6` / `materials=3`, `badMaterials=0`) now assert the
+material field, and its convergence branch re-proved `converted: 0`. Whole-library re-check
+(checker without `--prefix`, 16 s; `out/m0-glbcheck-all-fixed.log`, quoted in full in §4 above —
+`materials=7147 badMaterials=0`, 0 mismatches). Artifact-level proof of the fix:
+
+```bash
+$ grep -o -a '"metallicFactor":0' out/library/models/shadow/characters/wander/_cmn/wander.glb | wc -l
+12        # = the file's material count (12): every one carries the explicit dielectric factor
+```
+
+**What actually changed in the results sheet**: the glb byte figures in §§1–2 and §4 grew by
+`+19 B` per material of JSON (`wander` 19,439,104 → 19,440,248; pre-flight total 205,840,260 →
+205,847,616; whole library 3,140,291,956 → 3,140,427,688). Everything else is unchanged: 16,782
+entries, 16,758 `ok` / 24 failed (0.143 %), the same 24-overflow failure class, 23,583 meshes,
+64,085,954 vertices, 23,761 PNGs. §3's snapshot table and both historical command transcripts above
+are the original run-of-record; their counts remain valid.
 
 ## 5 · Failure analysis
 
@@ -258,6 +316,10 @@ Observed classes:
   command it encodes is byte-identical to the one that produced the batch above.
 - The `out/m0-run.pid` guard was verified live while the batch was running: the script refused with
   "a batch is already running (pid 65954); refusing to run" (exit 1) and left the catalog untouched.
+- **Post-review fix wave** (2026-10-16, commit `600f36b`): CLI republished; full `--force` re-run
+  (launched 18:24:25Z, `out/m0-force-run.log`), second invocation (`out/m0-force-convergence.log`),
+  acceptance script re-run (exit 0, `out/m0-acceptance-run3.log`), whole-library check
+  (`out/m0-glbcheck-all-fixed.log`) — details and superseded byte figures in §4a.
 - The checker embedded in the script is byte-identical (`diff` clean) to the copy used for the
   manual checks and to `scratch/glbcheck/`.
 
