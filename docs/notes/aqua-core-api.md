@@ -403,8 +403,9 @@ public int GetWidth();  public int GetHeight();          // CTXR.cs:1062/1076
   from disk relative to the `eboot.bin` root (`CTXR.cs:1266-1294`).
 * `CTXR.cs` compression check runs first — `8C 0A` ctxr (per the plan's T3 samples) hits the same
   Windows-only Oodle wall as §0.3.
-* **Task 3's remaining work:** PNG encode from DDS bytes (e.g. SixLabors.ImageSharp, already in the
-  `Data` dependency graph) — the library alone stops at DDS.
+* **Task 3 done (2026-10-15):** `BpConvert.Core.Textures.CtxrConverter` now produces real PNGs —
+  hand-written BC1/BC2/BC3/BC4/BC5 + masked RGBA8/BGRA8 decoders and an in-house PNG writer (no new
+  packages). See §9 for the reconnaissance and the sharp edges found there.
 * Useful header-only path for cheap scans: `new CTXR(bytes, readTexBuffers: false)`.
 
 ## 7. Other BluePoint containers present in `Data` (not needed for M0 v1)
@@ -430,3 +431,75 @@ apphost (`./out/bin/bp-convert`) on this machine, export
 Resolved tool versions: .NET SDK 10.0.401 (arm64), SharpGLTF.Core **1.0.7** (test-only),
 submodule commit **5dcf37a815bf683852bbfd283834c1e8d23f38ad**, vendored Oodle dylib sha256
 **47269bc3c9f7ef7948775be2c018ce674d1ab8a8526b6935e9d1033b0b47e8b7**.
+
+## 9. T3 reconnaissance — texture formats, decoder and CC0A findings (2026-10-15)
+
+Reconnaissance for `BpConvert.Core.Textures.CtxrConverter` (`ctxr → png`), from the extracted tree
+(`$SOTC_GAME_ROOT` = `…/extracted/game`, all **7,334** `*.ctxr` files header-scanned).
+
+**Variant/format inventory** (first two bytes → count; `0x25` footer textures unless noted):
+
+| variant | files | notes |
+|---|---|---|
+| `8C 0A` | 6,901 | Oodle; formats below |
+| `CC 0A` | 325 | Oodle; **100 % textureFormat `0x10` (BC6H_UF16)** — every IBL/sky texture |
+| `0B 00` | 86 | uncompressed, format `0xB` (BC1), legacy fourCC `DXT1` |
+| `89 50` (`PNG`) | 13 | raw PNG payloads (`textureFormat == -1`), e.g. `misc/boot/_ps4/saveshadow_scee_tr.ctxr` |
+| `00 00` | 7 | uncompressed, format `0x0` (R8G8B8A8_UNORM), masked `R=0xFF G=0xFF00 B=0xFF0000 A=0xFF000000` |
+| `8C 06` | 1 | `textures/shadow/characters/mono/_ps4/gradient_mask_alpha.ctxr`, format `0xE` (BC4) |
+| `0F 00` | 1 | uncompressed, format `0xF` (BC5) |
+
+`8C 0A` format histogram: BC1 `0xB` 4,715 · BC5 `0xF` 907 · RGBA8 `0x0` 753 · BC3 `0xD` 263 ·
+BC4 `0xE` 138 · BC6H `0x10` 124 · BC2 `0xC` 1. **No BC7 anywhere.** 3,682 of the 6,901 `8C 0A`
+files carry **external `.ctxc` mip chunks**.
+
+**Pinned samples**: `misc/boot/_ps4/saveshadow_scee_tr.ctxr` = raw PNG (IHDR 228×128, copy
+verbatim). `textures/ocean/flowmaps/_ps4/neutral_flowmap_nml.ctxr` = `8C 0A`, 16×16 BC5UNORM,
+5 mips, **no external mips**; its top mip is uniformly `80 80` — a *neutral* normal, so the file
+decodes to the single RGBA value (128, 128, 0, 255) by design (BCnEncoder.Net agrees byte-for-byte;
+the "not all-identical pixels" check therefore uses a detailed sample instead).
+
+**Decoder chosen** (product code, no new NuGet packages): hand-written BC1/BC2/BC3/BC4/BC5 block
+decoders plus the 32-bit masked (RGBA8/BGRA8/RGBX/BGRX) layouts in
+`src/BpConvert.Core/Textures/BcnDecoder.cs`; PNG encoding by an in-house writer (RGBA8, filter 0,
+`System.IO.Compression.ZLibStream` + table CRC-32) in `CtxrConverter.cs`. Cross-checked against the
+in-graph, test-only `BCnEncoder.Net` 2.1.0: BC1 and BC2 are byte-identical, BC3/BC4/BC5 differ only
+on interpolated palette entries by ±1 (BCnEncoder rounds; we truncate, matching the D3D/Vulkan
+integer reference). BC4/BC5 keep the single/two channels where they are (red, red+green) with
+alpha 255, matching BCnEncoder.Net and texconv. Verified visually on decoded UI/logo/leaf textures.
+
+**Sharp edges found (and how the converter handles them)**
+
+* The library's own `DDS.GetDXGIFormat()` resolves the `BC4U` fourCC it writes itself to
+  `R8G8B8A8UNORM` (silently wrong pixels); `CtxrConverter.ParseDdsHeader` parses the DDS header
+  itself and maps `BC4U`/`ATI1` → BC4, `BC5U`/`ATI2` → BC5, `DXT1/2/3/4/5`, DX10 and the masked
+  layouts, and rejects anything else **by name** (BC6H/BC7/SNORM/float).
+* `8C 06` `gradient_mask_alpha.ctxr` writes `dwMipMapCount = 0` while carrying a full mip chain —
+  harmless, only mip 0 is decoded.
+* `textures/shadow/ui/_ps4/hdr_calibration_image.ctxr` declares `-16000x692` (its SOTC
+  width/height bytes decode to a negative width) → the converter refuses with that message.
+* **External mip chunks are unusable on macOS**: `GetDDSBytes` builds chunk paths with
+  `.Replace("/", "\\")` (`CTXR.cs:1272`), and on macOS a backslash is a literal filename
+  character, so `File.Exists` never matches; the assembled DDS then silently contains only the
+  *internal* mips while claiming the full resolution (observed directly: `arena_02_flow_nml.ctxr`
+  with a fake `eboot.bin` root → 87,408-byte payload for a declared 2048×2048 BC5 top mip).
+  Independently, `PSUtility.GetPSRootPath` needs an `eboot.bin` ancestor and this extraction keeps
+  `eboot.bin` in `extracted/uroot/` while the assets live in `extracted/game/` (no `textures/`
+  under `uroot`), so `$`-chunk references cannot resolve at all here. `CtxrConverter` therefore
+  **rejects any container with `externalMipCount > 0`** (loud, path-named) instead of writing a
+  wrong mip level. That is 3,682 of the 6,901 Oodle `8C 0A` files (53 %). Remaining convertible
+  set: 3,095 (BC1 2,192 · RGBA8 748 · BC3 123 · BC5 19 · BC4 13), plus the 13 PNG + 94
+  uncompressed-variant files; a 30-file random sample of the convertible set converted 30/30 OK.
+
+**CC0A path**. Found via the brief's scan: the first `cc0a` file is
+`textures/shadow/sky/_ps4/sky_op2_storm__col.ctxr` (30,455,533 bytes, textureFormat `0x10`), and a
+full scan shows **all 325 CC0A containers are BC6H_UF16** (8192×4096 sky 14 mips + 256²–512² IBL
+cubes — HDR). The converter routes them as variant `cc0a`, decompresses through the vendored dylib
+(0x0ACC works exactly like 0x0A8C), de-swizzles and assembles the DDS, then **fails by name**:
+`cc0a container: unsupported DDS DXGI format 95 (BC6H_UF16)` — no BC6H decode was attempted.
+CC0A can therefore not succeed anywhere in this tree, and no decodable CC0A sample exists to pin a
+test on. A synthetic substitute is not available either: `Zamboni.Oodle.OodleCompress` only emits
+`8C 06` stream headers, and re-labelling such a stream as `CC 0A` breaks decompression (the marker
+bytes are the Oodle stream header itself — byte-0-only edit `CC 06`: payload no longer round-trips;
+`CC 0A`: `OodleLZ_Decompress` fails outright). BC6H support (or an HDR-aware path) is an explicit
+scope decision for the M0 controller, not something to guess at.
