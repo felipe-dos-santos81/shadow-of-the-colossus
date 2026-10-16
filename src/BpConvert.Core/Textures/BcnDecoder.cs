@@ -163,10 +163,13 @@ internal static class BcnDecoder
         }
         else
         {
-            // 3-colour mode: the midpoint, and index 3 is transparent black.
+            // 3-colour mode: the midpoint, and index 3 is transparent black. Entry 3 is written
+            // explicitly: stackalloc content is undefined without localsinit, and the copy loop
+            // below would otherwise publish whatever happened to be on the stack.
             for (int channel = 0; channel < 3; channel++)
                 palette[8 + channel] = (byte)((palette[channel] + palette[4 + channel]) / 2);
             palette[11] = 255;
+            palette[12] = palette[13] = palette[14] = palette[15] = 0;
         }
 
         for (int pixel = 0; pixel < 16; pixel++)

@@ -180,6 +180,7 @@ public class CtxrConverterTests : IDisposable
         var ex = Assert.ThrowsAny<Exception>(() => CtxrConverter.Convert(file, outPng));
 
         Assert.Contains(file, ex.Message);
+        Assert.Contains("-16000x692", ex.Message);   // the exact refusal reason
         Assert.False(File.Exists(outPng), "no output file may be written on failure");
     }
 
@@ -206,6 +207,27 @@ public class CtxrConverterTests : IDisposable
         var rgba = BcnDecoder.DecodeToRgba(block, DdsFormat.Bc1, 4, 4);
 
         AssertAll(rgba, r: 0, g: 0, b: 0, a: 0);
+    }
+
+    [Fact]
+    public void Decode_Bc1_ThreeColorMode_PinsAllFourPaletteEntries()
+    {
+        // c0 (red) < c1 (blue) → 3-colour mode. Pixel i uses index i % 4, so every palette entry
+        // appears: two endpoints, the midpoint, and the explicit transparent-black entry 3 (which
+        // must not depend on undefined stackalloc content).
+        var block = Bc1Block(0x001F, 0xF800, 0xE4, 0xE4, 0xE4, 0xE4);   // c0 < c1 → 3-colour mode
+        byte[][] expected =
+        [
+            [0, 0, 255, 255],       // entry 0: colour0
+            [255, 0, 0, 255],       // entry 1: colour1
+            [127, 0, 127, 255],     // entry 2: midpoint
+            [0, 0, 0, 0],           // entry 3: transparent black
+        ];
+
+        var rgba = BcnDecoder.DecodeToRgba(block, DdsFormat.Bc1, 4, 4);
+
+        for (int i = 0; i < 16; i++)
+            Assert.Equal(expected[i % 4], Pixel(rgba, i));
     }
 
     [Fact]
