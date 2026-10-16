@@ -648,9 +648,10 @@ QUT0 is used when present (other BluePoint titles); a zero-length entry falls ba
 
 ## 11. Skinning (Task 5, 2026-10-15) — adapter append
 
-Implements the adapter's skeleton/skinning half from §5. Records what the real tree showed, the
-decisions taken (CSKL routing, IBM element order, index/weight policies) and the one open concern
-(the writer's joint nodes carry no bind-pose transforms).
+Implements the adapter's skeleton/skinning half from §5. Records what the real tree showed and the
+decisions taken (CSKL routing, IBM element order, index/weight policies); §11.2 also covers the
+writer-side bind-pose joint transforms that closed the initial "nodes carry no transforms" gap
+(2026-10-16 addendum).
 
 ### 11.1 CSKL routing (measured)
 
@@ -706,14 +707,34 @@ while the chosen order decodes to the derived translation (`Bone_EYELID_Bot_L`:
 `M41..M43 ≈ (0.1066, −0.3910, 0.0188)`); the pinned `Wander_HasSkin_WithJoints` test asserts that
 translation, so the layout is pinned, not just the counts.
 
-**Representation choice:** the glTF joint nodes are written without transforms (Task 1's writer).
-The reflection is worth stating plainly, because M1's visual pass will hit it: glTF computes
-`jointMatrix = globalTransform(jointNode) × IBM`, so at bind pose a viewer reproduces the mesh
-only when the nodes carry the bind-pose locals (the CSKL transforms) — with identity nodes every
-skinned vertex is mapped into its joints' local frames. The *IBMs here are correct* (inverse bind
-matrices for the CSKL bind pose); what is missing is the node transforms, which need a
-`SkeletonJoint`/writer extension and are deliberately left to the M1 visual pass. Recorded as the
-Task 5 report's concern.
+**Joint node transforms (2026-10-16 addendum).** The writer (`GlbWriter`) now derives each joint
+node's bind-pose local transform from the data it already receives — no DTO change, no pin change:
+
+```
+world_i  = inverse(IBM_i)                      (glTF column-vector, or row-vector with the
+local_i  = world_i × IBM_parent                  same elements — the identity transposes)
+local_i  = world_i                            (roots, ParentIndex == -1)
+```
+
+In the row-vector terms this project uses (`local = world × IBM_parent`, `Matrix4x4.Multiply` =
+"apply left, then right"), that is the transpose of the column-vector
+`local = inverse(world_parent) × world` — i.e. the same node matrix on the wire once written in
+glTF's element order, which is also the DTO's own order (`M11 M12 M13 M14 M21 … M44`). The reason
+the node matrices are derivable at all: glTF defines the skin by
+`jointMatrix = globalTransform(joint) × IBM`, and at bind pose `jointMatrix` must be the identity,
+so `globalTransform(joint)` *is* `inverse(IBM)` and the node locals follow from the hierarchy.
+Shape of the derivation: `IBM_i` and `IBM_parent` are both in the data, so no traversal order is
+assumed (the parent's world transform is `IBM_parent` — that is what an inverse bind matrix is).
+
+Acceptance (`Wander_Joints_IdentityAtBindPose`, `Write_Skinned_JointNodesCarryBindPoseTransforms`):
+for every joint of the produced glb, `joint.WorldMatrix × IBM` must be the identity with
+max-abs-diff ≤ 1e-3. Measured on wander: **max residual 5.96e-7 over all 348 joints** (worst joint
+346), i.e. float32 accumulation only — the mesh now renders undeformed at bind pose with a
+conformant loader. Models without a skeleton emit no node `matrix` and stay byte-identical
+(verified: plank `sha256[:16] 3E09FF76CB5679A1`, minotaur statue `A443CD480FAA20D1`, before and
+after the change). These `matrix` nodes are an M0/M1 representation: when animation lands (M3) the
+joints should carry TRS (and animation channels) instead, which is a mechanical substitution
+(`matrix` ↔ translation/rotation/scale) — the local values stay the bind pose either way.
 
 ### 11.3 Weights and indices (policies, measured)
 

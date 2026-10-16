@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Text.Json;
 using BpConvert.Core.Model;
 
@@ -9,6 +10,12 @@ namespace BpConvert.Core.Gltf;
 /// No axis conversion (game and glTF are both Y-up), no external dependencies. The output is
 /// accepted by any conformant loader; the tests prove it by reloading it with SharpGLTF.
 /// </summary>
+/// <remarks>
+/// A <see cref="ModelData.Skeleton"/> additionally gives the joint nodes their bind-pose local
+/// transforms (derived from the inverse bind matrices — see <c>BindPoseLocalMatrices</c>), so the
+/// skinned mesh renders undeformed at bind pose. Models without a skeleton are written exactly as
+/// they were before that support existed (no node <c>matrix</c> properties at all).
+/// </remarks>
 public static class GlbWriter
 {
     /// <summary>
@@ -62,6 +69,7 @@ public static class GlbWriter
         private List<SkeletonJoint> _joints = new();
         private List<int>[] _jointChildren = Array.Empty<List<int>>();
         private List<int> _jointRoots = new();
+        private float[] _jointLocalMatrices = Array.Empty<float>();
         private int _ibmAccessor = -1;
         private string _skinName = string.Empty;
         private List<PrimitiveInfo> _primitives = new();
@@ -115,6 +123,63 @@ public static class GlbWriter
             }
 
             _ibmAccessor = AddAccessor(FloatBytes(ibm), null, ComponentFloat, "MAT4", _joints.Count, null, null);
+            _jointLocalMatrices = BindPoseLocalMatrices(_joints);
+        }
+
+        /// <summary>
+        /// The bind-pose local transform of every joint, for its node's <c>matrix</c>: glTF feeds a
+        /// skinned vertex through <c>globalTransform(joint) × inverseBindMatrix</c>, so a joint
+        /// renders undeformed at bind pose when its world transform is <c>inverse(IBM)</c>; its
+        /// local transform is that world transform relative to its parent's (roots are absolute).
+        /// </summary>
+        /// <remarks>
+        /// The DTO's 16 floats arrive in glTF's element order — column-major, i.e. the row-vector
+        /// matrix's rows in order (adapter notes §11) — and this type emits the same order, so the
+        /// composition is the row-vector <c>local = world × IBM_parent</c>: the transpose of the
+        /// column-vector <c>local = inverse(world_parent) × world</c>, i.e. the same node matrix.
+        /// </remarks>
+        private static float[] BindPoseLocalMatrices(List<SkeletonJoint> joints)
+        {
+            var matrices = new float[joints.Count * 16];
+            for (int i = 0; i < joints.Count; i++)
+            {
+                if (!Matrix4x4.Invert(ToMatrix(joints[i].InverseBindMatrix16), out var world))
+                    throw new InvalidOperationException($"Joint '{joints[i].Name}': InverseBindMatrix16 is not invertible.");
+
+                var local = world;
+                var parent = joints[i].ParentIndex;
+                if (parent >= 0) local = world * ToMatrix(joints[parent].InverseBindMatrix16);
+                WriteMatrix(local, matrices, i * 16);
+            }
+            return matrices;
+        }
+
+        /// <summary>The DTO's 16 floats read as a row-vector matrix (their own element order).</summary>
+        private static Matrix4x4 ToMatrix(float[] values) => new(
+            values[0], values[1], values[2], values[3],
+            values[4], values[5], values[6], values[7],
+            values[8], values[9], values[10], values[11],
+            values[12], values[13], values[14], values[15]);
+
+        /// <summary>Writes a matrix back in the DTO's element order (glTF's column-major listing).</summary>
+        private static void WriteMatrix(Matrix4x4 matrix, float[] destination, int offset)
+        {
+            destination[offset] = matrix.M11;
+            destination[offset + 1] = matrix.M12;
+            destination[offset + 2] = matrix.M13;
+            destination[offset + 3] = matrix.M14;
+            destination[offset + 4] = matrix.M21;
+            destination[offset + 5] = matrix.M22;
+            destination[offset + 6] = matrix.M23;
+            destination[offset + 7] = matrix.M24;
+            destination[offset + 8] = matrix.M31;
+            destination[offset + 9] = matrix.M32;
+            destination[offset + 10] = matrix.M33;
+            destination[offset + 11] = matrix.M34;
+            destination[offset + 12] = matrix.M41;
+            destination[offset + 13] = matrix.M42;
+            destination[offset + 14] = matrix.M43;
+            destination[offset + 15] = matrix.M44;
         }
 
         private PrimitiveInfo AddMesh(MeshData mesh, int jointCount, int materialCount)
@@ -232,6 +297,14 @@ public static class GlbWriter
                     {
                         w.WriteStartObject();
                         if (!string.IsNullOrEmpty(_joints[i].Name)) w.WriteString("name", _joints[i].Name);
+
+                        // Bind-pose local transform (glTF column-major); TRS replaces it when
+                        // animation lands (M3). See BindPoseLocalMatrices.
+                        w.WritePropertyName("matrix");
+                        w.WriteStartArray();
+                        for (int k = 0; k < 16; k++) w.WriteNumberValue(_jointLocalMatrices[i * 16 + k]);
+                        w.WriteEndArray();
+
                         if (_jointChildren[i].Count > 0)
                         {
                             w.WritePropertyName("children");

@@ -88,32 +88,78 @@ public class SkinningTests : IDisposable
     }
 
     [Fact]
+    public void Wander_Joints_IdentityAtBindPose()
+    {
+        // The bind-pose acceptance for the whole rig: glTF requires joint.WorldMatrix × IBM = I at
+        // bind pose, i.e. the mesh renders undeformed. The joint nodes' local transforms are
+        // derived from the IBM accessor by the writer, so this covers all 348 joints of the real
+        // skeleton (rotations and translations, several levels deep).
+        var gltf = ConvertAndLoad(WanderRel);
+        var skin = Assert.Single(gltf.LogicalSkins);
+        var inverseBind = skin.GetInverseBindMatricesAccessor()!.AsMatrix4x4Array();
+
+        float maxResidual = 0;
+        for (int i = 0; i < skin.JointsCount; i++)
+        {
+            var product = skin.Joints[i].WorldMatrix * inverseBind[i];
+            for (int row = 1; row <= 4; row++)
+                for (int column = 1; column <= 4; column++)
+                    maxResidual = Math.Max(maxResidual, Math.Abs(Get(product, row, column) - (row == column ? 1f : 0f)));
+        }
+        Assert.InRange(maxResidual, 0f, 1e-3f);
+    }
+
+    [Fact]
     public void Plank_StaysUnskinned()
     {
         // obj_plank_01.cmsh has no bone data (variantFlag 0x0): exactly the Task 4 output — no
-        // skeleton, no skin attributes, but still a full conversion.
-        var gltf = ConvertAndLoad(PlankRel);
+        // skeleton, no skin attributes, no joint nodes, but still a full conversion.
+        var glbPath = Convert(PlankRel);
+        var gltf = ModelRoot.Load(glbPath);
 
         Assert.NotEmpty(gltf.LogicalMeshes);
         Assert.Empty(gltf.LogicalSkins);
         Assert.All(gltf.LogicalMeshes.SelectMany(mesh => mesh.Primitives), primitive =>
             Assert.All(SkinnedAttributes, attribute => Assert.False(primitive.VertexAccessors.ContainsKey(attribute))));
+
+        // Byte-level: a model without a skeleton must not gain any bind-pose node transforms.
+        Assert.DoesNotContain("\"matrix\"", File.ReadAllText(glbPath, System.Text.Encoding.ASCII));
     }
 
     /// <summary>Converts a pinned sample and loads the produced .glb with SharpGLTF.</summary>
-    private ModelRoot ConvertAndLoad(string relativePath)
+    private ModelRoot ConvertAndLoad(string relativePath) => ModelRoot.Load(Convert(relativePath));
+
+    private string Convert(string relativePath)
     {
         var result = ModelConverter.Convert(TestAssets.Root, relativePath, Path.Combine(_dir, "lib"));
         Assert.True(File.Exists(result.GlbPath), result.GlbPath);
-        return ModelRoot.Load(result.GlbPath);
+        return result.GlbPath;
     }
 
-    /// <summary>
-    /// Translation of a matrix SharpGLTF decoded from the IBM accessor, within float noise (the
-    /// values come from the same float operations on both sides).
-    /// </summary>
+    /// <summary>Translation of a matrix SharpGLTF decoded from the IBM accessor, within float noise (the
+    /// values come from the same float operations on both sides).</summary>
     private static void AssertTranslation(Vector3 expected, Matrix4x4 actual)
     {
         Assert.InRange((actual.Translation - expected).Length(), 0f, 1e-3f);
     }
+
+    private static float Get(Matrix4x4 m, int row, int column) => (row, column) switch
+    {
+        (1, 1) => m.M11,
+        (1, 2) => m.M12,
+        (1, 3) => m.M13,
+        (1, 4) => m.M14,
+        (2, 1) => m.M21,
+        (2, 2) => m.M22,
+        (2, 3) => m.M23,
+        (2, 4) => m.M24,
+        (3, 1) => m.M31,
+        (3, 2) => m.M32,
+        (3, 3) => m.M33,
+        (3, 4) => m.M34,
+        (4, 1) => m.M41,
+        (4, 2) => m.M42,
+        (4, 3) => m.M43,
+        _ => m.M44,
+    };
 }

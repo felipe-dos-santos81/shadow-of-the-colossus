@@ -85,6 +85,91 @@ public class GltfWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_Skinned_JointNodesCarryBindPoseTransforms()
+    {
+        // A non-trivial bind pose: j0 is rotated and translated, j1 hangs 0.4 below it in j0's
+        // own frame (row-vector composition). The inverse bind matrices are produced exactly as
+        // the adapter produces them (the DTO's 16 floats are glTF's column-major listing).
+        var world0 = Matrix4x4.CreateRotationZ(0.6f) * Matrix4x4.CreateTranslation(0.25f, 1f, 0f);
+        var local1 = Matrix4x4.CreateTranslation(0f, 0.4f, 0f);
+        var world1 = local1 * world0;
+        var skeleton = new SkeletonData("sk", new()
+        {
+            new SkeletonJoint("j0", -1, InverseBindMatrix(world0)),
+            new SkeletonJoint("j1", 0, InverseBindMatrix(world1)),
+        });
+        var m = new ModelData("x.cmsh", new() { new MeshData("m", Positions, Normals, new[] { Uv0 }, Indices,
+            new int[] { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0 }, new float[] { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 }, -1) },
+            new(), skeleton, new());
+
+        var gltf = ModelRoot.Load(GlbWriter.Write(m, _dir, "bindpose", new Dictionary<string, string>()).GlbPath);
+
+        // glTF: at bind pose joint.WorldMatrix × IBM = Identity — the definition of "renders
+        // undeformed". SharpGLTF decodes both sides in System.Numerics convention, where the same
+        // product holds (the column-vector identity transposes as a whole).
+        var skin = Assert.Single(gltf.LogicalSkins);
+        var ibm = skin.GetInverseBindMatricesAccessor()!.AsMatrix4x4Array();
+        for (int i = 0; i < skin.JointsCount; i++)
+            AssertBindPoseIdentity(skin.Joints[i].WorldMatrix * ibm[i]);
+
+        // The nodes carry the bind pose itself (a root local is its world; a child's is its world
+        // relative to its parent), so the emitted `matrix` values pin the derivation order too.
+        AssertClose(world0, skin.Joints[0].LocalMatrix);
+        AssertClose(local1, skin.Joints[1].LocalMatrix);
+        AssertClose(world1, skin.Joints[1].WorldMatrix);
+    }
+
+    /// <summary>
+    /// Inverse bind matrix in the DTO's float order (glTF column-major — i.e. the row-vector
+    /// matrix's rows in order; see the adapter notes §11): <c>inverse(world)</c> for a bind-pose
+    /// world transform.
+    /// </summary>
+    private static float[] InverseBindMatrix(Matrix4x4 world)
+    {
+        Assert.True(Matrix4x4.Invert(world, out var ibm));
+        return new[]
+        {
+            ibm.M11, ibm.M12, ibm.M13, ibm.M14,
+            ibm.M21, ibm.M22, ibm.M23, ibm.M24,
+            ibm.M31, ibm.M32, ibm.M33, ibm.M34,
+            ibm.M41, ibm.M42, ibm.M43, ibm.M44,
+        };
+    }
+
+    /// <summary>Element-wise max-abs-diff ≤ 1e-3 (float32 accumulation through the glb).</summary>
+    private static void AssertClose(Matrix4x4 expected, Matrix4x4 actual)
+    {
+        var residual = expected - actual;
+        float max = 0;
+        for (int row = 1; row <= 4; row++)
+            for (int column = 1; column <= 4; column++)
+                max = Math.Max(max, Math.Abs(Get(residual, row, column)));
+        Assert.InRange(max, 0f, 1e-3f);
+    }
+
+    private static void AssertBindPoseIdentity(Matrix4x4 product) => AssertClose(Matrix4x4.Identity, product);
+
+    private static float Get(Matrix4x4 m, int row, int column) => (row, column) switch
+    {
+        (1, 1) => m.M11,
+        (1, 2) => m.M12,
+        (1, 3) => m.M13,
+        (1, 4) => m.M14,
+        (2, 1) => m.M21,
+        (2, 2) => m.M22,
+        (2, 3) => m.M23,
+        (2, 4) => m.M24,
+        (3, 1) => m.M31,
+        (3, 2) => m.M32,
+        (3, 3) => m.M33,
+        (3, 4) => m.M34,
+        (4, 1) => m.M41,
+        (4, 2) => m.M42,
+        (4, 3) => m.M43,
+        _ => m.M44,
+    };
+
+    [Fact]
     public void Write_BaseColorTexture_EmitsUri()
     {
         Directory.CreateDirectory(Path.Combine(_dir, "tex"));
