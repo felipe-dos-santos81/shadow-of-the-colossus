@@ -127,10 +127,11 @@ in scope: 16782  skipped: 127  converted: 16631  failed: 24  elapsed: 32:57.656
 `skipped: 127` is exactly the pre-flight (121) + largest-model (6) entries the earlier steps had
 already converted into the same library — i.e. the batch picked up where the pre-flight stopped.
 
-Fastest section: `models/objects/rocks` + `models/objects/rocks_desert` (6,180 files) were already
-complete at the first snapshot (2m19s in) — overwhelmingly reference-mesh stubs (see §5, class 2);
-slowest: the textured level geometry (`models/shadow/levels`, ≈7.1 s/file) and the skinned
-colossus/player meshes (43.7 s for one mega-maid skirt mesh).
+Fastest section by far: the rocks family (`models/objects/rocks` + `models/objects/rocks_desert`,
+**12,372** in-scope `cmsh`, 11,835 of them reference-mesh stubs — see §5, class 2): 11,126 were
+already recorded inside the first snapshot's 11,456 log lines (2m19s in), the remaining 1,246 by
+log line 14,793. Slowest: the textured level geometry (`models/shadow/levels`, ≈7.1 s/file) and
+the skinned colossus/player meshes (43.7 s for one mega-maid skirt mesh).
 
 ```bash
 dotnet exec out/bin/bp-convert.dll report --out out/library --top 20
