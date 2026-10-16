@@ -1,6 +1,8 @@
 using System.IO.Compression;
 using System.Text;
+using AquaModelLibrary.Data.BluePoint;
 using AquaModelLibrary.Data.BluePoint.CTXR;
+using AquaModelLibrary.Helpers;
 
 namespace BpConvert.Core.Textures;
 
@@ -28,10 +30,10 @@ public sealed record CtxrResult(int Width, int Height, string Variant);
 /// </para>
 /// <para>
 /// Only the top mip is written. Cube maps and volume textures yield their first slice/face.
-/// Textures whose mip data is split into external <c>.ctxc</c> chunks are rejected (the library
-/// resolves those with Windows path separators, so they cannot be assembled on macOS) — a loud
-/// failure instead of silent garbage. Unsupported pixel formats (BC6H/BC7/SNORM/float) are
-/// reported by name; no format is ever decoded on a guess.
+/// Containers whose mip chain starts in external <c>.ctxc</c> chunk files are supported by
+/// assembling <b>mip 0 only</b> from the level-0 chunk (see <see cref="AssembleExternalMip0"/>);
+/// lower levels are skipped because consumers regenerate them. Unsupported pixel formats
+/// (BC6H/BC7/SNORM/float) are reported by name; no format is ever decoded on a guess.
 /// </para>
 /// <para>
 /// Failures throw <see cref="InvalidDataException"/> whose message starts with the input path.
@@ -96,25 +98,34 @@ public static class CtxrConverter
             return new CtxrResult(width, height, variant);
         }
 
+        byte[] dds;
         if (ctxr.externalMipCount > 0)
         {
-            throw Error(ctxrAbsPath,
-                $"{variant} container: texture has {ctxr.externalMipCount} external mip chunk(s) (.ctxc); assembling them is not " +
-                "supported on macOS (the library builds those paths with Windows separators), so the decoded " +
-                "image would silently be the wrong mip level");
+            try
+            {
+                var mip0 = AssembleExternalMip0(ctxr, ctxrAbsPath);
+                dds = ctxr.GenerateDDSHeader(ctxr.GetFormat(), ctxr.GetWidth(), ctxr.GetHeight(), mipCount: 1)
+                    .Concat(mip0)
+                    .ToArray();
+            }
+            catch (Exception e)
+            {
+                throw Error(ctxrAbsPath, $"{variant} container: external mip 0: {e.Message}", e);
+            }
         }
-
-        byte[] dds;
-        try
+        else
         {
-            var ddsBlobs = ctxr.GetDDSBytes(ctxrAbsPath);
-            dds = ddsBlobs.Count > 0
-                ? ddsBlobs[0]
-                : throw new InvalidDataException("container holds no texture data");
-        }
-        catch (Exception e)
-        {
-            throw Error(ctxrAbsPath, $"{variant} container: CTXR → DDS assembly failed ({Describe(e)})", e);
+            try
+            {
+                var ddsBlobs = ctxr.GetDDSBytes(ctxrAbsPath);
+                dds = ddsBlobs.Count > 0
+                    ? ddsBlobs[0]
+                    : throw new InvalidDataException("container holds no texture data");
+            }
+            catch (Exception e)
+            {
+                throw Error(ctxrAbsPath, $"{variant} container: CTXR → DDS assembly failed ({Describe(e)})", e);
+            }
         }
 
         DdsImage image;
@@ -144,6 +155,79 @@ public static class CtxrConverter
 
     /// <summary>DDS header fields needed to decode the top mip.</summary>
     internal readonly record struct DdsImage(DdsFormat Format, int Width, int Height, int DataOffset);
+
+    /// <summary>
+    /// Assembles mip 0 of a container whose mip chain lives in external <c>.ctxc</c> chunk files:
+    /// resolves the level-0 reference, reads/decompresses the chunk and de-swizzles it to raw
+    /// mip-0 block bytes. Mirrors what <c>CTXR.GetDDSBytes</c> intends (lower levels are skipped —
+    /// Godot/glTF consumers regenerate them), but resolves the paths the way the game stores them
+    /// (<c>/</c> separators) instead of the library's Windows-only <c>\</c> substitution.
+    /// </summary>
+    internal static byte[] AssembleExternalMip0(CTXR ctxr, string ctxrAbsPath)
+    {
+        if (ctxr.textureType is not (CTextureType.Standard or CTextureType.LargeUI))
+            throw new InvalidDataException(
+                $"external mip 0 assembly supports Standard/LargeUI textures, not {ctxr.textureType}");
+
+        var reference = ctxr.mipPaths.FirstOrDefault(p => p.mipLevel == 0)
+            ?? throw new InvalidDataException(
+                $"no external reference for mip level 0 (container has {ctxr.externalMipCount} external level(s))");
+
+        var chunkFile = ResolveChunkFile(ctxrAbsPath, reference.externalMipReference)
+            ?? throw new InvalidDataException(
+                $"chunk file for mip level 0 not found: '{reference.externalMipReference}' " +
+                "(tried the reference below every ancestor directory, with **** → _cmn/_ps4/_ps5)");
+
+        var pixelFormat = ctxr.GetFormat();
+        var width = ctxr.GetWidth();
+        var height = ctxr.GetHeight();
+
+        // `CheckCompression` decompresses the chunk (they carry their own Oodle marker) and keeps
+        // its 12-byte CTXT trailer; the de-swizzle size is computed on the payload only — exactly
+        // as CTXR.ReadAndDeSwizzleCTexChunk does it.
+        var chunk = CompressionHandler.CheckCompression(File.ReadAllBytes(chunkFile), out _);
+        ctxr.GetDeSwizzleSize(chunk.Length - 0xC, pixelFormat, width, height, out var swizzleWidth, out var swizzleHeight);
+        var deSwizzled = ctxr.footerData.version switch
+        {
+            0x25 => DeSwizzler.PS4DeSwizzle(chunk, swizzleWidth, swizzleHeight, pixelFormat),   // SOTC
+            0x6E => DeSwizzler.PS5DeSwizzle(chunk, swizzleWidth, swizzleHeight, pixelFormat),   // DeSR
+            var version => throw new InvalidDataException(
+                $"unsupported container version 0x{version:X} for external mip chunks"),
+        };
+        return DeSwizzler.ExtractTile(deSwizzled, pixelFormat, swizzleWidth, 0, 0, width, height);
+    }
+
+    /// <summary>
+    /// Resolves a <c>$</c>-rooted chunk reference (for example
+    /// <c>$/textures/ocean/flowmaps/****/arena_02_flow_nml.chunk0.ctxc</c>) to a real file.
+    /// Root derivation (no environment variables, no globals): the reference is game-root relative,
+    /// so every ancestor of the container's own directory is a candidate root; the first candidate
+    /// that exists wins. <c>****</c> (the platform wildcard) is tried as <c>_cmn</c>, then
+    /// <c>_ps4</c>, then <c>_ps5</c>, matching the game's shared-first ordering. Bare references
+    /// (no <c>$/</c>) resolve against the container's directory first.
+    /// </summary>
+    private static string? ResolveChunkFile(string ctxrAbsPath, string externalMipReference)
+    {
+        var reference = externalMipReference.StartsWith("$/", StringComparison.Ordinal)
+            ? externalMipReference[2..]
+            : externalMipReference;
+        reference = reference.Replace('\\', '/');
+        var platforms = reference.Contains("****") ? new[] { "_cmn", "_ps4", "_ps5" } : new[] { string.Empty };
+
+        var directory = Path.GetDirectoryName(Path.GetFullPath(ctxrAbsPath));
+        for (var depth = 0; directory != null && depth < 64; depth++)
+        {
+            foreach (var platform in platforms)
+            {
+                var candidate = Path.Combine(
+                    directory, reference.Replace("****", platform).Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            directory = Path.GetDirectoryName(directory);
+        }
+        return null;
+    }
 
     /// <summary>
     /// Parses a DDS header (plus the DX10 extension header when present). This deliberately does

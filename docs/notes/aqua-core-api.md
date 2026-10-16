@@ -467,6 +467,8 @@ in-graph, test-only `BCnEncoder.Net` 2.1.0: BC1 and BC2 are byte-identical, BC3/
 on interpolated palette entries by ±1 (BCnEncoder rounds; we truncate, matching the D3D/Vulkan
 integer reference). BC4/BC5 keep the single/two channels where they are (red, red+green) with
 alpha 255, matching BCnEncoder.Net and texconv. Verified visually on decoded UI/logo/leaf textures.
+(`SixLabors.ImageSharp` 3.1.6, used test-only/transitively to decode written PNGs, is under the
+**Six Labors Split License** — not Apache-2.0; it is not a product dependency.)
 
 **Sharp edges found (and how the converter handles them)**
 
@@ -478,18 +480,36 @@ alpha 255, matching BCnEncoder.Net and texconv. Verified visually on decoded UI/
   harmless, only mip 0 is decoded.
 * `textures/shadow/ui/_ps4/hdr_calibration_image.ctxr` declares `-16000x692` (its SOTC
   width/height bytes decode to a negative width) → the converter refuses with that message.
-* **External mip chunks are unusable on macOS**: `GetDDSBytes` builds chunk paths with
-  `.Replace("/", "\\")` (`CTXR.cs:1272`), and on macOS a backslash is a literal filename
+* **External mip chunks are unusable through the library on macOS** — `GetDDSBytes` builds chunk
+  paths with `.Replace("/", "\\")` (`CTXR.cs:1272`), and on macOS a backslash is a literal filename
   character, so `File.Exists` never matches; the assembled DDS then silently contains only the
   *internal* mips while claiming the full resolution (observed directly: `arena_02_flow_nml.ctxr`
   with a fake `eboot.bin` root → 87,408-byte payload for a declared 2048×2048 BC5 top mip).
   Independently, `PSUtility.GetPSRootPath` needs an `eboot.bin` ancestor and this extraction keeps
   `eboot.bin` in `extracted/uroot/` while the assets live in `extracted/game/` (no `textures/`
-  under `uroot`), so `$`-chunk references cannot resolve at all here. `CtxrConverter` therefore
-  **rejects any container with `externalMipCount > 0`** (loud, path-named) instead of writing a
-  wrong mip level. That is 3,682 of the 6,901 Oodle `8C 0A` files (53 %). Remaining convertible
-  set: 3,095 (BC1 2,192 · RGBA8 748 · BC3 123 · BC5 19 · BC4 13), plus the 13 PNG + 94
-  uncompressed-variant files; a 30-file random sample of the convertible set converted 30/30 OK.
+  under `uroot`), so `$`-chunk references cannot resolve at all here.
+  **Resolution (D2, 2026-10-15): we assemble mip 0 ourselves.** `CtxrConverter.AssembleExternalMip0`
+  resolves the level-0 `mipPaths` reference by walking the *ancestors of the container's own
+  directory* (no environment variables, no globals): the first ancestor under which the reference
+  exists wins, with `****` tried as `_cmn`, then `_ps4`, then `_ps5` (the game's shared-first order;
+  the library's own order is `_cmn`/`_ps5`/`_ps4`). The chunk file is read, decompressed via
+  `CompressionHandler.CheckCompression` (`.ctxc` chunks carry their own Oodle marker), sized with
+  `CTXR.GetDeSwizzleSize`, de-swizzled with `DeSwizzler.PS4DeSwizzle`/`PS5DeSwizzle` and cropped by
+  `DeSwizzler.ExtractTile` — mirroring `ReadAndDeSwizzleCTexChunk` (`CTXR.cs:1411-1432`) exactly, but
+  with `/` separators. **Only mip 0 is assembled; lower levels are skipped** (consumers re-mip),
+  which is also what the DDS blob we hand to `BcnDecoder` declares (`mipCount: 1`). Verified: 35/35
+  random files from the previously-refused class convert (0 failures, ~0.4 s/file), the minotaur
+  statue and Wander head/skin/poncho textures render correctly, and
+  `arena_02_flow_nml.ctxr` goes from the library's 87,408-byte internal-only payload (wrong mip) to
+  a 4,194,304-byte mip 0 (= the level-0 reference's own `bufferSize`).
+* All 3,682 external-mip containers are `textureType Standard`, `sliceCount 1`, formats
+  BC1 2,523 / BC5 888 / BC3 140 / BC4 125 / RGBA8 5 / BC2 1, every one with a level-0 reference.
+  Cube/volume containers with external mips are not present; the assembler refuses them by name.
+
+**Convertible set after D2** (whole-tree picture): 3,095 containers without external mips + 3,682
+with external mips now assembled = **6,777 of 6,901 `8C 0A` files (98.2 %)**, plus the 13 PNG and
+94 uncompressed-variant files. Only BC6H (124 `8C 0A` + all 325 `CC 0A`) and
+`hdr_calibration_image.ctxr` remain refused, by name.
 
 **CC0A path**. Found via the brief's scan: the first `cc0a` file is
 `textures/shadow/sky/_ps4/sky_op2_storm__col.ctxr` (30,455,533 bytes, textureFormat `0x10`), and a
@@ -501,5 +521,7 @@ CC0A can therefore not succeed anywhere in this tree, and no decodable CC0A samp
 test on. A synthetic substitute is not available either: `Zamboni.Oodle.OodleCompress` only emits
 `8C 06` stream headers, and re-labelling such a stream as `CC 0A` breaks decompression (the marker
 bytes are the Oodle stream header itself — byte-0-only edit `CC 06`: payload no longer round-trips;
-`CC 0A`: `OodleLZ_Decompress` fails outright). BC6H support (or an HDR-aware path) is an explicit
-scope decision for the M0 controller, not something to guess at.
+`CC 0A`: `OodleLZ_Decompress` fails outright). **Controller ruling (D1, 2026-10-15):** accepted as a
+*named M0 limitation* — the `cc0a` route stays verified up to the named refusal, no BC6H work in M0;
+revisit at M1+ with an HDR-capable container (EXR/KTX2 + tonemap), since PNG is the wrong container
+for HDR.

@@ -1,3 +1,4 @@
+using AquaModelLibrary.Data.BluePoint.CTXR;
 using BpConvert.Core.Textures;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -110,19 +111,76 @@ public class CtxrConverterTests : IDisposable
     }
 
     [Fact]
-    public void Convert_ExternalMipTexture_ThrowsWithPath()
+    public void Convert_ExternalMipTexture_AssemblesMip0()
     {
-        // Pins a known limitation: external mip chunks (.ctxc) cannot be assembled on macOS
-        // (the library resolves them with Windows path separators, and this extraction has no
-        // eboot.bin anchor). The converter must refuse loudly instead of writing wrong pixels.
-        var file = TestAssets.Sample("textures/ocean/flowmaps/_ps4/arena_02_flow_nml.ctxr");
+        // Containers with external .ctxc mip chunks: we assemble mip 0 ourselves (the library
+        // cannot read those chunks on macOS). Wander-class sample, BC1 2048x2048, 3 external levels.
+        var file = TestAssets.Sample("textures/shadow/characters/wander/_ps4/wander_skin_col.ctxr");
         Assert.True(File.Exists(file));
         AssertMagic(file, "8c0a");
 
-        var ex = Assert.ThrowsAny<Exception>(() => CtxrConverter.Convert(file, Path.Combine(_dir, "arena_02.png")));
+        var outPng = Path.Combine(_dir, "wander_skin_col.png");
+        var result = CtxrConverter.Convert(file, outPng);
+
+        Assert.True(File.Exists(outPng));
+        Assert.Equal("8c0a", result.Variant);
+        Assert.Equal(2048, result.Width);
+        Assert.Equal(2048, result.Height);
+        using var img = Image.Load<Rgba32>(outPng);
+        Assert.Equal(result.Width, img.Width);
+        Assert.Equal(result.Height, img.Height);
+        Assert.True(DistinctPixels(img).Count >= 1_000,
+            $"decoded PNG has only {DistinctPixels(img).Count} distinct RGBA values");
+    }
+
+    [Fact]
+    public void AssembleExternalMip0_ReturnsExactlyTheTopMip()
+    {
+        var file = TestAssets.Sample("textures/shadow/characters/wander/_ps4/wander_skin_col.ctxr");
+        var ctxr = new CTXR(File.ReadAllBytes(file));
+        Assert.Equal(3, ctxr.externalMipCount);
+
+        var mip0 = CtxrConverter.AssembleExternalMip0(ctxr, file);
+
+        // BC1: ceil(w/4) * ceil(h/4) * 8 bytes per block.
+        var expected = ((ctxr.GetWidth() + 3) / 4) * ((ctxr.GetHeight() + 3) / 4) * 8;
+        Assert.Equal(expected, mip0.Length);
+        // The container's own level-0 reference declares the same byte count (4,194,304 for the
+        // 2048x2048 BC5 flowmap, 2,097,152 here) — a second, container-side cross-check.
+        Assert.Equal(ctxr.mipPaths.Single(p => p.mipLevel == 0).bufferSize, mip0.Length);
+    }
+
+    [Fact]
+    public void AssembleExternalMip0_UnresolvableChunk_ThrowsWithReason()
+    {
+        var file = TestAssets.Sample("textures/shadow/characters/wander/_ps4/wander_skin_col.ctxr");
+        var ctxr = new CTXR(File.ReadAllBytes(file));
+        ctxr.mipPaths.Clear();
+        ctxr.mipPaths.Add(new CTXRExternalReference
+        {
+            mipLevel = 0,
+            externalMipReference = "$/textures/does/not/****/exist.chunk0.ctxc",
+        });
+
+        var ex = Assert.ThrowsAny<Exception>(() => CtxrConverter.AssembleExternalMip0(ctxr, file));
+
+        Assert.Contains("exist.chunk0.ctxc", ex.Message);
+        Assert.Contains("_cmn", ex.Message);
+    }
+
+    [Fact]
+    public void Convert_NegativeDimensions_ThrowsWithPath()
+    {
+        // Permanently unassemblable: the container's SOTC width/height bytes decode to a negative
+        // width (-16000x692), so there is no image to write.
+        var file = TestAssets.Sample("textures/shadow/ui/_ps4/hdr_calibration_image.ctxr");
+        Assert.True(File.Exists(file));
+        var outPng = Path.Combine(_dir, "hdr_calibration_image.png");
+
+        var ex = Assert.ThrowsAny<Exception>(() => CtxrConverter.Convert(file, outPng));
 
         Assert.Contains(file, ex.Message);
-        Assert.Contains("external", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(outPng), "no output file may be written on failure");
     }
 
     // --- Synthetic block decoders (no game assets required) ---------------------------------
