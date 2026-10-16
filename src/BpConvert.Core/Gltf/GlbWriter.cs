@@ -450,6 +450,10 @@ public static class GlbWriter
             w.WriteStartObject();
             if (material.BaseColorFactor.Length > 0) WriteFloats(w, "baseColorFactor", Rgba(material.BaseColorFactor));
             if (textures.BaseColor >= 0) WriteTextureRef(w, "baseColorTexture", textures.BaseColor);
+            // glTF's default metallicFactor is 1.0 (fully metallic) and the BluePoint pipeline has
+            // no metallic input, so every material is dielectric until an M1 material pass exists.
+            // Roughness keeps its 1.0 default (the accepted approximation for now).
+            w.WriteNumber("metallicFactor", 0);
             w.WriteEndObject();
 
             if (material.EmissiveFactor.Length >= 3) WriteFloats(w, "emissiveFactor", material.EmissiveFactor[..3]);

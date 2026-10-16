@@ -467,8 +467,11 @@ in-graph, test-only `BCnEncoder.Net` 2.1.0: BC1 and BC2 are byte-identical, BC3/
 on interpolated palette entries by ±1 (BCnEncoder rounds; we truncate, matching the D3D/Vulkan
 integer reference). BC4/BC5 keep the single/two channels where they are (red, red+green) with
 alpha 255, matching BCnEncoder.Net and texconv. Verified visually on decoded UI/logo/leaf textures.
-(`SixLabors.ImageSharp` 3.1.6, used test-only/transitively to decode written PNGs, is under the
-**Six Labors Split License** — not Apache-2.0; it is not a product dependency.)
+(`SixLabors.ImageSharp` 3.1.6, used to decode written PNGs, is transitive through the GPL-3.0
+submodule — a direct `PackageReference` of `AquaModelLibrary.Data` — and is present in the
+**product** graph: its DLL ships in the published CLI output. It is under the
+**Six Labors Split License** — not Apache-2.0 — hence personal use only, no redistribution;
+see `tools/native/NOTICE.md`.)
 
 **Sharp edges found (and how the converter handles them)**
 

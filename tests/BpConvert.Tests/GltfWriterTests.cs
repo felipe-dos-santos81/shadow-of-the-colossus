@@ -204,6 +204,13 @@ public class GltfWriterTests : IDisposable
 
         // The shipped SharpGLTF surfaces KHR_materials_specular's specularTexture as "SpecularFactor".
         Assert.Equal("tex/t_spec.png", mat.FindChannel("SpecularFactor")!.Value.Texture.PrimaryImage.Content.SourcePath);
+
+        // glTF's default metallicFactor is 1.0 (fully metallic in conformant loaders); the writer
+        // must pin every material to dielectric (0) — the BluePoint pipeline has no metallic input.
+        // Asserted through SharpGLTF (the same loader the acceptance checker uses): a defaulted
+        // factor would read back as 1.0, so 0 proves the JSON carries it explicitly.
+        var metallic = mat.FindChannel("MetallicRoughness")!.Value.Parameters.Single(p => p.Name == "MetallicFactor");
+        Assert.Equal(0f, Convert.ToSingle(metallic.Value));
     }
 
     [Fact]

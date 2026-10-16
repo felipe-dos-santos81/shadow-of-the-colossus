@@ -15,10 +15,13 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <!--
       SixLabors.ImageSharp (3.1.6, Six Labors Split License) is used by the texture tests to decode
-      written PNGs. It is referenced transitively through AquaModelLibrary.Data and deliberately NOT
-      added as a direct PackageReference: it is test-only/transitive (not a product dependency, so
-      the product's MIT/Apache-2.0 constraint is not triggered), and this library-pinned version
+      written PNGs. It is referenced transitively through AquaModelLibrary.Data (a direct
+      PackageReference of that GPL-3.0 submodule) and is deliberately NOT added as a direct
+      PackageReference here: it is not pinned by this project, and the library-pinned version
       carries known advisories we do not want to surface as warnings (see Directory.Build.props).
+      Note it IS present in the product graph — its DLL ships in the published CLI output — so the
+      personal-use/no-redistribution terms of the Six Labors Split License apply to the product
+      build too (see tools/native/NOTICE.md).
     -->
   </ItemGroup>
 

@@ -19,3 +19,11 @@
 - **Behavior note:** `OodleLZ_Decompress` requires `rawLen` to equal the **exact** decompressed
   size; a larger output buffer fails. The library passes exactly the size read from the container's
   12-byte footer trailer, so it is compatible as-is.
+
+## Managed dependency: `SixLabors.ImageSharp`
+
+- SixLabors.ImageSharp 3.1.6 is pulled in transitively through the GPL-3.0 submodule
+  (`AquaModelLibrary.Data` carries it as a direct `PackageReference`) and is **present in the
+  product graph** — `SixLabors.ImageSharp.dll` ships in the published CLI output (`out/bin/`).
+- **Terms:** Six Labors Split License (not Apache-2.0). As with the Oodle dylib above: personal
+  use only — do not redistribute this repository's build output.

@@ -27,6 +27,9 @@
 # SharpGLTF.Core 1.0.7 (the test project's pin; restored from the local NuGet cache) that reads
 # out/library/catalog.json, loads each recorded-ok glb below the requested prefixes, and
 # cross-checks the converter-reported meshes/vertices against what the file actually carries.
+# It also asserts every material in every loaded glb carries an explicit `metallicFactor` of 0
+# (glTF defaults the factor to 1.0 — fully metallic — so an omitted factor would make every
+# material render as metal; see the post-review fix wave in docs/notes/m0-results.md).
 # Nothing below src/ or tests/ is touched.
 #
 # Environment:
@@ -127,14 +130,18 @@ cat > "$checker_dir/Program.cs" <<'EOF'
 //
 // Reads <lib>/catalog.json, loads every recorded-ok .glb below the requested source prefixes with
 // SharpGLTF (the same loader the test suite pins), cross-checks the converter-reported
-// meshes/vertices against what the glb actually carries, and prints per-group aggregates.
+// meshes/vertices against what the glb actually carries, and asserts every material in every
+// loaded glb carries an explicit metallicFactor of 0 (glTF's default is 1.0 — fully metallic).
+// Prints per-group aggregates.
 // One group per --prefix (a prefix with no recorded entries is a failure); a prefix may name a
 // directory or a single source file, and the first matching prefix owns the source (so keep nested
 // prefixes out of one invocation). Without --prefix the whole catalog is checked, grouped by the
 // source's first --depth path components.
-// Exit codes: 0 = every checked glb loaded and every requested group has files and meshes,
-// 1 = at least one failure (load error, missing glb, empty group, 0-mesh group under
-// --require-meshes), 2 = bad invocation.
+// Exit codes: 0 = every checked glb loaded, every material passed the metallicFactor assertion,
+// and every requested group has files and meshes, 1 = at least one failure (load error, missing
+// glb, empty group, 0-mesh group under --require-meshes, material without an explicit
+// metallicFactor 0), 2 = bad invocation.
+using System.Buffers.Binary;
 using System.Text.Json;
 using SharpGLTF.Schema2;
 
@@ -193,6 +200,7 @@ foreach (var prefix in prefixes)
 }
 
 int files = 0, loaded = 0, failed = 0, mismatches = 0;
+int materials = 0, badMaterials = 0;
 long totalMeshes = 0, totalVertices = 0, totalBytes = 0;
 
 using var document = JsonDocument.Parse(File.ReadAllText(catalogPath));
@@ -241,13 +249,25 @@ foreach (var property in document.RootElement.GetProperty("entries").EnumerateOb
             }
         }
 
+        var (fileMaterials, fileBadMaterials) = CheckMaterials(glbPath);
+        materials += fileMaterials;
+        badMaterials += fileBadMaterials;
+
         loaded++;
         var matches = glbMeshes == catalogMeshes && glbVertices == catalogVertices;
         if (!matches)
         {
             mismatches++;
         }
-        outcome = matches ? "ok" : "mismatch";
+        if (fileBadMaterials > 0)
+        {
+            failures++;
+            outcome = $"FAILED {fileBadMaterials} material(s) without explicit metallicFactor 0";
+        }
+        else
+        {
+            outcome = matches ? "ok" : "mismatch";
+        }
     }
     catch (Exception e)
     {
@@ -295,8 +315,39 @@ foreach (var (key, group) in groups)
 }
 
 Console.WriteLine($"summary files={files} loaded={loaded} failed={failed} mismatches={mismatches} "
+    + $"materials={materials} badMaterials={badMaterials} "
     + $"bytes={totalBytes} meshes={totalMeshes} vertices={totalVertices} groups={groups.Count} failures={failures}");
 return failures == 0 ? 0 : 1;
+
+static (int Materials, int Bad) CheckMaterials(string glbPath)
+{
+    // glTF defaults metallicFactor to 1.0 (fully metallic), so every material we write must carry
+    // an explicit 0. Reading the raw JSON chunk proves explicitness — a loader can only report the
+    // defaulted value, not whether the factor was present in the document.
+    var bytes = File.ReadAllBytes(glbPath);
+    var jsonLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(12));
+    using var document = JsonDocument.Parse(bytes.AsMemory(20, (int)jsonLength));
+    if (!document.RootElement.TryGetProperty("materials", out var materials))
+    {
+        return (0, 0);
+    }
+
+    var total = 0;
+    var bad = 0;
+    foreach (var material in materials.EnumerateArray())
+    {
+        total++;
+        var ok = material.TryGetProperty("pbrMetallicRoughness", out var pbr)
+            && pbr.TryGetProperty("metallicFactor", out var factor)
+            && factor.ValueKind == JsonValueKind.Number
+            && factor.GetDouble() == 0;
+        if (!ok)
+        {
+            bad++;
+        }
+    }
+    return (total, bad);
+}
 
 internal sealed class Group
 {

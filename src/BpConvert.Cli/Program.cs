@@ -243,6 +243,14 @@ static int ReportCommand(string[] args)
         Console.Error.WriteLine($"bp-convert report: {e.Message}");
         return 1;
     }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or AggregateException)
+    {
+        // Same filter and exit code as `convert`: a catalog that exists but cannot be read
+        // (permissions, I/O) reports a one-line cause, never a raw stack trace.
+        var cause = (e as AggregateException)?.InnerException ?? e;
+        Console.Error.WriteLine($"bp-convert report: {cause.GetType().Name}: {cause.Message}");
+        return 1;
+    }
 }
 
 static bool TryValue(string[] args, ref int i, out string? value)

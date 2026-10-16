@@ -279,6 +279,13 @@ Observed classes:
   catalog/entry).
 - **Geometry-free `cmsh` stubs** (§5, class 2) are `ok` by definition here; if a later milestone
   wants "every ok entry has geometry", that is a policy change, not a bug.
+- **Materials carry no `alphaMode`/`alphaCutoff`/`doubleSided`** (M1 material item): the library
+  does not parse the CMAT blend state, so the writer emits only `baseColorFactor`, its texture,
+  `emissiveFactor`, and the normal/specular texture slots. Alpha-tested foliage/cloth will render
+  opaque and single-sided until that item lands. The same M1 item revisits `metallicFactor` —
+  currently pinned to a dielectric `0` (the post-review fix wave; outputs before it omitted the
+  factor, which conformant loaders default to **1.0 = fully metallic**) — and `roughnessFactor`,
+  left at its default 1.0 as the accepted approximation.
 
 ## 8 · Reproduce
 
