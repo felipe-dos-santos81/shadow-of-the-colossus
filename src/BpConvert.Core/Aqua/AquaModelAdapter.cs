@@ -3,6 +3,7 @@ using System.Numerics;
 using AquaModelLibrary.Data.BluePoint.CMAT;
 using AquaModelLibrary.Data.BluePoint.CMDL;
 using AquaModelLibrary.Data.BluePoint.CMSH;
+using AquaModelLibrary.Data.BluePoint.CSKL;
 using BpConvert.Core.Model;
 using BpConvert.Core.Pipeline;
 
@@ -23,8 +24,13 @@ namespace BpConvert.Core.Aqua;
 /// to one <see cref="DefaultMaterialName"/> material with no textures.
 /// </para>
 /// <para>
-/// Skeleton and skinning are Task 5: <see cref="MeshData.BoneIndices"/>/
-/// <see cref="MeshData.BoneWeights"/> stay empty and <see cref="ModelData.Skeleton"/> stays null.
+/// Skinning: a mesh that carries bone data (<c>variantFlag &amp; 0x1</c>) gets its <c>.cskl</c>
+/// resolved beside it first, then through the tree; SOTC bind matrices are derived with the
+/// reference implementation's recipe and written in glTF's element order (notes §11). Sub-meshes
+/// without a weighted vertex stay unskinned, as does every mesh of a model whose skeleton does not
+/// resolve — each degradation is recorded on <paramref name="note"/>.
+/// </para>
+/// <para>
 /// Texture slots and <see cref="ModelData.ReferencedTexturePaths"/> carry the <b>resolved absolute
 /// .ctxr paths</b> (<c>AssetResolver</c> output); <c>ModelConverter</c> normalises them to
 /// game-root-relative paths for the writer. <see cref="ModelData.SourceRelativePath"/> is the file
@@ -87,6 +93,10 @@ public sealed class AquaModelAdapter
         var uvChannels = ReadUvChannels(cmsh.vertData, positions.Count);
         var faces = cmsh.faceData.faceList;
         var chain = MaterialChain(fullPath, note);
+        var skeleton = ReadSkeleton(fullPath, cmsh.boneData, note);
+        var vertexSkin = skeleton is null
+            ? null
+            : ReadVertexSkin(cmsh.vertData, positions.Count, skeleton.Joints.Count, note);
 
         var meshes = new List<MeshData>();
         var materials = new List<MaterialData>();
@@ -107,8 +117,11 @@ public sealed class AquaModelAdapter
             var localPositions = new List<float>();
             var localNormals = normals is null ? null : new List<float>();
             var localUvs = uvChannels.Select(_ => new List<float>()).ToArray();
+            var localBoneIndices = vertexSkin is null ? null : new List<int>();
+            var localBoneWeights = vertexSkin is null ? null : new List<float>();
             var indices = new List<uint>();
             var dropped = 0;
+            var meshSkinned = false;
 
             for (int f = startFace; f < startFace + faceCount; f++)
             {
@@ -137,8 +150,14 @@ public sealed class AquaModelAdapter
             int materialIndex = MaterialIndex(cmsh.header.meshList[m].matName, chain, materials, materialIndexByName,
                 fullPath, texturePaths, knownTexturePaths, note);
 
+            // A sub-mesh whose vertices carry no weight at all stays unskinned (arrays empty):
+            // JOINTS_0/WEIGHTS_0 would say nothing, and the writer keys skinning off them.
+            if (vertexSkin is not null && !meshSkinned)
+                note?.Invoke($"sub-mesh {m} has no weighted vertices: left unskinned");
             meshes.Add(new MeshData($"Mesh_{m}", localPositions.ToArray(), localNormals?.ToArray() ?? Array.Empty<float>(),
-                localUvs.Select(uv => uv.ToArray()).ToArray(), indices.ToArray(), Array.Empty<int>(), Array.Empty<float>(),
+                localUvs.Select(uv => uv.ToArray()).ToArray(), indices.ToArray(),
+                meshSkinned ? localBoneIndices!.ToArray() : Array.Empty<int>(),
+                meshSkinned ? localBoneWeights!.ToArray() : Array.Empty<float>(),
                 materialIndex));
 
             int LocalIndex(int vertex)
@@ -164,11 +183,18 @@ public sealed class AquaModelAdapter
                     localUvs[c].Add(uv.X);
                     localUvs[c].Add(uv.Y);
                 }
+                if (vertexSkin is not null)
+                {
+                    var skin = vertexSkin[vertex];
+                    localBoneIndices!.AddRange(skin.Indices);
+                    localBoneWeights!.AddRange(skin.Weights);
+                    if (skin.Weighted) meshSkinned = true;
+                }
                 return local;
             }
         }
 
-        return new ModelData(Path.GetFileName(fullPath), meshes, materials, null, texturePaths);
+        return new ModelData(Path.GetFileName(fullPath), meshes, materials, skeleton, texturePaths);
     }
 
     /// <summary>
@@ -477,4 +503,278 @@ public sealed class AquaModelAdapter
     }
 
     private static bool IsHexDigit(char c) => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+
+    // ---------------------------------------------------------------------------------------------
+    // Skeleton and skinning: cmsh boneData → .cskl → joints + inverse bind matrices, and per-vertex
+    // joint indices/weights for the sub-meshes (spec: notes §5; derivation and decisions: §11).
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Weight sum below which a vertex counts as unweighted. File weights are quantized to
+    /// <c>k/255</c>, so a real weight is at least ≈0.0039; this only guards the all-zero case
+    /// (and any hypothetical float weights near zero).
+    /// </summary>
+    private const float UnweightedWeightSum = 1e-4f;
+
+    /// <summary>One vertex's 4 joint indices and 4 weights (normalised to sum 1), and whether any weight was kept.</summary>
+    private sealed record VertexSkin(int[] Indices, float[] Weights, bool Weighted);
+
+    /// <summary>
+    /// The model's skeleton: resolves and parses the mesh's <c>.cskl</c>, then maps its bones to
+    /// <see cref="SkeletonJoint"/>s — the last <c>|</c> segment of each pipe-separated name, the
+    /// parent from <c>metadata.familyIds</c>, and the inverse bind matrix (see
+    /// <see cref="InverseBindMatrices"/>). Null — leaving every mesh unskinned — when the mesh has
+    /// no bone data (static models are not a degradation: no note), when the reference does not
+    /// resolve, when the CSKL cannot be parsed or its bone tables are incomplete, or when its
+    /// version's bind matrices cannot be derived; every case but the first is recorded on
+    /// <paramref name="note"/>.
+    /// </summary>
+    private SkeletonData? ReadSkeleton(string cmshPath, CMSHBoneData? boneData, Action<string>? note)
+    {
+        if (boneData is null || string.IsNullOrWhiteSpace(boneData.skeletonPath)) return null;
+
+        var csklPath = FindSkeleton(cmshPath, boneData.skeletonPath, note);
+        if (csklPath is null) return null;
+
+        var name = Path.GetFileName(csklPath);
+        CSKL cskl;
+        try
+        {
+            cskl = new CSKL(File.ReadAllBytes(csklPath));
+        }
+        catch (Exception e)
+        {
+            // A few shipped CSKLs break the library's parser (e.g. hawklores' missing family-id
+            // rows throw KeyNotFoundException, CSKL.cs:73). The mesh is the product; the skeleton
+            // is an optional reference, so this degrades like an unresolved one — and is recorded
+            // with the failure — instead of failing the conversion. (Contrast Task 4: a parse
+            // failure of the *source* is deliberately loud.)
+            note?.Invoke($"skeleton '{name}' failed to parse ({e.GetType().Name}); model left unskinned");
+            return null;
+        }
+
+        var familyIds = cskl.metadata?.familyIds;
+        var boneNames = cskl.names?.skeletonNames?.names;
+        int boneCount = cskl.header.boneCount;
+        if (boneCount == 0 || cskl.transforms.Count < boneCount
+            || familyIds is null || familyIds.Count < boneCount
+            || boneNames is null || boneNames.Count < boneCount)
+        {
+            note?.Invoke($"skeleton '{name}': incomplete CSKL bone tables ({boneCount} bones); model left unskinned");
+            return null;
+        }
+
+        var inverseBind = InverseBindMatrices(cskl, boneCount, name, note);
+        if (inverseBind is null) return null;
+
+        var joints = new List<SkeletonJoint>(boneCount);
+        for (int i = 0; i < boneCount; i++)
+        {
+            // 0x9 files store "no parent" as -1 (the library normalises 32767); any other
+            // out-of-range value has no better reading than "root".
+            var parent = familyIds[i].parentId;
+            if (parent < -1 || parent >= boneCount) parent = -1;
+            joints.Add(new SkeletonJoint(JointName(boneNames[i]), parent, ToGlbMatrix(inverseBind[i])));
+        }
+        return new SkeletonData(Path.GetFileNameWithoutExtension(csklPath), joints);
+    }
+
+    /// <summary>
+    /// The CSKL file for <paramref name="skeletonPath"/>: beside the mesh first (the reference's
+    /// first route, <c>BluePointConvert.cs:499-515</c>; all 128 skinned character meshes in the
+    /// extracted tree resolve there), then through the tree with the Task 4 <c>$</c>-reference
+    /// rules — which also covers the rooted <c>/models/…</c> spelling the game actually writes
+    /// (<c>AssetResolver</c> treats a leading <c>/</c> as tree-relative). Null when neither route
+    /// finds a file (recorded, like every unresolved Task 4 reference).
+    /// </summary>
+    private string? FindSkeleton(string cmshPath, string skeletonPath, Action<string>? note)
+    {
+        var fileName = Path.GetFileName(skeletonPath.Replace('\\', '/'));
+        var directory = Path.GetDirectoryName(cmshPath);
+        if (directory is not null && fileName.Length > 0)
+        {
+            var beside = Path.Combine(directory, fileName);
+            if (File.Exists(beside)) return beside;
+        }
+
+        var resolved = ResolveReference(skeletonPath, cmshPath);
+        if (resolved is not null) return resolved;
+
+        note?.Invoke($"unresolved skeleton reference '{skeletonPath}': model left unskinned");
+        return null;
+    }
+
+    /// <summary>glTF joint name: the last <c>|</c> segment of the CSKL's name (SOTC stores paths like <c>|Bone_root|Bone_KAO</c>).</summary>
+    private static string JointName(string name)
+    {
+        var bar = name.LastIndexOf('|');
+        return bar >= 0 ? name[(bar + 1)..] : name;
+    }
+
+    /// <summary>
+    /// Inverse bind matrices for every bone, in the library's row-vector convention.
+    /// SOTC (footer 0x9) derives them (<see cref="SotcInverseBindMatrices"/>); DeSR (0x19) ships
+    /// them and the library reads them out of the file's layout into its own
+    /// (<c>CSKL.cs:117</c>). Null — with a note — for anything else.
+    /// </summary>
+    private static Matrix4x4[]? InverseBindMatrices(CSKL cskl, int boneCount, string name, Action<string>? note)
+    {
+        switch (cskl.footerData.version)
+        {
+            case 0x9:
+                return SotcInverseBindMatrices(cskl, boneCount, name, note);
+
+            case 0x19:
+                if (cskl.invWorldTransforms.Count >= boneCount)
+                    return cskl.invWorldTransforms.GetRange(0, boneCount).ToArray();
+                note?.Invoke($"skeleton '{name}': 0x19 CSKL without inverse world matrices; model left unskinned");
+                return null;
+
+            default:
+                note?.Invoke($"skeleton '{name}': CSKL version 0x{cskl.footerData.version:X} is not convertible; model left unskinned");
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// SOTC inverse bind matrices, the recipe of <c>BluePointConvert.cs:832-854</c>: for every bone,
+    /// <c>mat = local</c>; with a parent, <c>mat = local × inverse(IBM_parent)</c> — the parent's
+    /// bind-pose world transform, so <c>mat</c> is the bone's own — then <c>IBM = inverse(mat)</c>.
+    /// The files list parents before children; resolving a parent on demand keeps that true for any
+    /// order. Null when a transform cannot be inverted or the parent links form a cycle (recorded).
+    /// </summary>
+    private static Matrix4x4[]? SotcInverseBindMatrices(CSKL cskl, int boneCount, string name, Action<string>? note)
+    {
+        var inverseBind = new Matrix4x4[boneCount];
+        var state = new byte[boneCount];    // 0 = unvisited, 1 = resolving, 2 = done
+        var valid = true;
+
+        for (int bone = 0; bone < boneCount && valid; bone++) Resolve(bone);
+        if (!valid)
+        {
+            note?.Invoke($"skeleton '{name}': cyclic or singular bone transforms; model left unskinned");
+            return null;
+        }
+        return inverseBind;
+
+        void Resolve(int bone)
+        {
+            if (!valid || state[bone] == 2) return;
+            if (state[bone] == 1)
+            {
+                valid = false;      // a parent chain that runs into this bone again
+                return;
+            }
+            state[bone] = 1;
+
+            var matrix = cskl.transforms[bone].ComputeLocalTransform();
+            var parent = cskl.metadata.familyIds[bone].parentId;
+            if (parent >= 0 && parent < boneCount)
+            {
+                Resolve(parent);
+                if (!valid || !Matrix4x4.Invert(inverseBind[parent], out var parentWorld))
+                {
+                    valid = false;
+                    return;
+                }
+                matrix = matrix * parentWorld;
+            }
+            if (!Matrix4x4.Invert(matrix, out inverseBind[bone]))
+            {
+                valid = false;
+                return;
+            }
+            state[bone] = 2;
+        }
+    }
+
+    /// <summary>
+    /// The 16 floats a glTF MAT4 accessor holds for <paramref name="matrix"/>: its own rows, in
+    /// order. glTF stores a matrix column-major for column-vector math, and the mixed conventions
+    /// make that the same float sequence as a row-vector matrix's row order — a translation in
+    /// <c>M41..M43</c> lands in glTF's last column (offsets 12..14). Writing the elements in the
+    /// library's <c>.cskl</c> layout instead (<c>M11, M21, M31, M41, …</c>) would put it in the
+    /// 4th row: glTF readers would lose the translation (and SharpGLTF rejects the accessor). The
+    /// notes §11 record the derivation and the reference cross-checks.
+    /// </summary>
+    private static float[] ToGlbMatrix(Matrix4x4 matrix) => new[]
+    {
+        matrix.M11, matrix.M12, matrix.M13, matrix.M14,
+        matrix.M21, matrix.M22, matrix.M23, matrix.M24,
+        matrix.M31, matrix.M32, matrix.M33, matrix.M34,
+        matrix.M41, matrix.M42, matrix.M43, matrix.M44,     // translation = glTF's 4th column
+    };
+
+    /// <summary>
+    /// Per-vertex joint data for a model whose skeleton resolved, or null when the weight streams
+    /// are absent or do not cover every vertex (recorded). Every vertex keeps its 4 slots in order:
+    /// in-range joint indices with their (positive) weights, invalid indices dropped to (0, 0) —
+    /// the writer validates every index, even a zero-weight one — and weights renormalised to
+    /// sum 1. A vertex with no weight left is marked unweighted: its mesh stays unskinned when no
+    /// vertex of it is weighted, and inside a skinned mesh such a vertex is bound to the root
+    /// joint (index 0, weight 1) rather than left all-zero, which keeps every emitted vertex
+    /// normalised (notes §11).
+    /// </summary>
+    private static List<VertexSkin>? ReadVertexSkin(CMSHVertexData vertexData, int vertexCount, int jointCount,
+        Action<string>? note)
+    {
+        var indices = vertexData.vertWeightIndices;
+        var weights = vertexData.vertWeights;
+        if (indices.Count != vertexCount || weights.Count != vertexCount)
+        {
+            // Only reachable for a model whose skeleton resolved, so an absent stream matters.
+            note?.Invoke($"weight streams do not cover all {vertexCount} vertices (indices {indices.Count}, "
+                + $"weights {weights.Count}): model left unskinned");
+            return null;
+        }
+
+        var skin = new List<VertexSkin>(vertexCount);
+        var dropped = 0;
+        var unweighted = 0;
+        for (int vertex = 0; vertex < vertexCount; vertex++)
+        {
+            var slotIndices = new int[4];
+            var slotWeights = new float[4];
+            var sum = 0f;
+            for (int slot = 0; slot < 4; slot++)
+            {
+                var joint = indices[vertex][slot];
+                if (joint < 0 || joint >= jointCount)
+                {
+                    dropped++;
+                    continue;
+                }
+                var weight = Weight(weights[vertex], slot);
+                if (weight <= 0f) continue;
+                slotIndices[slot] = joint;
+                slotWeights[slot] = weight;
+                sum += weight;
+            }
+
+            var weighted = sum >= UnweightedWeightSum;
+            if (weighted)
+            {
+                for (int slot = 0; slot < 4; slot++) slotWeights[slot] /= sum;
+            }
+            else
+            {
+                unweighted++;
+                slotIndices[0] = 0;
+                slotWeights[0] = 1f;
+            }
+            skin.Add(new VertexSkin(slotIndices, slotWeights, weighted));
+        }
+
+        if (dropped > 0) note?.Invoke($"{dropped} weight slot(s) with out-of-range bone indices dropped");
+        if (unweighted > 0) note?.Invoke($"{unweighted} unweighted vertex/vertices bound to the root joint");
+        return skin;
+    }
+
+    private static float Weight(Vector4 weights, int slot) => slot switch
+    {
+        0 => weights.X,
+        1 => weights.Y,
+        2 => weights.Z,
+        _ => weights.W,
+    };
 }

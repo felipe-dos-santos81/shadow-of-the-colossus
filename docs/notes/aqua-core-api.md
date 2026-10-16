@@ -643,5 +643,124 @@ QUT0 is used when present (other BluePoint titles); a zero-length entry falls ba
   stream). Those files fail loudly; the batch runner records them (Task 6).
 * `ModelData`/`MeshData` come from the adapter with **absolute** resolved texture paths
   (`SourceRelativePath` = file name) because `AquaModelAdapter` has no game root of its own;
-  `ModelConverter` normalises both to game-root-relative paths before writing. Skin fields stay
-  empty and `Skeleton` null (Task 5).
+  `ModelConverter` normalises both to game-root-relative paths before writing. Skin fields are
+  filled and `Skeleton` is set by Task 5 — see §11.
+
+## 11. Skinning (Task 5, 2026-10-15) — adapter append
+
+Implements the adapter's skeleton/skinning half from §5. Records what the real tree showed, the
+decisions taken (CSKL routing, IBM element order, index/weight policies) and the one open concern
+(the writer's joint nodes carry no bind-pose transforms).
+
+### 11.1 CSKL routing (measured)
+
+SOTC meshes do **not** spell their skeleton as `$/…`: all 128 skinned `.cmsh` under
+`models/shadow/characters` store a **rooted** `/models/…/x.cskl` path (0 `$/`-prefixed, 0 bare),
+and a file of that name exists beside every one of them. The adapter therefore tries
+`Path.GetFileName(skeletonPath)` next to the mesh first (the reference's first route,
+`BluePointConvert.cs:499-515`), then the Task 4 `$`-reference route (`$/` strip, `****` →
+`_cmn`/`_ps4`/`_ps5`; `AssetResolver` already treats a leading `/` as tree-relative), and records a
+miss like every other unresolved reference. Tree figures: 341 `.cmsh` under
+`models/shadow/characters` (128 skinned); `models/shadow/objects` + `models/shadow/characters`
+together 160 skinned meshes / 10.86M skinned vertices — the actor subtrees (colossi, horses) matter
+as much as the characters. All 128 character meshes resolve beside the model; a 1,353-file adapter
+sweep over both subtrees built 160 skeletons (21,106 joints) with 0 conversion failures.
+
+### 11.2 Inverse bind matrices — recipe, and the element-order (transpose) decision
+
+**Recipe** (SOTC `footerData.version == 0x9`, `BluePointConvert.cs:832-854`): per bone in order,
+`mat = ComputeLocalTransform()`; with a parent, `mat = mat × inverse(IBM_parent)` — i.e. the
+parent's bind world transform, so `mat` becomes the bone's own — then `IBM = inverse(mat)`. All of
+it in `System.Numerics`' row-vector convention (translation in `M41..M43`). The adapter resolves a
+parent on demand (files list parents first; recursion keeps that true for any order) and rejects
+cycles/singular transforms with a note instead of emitting NaNs. `0x19` (DeSR) files ship the
+matrices and the library reads them out of the file's layout into the row-vector convention
+(`CSKL.cs:117`); the adapter uses them when complete, and refuses the file (note → model
+unskinned) when they are not.
+
+**Element order.** `SkeletonJoint.InverseBindMatrix16` is written verbatim by the writer into a
+glTF MAT4 accessor, so the adapter must pick the sequence. It writes the matrix's own rows in
+order: `M11 M12 M13 M14 M21 … M44`. A glTF loader reads those 16 floats column by column and
+applies them as a column-vector matrix, so the pairing row-vector/System-Numerics (row order) with
+column-major storage is the *same geometric transform*: a translation in `M41..M43` lands in
+glTF's last column (offsets 12..14). Three independent supports:
+
+1. **Conventions.** A row-vector matrix with the same element values as a column-vector matrix
+   applies the transposed map, and glTF's `inverseBindMatrices` are column-vector matrices stored
+   column-major. Canonical check: `CreateTranslation(0,2,0)` has raw order
+   `[1,0,0,0, 0,1,0,0, 0,0,1,0, 0,2,0,1]`, which is exactly glTF's documented column-major array
+   for that transform.
+2. **The library's own file reader/writer.** The `.cskl` files store IBMs in the *other* element
+   order (`M11 M21 M31 M41 M12 …`, "Column-major 3x4", `CSKL.cs:486-492`) and the library
+   **transposes** when reading them into `System.Numerics` (`CSKL.cs:117`) — i.e. the game's
+   layout is the column-vector one, and glTF's layout is that layout, not the `System.Numerics`
+   one.
+3. **The library's own skinning export.** `AssimpModelExporter.cs:308-311` builds
+   `aiBone.OffsetMatrix` — assimp's inverse bind matrix — by reading the AQN node's `m1..m4` rows
+   **transposed** (`new Matrix4x4(m1.X, m2.X, m3.X, m4.X, m1.Y, …)`), the same conversion the
+   adapter performs for glTF.
+
+Experiment on the pinned sample: writing wander's IBM accessor with the elements in the file's
+order makes SharpGLTF **reject the file at load** (`Accessor[0] Matrices: Invalid MatrixModel`),
+while the chosen order decodes to the derived translation (`Bone_EYELID_Bot_L`:
+`M41..M43 ≈ (0.1066, −0.3910, 0.0188)`); the pinned `Wander_HasSkin_WithJoints` test asserts that
+translation, so the layout is pinned, not just the counts.
+
+**Representation choice:** the glTF joint nodes are written without transforms (Task 1's writer).
+The reflection is worth stating plainly, because M1's visual pass will hit it: glTF computes
+`jointMatrix = globalTransform(jointNode) × IBM`, so at bind pose a viewer reproduces the mesh
+only when the nodes carry the bind-pose locals (the CSKL transforms) — with identity nodes every
+skinned vertex is mapped into its joints' local frames. The *IBMs here are correct* (inverse bind
+matrices for the CSKL bind pose); what is missing is the node transforms, which need a
+`SkeletonJoint`/writer extension and are deliberately left to the M1 visual pass. Recorded as the
+Task 5 report's concern.
+
+### 11.3 Weights and indices (policies, measured)
+
+`vertData.vertWeightIndices` (4 per vertex; SOTC ships both widths — 10 ushort / 118 byte across
+the character tree, the library reads either) and `vertWeights` (4 × byte/255 → `[0,1]`) are read
+only when both cover every vertex; otherwise the model is left unskinned with a note.
+
+* **Normalisation is ours**: the quantised file weights often sum below 1 (wander: 28,404 of 62,466
+  vertices non-unit, minimum 0.988), so each vertex is renormalized to exactly 1 — verified over
+  the pinned sample (all 62,466 sums at `[1,1]` in float32) and a 6-model smoke pass; the pinned
+  `Wander_Weights_Normalized` test samples the first 100 vertices of every primitive.
+* **Index safety**: the writer validates *every* index element, even a zero-weight one, so an
+  out-of-range/negative index is always dropped to `(0, 0)` (weight 0), counted and noted per
+  model. Measured: 0 such slots in the whole shadow tree — the policy is purely defensive. The
+  vertex's remaining weights are renormalised.
+* **Unweighted vertices**: a vertex left with no weight (all-zero, or everything dropped) is
+  marked unweighted. If a sub-mesh has no weighted vertex at all it is emitted **unskinned**
+  (empty `BoneIndices`/`BoneWeights`, so `JOINTS_0`/`WEIGHTS_0` are omitted — the plank behaves
+  exactly as in Task 4). Inside a skinned sub-mesh such a vertex is bound to the root joint
+  (index 0, weight 1) instead of an all-zero quadruple, which keeps every emitted vertex
+  normalised and puts it where the root's IBM places it; noted per model. Measured: 0 all-zero
+  models and 491 zero-weight vertices across the 341 character meshes (the fallback fires; the
+  Task 4 plank pin is unaffected).
+* **Weight indices index the CSKL's bone list** (as §5 states and the reference assumes): the
+  mesh-local `boneData.boneNames` list matches the CSKL's last-name segments in count and order
+  for all 124 parseable character skeletons (0 mismatches), and no weight index exceeds
+  `boneCount` (0 of 124).
+
+### 11.4 Degradations and known limits
+
+* **A CSKL that fails to parse degrades, unlike a failing *source***: 4 bird meshes
+  (`hawklores/seagull_lores.cmsh`, `hawklores/hawk_lores.cmsh`, `hawk/obj_bird_b.cmsh`,
+  `hawklores/dove_lores.cmsh`) reference skeletons the library cannot read — `KeyNotFoundException`
+  at `CSKL.cs:73` (missing parent rows in `hawk_lores.cskl` / `obj_bird_b.cskl`). The adapter
+  catches that, records `skeleton '…' failed to parse (…); model left unskinned` and still converts
+  the mesh. Rationale: the skeleton is an optional reference (the Task 4 treatment of unresolved
+  materials/textures), whereas a parse failure of the *source* `.cmsh` stays loud (Task 4's grass
+  files). When the library is fixed upstream the skins appear without further changes.
+* **The reference's synthetic skeleton is not implemented.** When a mesh has `boneData` but no
+  CSKL, `BluePointConvert.cs:526-551` fabricates a chain from `boneNames` with identity IBMs.
+  Without transforms that rig cannot animate and the identity matrices only reproduce a bind pose
+  whose nodes are also identity — an unskinned mesh is the same picture with fewer parts, so v1
+  degrades (note) instead.
+* **The shipped `boneBoundingSpheres` do not corroborate the documented generator.** Checking a
+  bone's sphere center against `IBM · average(influenced vertices)` (the recipe
+  `CMSHBoneData.cs` describes) misses by ≈0.42 on average against a mean radius of 0.036
+  (3/150 wander bones inside their radius), so the spheres were not used to validate anything and
+  are not converted. Worth a look if the bounding volumes are ever needed.
+* Unsupported CSKL versions (neither `0x9` nor a complete `0x19`) leave the model unskinned with a
+  note rather than guessing identity bind matrices.
