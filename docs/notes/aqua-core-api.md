@@ -525,3 +525,123 @@ bytes are the Oodle stream header itself — byte-0-only edit `CC 06`: payload n
 *named M0 limitation* — the `cc0a` route stays verified up to the named refusal, no BC6H work in M0;
 revisit at M1+ with an HDR-capable container (EXR/KTX2 + tonemap), since PNG is the wrong container
 for HDR.
+
+---
+
+## 10. Adapter notes (Task 4, 2026-10-15) — derived rules for `AquaModelAdapter` / `ModelConverter`
+
+Everything below was derived by reading `BluePointConvert.cs` (§0 R-A: it is a *reference* only) and
+by scanning the extracted tree; it is the contract the adapter implements. Where nothing was
+derivable, the behavior is a named, tested degradation.
+
+### 10.1 Material chain for a bare `.cmsh` (cmsh → cmdl → cmat → ctxr)
+
+The CMSH carries no material data of its own: `header.meshList[i].matName` is a key, resolved as
+
+```
+matName → sibling .cmdl .GetCMATMaterialMap()[matName]  →  $/…/x.cmat  →  CMAT.texNames  →  $/…/x.ctxr
+```
+
+* **Sibling `.cmdl` selection** (the brief's pinned cases are `obj_plank_01.cmsh` →
+  `obj_plank_01_52f8cc91.cmdl` and `wander.cmsh` → `wander.cmdl`): exact stem first, then a stem
+  extension (`<stem>_…`, the game's unique-id suffix), deterministically the first candidate in
+  ordinal path order when several match. Measured over the tree (22,012 `*.cmsh` under `models/`):
+  **5,610 exact + 1,292 extension-only = 6,902 (31 %)**; of those, 97.9 % / 97.6 % have *all* their
+  `matName`s present in the chosen cmdl's map. The remaining 15,110 are UDIM/LOD tiles whose owner
+  cmdl references *them* (20,005 have such a referencing cmdl) — that search is **not** implemented
+  in v1 and is a named M1 candidate (the plank pin rules it out for the plank itself:
+  `obj_plank_01_52f8cc91.cmdl` references `obj_plank_01_f04cfcce.cmsh`, not `obj_plank_01.cmsh`).
+* **No sibling `.cmdl`** → *single default material* (`"default"`, no textures, all sub-meshes
+  share it) — the pinned degradation; this is what the fixture tests (plank copies without their
+  cmdl) exercise. A `matName` missing from a *found* cmdl's map degrades per-material (material
+  keeps the name, no textures).
+* The reference's additional bruteforce (`<parent>/materials/_cmn/<name>.cmat`,
+  `<modelDir>/<name>.cmat`, `BluePointConvert.cs:702-722`) is *not* implemented: for the plank it
+  finds nothing (`bpShader1.cmat`), and it would be a guess.
+* `GetCMATMaterialMap()` can return `null` keys (library `cmatMap.Add(matName, …)` with a nameless
+  set) — such cmdls throw inside the library; not worked around.
+
+### 10.2 CMAT `texNames` → material slots
+
+Slot order in `CMAT.texNames` is **not** reliable (`_col` sits at index 0 in 7,883 of 8,765
+materials that have one, but 370 at index 1, 281 at index 2, …; the plain `_nml` is at index 2 in
+1,545 and index 3 in 6,476). The shader list (`shaderNames`) is a cooked-pipeline list
+(`depth`/`shadow`/`gbuffer…`/`alpha` `.csdr` stages) and carries no slot information. The rule is
+therefore **name-based**:
+
+| slot | rule | evidence |
+|---|---|---|
+| base color | first `texName` with a `col` stem token, else `texNames[0]` | the reference's albedo heuristic: `tex.Contains("_col.")` (`BluePointConvert.cs:987-1001`), token-wise so `ocean_col_02` / `vineleaf01_col_alpha` are caught too. 8,765/8,920 materials have `_col`; the 121 without are terrain decals (`_msk`) and non-render shadow casters |
+| normal | first `texName` whose last stem token is `nml`/`nrm` and whose family token is *not* `spec`/`specular`/`flow`/`flowmap`; else the first `tangent_nml` | 8,712/8,920 materials have a plain `_nml`. `spec_nml`/`specular_nml` (18 materials) and `flow(map)_nml` (22+22) are different maps; `tangent_nml` is a tangent-space normal (what a glTF `normalTexture` is) and is the only normal in 6 hair materials (LOD copies of `wander_hair_03`) |
+| specular | **never set** (null) | no SOTC CMAT references a specular *colour* texture; the only specular-named maps are `*_spec_nml` BC5 two-channel normal-detail maps, which do not fit `KHR_materials_specular.specularTexture` semantics (specular colour F0 + strength in alpha) |
+| roughness/height/alpha/transmission/AO/mask | not mappable in M0's `MaterialData` | still converted: **every resolved `texNames` entry becomes a PNG** in `PngPaths`, mapped or not |
+| `BaseColorFactor` / `EmissiveFactor` | `(1,1,1,1)` / `(0,0,0)` | CMAT colours are not parsed by the library (`CMAT.cs:79/103` TODO) |
+
+### 10.3 Sub-mesh ranges, geometry and winding
+
+* SOTC sub-mesh range = `startingFaceVertIndex/3` + `faceVertIndicesUsed/3`; DeSR uses
+  `startingFaceIndex`/`faceIndexCount` (§3, `BluePointConvert.cs:660-690`). The reference's
+  degenerate marker (`faceCount == 0 && faceIndexCount > 1` — SOTC never sets that field, it stays
+  −1) and the all-zero failsafe ("take the rest of the buffer", `currentFace` advancing by the
+  range taken) are implemented as written. A sub-mesh that is empty *after* range computation is
+  skipped; ranges are clamped to the face list and faces with out-of-range indices are dropped
+  (the writer has no index range check). Measured: **0 degenerate sub-meshes** in the pinned
+  samples (12/12 wander, 3/3 statue, 1/1 plank) and in a 150-file tree slice (236/236 emitted).
+* Vertices are compacted per sub-mesh (the reference's per-material vertex remap) in face order;
+  positions are written unchanged (**no axis conversion** — both sides are Y-up; verified: the
+  plank's thickness sits in Y, wander is 1.26 tall in Y vs 1.23 wide in X arm-span and 0.21 deep,
+  statue pieces within ±8). Winding is **already CCW-outward** (glTF's front-face convention), so
+  no triangle reordering: face geometry beat the vertex normals on 732/756 plank, 736/736
+  rock_slide, 11,440/11,446 wander-body and 28,930/28,930 wander-hair faces (mean dot 0.91–0.999).
+* UVs: TEX0..TEX3 channels whose length matches the vertex count, written unchanged (half-float
+  pairs); `TEX3` is wander's second channel. No V-flip: the decoded PNGs are top-down and glTF's
+  UV origin is top-left, like the game's DirectX-style textures.
+
+### 10.4 Normals: NRM0 is decodable (the library only documents QUT0)
+
+SOTC `.cmsh` files do **not** carry QUT0: every sample's `vertDefs` holds `NRM0`+`TAN0`
+(4 bytes/vertex; `CMSHVertexData.normalTemp` receives both streams in `vertDefs` order, NRM0
+first). The library has no decoder ("These are a similar idea, but NOT the same as QUT0",
+`CMSHVertexData.cs:120`), so the adapter implements one:
+
+```
+x = (packed[0:10]  − 511.5)/511.5      packed = LE uint32 of the 4-byte entry
+y = (packed[10:20] − 511.5)/511.5      then normalized (defensively; entries are not always
+z = (packed[20:30] − 511.5)/511.5      unit — rock_slide_01 decodes to 0.377)
+```
+
+Same packing the library uses for a QUT0's vector part (`UnpackQUT0`, `CMSHVertexData.cs:414-421`).
+Verified on the pinned samples: decoded lengths 0.998–1.001 (plank, wander), direction agrees with
+the face winding as above, and the plank's dominant normal axis is Y (its 0.31-thick side).
+QUT0 is used when present (other BluePoint titles); a zero-length entry falls back to Y-up.
+
+### 10.5 Reference resolution, output mapping and skip policy (`ModelConverter`)
+
+* `$`-refs: strip `$/`, then `****` → `_cmn`, `_ps4`, `_ps5` (first existing wins — the same order
+  Task 3 pinned for `.ctxc`; the library's own is `_cmn`/`_ps5`/`_ps4`). Unresolved references are
+  **not fatal**: a missing `.cmat`/`.ctxr` leaves its slot null (material keeps its name) and a
+  missing texture is simply not converted.
+* Output: `<outLib>/<source tree path>.glb` and `<outLib>/<ctxr tree path>.png` (pinned mapping);
+  `textureUriMap` = source `.ctxr` tree path → PNG uri **relative to the `.glb`'s directory**,
+  `/`-separated. `PngPaths` is the deduped list of PNGs actually written (absolute).
+* Refused textures (BC6H/HDR, negative dimensions, …) are skipped, not fatal:
+  `CtxrConverter.Convert`'s `InvalidDataException`/`NotSupportedException` are caught, the model
+  still writes its `.glb`, and the unmapped channel is omitted. Measured: 0 refusals among the
+  pinned samples (3 + 41 + 12 textures) and the 150-file slice (557 textures, all written).
+* Sources: `.cmsh` only in v1 (`NotSupportedException` otherwise — a `.cmdl` merely lists meshes);
+  a missing source throws `FileNotFoundException`. Reference-mesh/LOD stubs (`cmsh.header == null`)
+  produce a valid empty `.glb` (0 meshes) instead of failing.
+* **Diagnostics** (the brief's "keep a diagnostic" / "record it"): `Load` and `Convert` take an
+  optional `Action<string>? note` (additive to the pinned 1-/3-argument call shapes; the pinned
+  signatures keep working). Reported: unresolved `$`/`****` references (material and texture),
+  the no-sibling-cmdl default-material fallback, skipped sub-meshes and dropped
+  out-of-range faces, and refused textures. No other channel exists — degradations are otherwise
+  observable only structurally (null slots, absent PNGs, 0 meshes).
+* Library parse limits are **not** worked around: e.g. `models/objects/foliage/grass/*.cmsh`
+  (8 of the first 150 tree files) throw `OverflowException` in
+  `CMSHVertexData.ReadVertDefData` (the 16-bit-colour `dataFormat == 7` hack seeks past the
+  stream). Those files fail loudly; the batch runner records them (Task 6).
+* `ModelData`/`MeshData` come from the adapter with **absolute** resolved texture paths
+  (`SourceRelativePath` = file name) because `AquaModelAdapter` has no game root of its own;
+  `ModelConverter` normalises both to game-root-relative paths before writing. Skin fields stay
+  empty and `Skeleton` null (Task 5).
