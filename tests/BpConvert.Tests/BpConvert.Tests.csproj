@@ -13,6 +13,13 @@
     <PackageReference Include="SharpGLTF.Core" Version="1.0.7" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <!--
+      SixLabors.ImageSharp (3.1.6, Apache-2.0) is used by the texture tests to decode written
+      PNGs. It is referenced transitively through AquaModelLibrary.Data and deliberately NOT
+      added as a direct PackageReference: the repo audits direct dependencies only, and this
+      library-pinned version carries known advisories we do not want to surface as warnings
+      (see Directory.Build.props).
+    -->
   </ItemGroup>
 
   <ItemGroup>

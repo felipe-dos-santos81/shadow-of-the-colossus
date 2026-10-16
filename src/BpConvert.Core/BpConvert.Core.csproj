@@ -19,4 +19,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Synthetic block-decoder tests exercise the internal decoder surface directly. -->
+    <InternalsVisibleTo Include="BpConvert.Tests" />
+  </ItemGroup>
+
 </Project>
