@@ -418,13 +418,15 @@ Catalog `catalog.json` (pinned schema; written atomically as `catalog.json.tmp` 
 
 - [ ] **Step 1: Pre-flight on the pinned 10 characters** (wander + 9 others from `models/shadow/characters/`), assert each: glb loads via SharpGLTF, meshes ≥ 1, and record sizes.
 - [ ] **Step 2: Largest-model check (Review Focus #4)** — convert the largest `*.cmsh` under `models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn/`; assert it completes and the glb loads.
-- [ ] **Step 3: Publish the CLI and launch the full batch** over `--under models --under characters --ext cmsh,cmdl` (≈46k files) in the background:
+- [ ] **Step 3: Publish the CLI and launch the full batch** over `--under models --under characters --ext cmsh` (22,012 files; `.cmdl` dropped — see amendment below) in the background:
 
 ```bash
 dotnet publish src/BpConvert.Cli -c Release -o out/bin
-nohup ./out/bin/bp-convert convert --root "$SOTC_GAME_ROOT" --out out/library --under models --under characters --ext cmsh,cmdl --jobs 8 \
+nohup ./out/bin/bp-convert convert --root "$SOTC_GAME_ROOT" --out out/library --under models --under characters --ext cmsh --jobs 8 \
   > out/m0-run.log 2>&1 &
 ```
+
+**Amendment (2026-10-16 — controller ruling, from T6's measured concern):** the batch `--ext` is **`cmsh` only**. Converting a `.cmdl` *as a source* is not implemented (T4 converts `.cmsh`; sibling `.cmdl`s are consumed as material maps by the adapter) — measured 12/12 `NotSupportedException`; including ~19k `.cmdl` files would record them all as `failed` and poison the 5 % failure gate. cmdl-driven model assembly (`GetCMeshReferences`, composing a character from its parts) is an M1 item. The 5 % gate is evaluated over `cmsh` entries.
 
 Resume-able; re-running continues where it stopped. Do not block on completion — the acceptance criterion is that the run is resumable and converges (verify with a second invocation: 0 new conversions once complete).
 - [ ] **Step 4: Write `docs/notes/m0-results.md`** — success/failure counts, top-20 failure reasons with sample paths, the 10-character table (name, glb bytes, meshes, vertices), catalog path, and the exact commands. Record whether any failure rate exceeded 5% (design gate).
