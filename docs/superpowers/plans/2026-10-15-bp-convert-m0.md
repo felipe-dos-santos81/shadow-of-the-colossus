@@ -327,7 +327,8 @@ Output mapping (pinned): `models/shadow/characters/wander/_cmn/wander.cmsh` → 
     // wander.cmsh → meshes >= 1; result.PngPaths.Count >= 1; each png exists
 [Fact] public void Convert_TwoSameBasenames_DistinctOutputs()      // Review Focus #2
     // synthetic fixture game root (temp dir): copy obj_plank_01.cmsh to a/x.cmsh and b/x.cmsh;
-    // convert both; assert both glbs exist at their mirrored paths (a/x.glb, b/x.glb) and differ
+    // convert both; assert both glbs exist at their distinct mirrored paths (a/x.glb, b/x.glb);
+    // identical inputs ⇒ byte-equal outputs are expected (assert determinism + that <out>/x.glb does not exist — no collision)
 ```
 
 - [ ] **Step 2: Verify fail.**
@@ -359,6 +360,8 @@ Output mapping (pinned): `models/shadow/characters/wander/_cmn/wander.cmsh` → 
 - [ ] **Step 2: Verify fail.**
 - [ ] **Step 3: Implement** — read `cskl` + weight streams via the library (extend the notes doc), map to DTOs; normalize weights defensively (sum ≠ 0.0? renormalize; all-zero → leave unskinned).
 - [ ] **Step 4: Pass + commit** — `git commit -m "feat: skeleton + skinning conversion"`
+
+**Amendment (2026-10-16 — controller ruling, post-implementation):** joint nodes need bind-pose transforms, or `jointMatrix = I×IBM ≠ I` at bind pose and the skin renders deformed. **Ruling: fix in-task** — `GlbWriter` derives each joint node's bind-local from the IBMs + hierarchy already present in the DTO (`bindWorld_i = inv(IBM_i)`; `local_i = inv(bindWorld_parent)·bindWorld_i`; roots `local_i = bindWorld_i`; glTF column-major), emitted as node `matrix`; acceptance test = for every joint, `joint.WorldMatrix × IBM ≈ Identity` (synthetic + Wander). Pinned interfaces unchanged — no DTO change. M3 animation will replace `matrix` nodes with TRS + channels (mechanical substitution, no data change).
 
 ---
 
