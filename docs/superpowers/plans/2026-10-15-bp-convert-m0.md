@@ -281,6 +281,13 @@ Record the found path in `docs/notes/aqua-core-api.md` (no test pinned: sample s
 
 - [ ] **Step 5: Pass + commit** — `git commit -m "feat: ctxr → png converter (png/8c0a/cc0a variants)"`
 
+**Amendment (2026-10-15 — post-implementation rulings, after T3 reconnaissance):**
+
+- **D1 (CC0A/BC6H):** all 325 `CC 0A` containers are BC6H_UF16 HDR (sky + IBL cubemaps). Accepted as a *named M0 limitation*: the `cc0a` route is verified end-to-end up to the pixel decode and refuses by name. PNG is the wrong container for HDR anyway — revisit (EXR/KTX2 + tonemap) when sky/IBL work starts (M1+).
+- **D2 (external `.ctxc` mips):** 3,682 of 6,901 `8C 0A` files (53 %; **75 % of Wander's textures, 9/9 of the colossus-01 statue**) carry external mip chunks the library cannot assemble on macOS (Windows `\` path building at `CTXR.cs:1272` + missing `eboot.bin` anchor). **Fix is required within this task** (addendum): implement our own mip-0 assembly — resolve each `mipPaths[i].externalMipReference` to a real file (`$/` strip; `****` → try `_cmn`, then `_ps4`, then `_ps5`), read the `.ctxc` chunks, slice + de-swizzle (managed DrSwizzler) exactly as `CTXR.GetDDSBytes` (`CTXR.cs:1195-1294`) intends, feed assembled mip 0 into our `BcnDecoder`. Only mip 0 is needed (Godot re-mips). Keep `Convert`'s pinned signature; if a root anchor proves unavoidable, derive it from the input path (no env vars) and document it. Repoint the loud-refusal test to `textures/shadow/ui/_ps4/hdr_calibration_image.ctxr` (negative dimensions — permanently unassemblable). Pin one real Wander-class external-mip sample as a conversion test (dimensions == declared; ≥1,000 distinct RGBA values; assembled mip-0 byte length == `ceil(w/4)·ceil(h/4)·blockSize`). STOP-and-report if assembly proves impossible without touching the submodule.
+- **D3 (pinned-test deviation):** accepted — `neutral_flowmap_nml.ctxr` is genuinely uniform `(128,128,0,255)` (BCnEncoder-verified); the pinned test asserts that exact value; the "not all-identical" intent is covered by the added detailed-sample test.
+- Also correct the ImageSharp license label where recorded: 3.1.6 is under the **Six Labors Split License**, not Apache-2.0. It remains test-only/transitive (not a product dependency), so the product-dependency constraint is not triggered.
+
 ---
 
 ### Task 4: Model converter v1 — static meshes, materials, textures
