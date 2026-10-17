@@ -18,7 +18,7 @@ void print_usage(FILE* out) {
                  "  --library DIR     converted asset library (default: $SOTC_LIB)\n"
                  "  --model REL       model to load, relative to the library\n"
                  "  --screenshot PNG  write a PNG after --frames frames, then exit\n"
-                 "  --frames N        frames to render before exiting (default 3)\n"
+                 "  --frames N        frames the --screenshot path renders first (default 3)\n"
                  "  --width N         window width in points (default 1280)\n"
                  "  --height N        window height in points (default 720)\n"
                  "  --selftest        render one frame, print s1-status, exit\n");
