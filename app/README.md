@@ -4,11 +4,12 @@ The native macOS viewer for the converted *Shadow of the Colossus* asset library
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb` + `.png`) — never the game tree or original containers.
 
-**Status (milestone S1, task 3): the windowed shell with a textured renderer.**
+**Status (milestone S1, task 4): the windowed viewer with an orbit camera.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
-it (offscreen target → swapchain → present) at vsync, and exits on Escape or the
-window's close button. `--screenshot` writes the same frame to a PNG. The orbit
-camera and input arrive in task 4.
+it (offscreen target → swapchain → present) at vsync, and frames the scene
+bounds on load. Drag to orbit, scroll to zoom, press `F` to reframe; the window
+title shows the fps readout. Escape or the window's close button quits.
+`--screenshot` writes the same frame to a PNG.
 
 ## Build
 
@@ -41,6 +42,15 @@ is required. Escape or the close button quits.
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
 | `--selftest` | render one frame, print `s1-status …`, exit |
 
+Controls (no mouse capture: the cursor stays visible and free):
+
+| Gesture | Action |
+| --- | --- |
+| Left-drag | Orbit: yaw freely, pitch stops at ±89° |
+| Scroll | Zoom: distance clamped to [0.5, 500] |
+| `F` | Reframe the scene bounds (keeps the viewing direction) |
+| Escape / close button | Quit |
+
 A screenshot run also prints its size and a per-channel pixel summary, e.g.
 
 ```text
@@ -55,7 +65,7 @@ export SOTC_LIB=…/out/library   # repo convention: app tests fail fast without
 ctest --test-dir app/build --output-on-failure
 ```
 
-- `unit_tests` — doctest cases (asset IO today; the camera joins in task 4).
+- `unit_tests` — doctest cases (asset IO and camera math).
 - `windowed_selftest` — opens the window, compiles the shader, renders one
   frame, and asserts the `s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0`
   line. `mesh.metal` must sit next to the binary (the build copies it; a bad

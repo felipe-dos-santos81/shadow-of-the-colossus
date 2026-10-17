@@ -18,12 +18,9 @@ struct MaterialUniforms {
 static_assert(sizeof(MaterialUniforms) == 32, "Material uniform size changed");
 
 // No per-mesh transforms exist yet (the converter emits world-space geometry),
-// but vertex slot 1 is part of the shader contract, so every mesh gets the
-// identity. Task 4's math3d.h will grow the shared helpers.
-const Mat4 kIdentity = Mat4{{1.0f, 0.0f, 0.0f, 0.0f,
-                             0.0f, 1.0f, 0.0f, 0.0f,
-                             0.0f, 0.0f, 1.0f, 0.0f,
-                             0.0f, 0.0f, 0.0f, 1.0f}};
+// but vertex slot 1 is part of the shader contract, so every mesh draws with
+// the shared identity from math3d.h.
+const Mat4 kIdentity = mat4_identity();
 
 [[noreturn]] void throw_sdl_error(const std::string& what) {
     const char* error = SDL_GetError();

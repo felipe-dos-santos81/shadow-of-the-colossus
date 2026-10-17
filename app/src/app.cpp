@@ -1,16 +1,18 @@
 #include "app.h"
 
 #include "asset_io.h"
+#include "camera.h"
 #include "renderer.h"
 #include "scene.h"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -46,85 +48,19 @@ struct Shell {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Provisional fixed camera (task 3 only).
-//
-// The viewer's orbit camera — with camera_view/camera_proj and the shared
-// mat4_* helpers in math3d.h — is task 4's deliverable. Until then a screenshot
-// still has to show the model, so this computes a fixed view-projection from
-// the scene bounds: look at the bounds centre from 2.5 x the bounds radius,
-// 60 degrees vertical FOV, aspect from the drawable size. Delete it when
-// camera_view/camera_proj arrive.
-// ---------------------------------------------------------------------------
-
-Mat4 mat4_product(const Mat4& a, const Mat4& b) {
-    // Column-major: out[col * 4 + row] = sum_k a.m[k * 4 + row] * b.m[col * 4 + k].
-    Mat4 out{};
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            float sum = 0.0f;
-            for (int k = 0; k < 4; ++k) {
-                sum += a.m[k * 4 + row] * b.m[col * 4 + k];
-            }
-            out.m[col * 4 + row] = sum;
-        }
+// The camera's view-projection for the window's current drawable size,
+// recomputed per frame so the aspect follows a resize (the task-3 stopgap
+// froze it at startup, which stretched the image on a resized window).
+Mat4 camera_view_proj(const Camera& camera, SDL_Window* win) {
+    int width = 0;
+    int height = 0;
+    if (!SDL_GetWindowSizeInPixels(win, &width, &height)) {
+        const char* error = SDL_GetError();
+        throw std::runtime_error(std::string("sotc-viewer: SDL_GetWindowSizeInPixels: ") +
+                                 (error != nullptr ? error : "unknown error"));
     }
-    return out;
-}
-
-Mat4 provisional_view_proj(const Scene& scene, float aspect) {
-    const Vec3 center{(scene.boundsMin.x + scene.boundsMax.x) * 0.5f,
-                      (scene.boundsMin.y + scene.boundsMax.y) * 0.5f,
-                      (scene.boundsMin.z + scene.boundsMax.z) * 0.5f};
-    const Vec3 diagonal{scene.boundsMax.x - scene.boundsMin.x,
-                        scene.boundsMax.y - scene.boundsMin.y,
-                        scene.boundsMax.z - scene.boundsMin.z};
-    float radius = 0.5f * std::sqrt(vec3_dot(diagonal, diagonal));
-    if (!(radius > 0.0f)) {
-        radius = 1e-3f;  // empty scene: keep the matrix finite
-    }
-    if (!(aspect > 0.0f)) {
-        aspect = 1.0f;
-    }
-
-    const float distance = 2.5f * radius;
-    const Vec3 direction = vec3_normalize(Vec3{0.55f, 0.45f, 1.0f});
-    const Vec3 eye{center.x + direction.x * distance, center.y + direction.y * distance,
-                   center.z + direction.z * distance};
-
-    // Right-handed look-at: the camera looks down its own -Z.
-    const Vec3 forward = vec3_normalize(
-        Vec3{center.x - eye.x, center.y - eye.y, center.z - eye.z});
-    const Vec3 right = vec3_normalize(vec3_cross(forward, Vec3{0.0f, 1.0f, 0.0f}));
-    const Vec3 up = vec3_cross(right, forward);
-
-    Mat4 view{};
-    view.m[0] = right.x;
-    view.m[1] = up.x;
-    view.m[2] = -forward.x;
-    view.m[4] = right.y;
-    view.m[5] = up.y;
-    view.m[6] = -forward.y;
-    view.m[8] = right.z;
-    view.m[9] = up.z;
-    view.m[10] = -forward.z;
-    view.m[12] = -vec3_dot(right, eye);
-    view.m[13] = -vec3_dot(up, eye);
-    view.m[14] = vec3_dot(forward, eye);
-    view.m[15] = 1.0f;
-
-    // Right-handed perspective with Metal's [0, 1] depth range.
-    const float near_plane = std::max(0.05f * radius, 1e-3f);
-    const float far_plane = distance + 4.0f * radius;
-    const float focal = 1.0f / std::tan(0.5f * 60.0f * (3.14159265358979f / 180.0f));
-    Mat4 proj{};
-    proj.m[0] = focal / aspect;
-    proj.m[5] = focal;
-    proj.m[10] = far_plane / (near_plane - far_plane);
-    proj.m[11] = -1.0f;
-    proj.m[14] = near_plane * far_plane / (near_plane - far_plane);
-
-    return mat4_product(proj, view);
+    const float aspect = static_cast<float>(width) / static_cast<float>(std::max(height, 1));
+    return mat4_mul(camera_proj(camera, aspect), camera_view(camera));
 }
 
 // Names the swapchain format so a run records which gamma path applies (SDR
@@ -253,7 +189,7 @@ int run_app(const AppOptions& opts) {
         std::printf("s1-gpu format=%s\n",
                     texture_format_name(SDL_GetGPUSwapchainTextureFormat(shell.device, shell.win)));
 
-        Scene scene;
+        Scene scene{};
         if (!opts.modelRelPath.empty()) {
             scene = load_scene(opts.libraryDir, opts.modelRelPath);
             renderer.upload(scene);
@@ -266,27 +202,28 @@ int run_app(const AppOptions& opts) {
                         scene.textures.size());
         }
 
-        int pixel_width = 0;
-        int pixel_height = 0;
-        if (!SDL_GetWindowSizeInPixels(shell.win, &pixel_width, &pixel_height)) {
-            std::fprintf(stderr, "sotc-viewer: SDL_GetWindowSizeInPixels: %s\n", SDL_GetError());
-            return 1;
-        }
-        const Mat4 view_proj = provisional_view_proj(
-            scene, static_cast<float>(pixel_width) / static_cast<float>(std::max(pixel_height, 1)));
+        // The real camera: framed on the scene bounds at load (and again on F).
+        // `Scene scene{}` above zeroes the bounds for a model-less run, so the
+        // fit stays finite even when there is nothing to draw.
+        Camera camera{};
+        camera_frame(camera, scene.boundsMin, scene.boundsMax);
 
         if (opts.selftest) {
-            renderer.render_frame(scene, view_proj, /*acquire_swapchain=*/true);
+            renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                  /*acquire_swapchain=*/true);
             print_status_line(opts, shell.win);
             return 0;
         }
 
         if (!opts.screenshotPath.empty()) {
             for (int frame = 0; frame < opts.frames; ++frame) {
-                renderer.render_frame(scene, view_proj, /*acquire_swapchain=*/true);
+                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                      /*acquire_swapchain=*/true);
             }
 
             const std::vector<uint8_t> pixels = renderer.read_pixels();
+            int pixel_width = 0;
+            int pixel_height = 0;
             if (!SDL_GetWindowSizeInPixels(shell.win, &pixel_width, &pixel_height)) {
                 std::fprintf(stderr, "sotc-viewer: SDL_GetWindowSizeInPixels: %s\n", SDL_GetError());
                 return 1;
@@ -314,17 +251,61 @@ int run_app(const AppOptions& opts) {
             return 0;
         }
 
+        // Interactive: left-drag orbits, the wheel zooms, F reframes, Escape or
+        // the close button quits. Input needs no capture: plain mouse-motion
+        // events with SDL_BUTTON_LMASK held (never relative mode, never
+        // SDL_CaptureMouse) — the cursor stays visible and free.
         bool running = true;
+        std::deque<Uint64> frame_ticks;  // frame arrival times within the last second
+        Uint64 last_title_update = SDL_GetTicks();
         while (running) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
-                if (event.type == SDL_EVENT_QUIT) {
-                    running = false;
-                } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
-                    running = false;
+                switch (event.type) {
+                    case SDL_EVENT_QUIT:
+                        running = false;
+                        break;
+                    case SDL_EVENT_KEY_DOWN:
+                        if (event.key.key == SDLK_ESCAPE) {
+                            running = false;
+                        } else if (event.key.key == SDLK_F) {
+                            camera_frame(camera, scene.boundsMin, scene.boundsMax);
+                        }
+                        break;
+                    case SDL_EVENT_MOUSE_MOTION:
+                        // SDL fills xrel/yrel from successive positions even
+                        // without relative mode, so a plain motion event with
+                        // the button held is all a drag needs.
+                        if ((event.motion.state & SDL_BUTTON_LMASK) != 0) {
+                            camera_orbit(camera, event.motion.xrel, event.motion.yrel);
+                        }
+                        break;
+                    case SDL_EVENT_MOUSE_WHEEL:
+                        camera_zoom(camera, event.wheel.y);
+                        break;
+                    default:
+                        break;
                 }
             }
-            renderer.render_frame(scene, view_proj, /*acquire_swapchain=*/true);
+
+            renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                  /*acquire_swapchain=*/true);
+
+            // The S1 fps HUD: the window title shows the rolling average over
+            // the last second, refreshed twice a second (drawn text arrives
+            // with SDL_ttf when a HUD needs it).
+            const Uint64 now = SDL_GetTicks();
+            frame_ticks.push_back(now);
+            while (!frame_ticks.empty() && frame_ticks.front() + 1000 < now) {
+                frame_ticks.pop_front();
+            }
+            if (now - last_title_update >= 500) {
+                char title[64];
+                std::snprintf(title, sizeof(title), "sotc-viewer | %.1f fps",
+                              static_cast<double>(frame_ticks.size()));
+                SDL_SetWindowTitle(shell.win, title);
+                last_title_update = now;
+            }
         }
         return 0;
     } catch (const std::exception& error) {
