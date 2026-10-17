@@ -12,6 +12,9 @@ export_presets.cfg
 # macOS
 .DS_Store
 
+# SDL app (CMake)
+app/build/
+
 # scratch
 out/
 scratch/
