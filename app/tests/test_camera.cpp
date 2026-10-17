@@ -102,6 +102,46 @@ TEST_CASE("camera_frame keeps an off-center box inside the frustum") {
     }
 }
 
+TEST_CASE("zooming in keeps the framed scene inside the depth range") {
+    // camera_frame derives the distance from the bounds' half-diagonal, so the
+    // model lives inside the sphere of that radius r around the target: its far
+    // side sits `distance + r` in front of the eye. A far plane that only
+    // tracks the distance shrinks along with the zoom and cuts a hard depth
+    // hole through the far side — with the old 2.6 x distance, this fixture's
+    // far side (0.9 + sqrt(3) = 2.63) was past far = 2.34.
+    Camera camera{};
+    camera_frame(camera, Vec3{-1.0f, -1.0f, -1.0f}, Vec3{1.0f, 1.0f, 1.0f});  // framed: 3.0
+    camera.distance = 0.9f;
+
+    const Mat4 proj = camera_proj(camera, 16.0f / 9.0f);
+    const auto ndc_z = [&proj](float z_view) {
+        return (proj.m[10] * z_view + proj.m[14]) / (proj.m[11] * z_view);
+    };
+
+    // The whole bounding sphere — hence every vertex of the model — must be in
+    // front of the far plane.
+    const float radius = std::sqrt(3.0f);
+    CHECK(ndc_z(-(camera.distance + radius)) <= 1.0f);
+
+    // The cube's own corners: the six in front of the eye sit inside the
+    // [near, far] range; the two behind the eye are legitimately clipped by the
+    // near plane.
+    const Mat4 view = camera_view(camera);
+    int corners_in_front = 0;
+    for (int corner = 0; corner < 8; ++corner) {
+        const Vec3 point{(corner & 1) != 0 ? 1.0f : -1.0f, (corner & 2) != 0 ? 1.0f : -1.0f,
+                         (corner & 4) != 0 ? 1.0f : -1.0f};
+        const float z_view = clip_space(view, point)[2];
+        if (z_view >= 0.0f) {
+            continue;
+        }
+        ++corners_in_front;
+        CHECK(ndc_z(z_view) >= 0.0f);
+        CHECK(ndc_z(z_view) <= 1.0f);
+    }
+    CHECK(corners_in_front == 6);  // the loop is not silently vacuous
+}
+
 TEST_CASE("camera_view maps the target to -distance on the view axis") {
     Camera camera{};
     camera.target = Vec3{3.0f, 1.5f, -2.0f};

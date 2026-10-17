@@ -36,12 +36,21 @@ Mat4 camera_proj(const Camera& camera, float aspect) {
     if (!(aspect > 0.0f)) {
         aspect = 1.0f;  // a zero-size drawable must not produce infinities
     }
-    // The depth range scales with the orbit distance: a framed scene spans
-    // roughly [distance - r, distance + r] with r ≈ 0.58 * distance (the
-    // half-diagonal fit of a cube gives r = distance * tan(30°)), so 2.6 x the
-    // distance is safely behind the model and the near plane stays in front.
-    const float near_plane = std::max(0.02f * camera.distance, 1e-3f);
-    const float far_plane = 2.6f * camera.distance + 1e-3f;
+    // A hand-set zero distance (the orbit and the fit clamp to [0.5, 500]) must
+    // not make the depth range divide by zero.
+    const float distance = std::max(camera.distance, 1e-3f);
+
+    // Both planes scale with the orbit distance so the viewer works at any
+    // scene scale (never absolute planes). The far plane is deliberately 100 x
+    // the distance: the framed model reaches up to `distance + radius` in front
+    // of the eye, and a far plane that tracked the distance with a small
+    // multiplier cuts a hard depth hole through that far side as soon as the
+    // user zooms in (a 2.6 x multiplier clipped from ≈0.36 x the framed
+    // distance onward — e.g. the far side of a framed unit cube at distance 0.9
+    // sits at 2.63 while 2.6 x 0.9 is only 2.34). 100 x keeps float32 depth
+    // precision ample at scene depth (a constant 1:5000 near:far ratio).
+    const float near_plane = std::max(0.02f * distance, 1e-3f);
+    const float far_plane = 100.0f * distance;
     return mat4_perspective(camera.fovYDeg, aspect, near_plane, far_plane);
 }
 
