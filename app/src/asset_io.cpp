@@ -1,7 +1,9 @@
 #include "asset_io.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -55,6 +57,80 @@ struct StbPixels {
     StbPixels& operator=(const StbPixels&) = delete;
     ~StbPixels() { stbi_image_free(data); }
 };
+
+// A node's local transform, decomposed: the converter emits `matrix`, but TRS
+// nodes are equally valid glTF.
+struct LocalTrs {
+    Vec3 t;
+    Quat r;
+    Vec3 s;
+};
+
+// Rotation (three column-major basis vectors) -> quaternion. The branch on the
+// largest diagonal term keeps the divisor away from zero for every rotation;
+// normalizing the result keeps a sheared basis from scaling the rotation.
+Quat quat_from_basis(const Vec3 basis[3]) {
+    const float m00 = basis[0].x, m10 = basis[0].y, m20 = basis[0].z;
+    const float m01 = basis[1].x, m11 = basis[1].y, m21 = basis[1].z;
+    const float m02 = basis[2].x, m12 = basis[2].y, m22 = basis[2].z;
+
+    const float trace = m00 + m11 + m22;
+    Quat q{};
+    if (trace > 0.0f) {
+        const float s = std::sqrt(trace + 1.0f) * 2.0f;
+        q = Quat{(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25f * s};
+    } else if (m00 > m11 && m00 > m22) {
+        const float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
+        q = Quat{0.25f * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s};
+    } else if (m11 > m22) {
+        const float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
+        q = Quat{(m01 + m10) / s, 0.25f * s, (m12 + m21) / s, (m02 - m20) / s};
+    } else {
+        const float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
+        q = Quat{(m02 + m20) / s, (m12 + m21) / s, 0.25f * s, (m10 - m01) / s};
+    }
+    return quat_normalize(q);
+}
+
+// Decomposes a column-major local matrix: T = column 3, S = the basis column
+// lengths, R = the normalized basis. A zero-length column (degenerate scale)
+// cannot be normalized, so it keeps S = 1 and contributes a zero basis vector:
+// the rotation is then arbitrary, but finite, instead of dividing by zero.
+LocalTrs decompose_matrix(const float* m) {
+    LocalTrs out;
+    out.t = Vec3{m[12], m[13], m[14]};
+
+    Vec3 basis[3] = {Vec3{m[0], m[1], m[2]}, Vec3{m[4], m[5], m[6]}, Vec3{m[8], m[9], m[10]}};
+    float scale[3] = {1.0f, 1.0f, 1.0f};
+    for (int i = 0; i < 3; ++i) {
+        const float length = std::sqrt(vec3_dot(basis[i], basis[i]));
+        if (length > 0.0f) {
+            scale[i] = length;
+            basis[i] = Vec3{basis[i].x / length, basis[i].y / length, basis[i].z / length};
+        } else {
+            basis[i] = Vec3{0.0f, 0.0f, 0.0f};
+        }
+    }
+    out.s = Vec3{scale[0], scale[1], scale[2]};
+    out.r = quat_from_basis(basis);
+    return out;
+}
+
+// The node's local transform. cgltf leaves an absent rotation/scale zeroed, so
+// the glTF defaults (identity rotation, unit scale) are applied here.
+LocalTrs node_local_trs(const cgltf_node& node) {
+    if (node.has_matrix) {
+        return decompose_matrix(node.matrix);
+    }
+    LocalTrs out;
+    out.t = Vec3{node.translation[0], node.translation[1], node.translation[2]};
+    out.r = node.has_rotation
+                ? Quat{node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]}
+                : Quat{0.0f, 0.0f, 0.0f, 1.0f};
+    out.s = node.has_scale ? Vec3{node.scale[0], node.scale[1], node.scale[2]}
+                           : Vec3{1.0f, 1.0f, 1.0f};
+    return out;
+}
 
 }  // namespace
 
@@ -163,6 +239,10 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
                 cgltf_find_accessor(&primitive, cgltf_attribute_type_normal, 0);
             const cgltf_accessor* texcoord =
                 cgltf_find_accessor(&primitive, cgltf_attribute_type_texcoord, 0);
+            const cgltf_accessor* joints =
+                cgltf_find_accessor(&primitive, cgltf_attribute_type_joints, 0);
+            const cgltf_accessor* weights =
+                cgltf_find_accessor(&primitive, cgltf_attribute_type_weights, 0);
 
             MeshCpu out;
             out.materialIndex =
@@ -200,6 +280,29 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
                     cgltf_accessor_read_float(texcoord, v, uv, 2);
                     vertex.u = uv[0];
                     vertex.v = uv[1];
+                }
+
+                // Absent JOINTS_0/WEIGHTS_0: joint 0 at full weight, so an
+                // unskinned primitive of a skinned model renders in bind pose
+                // instead of collapsing to the origin. JOINTS_0 arrives as
+                // unsigned byte or short; both become the u16 the pipeline uses.
+                for (int i = 0; i < 4; ++i) {
+                    vertex.j[i] = 0;
+                    vertex.w[i] = i == 0 ? 1.0f : 0.0f;
+                }
+                if (joints != nullptr && v < joints->count) {
+                    cgltf_uint indices[4] = {0, 0, 0, 0};
+                    cgltf_accessor_read_uint(joints, v, indices, 4);
+                    for (int i = 0; i < 4; ++i) {
+                        vertex.j[i] = static_cast<uint16_t>(indices[i]);
+                    }
+                }
+                if (weights != nullptr && v < weights->count) {
+                    float values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    cgltf_accessor_read_float(weights, v, values, 4);
+                    for (int i = 0; i < 4; ++i) {
+                        vertex.w[i] = values[i];
+                    }
                 }
 
                 if (!have_vertex) {
@@ -253,6 +356,149 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
         out.normalTexture = resolve_texture(material.normal_texture.texture);
 
         scene.materials.push_back(std::move(out));
+    }
+
+    // Skin: the converted models carry exactly one. `joint_of_node` maps a node
+    // index to its slot in the joint list, so both parent links and animation
+    // channels can be resolved against the skin's own order.
+    std::vector<int> joint_of_node(document.data->nodes_count, -1);
+    if (document.data->skins_count > 0) {
+        const cgltf_skin& skin = document.data->skins[0];
+        for (cgltf_size i = 0; i < skin.joints_count; ++i) {
+            if (skin.joints[i] != nullptr) {
+                joint_of_node[cgltf_node_index(document.data, skin.joints[i])] =
+                    static_cast<int>(i);
+            }
+        }
+
+        scene.skin.joints.resize(skin.joints_count);
+        for (cgltf_size i = 0; i < skin.joints_count; ++i) {
+            JointCpu& joint = scene.skin.joints[i];
+            joint.parent = -1;
+            joint.inverseBind = mat4_identity();
+
+            const cgltf_node* node = skin.joints[i];
+            if (node == nullptr) {
+                continue;  // malformed joint entry: keep the slot, not the data
+            }
+            joint.name = node->name != nullptr ? node->name : "";
+            const LocalTrs rest = node_local_trs(*node);
+            joint.restT = rest.t;
+            joint.restR = rest.r;
+            joint.restS = rest.s;
+            // Only a joint can be a joint's parent: an enclosing armature node
+            // (or the scene) leaves this joint a skeleton root.
+            if (node->parent != nullptr) {
+                joint.parent = joint_of_node[cgltf_node_index(document.data, node->parent)];
+            }
+        }
+
+        // Inverse bind matrices; a skin without them binds in rest pose.
+        if (skin.inverse_bind_matrices != nullptr) {
+            const cgltf_accessor* inverse_bind = skin.inverse_bind_matrices;
+            for (cgltf_size i = 0; i < skin.joints_count && i < inverse_bind->count; ++i) {
+                float matrix[16] = {};
+                if (cgltf_accessor_read_float(inverse_bind, i, matrix, 16)) {
+                    for (int k = 0; k < 16; ++k) {
+                        scene.skin.joints[i].inverseBind.m[k] = matrix[k];
+                    }
+                }
+            }
+        }
+    }
+
+    // Animations: only channels that drive a skin joint survive — a clip's
+    // helper-bone or camera channels have no joint to land on. What is dropped
+    // is counted once per clip, so the loader never discards data silently.
+    for (cgltf_size a = 0; a < document.data->animations_count; ++a) {
+        const cgltf_animation& animation = document.data->animations[a];
+
+        AnimationCpu clip;
+        clip.name = animation.name != nullptr ? animation.name : "";
+        clip.duration = 0.0f;
+        int skipped_non_joint = 0;
+        int skipped_unsupported = 0;
+
+        for (cgltf_size c = 0; c < animation.channels_count; ++c) {
+            const cgltf_animation_channel& channel = animation.channels[c];
+            const cgltf_animation_sampler* sampler = channel.sampler;
+
+            if (sampler == nullptr || sampler->input == nullptr || sampler->output == nullptr) {
+                ++skipped_unsupported;
+                continue;
+            }
+            // A CUBICSPLINE key holds three values (in-tangent, value,
+            // out-tangent): reading them as LINEAR would mis-animate silently,
+            // so refuse the whole load instead.
+            if (sampler->interpolation == cgltf_interpolation_type_cubic_spline) {
+                throw std::runtime_error("load_scene: animation \"" + clip.name + "\" channel " +
+                                         std::to_string(c) + " in " + model_path_string +
+                                         " uses CUBICSPLINE interpolation, which is not supported");
+            }
+            if (channel.target_node == nullptr) {
+                ++skipped_unsupported;
+                continue;
+            }
+            const int joint =
+                joint_of_node[cgltf_node_index(document.data, channel.target_node)];
+            if (joint < 0) {
+                ++skipped_non_joint;
+                continue;
+            }
+
+            int path = -1;
+            switch (channel.target_path) {
+                case cgltf_animation_path_type_translation: path = 0; break;
+                case cgltf_animation_path_type_rotation: path = 1; break;
+                case cgltf_animation_path_type_scale: path = 2; break;
+                default: break;  // morph-target weights are not TRS
+            }
+            if (path < 0) {
+                ++skipped_unsupported;
+                continue;
+            }
+
+            AnimationChannelCpu out;
+            out.joint = joint;
+            out.path = path;
+            out.interpolation =
+                sampler->interpolation == cgltf_interpolation_type_step ? 1 : 0;
+
+            const cgltf_accessor* input = sampler->input;
+            out.times.resize(input->count);
+            for (cgltf_size k = 0; k < input->count; ++k) {
+                float time = 0.0f;
+                cgltf_accessor_read_float(input, k, &time, 1);
+                out.times[k] = time;
+            }
+
+            // Rotations carry 4 floats per key, translations and scales 3.
+            const std::size_t components = path == 1 ? 4u : 3u;
+            const cgltf_accessor* output = sampler->output;
+            out.values.resize(output->count * components);
+            for (cgltf_size k = 0; k < output->count; ++k) {
+                float value[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                cgltf_accessor_read_float(output, k, value, components);
+                for (std::size_t i = 0; i < components; ++i) {
+                    out.values[k * components + i] = value[i];
+                }
+            }
+
+            if (!out.times.empty()) {
+                clip.duration =
+                    std::max(clip.duration, *std::max_element(out.times.begin(), out.times.end()));
+            }
+            clip.channels.push_back(std::move(out));
+        }
+
+        if (skipped_non_joint > 0 || skipped_unsupported > 0) {
+            std::fprintf(stderr,
+                         "sotc-viewer: animation \"%s\": skipped %d channel(s) "
+                         "(non-joint targets: %d, unsupported: %d)\n",
+                         clip.name.c_str(), skipped_non_joint + skipped_unsupported,
+                         skipped_non_joint, skipped_unsupported);
+        }
+        scene.animations.push_back(std::move(clip));
     }
 
     scene.boundsMin = have_vertex ? bounds_min : Vec3{0.0f, 0.0f, 0.0f};

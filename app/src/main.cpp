@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,9 @@ void print_usage(FILE* out) {
                  "\n"
                  "  --library DIR     converted asset library (default: $SOTC_LIB)\n"
                  "  --model REL       model to load, relative to the library\n"
+                 "  --anim NAME|IDX   clip to play, by name or 0-based index\n"
+                 "                    (default: procedural-wave for a skinned model)\n"
+                 "  --anim-time SEC   pause playback at SEC seconds (deterministic captures)\n"
                  "  --screenshot PNG  write a PNG after --frames frames, then exit\n"
                  "  --frames N        frames the --screenshot path renders first (default 3)\n"
                  "  --width N         window width in points (default 1280)\n"
@@ -28,6 +32,19 @@ bool parse_int(const char* text, int& out) {
     const char* const end = text + std::strlen(text);
     const auto [ptr, ec] = std::from_chars(text, end, out);
     return ec == std::errc() && ptr == end;
+}
+
+// Strict seconds parse for --anim-time: the whole string must be one finite
+// number. std::strtof alone would accept trailing garbage and the "nan"/"inf"
+// spellings, and a non-finite time has no meaning for playback.
+bool parse_seconds(const char* text, float& out) {
+    char* end = nullptr;
+    const float value = std::strtof(text, &end);
+    if (end == text || *end != '\0' || !std::isfinite(value)) {
+        return false;
+    }
+    out = value;
+    return true;
 }
 
 const char* library_from_env() {
@@ -48,7 +65,8 @@ int main(int argc, char** argv) {
         }
 
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
-                                 arg == "--frames" || arg == "--width" || arg == "--height";
+                                 arg == "--frames" || arg == "--width" || arg == "--height" ||
+                                 arg == "--anim" || arg == "--anim-time";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -67,6 +85,18 @@ int main(int argc, char** argv) {
             opts.modelRelPath = value;
         } else if (arg == "--screenshot") {
             opts.screenshotPath = value;
+        } else if (arg == "--anim") {
+            opts.animClip = value;
+        } else if (arg == "--anim-time") {
+            float seconds = 0.0f;
+            if (!parse_seconds(value, seconds)) {
+                std::fprintf(stderr, "sotc-viewer: %s expects a finite number of seconds, got: %s\n",
+                             arg.c_str(), value);
+                print_usage(stderr);
+                return 2;
+            }
+            opts.animTime = seconds;
+            opts.animTimeSet = true;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {

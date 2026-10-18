@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
@@ -29,6 +30,18 @@ const Mat4 kIdentity = mat4_identity();
     }
     throw std::runtime_error(what);
 }
+
+// Owns transfer buffers for the duration of one upload: released on scope
+// exit, so an error between mapping and the fence wait cannot leak them.
+struct TransferBufferGuard {
+    SDL_GPUDevice* device;
+    std::vector<SDL_GPUTransferBuffer*>* buffers;
+    ~TransferBufferGuard() {
+        for (SDL_GPUTransferBuffer* buffer : *buffers) {
+            SDL_ReleaseGPUTransferBuffer(device, buffer);
+        }
+    }
+};
 
 // Reads the shader source that CMake copied next to the executable. SDL
 // compiles it at runtime (plan ruling R2), so the file must be present beside
@@ -100,11 +113,12 @@ Renderer::~Renderer() {
 void Renderer::create_pipeline() {
     const std::vector<uint8_t> source = read_shader_source("mesh.metal");
 
-    // Vertex stage: slots 0 (viewProj) and 1 (model). Fragment stage: slot 0
-    // (material) plus the base-color texture and its sampler.
-    vertex_shader_ = create_shader(SDL_GPU_SHADERSTAGE_VERTEX, "mesh_vertex", 2, 0,
+    // Vertex stage: uniforms 0 (viewProj) and 1 (model) plus the palette
+    // storage buffer. Fragment stage: slot 0 (material) plus the base-color
+    // texture and its sampler.
+    vertex_shader_ = create_shader(SDL_GPU_SHADERSTAGE_VERTEX, "mesh_vertex", 2, 1, 0,
                                    source.data(), source.size());
-    fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "mesh_fragment", 1, 1,
+    fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "mesh_fragment", 1, 0, 1,
                                      source.data(), source.size());
 
     SDL_GPUVertexBufferDescription vertex_buffer{};
@@ -112,16 +126,18 @@ void Renderer::create_pipeline() {
     vertex_buffer.pitch = sizeof(Vertex);
     vertex_buffer.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
 
-    SDL_GPUVertexAttribute attributes[3]{};
+    SDL_GPUVertexAttribute attributes[5]{};
     attributes[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(Vertex, px)};
     attributes[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(Vertex, nx)};
     attributes[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(Vertex, u)};
+    attributes[3] = {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_USHORT4, offsetof(Vertex, j)};
+    attributes[4] = {4, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(Vertex, w)};
 
     SDL_GPUVertexInputState vertex_input{};
     vertex_input.vertex_buffer_descriptions = &vertex_buffer;
     vertex_input.num_vertex_buffers = 1;
     vertex_input.vertex_attributes = attributes;
-    vertex_input.num_vertex_attributes = 3;
+    vertex_input.num_vertex_attributes = 5;
 
     SDL_GPUColorTargetDescription color_target{};
     color_target.format = color_format_;
@@ -165,8 +181,9 @@ void Renderer::create_pipeline() {
 }
 
 SDL_GPUShader* Renderer::create_shader(SDL_GPUShaderStage stage, const char* entry_point,
-                                       uint32_t num_uniform_buffers, uint32_t num_samplers,
-                                       const uint8_t* source, size_t source_size) {
+                                       uint32_t num_uniform_buffers, uint32_t num_storage_buffers,
+                                       uint32_t num_samplers, const uint8_t* source,
+                                       size_t source_size) {
     SDL_GPUShaderCreateInfo info{};
     info.code_size = source_size;
     info.code = source;
@@ -174,6 +191,7 @@ SDL_GPUShader* Renderer::create_shader(SDL_GPUShaderStage stage, const char* ent
     info.format = SDL_GPU_SHADERFORMAT_MSL;
     info.stage = stage;
     info.num_samplers = num_samplers;
+    info.num_storage_buffers = num_storage_buffers;
     info.num_uniform_buffers = num_uniform_buffers;
 
     SDL_GPUShader* shader = SDL_CreateGPUShader(device_, &info);
@@ -201,15 +219,7 @@ void Renderer::upload(const Scene& scene) {
     }
 
     std::vector<SDL_GPUTransferBuffer*> transfer_buffers;
-    struct TransferBufferGuard {
-        SDL_GPUDevice* device;
-        std::vector<SDL_GPUTransferBuffer*>* buffers;
-        ~TransferBufferGuard() {
-            for (SDL_GPUTransferBuffer* buffer : *buffers) {
-                SDL_ReleaseGPUTransferBuffer(device, buffer);
-            }
-        }
-    } transfer_guard{device_, &transfer_buffers};
+    TransferBufferGuard transfer_guard{device_, &transfer_buffers};
 
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
     if (cmd == nullptr) {
@@ -314,7 +324,7 @@ void Renderer::upload(const Scene& scene) {
     }
 
     // Geometry: vertices for every mesh, then indices for every mesh, in one
-    // transfer buffer (vertex records are 32 bytes and indices 4, so every
+    // transfer buffer (vertex records are 56 bytes and indices 4, so every
     // region stays 4-byte aligned).
     uint32_t vertex_bytes = 0;
     uint32_t index_bytes = 0;
@@ -406,6 +416,48 @@ void Renderer::upload(const Scene& scene) {
         }
     }
 
+    // The joint palette (vertex storage buffer): one matrix per skin joint, or
+    // a single matrix for a scene without a skin — the shader always reads
+    // palette[joints], and an unskinned vertex defaults to joint 0 weight 1.
+    // The initial content is the bind pose (identity per joint), so any draw
+    // that happens before the first upload_pose is well defined.
+    pose_joint_count_ = static_cast<uint32_t>(scene.skin.joints.size());
+    const std::vector<Mat4> rest_palette(std::max<uint32_t>(pose_joint_count_, 1u),
+                                         mat4_identity());
+    {
+        const uint32_t pose_size = static_cast<uint32_t>(rest_palette.size() * sizeof(Mat4));
+        SDL_GPUBufferCreateInfo buffer_info{};
+        buffer_info.size = pose_size;
+        buffer_info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+        pose_buffer_ = SDL_CreateGPUBuffer(device_, &buffer_info);
+        if (pose_buffer_ == nullptr) {
+            throw_sdl_error("renderer: SDL_CreateGPUBuffer(pose)");
+        }
+
+        SDL_GPUTransferBufferCreateInfo transfer_info{};
+        transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        transfer_info.size = pose_size;
+        SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
+        if (transfer == nullptr) {
+            throw_sdl_error("renderer: SDL_CreateGPUTransferBuffer(pose)");
+        }
+        transfer_buffers.push_back(transfer);
+
+        void* mapped = SDL_MapGPUTransferBuffer(device_, transfer, false);
+        if (mapped == nullptr) {
+            throw_sdl_error("renderer: SDL_MapGPUTransferBuffer(pose)");
+        }
+        std::memcpy(mapped, rest_palette.data(), pose_size);
+        SDL_UnmapGPUTransferBuffer(device_, transfer);
+
+        SDL_GPUTransferBufferLocation source{};
+        source.transfer_buffer = transfer;
+        SDL_GPUBufferRegion destination{};
+        destination.buffer = pose_buffer_;
+        destination.size = pose_size;
+        SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
+    }
+
     SDL_EndGPUCopyPass(copy_pass);
 
     // The uploads are on the GPU timeline; wait for them so the transfer
@@ -421,6 +473,61 @@ void Renderer::upload(const Scene& scene) {
     }
 
     uploaded_ = true;
+}
+
+void Renderer::upload_pose(const std::vector<Mat4>& palette) {
+    if (pose_joint_count_ == 0) {
+        return;  // no skin: the identity palette stands
+    }
+    if (palette.size() != pose_joint_count_) {
+        throw std::runtime_error("renderer: upload_pose got " + std::to_string(palette.size()) +
+                                 " matrices, expected " + std::to_string(pose_joint_count_));
+    }
+
+    const uint32_t byte_count = static_cast<uint32_t>(palette.size() * sizeof(Mat4));
+    std::vector<SDL_GPUTransferBuffer*> transfer_buffers;
+    TransferBufferGuard transfer_guard{device_, &transfer_buffers};
+
+    SDL_GPUTransferBufferCreateInfo transfer_info{};
+    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    transfer_info.size = byte_count;
+    SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
+    if (transfer == nullptr) {
+        throw_sdl_error("renderer: SDL_CreateGPUTransferBuffer(pose)");
+    }
+    transfer_buffers.push_back(transfer);
+
+    void* mapped = SDL_MapGPUTransferBuffer(device_, transfer, false);
+    if (mapped == nullptr) {
+        throw_sdl_error("renderer: SDL_MapGPUTransferBuffer(pose)");
+    }
+    std::memcpy(mapped, palette.data(), byte_count);
+    SDL_UnmapGPUTransferBuffer(device_, transfer);
+
+    // The copy pass is its own submission, ordered before the frame's render
+    // pass on the same queue, so the draws read the new palette.
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
+    if (cmd == nullptr) {
+        throw_sdl_error("renderer: SDL_AcquireGPUCommandBuffer");
+    }
+    SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(cmd);
+    const SDL_GPUTransferBufferLocation source{transfer, 0};
+    const SDL_GPUBufferRegion destination{pose_buffer_, 0, byte_count};
+    SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
+    SDL_EndGPUCopyPass(copy_pass);
+
+    // The transfer buffer may only be released once the copy has run (upload()'s
+    // pattern); the fence wait costs microseconds at this size. A ring of
+    // transfer buffers would avoid the wait if profiling ever asks for it.
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    if (fence == nullptr) {
+        throw_sdl_error("renderer: SDL_SubmitGPUCommandBufferAndAcquireFence");
+    }
+    const bool waited = SDL_WaitForGPUFences(device_, true, &fence, 1);
+    SDL_ReleaseGPUFence(device_, fence);
+    if (!waited) {
+        throw_sdl_error("renderer: SDL_WaitForGPUFences");
+    }
 }
 
 void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain) {
@@ -480,6 +587,12 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
 
     // Vertex slot 0: one view-projection for the whole frame.
     SDL_PushGPUVertexUniformData(cmd, 0, &viewProj, sizeof(Mat4));
+
+    // Vertex storage buffer 0: the joint palette, shared by every draw.
+    if (pose_buffer_ != nullptr) {
+        SDL_GPUBuffer* pose_buffers[1] = {pose_buffer_};
+        SDL_BindGPUVertexStorageBuffers(pass, 0, pose_buffers, 1);
+    }
 
     for (size_t i = 0; i < scene.meshes.size() && i < meshes_.size(); ++i) {
         const MeshGpu& mesh = meshes_[i];
@@ -663,6 +776,11 @@ void Renderer::release_gpu_resources() {
         SDL_ReleaseGPUTexture(device_, white_texture_);
         white_texture_ = nullptr;
     }
+    if (pose_buffer_ != nullptr) {
+        SDL_ReleaseGPUBuffer(device_, pose_buffer_);
+        pose_buffer_ = nullptr;
+    }
+    pose_joint_count_ = 0;
     for (MeshGpu& mesh : meshes_) {
         if (mesh.vertex_buffer != nullptr) {
             SDL_ReleaseGPUBuffer(device_, mesh.vertex_buffer);
