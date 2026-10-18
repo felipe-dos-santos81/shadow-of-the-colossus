@@ -411,8 +411,7 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
             const cgltf_accessor* position =
                 cgltf_find_accessor(&primitive, cgltf_attribute_type_position, 0);
             if (position == nullptr) {
-                throw std::runtime_error("load_scene: primitive without POSITION in " +
-                                         model_path_string);
+                throw std::runtime_error("primitive without POSITION in " + model_path_string);
             }
             const cgltf_accessor* normal =
                 cgltf_find_accessor(&primitive, cgltf_attribute_type_normal, 0);
@@ -607,9 +606,13 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
         }
     }
 
-    // The player: identity model, and the only rig the scene keeps.
-    load_glb_into(scene, libraryDir, playerGlbRelPath, GlbPlacement{.includeRig = true},
-                  have_bounds);
+    // The player: identity model, and the only rig the scene keeps. Its
+    // materials follow every instance's, so they carry the same offset.
+    const GlbPlacement player_placement{
+        .materialOffset = static_cast<int>(scene.materials.size()),
+        .includeRig = true,
+    };
+    load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds);
 
     if (!have_bounds) {
         scene.boundsMin = Vec3{0.0f, 0.0f, 0.0f};
