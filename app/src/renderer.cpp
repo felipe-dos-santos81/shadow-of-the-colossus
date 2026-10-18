@@ -314,7 +314,7 @@ void Renderer::upload(const Scene& scene) {
     }
 
     // Geometry: vertices for every mesh, then indices for every mesh, in one
-    // transfer buffer (vertex records are 32 bytes and indices 4, so every
+    // transfer buffer (vertex records are 56 bytes and indices 4, so every
     // region stays 4-byte aligned).
     uint32_t vertex_bytes = 0;
     uint32_t index_bytes = 0;
