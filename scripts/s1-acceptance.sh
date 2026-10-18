@@ -15,7 +15,9 @@
 #      out/s1/<name>.png; each PNG must carry the \x89PNG magic, be larger than 5000 bytes,
 #      and show a non-uniform frame (largest channel span >= 30 in the viewer's own
 #      s1-pixels stats) — a solid clear-colour frame passes the size floor (it compresses
-#      to ~146 KB), so bytes alone cannot prove the draw loop ran;
+#      to ~146 KB), so bytes alone cannot prove the draw loop ran. The wander run passes
+#      `--anim-time 0`: a skinned model plays its clip by default (S2), and a pinned time
+#      keeps the capture byte-reproducible;
 #   5. a summary block (library, status line, screenshot paths + byte sizes).
 #
 # Environment:
@@ -70,15 +72,19 @@ fi
 
 mkdir -p "$out_dir"
 
+# screenshot NAME REL [viewer flags...] — the extra flags are passed through to
+# the viewer (e.g. `--anim-time 0` to pin a skinned capture's playback time).
 screenshot() {
-  local name="$1" rel="$2" png magic bytes output status pixels_line
+  local name="$1" rel="$2"
+  shift 2
+  local png magic bytes output status pixels_line
   local min_r min_g min_b max_r max_g max_b span d
   png="$out_dir/$name.png"
   rm -f "$png"
   stamp "screenshot: $name <- $rel"
   # The viewer's output is captured (and printed below) so the run's own
   # s1-pixels stats can prove the frame was actually drawn, not just written.
-  output="$("$viewer" --library "$lib" --model "$rel" --screenshot "$png" --frames 3 2>&1)" || {
+  output="$("$viewer" --library "$lib" --model "$rel" --screenshot "$png" --frames 3 "$@" 2>&1)" || {
     status=$?
     printf '%s\n' "$output" >&2
     fail "screenshot $name: viewer exited $status"
@@ -104,7 +110,9 @@ screenshot() {
     fail "screenshot $name: uniform frame (largest channel span $span < 30): $pixels_line"
 }
 
-screenshot wander models/shadow/characters/wander/_cmn/wander.glb
+# The wander capture pins the time: since S2 a skinned model plays its clip by
+# default, and an unpinned run would capture wherever the wave happened to be.
+screenshot wander models/shadow/characters/wander/_cmn/wander.glb --anim-time 0
 screenshot plank models/objects/props/_cmn/obj_plank_01.glb
 
 # --- Step 5: summary ----------------------------------------------------------

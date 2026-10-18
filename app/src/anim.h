@@ -15,8 +15,9 @@ float animation_loop_time(float time, float duration);
 // Samples one channel at `t` into `out`: 4 floats for a rotation (path 1),
 // 3 for a translation or scale. Values outside the key range clamp to the end
 // keys; LINEAR interpolates (rotations via shortest-path slerp, vectors via
-// componentwise lerp) and STEP holds the left key. A channel with no keys
-// writes nothing, leaving the caller's default in place.
+// componentwise lerp) and STEP holds the left key. A non-finite `t` (NaN,
+// ±inf) samples the clip's start. A channel with no keys — or one whose packed
+// values are truncated — writes nothing, leaving the caller's default in place.
 void animation_sample(const AnimationChannelCpu& ch, float t, float* out);
 
 // The skin palette at `time`: one matrix per skin joint, worldJoint *

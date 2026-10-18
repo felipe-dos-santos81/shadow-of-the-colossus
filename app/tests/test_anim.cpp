@@ -332,3 +332,21 @@ TEST_CASE("the procedural wave starts at rest and moves later") {
     CHECK(!std::all_of(mid.begin(), mid.end(),
                        [](const Mat4& m) { return is_identity(m, 1e-3f); }));
 }
+
+TEST_CASE("the procedural wave animates every joint of a rig smaller than the cap") {
+    // The other half of the declared `min(12, joints)` contract: a rig with
+    // fewer joints than the cap gets one channel per joint, not the cap
+    // (wander's case above pins the cap with 348 joints).
+    const Scene scene = turn_fixture_scene();  // 2 joints
+    const AnimationCpu wave = make_procedural_wave(scene);
+    REQUIRE(scene.skin.joints.size() == 2);
+    REQUIRE(wave.channels.size() == 2);
+    CHECK(wave.channels[0].joint == 0);
+    CHECK(wave.channels[1].joint == 1);
+
+    // Key 0 of each channel is that joint's rest rotation (identity here).
+    for (const AnimationChannelCpu& channel : wave.channels) {
+        CHECK(channel.values[0] == 0.0f);
+        CHECK(channel.values[3] == 1.0f);
+    }
+}
