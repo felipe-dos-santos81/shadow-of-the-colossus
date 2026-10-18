@@ -83,8 +83,8 @@ but the same little-endian field style; see §1.2.
   `player_a.skb`: 30 of the 32 `0x000` entries resolve to names — the 29 core offsets plus the
   `OptBone_*` run start — while the other two are section starts, `0x180` record array and `0xAA0`
   bind region); for `.anb` the same walk can absorb leading zero padding (measured 119 vs ~116
-  entries for `player_a_stand.anb`), so treat `.anb` tail counts as approximate until B2 decodes
-  that bank.
+  entries for `player_a_stand.anb`) — **B2 resolved this: the exact counts come from the header
+  (§3.1); the walk's extra entries are the data region's trailing zero bytes.**
 - The vendored `CANI` parser (`third_party/PSO2-Aqua-Library`) **does not fit** this family: it
   reads big-endian while these containers are little-endian (and it expects `int_14 // Usually 0x30`
   where the `xff` files store the file size), so every parse throws — the spike recorded
@@ -203,3 +203,207 @@ The 348 / `Bone_root` values describe the **full** skeleton (`wander.cskl` 348 n
 extraction, tail tables, records, glb-subset, `.weightinfo` equality — 16/16 pass, exit 0) and
 **reports the three plan deltas** as findings, printing the pointer to this section. `--strict-plan`
 turns the deltas into an exit-1 failure for anyone who wants the plan's numbers enforced verbatim.
+
+## 3 · Actor clips (`.anb`) — the container decoded, the curve encoding open
+
+Task B2's gate was `player_a_stand`'s per-joint curves, extracted and verified. The container is
+decoded to the byte (§3.1–§3.2) and the payload's **content classes** are measured (§3.3), but the
+**key encoding itself is not decoded**: the candidate reading (§3.5) fails the gate's own sanity
+checks (§3.6), and the joint-count cross-check is pinned to what the data shows. Artifacts (gitignored,
+under `out/re/anb/`): `player_a_stand.structure.txt`, `horse_a_add_horse_kick.structure.txt`,
+`check-curves.txt`, `player_a_stand.curves.json`, plus the JSON forms of each.
+
+| | |
+|---|---|
+| Probe modes (this section) | `anb <file> [--json out] [--curves out.json]`, `check-curves [--file F] [--cani F] [--json out]` |
+| Gate file | `cp3shadow/anim/player_a_stand.anb` (8,424 B), second sample `horse_a_add_horse_kick.anb` (4,276 B) |
+| Gate verdict input | `check-curves` → **exit 1, gate: NOT MET** (§3.6, verbatim) |
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+python3 tools/re/anb/probe.py anb cp3shadow/anim/player_a_stand.anb --json out/re/anb/player_a_stand.structure.json
+python3 tools/re/anb/probe.py anb cp3shadow/anim/horse_a_add_horse_kick.anb
+python3 tools/re/anb/probe.py anb cp3shadow/anim/player_a_stand.anb --curves out/re/anb/player_a_stand.curves.json
+python3 tools/re/anb/probe.py check-curves                      # exit 1 (NOT MET)
+```
+
+### 3.1 Container structure (measured)
+
+The header is B1's `xff` header (§1.1) with the fields it left opaque now named. The `0x70..0x110`
+region turns out to be a fixed set of descriptor structures — the *same shape in every `.anb`*:
+`{0,1,0,0}` at `0x70`, a section record at `0x78` (`{0,0,0,1,8,0,0,0}`), the motion descriptor at
+`0x90`, `{0,0x110,0,0}` at `0xB0`, the table descriptor at `0xC0`, and a trailer at `0xE8`
+(`{0,1,0,0}` + `0x00010003` + the literal string `.rodata` at `0xFC`) — the string is part of the
+file, not a pointer target.
+
+| offset | width | measured (both samples + 300-file sample) | meaning |
+|---|---|---|---|
+| `0x90..0xC0` | 12 × u32 | `{0, X, ext_ptr, ptr, data_size, 0x10, 1, 0, 0, 0x110, 0, 0}` | "motion" descriptor: `X`/`ext_ptr` are pointers with *external* tags (0 for the character samples, non-zero in `objanim_*`), `ptr` = the data start |
+| `0xA0` | u32 | 7224 (`player_a_stand`), 2900 (horse) | **data size** = `table1_start − 0xB4` (300/300 sampled; the 5 exceptions are the §3.1 variant) |
+| `0xB4` | u32 | `0x110` (300/300) | data offset — the same string/data base as `.skb` |
+| `0xC0` | u32 | **9** (300/300) | constant, semantics open |
+| `0xC4` | u32 | 58 / 69 | **count of *both* tail tables** |
+| `0xC8` | u32 | **1** (300/300) | constant |
+| `0xCC`, `0xD0` | u32 | tagged pointers | table 1 / table 2 pointers; `0xD4`/`0xD8` mirror the offsets untagged |
+| `0x10` | u32 | 0x1BF4 / 0xB10 | "last section" — in the character samples this is a block boundary *inside* the data region, not a separate tail (B1's §1.1 scope note); `objanim_*` samples can point into the header instead (`objanim_leo_a_run.anb`: `0x44`) |
+
+- **The tail tables are exact now.** B1 walked back from EOF and absorbed leading zero bytes, so its
+  counts were "approximate" (119 vs ~116 for `player_a_stand`). The header's pointers give the exact
+  rule: **both** tables hold `count` = u32 `@0xC4` entries of 8-byte `{u32 offset, u32 tag}`; table 1
+  starts at `@0xCC`'s low half (tags all `0x102`), table 2 at `@0xD0`'s (tags all `0x000`), and the two
+  are **contiguous**: `t2p == t1p + 8*count`. Measured: contiguity **300/300** sampled `.anb`
+  (plus 60/60 `anb-v0`), `@0xD0` agrees 299/300 (`eel_b_death.anb`'s points into the header —
+  contiguity still locates the table), tables end at EOF **293/300**. `player_a_stand`: table 1
+  `@0x1D48` (58 entries), table 2 `@0x1F18` (58), ends at EOF. The "119 entries" B1 measured for this
+  file = 116 real entries + 3 trailing zero entries of the data region (the 24 bytes at
+  `0x1D30..0x1D48`).
+- **7/300 sampled files are a variant** (`girl_a_demo_end08_cut015.anb`, `eel_b_death.anb`, and five
+  other `*_demo*`/`*_cut*` clips; 4/120 in a second sample): there the **header's table pointers are
+  0x10000 short of the real tables** (`girl_a…`: `@0xCC` says `0x10B4`, the real table 1 is at
+  `0x110B4`; `player_a_demo01_cut15.anb`: `0xBC58` vs `0x1BC58`) and the entries at the stale
+  location are payload bytes, not offsets. The **walk-back-from-EOF rule *with the exact count*
+  locates them**: walking back stops at the first non-`{0x102,0x000}` tag, and the **last `2*count`
+  entries are [table 1][table 2]** (the walk's extra leading entries are the data region's trailing
+  zero bytes, exactly as B1 saw). The probe uses the header pointers when they are plausible and
+  falls back to this rule otherwise, reporting which was used; the `@0xA0` data-size cross-check
+  (`data_size == table1_start − 0xB4`) confirms the fallback's table 1 start in both variants.
+  The gate file is the common variant.
+- **11 tagged pointers per file** (measured, both samples, no others anywhere): the 8 B1 fields
+  (`0x20..0x48`), `0x9C` (data start, offset `0x110`), and `0xCC`/`0xD0` (the tables).
+
+### 3.2 The record map (measured)
+
+- Table 1's offsets are **record starts**; a record runs to the next t1 offset (the last one to
+  `t1p`). Sizes are heterogeneous but always multiples of 4:
+  `player_a_stand` 58 records: 32 × 4 B, 12 × 340 B, 4 × 176 B, 2 × 12 B, singles 356/360/412/72/516/44/20/300;
+  horse 69 records: 35 × 4 B, 18 × 100 B, 9 × 56 B, 1 × 136 B, 1 × 88 B, 1 × 64 B.
+- **The t2 pairing rule**: `t2[0] == 0` and `t2[i] == t1[i-1] + 4` for the leading run (measured
+  16/57 entries for `player_a_stand`, 27/68 for the horse); the rule then breaks and the t2 values
+  continue as a second ascending run that points *inside* the records. What t2 means is **not**
+  decoded; it is *not* a per-record "data pointer" (the rule is shifted by one and only holds for the
+  leading run).
+- The horse's t1 list **starts with the three descriptor structures** (`0x78`, `0xB0`, `0xE8`);
+  `player_a_stand`'s does not, although both files' `0x70..0x110` regions are structurally identical.
+  Why the lists differ is open.
+
+### 3.3 What the payload contains (measured)
+
+Four content classes, all measured with the probe's per-record flags (`anb` mode):
+
+1. **Unit float32 quaternions — the only *verified* quaternion data in the files.** Norms are
+   1.0000000 in float32 (well inside the gate's 1e-3). `player_a_stand`: 17 quats in 9/58 records
+   (blocks of 4 at `0x1520` and `0x1A10`, e.g. `(0.74762, 0.03297, 0.03722, 0.66226)`, and
+   axis-aligned values like `(-1,0,0,0)`, `(0,0,0,1)`); horse: 14 quats in 10/69 records (e.g.
+   `(0.42626, 0.53636, -0.48916, -0.53976)` at `0x590`). They are **too sparse to be a curve** (no
+   per-joint series), and their role (bind pose? pose snapshots? sparse keys?) is not decoded.
+2. **16-bit streams** dominate the payload. They are smooth under some stride readings (the probe's
+   `triplet` column: relative mean |Δ| of the stride-6 channel, 0.05–0.52 for the player's records)
+   but see §3.5 — smoothness alone does not identify the encoding.
+3. **Constant runs** of identical 4-byte words (e.g. `FF FE FD 2B` ×4, `FF 02 06 24` ×3,
+   `02 80 02 80` ×n) — plausibly static/stub tracks, not decoded.
+4. **4-byte-group blocks** at the end of many records where **three of the four stride-4 byte planes
+   vary smoothly and the fourth is low-order noise** — the signature of a fixed-point value whose
+   high bytes vary. Read big-endian and scaled by 2⁻³¹ the values lie in [−1, 1] and several blocks
+   are *symmetric with first == last* (`player_a_stand` `0x2F4..0x334`: 0.3066 → 0.0079 → 0.3066,
+   16 values) — i.e. they look like a looping component series, but a single 4-byte value is not a
+   quaternion and the packing is not decoded.
+
+### 3.4 Timing model (inference and its evidence)
+
+**No time or frame fields were found in the `.anb` payload**: no monotonically increasing 16/32-bit
+field, no fps float (the `.anb` `0x08` is 0 in every file; the `.cani`'s fps lives at *its* `0x08`),
+and no per-record count that matches a frame count. The only fps evidence is the **family**: the
+sibling `.cani` clips (2,869 files, §1.2) carry `fps` = 29.999998 (bits `0x41EFFFFF`) in every
+plaintext file, and the `.anb` is the same engine's actor-clip container. The candidate extraction
+therefore **assumes** uniform key times at the family fps (one key per frame) — an assumption, not a
+measurement — and the gate's two timing assertions are reported as **unverified** rather than passing
+vacuously. The joint-count cross-check (from the same family): the clip's own `player_a_stand.cani`
+is Oodle-compressed and has no readable header, so `check-curves` resolves the character's plaintext
+sibling instead (exact stem first, else any plaintext `.cani` of the same character directory —
+`player_a_add_grip_stand_crouch.cani`, **348** joints; the horse's `horse_a_add_horse_kick.cani` in
+`characters/agro/`, **132** joints).
+
+### 3.5 The extraction recipe (candidate) — and why it is unverified
+
+The candidate the probe emits (`anb <file> --curves`):
+
+> For each record, read `size // 6` little-endian `int16` triplets from the record start as a
+> quaternion vector part `(x, y, z)` scaled by `1/32768`; derive `w = sqrt(1 − |v|²)` (keys with
+> `|v| > 1` keep `w = 0` and are counted, never silently normalized); times = `k / fps`.
+
+It is emitted **marked `UNVERIFIED`** in the JSON and on stderr, because:
+
+- it **fails the gate's own sanity checks** on `player_a_stand` (§3.6: 428 keys with `|v| > 1`,
+  693/1111 adjacent-key dots below 0.9, max norm error 0.732);
+- continuity cannot verify it: **any** smooth triplet stream yields continuous derived-`w`
+  quaternions (measured — a whole-file scan finds "continuous runs" even inside the tail table,
+  which is not curve data), so the reading is unfalsifiable;
+- the payload's semantics — which record is which joint, where a record's keys start, how the values
+  are packed — are **not** established.
+
+### 3.6 The gate run (verbatim)
+
+`python3 tools/re/anb/probe.py check-curves` (exit 1):
+
+```
+check-curves: .../cp3shadow/anim/player_a_stand.anb
+  sibling .skb: player_a.skb (52 names)
+  sibling .cani: player_a_add_grip_stand_crouch.cani (348 joints) [same character, different clip]
+PASS  structure   magic is 78 66 66 00                                 expected 78666600, measured 78666600
+PASS  structure   size field @0x14 == file size                        expected 8424, measured 8424
+PASS  structure   data size @0xA0 == table1 start - data offset        expected 7224, measured 7224
+PASS  structure   table count @0xC4 matches both tables                expected 58, measured [58, 58]
+PASS  finding     table location method                                expected header-pointers, measured header-pointers
+PASS  structure   tables are contiguous and end at EOF                 expected True, measured (True, True)
+PASS  structure   table1 tags are all 0x102                            expected 0x102, measured ['102']
+PASS  structure   table2 tags are all 0x000                            expected 0x000, measured ['000']
+PASS  structure   records are in range and sized                       expected >0, measured 58
+PASS  structure   t2[i] == t1[i-1] + 4 (leading run)                   expected first 4 entries, measured 16/57 entries
+PASS  joint-count clip track count == declared count @0xC4             expected 58, measured 58
+PASS  joint-count tracks <= full skeleton joints (sibling .cani)       expected <=348, measured 58
+DELTA finding     tracks vs part-bank bone names (sibling .skb)        expected 52, measured 58
+PASS  curves      curve extraction produces keys                       expected >0, measured 1137
+PASS  curves      no NaN quaternions                                   expected 0, measured 0
+FAIL  curves      quaternion norms within 1e-3 of 1                    expected <=1e-3, measured 0.7319627110883922
+FAIL  curves      adjacent-key quaternion dot > 0.9                    expected 0 pairs below, measured 693/1111
+FAIL  curves      keys with |v| > 1 (w undefined)                      expected 0, measured 428
+SKIP  curves      times strictly increasing (derived uniform model)    (no time fields in the payload)
+SKIP  curves      timing consistent with family fps (29.999998)        (no time fields in the payload)
+summary: 13/16 gating assertions pass (2 skipped, 1 finding delta(s))
+gate: NOT MET — 3 curve assertion(s) fail; the container decode is
+      verified but the curve encoding is not (docs/notes/re-anb.md §3).
+```
+
+The same check on the horse sample: same verdict (467 keys, 329/433 dots below 0.9, 156 keys with
+`|v| > 1`), with its own sibling resolved (`horse_a_add_horse_kick.cani`, 132 joints, `agro/`) —
+69 tracks ≤ 132 ✓, and 69 ≠ the 40-name `horse_a.skb` part bank (same finding shape).
+
+**Joint-count cross-check, pinned to what the data shows** (the plan's "348, or the real count"):
+`player_a_stand.anb` declares **58 tracks** (`@0xC4`, = its record count); the part bank
+`player_a.skb` has **52** names (B1 §2.3); the full skeleton is **348** joints (the sibling `.cani`).
+58 ≤ 348 holds (the clip animates a subset of the full skeleton); 58 ≠ 52 — the tracks are *not* the
+part bank's bone list (a finding, not a gate failure). The horse: 69 tracks vs a 40-name part bank.
+
+### 3.7 Hypotheses tested — negative results are results
+
+| hypothesis | checkable prediction | outcome |
+|---|---|---|
+| int16 `(x,y,z)` Q15 triplets + derived `w` (6-byte keys) | unit norms; adjacent dots > 0.9 | **FAILS** — 428 keys `|v| > 1`; 693/1111 dots < 0.9; norm error 0.732 |
+| same triplets as rotation vectors (×π, ×2π, ×1 rad) | continuous rotations | **FAILS** — 780/967, 759/967, 570/967 bad dots (per-record too) |
+| float32 quaternions are the keys | unit norms; a per-joint series | quaternions **verified** (norm 1.0000000) but only 17 (player) / 14 (horse) and no series — not a curve |
+| int8 quaternions (4-byte keys) | norm ≈ 127 | **FAILS** — norms 13…161 |
+| 4 × int16 quaternions (8/12/16/24/32-byte keys; LE/BE; 2³¹/2³⁰/2¹⁵) | unit-norm fraction high | **FAILS** — best unit fraction 0.20 |
+| `.cani` `CANIFrameData`-style records (variant codes `0x315`–`0x318`, `0x40F`–`0x41E`) | codes present | **FAILS** — 0 hits for `0x315`–`0x318` in the plaintext `.cani`; 3 incidental `0x412/0x418` hits only — the SOTC revision differs (B1 §1.2) |
+| `t2[i] = t1[i] + 4` (rotation/translation block pairs) | holds for all i | holds only for the leading run and **shifted by one** (`t2[i] = t1[i-1] + 4`); semantics open |
+| record = `[240][32][u32][64]` (player 340-byte records) | the 8-word block = keys | structure **measured** (records 0/1/3/15 fit it, with a 4-byte marker before the floats in record 1); the float blocks are **not** unit quaternions (norms 0.17…0.97) |
+| the "wave" blocks are component curves | monotonic time or unit data | values are smooth and symmetric (first == last) but in [−1,1] as fixed-point; not times, not quaternions as stored |
+| bit-packed values (fixed N-bit fields) | N-bit extraction reproduces the smoothness | not found (no N tried made the noisy byte plane smooth) |
+
+### 3.8 Stopping point
+
+The decode stopped at: **container verified, payload classified, key encoding open.** What a next pass
+needs is *semantic* ground truth for one record — the Ghidra front's keyframe sampler (B3 was allowed
+to stop before it) or a capture-derived reference pose to match against — because the payload's
+smoothness is not self-verifying. Until then the S2 converter cannot consume `.anb` clips and the
+capture-derived fallback (first-playable design §5) is the armed path.
+
