@@ -63,7 +63,7 @@ started="$(date +%s)"
 
 # SOTC_UROOT must be absolute (the staged symlinks point into it); the manifest default hangs
 # off the resolved path: <uroot>/../../logs/uroot.sha256 = SOTC-extract/logs/uroot.sha256.
-resolved="$(cd "$SOTC_UROOT" && pwd)" || fail "SOTC_UROOT is not a directory: $SOTC_UROOT"
+resolved="$(cd "$SOTC_UROOT" 2>/dev/null && pwd)" || fail "SOTC_UROOT is not a directory: $SOTC_UROOT"
 SOTC_UROOT="$resolved"
 : "${SOTC_UROOT_SHA256:=$(dirname "$(dirname "$SOTC_UROOT")")/logs/uroot.sha256}"
 
@@ -106,6 +106,9 @@ fi
 if [[ ! -f "$stage/sce_sys/param.sfo" ]]; then
   sfo="$(dirname "$SOTC_UROOT")/pkg-meta/param.sfo"
   [[ -f "$sfo" ]] || fail "param.sfo not found: neither $SOTC_UROOT/sce_sys/param.sfo nor $sfo exists"
+  # The staged path can only be a symlink into the read-only tree (staged above when the source
+  # resolved but is not a regular file): rm it so cp writes a fresh file, never through it.
+  rm -f "$stage/sce_sys/param.sfo"
   cp "$sfo" "$stage/sce_sys/param.sfo"
   stamp "stage: param.sfo <- $sfo (uroot lacks one)"
 fi
