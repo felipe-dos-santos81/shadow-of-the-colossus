@@ -3,9 +3,10 @@
 RE-3 (S3 "the arena" design §5): the composition family — `cp3shadow/data/fs/stage/*.fs`,
 `cp3shadow/data/fs/stagetexseg_def/*.fs`, `cp3shadow/data/fs/rootseg.fs`,
 `workspaces/_ps4/shadow.cwks`, `cp3shadow/path/**/*.path`, `cp3shadow/camdata/*.csv` — mined
-from measured structure, not binary RE. This file grows with the workstream: **§1 (this
-commit)** is the `.fs` family + the inventory; §2 the workspace string pool; §3–§4 the arena
-manifest and the escalation decision (W2.2/W2.3).
+from measured structure, not binary RE. This file grows with the workstream: **§1 (commit 1)** is
+the `.fs` family + the inventory; **§2 (this commit)** the workspace dependencies file
+(`shadow.cwks`) + the arena path list; §3–§4 the arena manifest and the escalation decision
+(W2.2/W2.3).
 
 Every value below is measured with `tools/re/stage/probe.py`; the 2026-10-18 recon's starting
 facts were **re-verified, not trusted** — the two deltas found are recorded in place (§1.2).
@@ -18,7 +19,7 @@ offsets, sizes, and identifiers appear here — no game content.
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; `python3` 3.12.12 (stdlib only) |
 | Repo / branch | `sotc-native`, `re3-stage` |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
-| Probe | **`tools/re/stage/probe.py`** — `fs <file> [--json out]`, `classify`, `check-fs` |
+| Probe | **`tools/re/stage/probe.py`** — `fs <file> [--json out]`, `classify`, `check-fs`, `cwks [<file>] [--json out] [--arena-out out]`, `check-cwks` |
 
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
@@ -125,3 +126,285 @@ it measured (evidence: `out/re/stage/hashscan.txt` + `hashscan.py`, both gitigno
 - **Not tested (recorded for later targets):** NUL-terminated inputs, byte-swapped output,
   salted/chained forms, and any convention over strings absent from both corpora (e.g. names
   assembled at runtime). The structured pool parse (§2) is the natural next corpus.
+
+## 2 · The workspace dependencies file (`shadow.cwks`)
+
+### 2.1 What it is (measured; refined by the shipped eboot)
+
+`workspaces/_ps4/shadow.cwks` — **29,398,788 B**, the tree's only `.cwks`. The recon framed it as a
+"workspace string pool"; the shipped `eboot.bin` (`SOTC-extract/extracted/uroot/`, plain strings,
+read-only) refines that: it is the **resource dependency file** the engine loads at startup —
+
+- `+ResourceDependenciesFile=$/workspaces/_ps4/shadow.cwks` (the ini line naming it),
+- `Bad fourcc/version combo %8.8x/%d for workspace dependencies file: %s` (the header check),
+- `Failed to open the workspace dependencies file: %s` / `Resource dependency file loaded: %s`,
+- `ResourcePool::LoadResourceDependencies(const bpe::String &)` and
+  `ResourcePool::GetResourceDependencies(const ResourceId &, std::vector<ResourceRef> &)`.
+
+So: a resource→dependencies map (path strings + per-record index), not a plain string pool. The
+parse below is **structural only**; the record semantics stay open (§2.4) and nothing about the
+engine's lookup is claimed beyond what the strings say.
+
+### 2.2 The measured PSKW structure
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+python3 tools/re/stage/probe.py check-cwks                 # 13/13 gating assertions pass (exit 0)
+python3 tools/re/stage/probe.py cwks                       # structure dump (verbatim below)
+python3 tools/re/stage/probe.py cwks --json out/re/stage/shadow.cwks.json
+python3 tools/re/stage/probe.py cwks --arena-out out/re/stage/arena_paths.txt
+```
+
+`cwks` with no file argument defaults to `workspaces/_ps4/shadow.cwks`; a bare name also resolves
+under `workspaces/_ps4/`. Every value below is re-measured 2026-10-18 with `probe.py` (never
+forced from the recon):
+
+| offset | width | value (measured on the one file) |
+|---|---|---|
+| `0x00` | 4 B | `PSKW` — fourcc (the eboot's "fourcc/version combo" check) |
+| `0x04` | u32 | `6` — version |
+| `0x08` | u32 | `130234` — semantics open |
+| `0x0C` | u32 | `67045` — index record count (verified: `0x10 + 67045·16 == 0x105E60`, the pool start) |
+| `0x10` | 16 B × 67045 | index records, ending exactly at the pool start |
+| `0x105E60` | 28,326,052 B | the string pool, to EOF (`0x1C09704`) |
+
+**Index records** — four u32 fields each; measured, *not decoded*: field[0] is **non-decreasing**
+across all 67,045 records (20,669 → 4,294,747,458 = `0xFFFCA542`; 0 decreases, 2 equal adjacent
+pairs at records 23589/42109); fields[1] and [3] point into the string pool for **63,664 / 63,663**
+of the records (the rest point into the record region). First and last records verbatim:
+`(0x50BD, 0xFD20B6, 1, 0xFD2076)` … `(0xFFFCA542, 0x21134A, 8, 0x2111B3)`.
+
+**Two deltas against the recon's starting facts** (re-measured, recorded, not forced):
+
+1. **The index table starts at `0x10`, not `0x08`** — the `0x08` pair (`130234, 67045`) is the
+   header's tail; treating it as a first record leaves a half-record before the pool
+   (`0x105E60 − 0x08` is not a multiple of 16). With the table at `0x10` the records end
+   **exactly** at the pool start.
+2. **The record count is `67045`** (the header u32 at `0x0C`), not re-derived from a scan.
+
+### 2.3 The string pool + the arena path list
+
+The pool (from `0x105E60` to EOF) is a flat sequence of NUL-terminated entries in two measured
+forms; every path starts with `/` and the walk is validated strictly (any other shape → loud
+failure):
+
+- **tagged** `[u8 L]$path\0` — `L` equals the whole entry length (measured on all **340,920**
+  tagged entries);
+- **bare** `$path\0` — no length byte (**67,045**; 60,660 of them duplicate a tagged entry's
+  payload — e.g. a `$/coredata/...` copy next to the `5$/coredata/...` original; the
+  record pointers land inside these copies, §2.4).
+
+**Total: 407,965 entries** — the recon's "~408,308" was an estimate 343 high; the measured count
+is pinned. Note the 0x24 ambiguity: a bare entry whose path is 35 B long has entry length 36 =
+`0x24` = `$`, so the disambiguator is **byte 1** (`$` → tagged), never byte 0 alone (measured:
+67,045 bare vs 340,920 tagged).
+
+**The arena path list** — every entry matching `levels/arena_01/` (the level-dir pattern): **142
+entries, 72 distinct**; the list's sha256 (pool order, one path per line, trailing newline) is
+**`13e3bb60daf3dc91bbf36818b3bc6dd50dc59c27e9730f341d2c4b24d77e5706`** — pinned by `check-cwks`
+and saved verbatim to `out/re/stage/arena_paths.txt`. Pattern note (re-measured): the brief's
+literal `models/shadow/levels/arena_01/` matches 32 entries (20 distinct), the same without the
+trailing `/` 85 (53 distinct, including `arena_01_entrance/`); the recon's pinned **142**
+reproduces with the level-dir pattern `levels/arena_01/` (raw occurrences in the file: 142).
+
+The list verbatim (`out/re/stage/arena_paths.txt`, pool order; duplicates preserved as
+extracted — the 72 distinct paths are the `_cmn`/`_ps4`/particle set of the arena):
+
+```text
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+/models/shadow/levels/arena_01/_cmn/arena_01_hero_rock_3e6a4f11.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_ground_0c992b51.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_shared-source_0ef814a3.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_shadow_caster.cmdl
+/models/shadow/levels/arena_01/_cmn/arena01_occluder1.cmdl
+/materials/shadow/levels/arena_01/_ps4/arena01_hero_rock_219d5d74.cmat
+/models/shadow/levels/arena_01/_cmn/arena_01_hero_rock_b912a496.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_hero_rock_3e6a4f11.cmdl
+/textures/shadow/levels/arena_01/_ps4/arena01_hero_rock_col.ctxr
+/textures/shadow/levels/arena_01/_ps4/arena01_hero_rock_rgh_b444ba4e.ctxr
+/textures/shadow/levels/arena_01/_ps4/arena01_hero_rock_nml.ctxr
+/materials/shadow/levels/arena_01/_ps4/arena01_hero_rock_219d5d74.cmat
+/models/shadow/levels/arena_01/_cmn/arena_01_hero_rock.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_hero_rock_b912a496.cmsh
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+/models/shadow/levels/arena_01/_cmn/arena_01_ground_7391f55a.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_ground_0c992b51.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_ground.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_ground_7391f55a.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_shared-source_4a9b2556.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_shared-source_0ef814a3.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_shared-source.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_shared-source_4a9b2556.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_shadow_caster.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_shadow_caster.cmdl
+/models/shadow/levels/arena_01/_cmn/arena01_occluder1.cmsh
+/models/shadow/levels/arena_01/_cmn/arena01_occluder1.cmdl
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_dustmotes_01/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_2_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_2_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_2_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_3_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_3_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_3_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_2_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_2_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_2_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_3_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_3_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small/emitter_3_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_2_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_2_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_2_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_2_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_2_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_large/emitter_2_update.csdr
+/models/shadow/levels/arena_01/_cmn/arena_01_skirt_1d2ff767.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_6a543ab4.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_skirt_66158196.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_skirt_1d2ff767.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01_skirt.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_skirt_66158196.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_aee5e9a9.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01.cclm
+/models/shadow/levels/arena_01/_cmn/arena_01_6a543ab4.cmdl
+/models/shadow/levels/arena_01/_cmn/arena_01.cmsh
+/models/shadow/levels/arena_01/_cmn/arena_01_aee5e9a9.cmsh
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles2.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles2.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles2.cmat
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_flow/emitter_0_update.csdr
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles2.cmat
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_dust_small.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_falling_rocks_small.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_1_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall.cprt
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_0_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_0_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_0_update.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_1_emit.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_1_spawn.csdr
+/particles/shadow/levels/arena_01/_ps4/arena_01_ent_dust_fall/emitter_1_update.csdr
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles_b490955e.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles_b490955e.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+/materials/shadow/levels/arena_01/_ps4/level_01_ground_ruintiles.cmat
+```
+
+### 2.4 The record-semantics open item (unresolved)
+
+The four record fields are **not decoded**, and no mapping is claimed. What is measured:
+
+- field[0] is non-decreasing over all 67,045 records (20,669 … 4,294,747,458, just below 2³²).
+  Hypothesis (marked, not confirmed): a cumulative byte quantity of the resource payload — the
+  deltas are file-size-shaped (26 KB–364 KB on the first records).
+- fields[1] and [3] point into the string pool for ~95% of the records; **the pointers land
+  mid-string as often as on entry starts** (measured on field[1]: ~2.6k land on a tagged/bare
+  entry boundary, ~61k land inside a path, ~3.4k land in the record region outside the pool) —
+  so a naive "name pointer" reading is **wrong** and is not adopted here.
+- Consecutive records interlock: under the table-at-`0x10` alignment, field[3] of record *i* ≈
+  field[1] of the same record (differences 0–1,745 B measured on the first records), i.e. the
+  two offsets bracket a small pool region (64–1,745 B) that holds a handful of NUL-terminated
+  strings (the record's field[2] is 0–24 on the first records) — consistent with *"a resource
+  and its dependency list live in one pool region"*, but the exact field roles (which offset is
+  the name, which the list; whether field[2] is a count; why the region boundaries cut strings)
+  are **open**.
+- The recon's field framing `(u32 count, u32 dataOff, u32 size, u32 nameOff)` is **not
+  confirmed**: no field assignment reproduces a clean count/offset/size reading on a sample;
+  it stays a candidate to test, never a fact.
+
+The engine side confirms what the file is *for* (§2.1) but not the byte roles. If a future
+milestone needs the dependency graph, the bounded Ghidra pass on
+`ResourcePool::LoadResourceDependencies` in the shipped eboot is the escalation (design §5);
+it was **not** triggered for W2.2.
+
+### 2.5 The tail: the stage-family paths
+
+The pool's last stage-family strings — **13 paths, verbatim**, the first at `0x1C07319`
+(matching the recon's ≈`0x1C07318` NUL); they are the **only** entries matching
+`cp3shadow/data/fs/stage` anywhere in the pool (measured), i.e. the workspace names its 10
+stage segment lists + 3 texture-segment defs exactly once, at the end:
+
+```text
+/cp3shadow/data/fs/stage/132391.fs
+/cp3shadow/data/fs/stage/136811.fs
+/cp3shadow/data/fs/stage/136867.fs
+/cp3shadow/data/fs/stage/144144.fs
+/cp3shadow/data/fs/stage/145969.fs
+/cp3shadow/data/fs/stage/316283.fs
+/cp3shadow/data/fs/stage/317197.fs
+/cp3shadow/data/fs/stage/346875.fs
+/cp3shadow/data/fs/stage/350578.fs
+/cp3shadow/data/fs/stage/908.fs
+/cp3shadow/data/fs/stagetexseg_def/657159.fs
+/cp3shadow/data/fs/stagetexseg_def/659959.fs
+/cp3shadow/data/fs/stagetexseg_def/660533.fs
+```
+
+All 13 are `[u8 L]$path` tagged entries; the 10 stage ids are among the 1,896 stage `.fs` files
+(§1), the 3 defs among the 112 `stagetexseg_def` files. Evidence dumps (gitignored):
+`out/re/stage/cwks.dump.txt`, `check-cwks.dump.txt`, `shadow.cwks.json`, `arena_paths.txt`.
