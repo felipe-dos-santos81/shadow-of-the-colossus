@@ -6,7 +6,7 @@ find_package(SDL3 CONFIG REQUIRED)
 
 add_executable(sotc-viewer
   src/main.cpp src/app.cpp src/asset_io.cpp src/renderer.cpp src/camera.cpp src/anim.cpp
-  src/manifest.cpp)
+  src/manifest.cpp src/heightmap.cpp)
 target_link_libraries(sotc-viewer PRIVATE SDL3::SDL3)
 target_include_directories(sotc-viewer PRIVATE third_party)
 
@@ -24,8 +24,8 @@ add_custom_command(TARGET sotc-viewer POST_BUILD
 
 enable_testing()
 add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/test_asset_io.cpp
-  tests/test_anim.cpp tests/test_manifest.cpp src/asset_io.cpp src/camera.cpp src/anim.cpp
-  src/manifest.cpp)
+  tests/test_anim.cpp tests/test_manifest.cpp tests/test_heightmap.cpp src/asset_io.cpp
+  src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp)
 target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3)
 target_include_directories(sotc-app-tests PRIVATE third_party src)
 add_test(NAME unit_tests COMMAND sotc-app-tests)
