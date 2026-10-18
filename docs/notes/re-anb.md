@@ -68,7 +68,8 @@ but the same little-endian field style; see §1.2.
   every pointer of a file). The `0x50` mirror table always reproduces the offsets.
 - **`0x10` (last section).** Measured ≤ size in all 4,512 files; the section it starts is ≥ 396 B —
   the four smallest are the 556-byte banks `gextail_a.skb`, `guard_c_head.skb`, `guard_d_head.skb`,
-  `guard_e_head.skb` (396 B each; the next smallest is 412 B).
+  `guard_e_head.skb` (396 B each; among `.skb` only, the next smallest is 412 B, while across the
+  full 4,512-file scope it is 400 B — 104 `.anb`, first `camera_debug_camera.anb`).
 - **`0x18` is opaque.** The 4 text bytes differ per file, never relate to that file's own names or
   to its siblings, and mostly consist of fragments of unrelated text (`"yubi"`, `"nigh"`, `"wpos"`,
   `"ssio"`, `" 100"`, …); they are fully printable in 647 of the 1,061 non-zero fields, contain
