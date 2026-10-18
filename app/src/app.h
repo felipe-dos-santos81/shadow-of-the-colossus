@@ -7,7 +7,7 @@ struct AppOptions {
     std::string libraryDir;      // converted asset library (--library, or $SOTC_LIB)
     std::string modelRelPath;    // model to load, relative to libraryDir (--model)
     std::string screenshotPath;  // PNG destination; empty = no screenshot (--screenshot)
-    int frames = 3;              // frames to render before exiting (--frames)
+    int frames = 3;              // frames the --screenshot path renders first (--frames)
     bool selftest = false;       // --selftest: render one frame, print s1-status, exit
     int width = 1280;            // window width in points (--width)
     int height = 720;            // window height in points (--height)

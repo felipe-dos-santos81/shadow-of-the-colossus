@@ -12,7 +12,10 @@
 #      `s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0` line — the state queried back
 #      from SDL (windowed flag, relative mouse mode, the auto-capture hint), not assumed flags;
 #   4. two screenshot runs — wander (a character) and obj_plank_01 (a prop) — writing
-#      out/s1/<name>.png; each PNG must carry the \x89PNG magic and be larger than 5000 bytes;
+#      out/s1/<name>.png; each PNG must carry the \x89PNG magic, be larger than 5000 bytes,
+#      and show a non-uniform frame (largest channel span >= 30 in the viewer's own
+#      s1-pixels stats) — a solid clear-colour frame passes the size floor (it compresses
+#      to ~146 KB), so bytes alone cannot prove the draw loop ran;
 #   5. a summary block (library, status line, screenshot paths + byte sizes).
 #
 # Environment:
@@ -68,16 +71,37 @@ fi
 mkdir -p "$out_dir"
 
 screenshot() {
-  local name="$1" rel="$2" png magic bytes
+  local name="$1" rel="$2" png magic bytes output status pixels_line
+  local min_r min_g min_b max_r max_g max_b span d
   png="$out_dir/$name.png"
   rm -f "$png"
   stamp "screenshot: $name <- $rel"
-  "$viewer" --library "$lib" --model "$rel" --screenshot "$png" --frames 3
+  # The viewer's output is captured (and printed below) so the run's own
+  # s1-pixels stats can prove the frame was actually drawn, not just written.
+  output="$("$viewer" --library "$lib" --model "$rel" --screenshot "$png" --frames 3 2>&1)" || {
+    status=$?
+    printf '%s\n' "$output" >&2
+    fail "screenshot $name: viewer exited $status"
+  }
+  printf '%s\n' "$output"
   [[ -f "$png" ]] || fail "screenshot $name: $png was not written"
   magic="$(od -An -tx1 -N4 "$png" | tr -d ' \n')"
   [[ "$magic" = "89504e47" ]] || fail "screenshot $name: $png lacks the PNG magic (got $magic)"
   bytes="$(wc -c < "$png" | tr -d '[:space:]')"
   [[ "$bytes" -gt 5000 ]] || fail "screenshot $name: $png is only $bytes bytes (need > 5000)"
+  # A silently broken draw loop still writes a valid PNG of ~146 KB (a solid
+  # clear-colour 2560x1440 frame), so require a real span in some channel.
+  pixels_line="$(printf '%s\n' "$output" | grep -m1 '^s1-pixels ')" ||
+    fail "screenshot $name: viewer printed no s1-pixels line"
+  min_csv="${pixels_line#*min=}"; min_csv="${min_csv%% *}"
+  max_csv="${pixels_line#*max=}"; max_csv="${max_csv%% *}"
+  IFS=, read -r min_r min_g min_b <<<"$min_csv"
+  IFS=, read -r max_r max_g max_b <<<"$max_csv"
+  span=$((max_r - min_r))
+  d=$((max_g - min_g)); if ((d > span)); then span=$d; fi
+  d=$((max_b - min_b)); if ((d > span)); then span=$d; fi
+  [[ "$span" -ge 30 ]] ||
+    fail "screenshot $name: uniform frame (largest channel span $span < 30): $pixels_line"
 }
 
 screenshot wander models/shadow/characters/wander/_cmn/wander.glb
@@ -92,4 +116,4 @@ printf 's1-acceptance: capture  %s  %s bytes\n' "$out_dir/wander.png" \
   "$(wc -c < "$out_dir/wander.png" | tr -d '[:space:]')"
 printf 's1-acceptance: capture  %s  %s bytes\n' "$out_dir/plank.png" \
   "$(wc -c < "$out_dir/plank.png" | tr -d '[:space:]')"
-printf 's1-acceptance: PASS — build, ctest, selftest status, 2 PNG screenshots (\\x89PNG magic, >5000 B)\n'
+printf 's1-acceptance: PASS — build, ctest, selftest status, 2 PNG screenshots (\\x89PNG magic, >5000 B, non-uniform pixels)\n'

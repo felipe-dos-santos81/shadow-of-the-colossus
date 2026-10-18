@@ -98,11 +98,14 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
             return -1;
         }
         // Image URIs are relative to the model's directory; sourceRelPath is the
-        // resolved library-relative path with '/' separators.
+        // resolved library-relative path with '/' separators. A URI that escapes
+        // the library (relative `..` or absolute) is skipped: lexically_relative
+        // reports escapes as `..`-prefixed paths (or empty when the roots differ),
+        // never as an in-library path.
         const std::filesystem::path resolved =
             (model_dir / std::filesystem::path(image->uri)).lexically_normal();
         const std::filesystem::path rel = resolved.lexically_relative(library);
-        if (rel.empty()) {
+        if (rel.empty() || *rel.begin() == "..") {
             std::fprintf(stderr, "sotc-viewer: skipping texture %s: outside the library\n",
                          resolved.string().c_str());
             return -1;

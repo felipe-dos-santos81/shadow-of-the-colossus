@@ -35,12 +35,13 @@ std::filesystem::path test_library() {
     return library;
 }
 
-// A scratch directory that deletes itself, holding the missing-PNG fixture.
+// A scratch directory that deletes itself, holding a fixture library. `suffix`
+// lets one test own two sibling directories (e.g. a texture outside the library).
 class TempFixtureDir {
 public:
-    TempFixtureDir()
+    explicit TempFixtureDir(const std::string& suffix = "")
         : path_(std::filesystem::temp_directory_path() /
-                ("sotc-asset-io-fixture-" + std::to_string(::getpid()))) {
+                ("sotc-asset-io-fixture-" + std::to_string(::getpid()) + suffix)) {
         std::error_code ec;
         std::filesystem::create_directories(path_, ec);
         if (ec) {
@@ -80,8 +81,9 @@ std::string base64_encode(const uint8_t* data, std::size_t size) {
 }
 
 // A minimal glTF: one triangle in a data-URI buffer (POSITION only — no NORMAL,
-// no TEXCOORD_0, no indices) and one material whose base-color PNG is absent.
-std::string fixture_gltf_json() {
+// no TEXCOORD_0, no indices) and one material whose base-color PNG is `image_uri`,
+// relative to the model's directory.
+std::string fixture_gltf_json(const std::string& image_uri = "missing.png") {
     const float positions[3][3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
     const std::string buffer_uri =
         "data:application/octet-stream;base64," +
@@ -93,7 +95,7 @@ std::string fixture_gltf_json() {
   "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
   "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
                  "min": [0, 0, 0], "max": [1, 1, 0]}],
-  "images": [{"uri": "missing.png"}],
+  "images": [{"uri": "%%IMAGE_URI%%"}],
   "textures": [{"source": 0}],
   "materials": [{"name": "fixture", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
   "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
@@ -101,9 +103,28 @@ std::string fixture_gltf_json() {
   "scenes": [{"nodes": [0]}],
   "scene": 0
 })";
-    const std::string placeholder = "%%BUFFER_URI%%";
-    json.replace(json.find(placeholder), placeholder.size(), buffer_uri);
+    const std::string buffer_placeholder = "%%BUFFER_URI%%";
+    json.replace(json.find(buffer_placeholder), buffer_placeholder.size(), buffer_uri);
+    const std::string image_placeholder = "%%IMAGE_URI%%";
+    json.replace(json.find(image_placeholder), image_placeholder.size(), image_uri);
     return json;
+}
+
+// A 1x1 red PNG (69 bytes), generated offline: valid enough for stb_image.
+const unsigned char kPng1x1Red[] = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+    0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+};
+
+void write_binary(const std::filesystem::path& path, const unsigned char* data,
+                  std::size_t size) {
+    std::ofstream out(path, std::ios::binary);
+    REQUIRE(out.good());
+    out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
 }
 
 }  // namespace
@@ -158,6 +179,32 @@ TEST_CASE("a missing base-color PNG degrades to factor-only") {
     CHECK(scene.meshes[0].vertices[0].u == doctest::Approx(0.0f));
     CHECK(scene.meshes[0].vertices[0].v == doctest::Approx(0.0f));
     CHECK(scene.meshes[0].vertices[2].py == doctest::Approx(1.0f));
+}
+
+TEST_CASE("image URIs that escape the library are rejected") {
+    TempFixtureDir dir;
+    TempFixtureDir outside("-outside");
+    // A real, decodable PNG outside the fixture library: without the guard the
+    // loader would read it and record a `..`-containing sourceRelPath, violating
+    // the library-relative invariant and D-S4 (converted assets only).
+    write_binary(outside.path() / "texture.png", kPng1x1Red, sizeof kPng1x1Red);
+    const std::filesystem::path outside_png = outside.path() / "texture.png";
+
+    for (const std::string& uri :
+         {std::string("../" + outside.path().filename().string() + "/texture.png"),
+          std::filesystem::weakly_canonical(outside_png).string()}) {
+        {
+            std::ofstream out(dir.path() / "fixture.gltf");
+            REQUIRE(out.good());
+            out << fixture_gltf_json(uri);
+        }
+
+        CAPTURE(uri);
+        auto scene = load_scene(dir.path(), "fixture.gltf");
+        CHECK(scene.textures.empty());
+        REQUIRE(scene.materials.size() == 1);
+        CHECK(scene.materials[0].baseColorTexture == -1);
+    }
 }
 
 TEST_CASE("a model that cannot be parsed throws") {
