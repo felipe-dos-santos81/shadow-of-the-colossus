@@ -437,3 +437,212 @@ to stop before it) or a capture-derived reference pose to match against — beca
 smoothness is not self-verifying. Until then the S2 converter cannot consume `.anb` clips and the
 capture-derived fallback (first-playable design §5) is the armed path.
 
+## 4. Ghidra findings — the animation runtime in eboot.elf
+
+The RE-1 Ghidra front: where the retail runtime touches the `xff` family and the `.cani` bank.
+Everything below is quoted from the committed script and the logs it writes under the gitignored
+`out/re/`.
+
+| | |
+|---|---|
+| Date | 2026-10-18 (run stamps UTC) |
+| Machine | Apple M3 Max, macOS 27.0.1, arm64 |
+| Repo / branch | `sotc-native`, `re1-ghidra` (base `2c768cb`) |
+| Baseline | RE-0 acceptance re-run in this worktree: project `out/re/ghidra`, program `eboot.elf`, `x86:LE:64:default`, image base 0, **38,845 functions** (exit 0, 451 s) |
+| Script | **`tools/re/ghidra/FindAnim.java`** — mode 1 scan (default), mode 2 `decompile <addr>…`, mode 3 `follow <addr>…` (references to each address + decompile of the referencing functions) |
+| Scan log | `out/re/ghidra-anim.log` (16,674 lines; re-run twice — the `FindAnim:` lines are byte-identical, so the scan is deterministic) |
+| Follow / decompile logs | `out/re/ghidra-anim-follow{,2,3,4}.log`, `out/re/ghidra-anim-decompile.log`, `out/re/ghidra-anim-motion.log` |
+
+```bash
+GHIDRA_HOME=$HOME/code/mine/ghidra-bundle/dist/ghidra_12.1.4_PUBLIC
+proj_link_dir=$(mktemp -d); ln -s "$PWD/out/re/ghidra" "$proj_link_dir/ghidra"
+"$GHIDRA_HOME/support/analyzeHeadless" "$proj_link_dir/ghidra" sotc -process eboot.elf \
+  -noanalysis -scriptPath "$PWD/tools/re/ghidra" -postScript FindAnim.java > out/re/ghidra-anim.log 2>&1
+# mode 3 example (the loading-path walk): -postScript FindAnim.java follow 0x00671e70 0x00670680
+```
+
+The dot-free `proj_link_dir` is the RE-0 R-E6 workaround, not a choice: this worktree lives under
+`~/.local`, and the plan's verbatim `… out/re/ghidra sotc …` form dies in `ProjectLocator` with
+`Path element starting with '.' is not permitted` (verified — the failure log is
+`out/re/ghidra-anim-verbatim.log`). `-scriptPath` is passed absolute for the same reason (the
+verbatim relative form resolved fine, but absolute is what the record uses).
+
+### 4.1 Scan totals (9 initialized blocks, 77,245,752 bytes)
+
+| pattern | hits | where |
+|---|---|---|
+| `xff-magic` bytes `78 66 66 00` (u32 LE `0x00666678`) | **1** | data — inside the ASCII string `.xff` (§4.2) |
+| `xff-magic-rev` bytes `00 66 66 78` (u32 LE `0x78666600`) | **0** | — |
+| `oodle-8c0a` bytes `8c 0a` (u16 LE `0x0A8C`) | 156 | 61 code / 95 data — byte-pattern noise (§4.2) |
+| `str-anb` (`anb`, ci) | 4,697 | all data — 4,696 pool names + the format string `anb %s` at `0x012D173B` (§4.6) |
+| `str-dot-anb` (`.anb`, ci) | 4,696 | all data — the same pool |
+| `str-skb` (`skb`, ci) | 83 | all data — 64 `skel/*.skb` names + 18 `skbush` texture names + the bare `.skb` (§4.6, §4.3) |
+| `str-mina` (`MINA`, ci) | 104 | **1 code** / 103 data (§4.5) |
+| `str-anim` (`ANIM`/`anim`, ci) | 6,854 | all data — mostly substrings (`ObjAnim`, `NewAnims`, `AnimLoop`); **no bare `anim` string exists** |
+| `str-animdata` (`ANIMDATA`, ci) | **0** | — |
+| `str-cp3shadow` (`cp3shadow`, ci) | 17 | all data — path templates (§4.6) |
+
+Totals: **16,608 hits**, **53 distinct functions** contain a code hit, `unreadable=0`. The plan's
+`ANIM` and `anim` entries are one pattern in the script (case-insensitively identical); the plan's
+other nine tokens are scanned as listed. Context is the enclosing printable string for the string
+patterns and the ±8 bracketed bytes for the binary ones.
+
+### 4.2 The `xff` magic is never compared — and the Oodle marker hits are noise
+
+- The single `78 66 66 00` hit (`0x01024F2B`) is the ASCII text `.xff` inside the module name
+  `nicosys-netguicnf.xff` in the string pool — a coincidence, not a container header. Measured
+  context: `…nicosys-netguicnf.` + `78 66 66 00` + `chooseLangScript…`.
+- The byte-order variant `00 66 66 78` occurs **0** times. A `cmp`/`mov` immediate of the u32 magic
+  (`3d 78 66 66 00` / `b8 78 66 66 00`) contains the same byte run and would have been caught by the
+  same pattern, so **no code in `eboot.elf` compares the container magic** (limitation: four separate
+  `cmp byte` checks would not be caught by a u32 scan).
+- All 156 `8c 0a` hits are two-byte-pattern noise: the code hits sit inside instruction encodings —
+  `0f 8c 0a ff ff ff` (`jl rel32`), `c5 fa 10 8c 0a …` (`vmovss` with disp32), `c7 87 8c 0a 00 00 …`
+  (`mov [reg+0xA8C], imm`). No code compares `0x0A8C`. Oodle itself **is** linked into the eboot
+  (strings `OodleLZ_Decompress`, `OodleLZ_Compress`, source paths `v:\devel\projects\oodle2\core\…`),
+  but its block-header handling is inside that library, not an inline constant.
+
+**Negative recorded:** the runtime does not validate the `xff` container by magic; it dispatches by
+asset type/name instead (§4.3, §4.6).
+
+### 4.3 The loading path — a named loader registry with `loadCdXffFile` and `loadCdMotionFile`
+
+The strongest structural find: a **named-function registry** (entries at stride `0x18`:
+`{const char *name, u64 0, handler}`) in the static data at VA **`0x01606270`–`0x01606D38`**
+(**116 entries**, walked contiguously by the pattern "name pointer into `0x0102…`, middle word 0,
+handler pointer into code"), holding the asset loaders and the script-callable functions
+(`chooseLangScript`, `nico_defaultAI`, `GexInitFunc`, …). Quoted entries (entry VA → handler VA):
+
+| name | entry | handler |
+|---|---|---|
+| `loadCdNtoFile` | `0x01606588` | `FUN_00671b20` |
+| `loadCdXffFile` | `0x01606690` | **`FUN_00671e70`** |
+| `unloadCdXffFile` | `0x016066a8` | `FUN_00672090` |
+| `loadCdNmoFile` | `0x016066c0` | `FUN_00671350` |
+| `loadCdColResFile` | `0x01606720` | `FUN_00672910` |
+| **`loadCdMotionFile`** | `0x01606750` | **`FUN_00670680`** |
+| `unloadCdMotionFile` | `0x01606768` | `FUN_00670ac0` |
+| `loadCdWinTexFile` | `0x01606780` | `FUN_00671d30` |
+| `load_npe_file_main` | `0x016067e0` | `FUN_00696560` |
+
+(all 116 registry name strings are packed in `0x01024F2F`–`0x01025980`)
+
+Evidence: `follow 0x00671e70` → data references from `0x016066A0`, `0x017EFC38`, `0x024C0E78` — the
+handler pair `{load, unload}` also appears in asset-type descriptor tables at `0x017EFC38` /
+`0x024C0E78` (those also carry a sample asset name; `0x024C0EA0` holds the logical name `OLD_BIRD`).
+The registry has **no incoming references** (`follow 0x01606630` and `follow 0x01606750` → 0), so the
+dispatcher reaches it by computing addresses — not resolved in this pass.
+
+**`loadCdXffFile` = `FUN_00671e70`** (531 bytes) is the xff-family loader — this is where `.skb` is
+recognized, by **extension string**, not by content:
+
+```c
+lVar4 = thunk_FUN_00f8fc86(param_2,&DAT_0127059d);   /* name vs ".skb" (VA 0x0127059D) */
+if (lVar4 != 0) { … lVar6 = thunk_FUN_00f8f646(param_2,0x2f);   /* strrchr '/', basename */
+                  pcVar7 = FUN_00a5bd20(uVar5,lVar6 + 1); … FUN_006709c0(uVar5,&local_58); }
+```
+
+The load branch itself goes through the engine FS (`FUN_006abe10` → `FUN_00589310`) and, when the
+loaded object's flag byte `+0x65` is clear, prints the message at `0x012705B5`
+(`objman: …`). `FUN_006709c0` is a `vector::push_back` of a 16-byte string element into the global
+list `DAT_03017840` (both `loadCdXffFile` and `loadCdMotionFile` push the basename there).
+
+### 4.4 What the runtime does with a motion file (`loadCdMotionFile` = `FUN_00670680`)
+
+`FUN_00670680` loads the file, then hands the loaded bytes (the file object's field `+0x48`) to
+**`FUN_0066fe60`** (1,160 bytes) — a **header-normalization + pointer re-base pass**:
+
+- the u32 triple at `+0x10/+0x14/+0x18` is rotated in place (new `+0x10` = old `+0x14`,
+  new `+0x14` = old `+0x18`, new `+0x18` = old `+0x10`);
+- nine 32-bit fields **of the header** — `+0x08`, `+0x0C`, `+0x18`, `+0x1C`, `+0x24`, `+0x28`,
+  `+0x3C`, `+0x40`, `+0x44` — are checked as offsets: bit 31 clear, low 31 bits non-zero, and
+  `value + DAT_02f3b8c0 < DAT_02f08000` → bit 31 is set (`DAT_02f3b8c0` = the load base,
+  `DAT_02f08000` = the region limit). The resolved pointer is `(bit31 ? base : 0) + (value & 0x7FFFFFFF)`.
+  The set is re-derived from the decompile and the raw disassembly (`orl $0x80000000` followed by
+  `movl …, 0xNN(%r13)` at `0x66FEB6`, `0x66FEEE`, `0x66FF1E`, `0x66FF4D`, `0x66FF81`, `0x66FFB5`,
+  `0x66FFE9`, `0x670255`, `0x6702BF`); `+0x24` is re-based only when the header's version byte is > 3
+  and flag `0x10000` is clear, `+0x3C` only when it is > 8 and the flag is clear;
+- `+0x10`/`+0x14` are **counts**, never re-based: the arrays reached from the re-based fields are
+  walked with per-element fix-ups `FUN_0066dec0`, `FUN_0066f9a0` (selected by header flag `0x10000`)
+  and `FUN_0066e460`. The same predicate also hits a nested field (`+0x18` of the structure a header
+  field points at, when the version is > 5 and `(header & 0xf000000000000) == 0x2000000000000`) and
+  array elements (stride 4).
+
+After the fix-up, `FUN_00670680` allocates a `0x88`-byte runtime object, copies the 64-bit pair at
+data `+0x10` into its first 8 bytes, stores the path at `+0x10` of the object and registers it
+(`FUN_006c17f0`). **Feeds B2:** the runtime treats the container's header fields as **31-bit
+base-relative offsets with bit 31 as a state flag**, and re-bases/rotates them in place at load —
+the field set above (`+0x08…+0x44`) is the list B2's record-layout hypotheses should line up against
+the §1.1 header. Of the re-based fields only `0x28`, `0x3C` and `0x44` are tagged-pointer fields in
+§1.1's table, while §1.1 measures `0x08`/`0x1C` as 0, `0x0C` as the bank-variant flag, `0x24`/`0x40`
+as the constant 2 and `0x18` as opaque — so the re-based structure is not the raw file header (a
+runtime sub-structure, or a repurposed header), to be pinned down by B2. The per-element fix-ups
+(`FUN_0066dec0`, `FUN_0066f9a0`, `FUN_0066e460`) are the next pass's entry point to the record layout
+and to keyframe sampling; they are not decoded here.
+
+### 4.5 `.cani` / `MINA` — the only code reference is a dev console command
+
+The single `MINA` code hit (`0x00A26DD2`, in `FUN_00a26d90`) is a **dev-console command
+registration**:
+
+```c
+FUN_00144640(local_d8,"Animation",FUN_00a26cf0,0);   /* command group "Animation" */
+local_b0 = 0x9414e494d;                              /* bytes: "MINA" 0x09 0 0 0  */
+FUN_001444e0(param_1,0x63616e69,local_d8);           /* fourcc: big-endian "cani" */
+```
+
+`0x9414E494D` is exactly the `.cani` footer signature measured in §1.2 — magic `MINA` + **version
+byte 9** — and `0x63616E69` is the big-endian fourcc of `cani` (the engine's short-name encoding;
+memory bytes read `inac`). So the `.cani` signature exists in the binary, but in a **dev tool**
+(handler `FUN_00a26cf0`), not in a runtime loader: the loader registry (§4.3) has **no `.cani`
+entry**, and an exact-case scan for the string `cani` matches only once more in the image (inside
+`motsyncanim_def`; a case-insensitive scan finds 8 — the other 7 inside `CAnim…`/`SyncAnim…` C++
+symbol names).
+
+### 4.6 Where the names live — the asset name pools (for B2)
+
+- **Anim names.** 4,696 `anim/*.anb` names in one string region (first anim name start `0x01030993`,
+  last `0x0105B300`) — the region holds 5,563 NUL-terminated strings, the other 867 being
+  script/symbol names; **613** of the `.anb` names are immediately followed by a logical name
+  (`anim/camera_home_e3_start_cam.anb` → `E3_HOME_START_CAM`), the rest sit in runs of consecutive
+  `.anb` names (last: `anim/objanim_boss_blood_bow.anb`).
+- **Skeleton names.** `skel/*.skb` and the matching `skel/*.weightinfo` as **64 adjacent pairs**
+  (64/64 verified; from `0x011A2201`): `skel/boss_cloud_cl.skb` + `skel/boss_cloud_cl.weightinfo`, …
+  Delta vs §1/§2: the tree ships **57** `.skb` (+ 57 `.weightinfo`) in `cp3shadow/skel/`, so the pool
+  lists **7 skeletons with no shipped file** (`boss_cloud_cl`, `buffalo_a`, `grass_c_cl`, `ico_boy`,
+  `ico_girl`, `old_bird_a`, `tree_cl` — absent tree-wide, verified case-insensitively), and the
+  shipped names differ from the pool's in **case** (tree lowercase `player_a.skb`, pool `player_A.skb`
+  — all 57 shipped names are present in the pool case-insensitively).
+- **Bone/motion names.** `Bone_*`/`OptBone_*` names each paired with a Japanese display name from
+  `0x0119EE6A`, and motion-state names just before it (`PLAYERBODY`, `strong_atk`, `mid_dam`,
+  `hang`, `strong_3D`, …).
+- **`follow` on a name returns 0 references** — auto-analysis created no xrefs, because the names
+  are reached through **absolute 64-bit pointers in static tables it did not annotate**: the anim
+  name `0x01030993` is pointed at by `0x016724B0` (a `0x40`-stride record whose `+0x30` field points
+  back at the record start) and by the slot at file offset `0x2ED2168` (Ghidra
+  `segment_8::000F7068` — the dynlibdata segment maps into its own address space, space = file −
+  `0x2DDB100`; the file−`0x4000` pseudo-VA `0x02ECE168` used elsewhere in this note lands in
+  `segment_2`'s zero-filled bss and reads as zeros), inside a `0x30`-stride index region. A raw
+  u64-slot scan of the dump (rule: every 8-byte-aligned little-endian u64 in `out/re/eboot.elf` whose
+  value lands in the stated range; the committed script does not scan pointer slots, so the rule is
+  stated here) finds **14,177** slots into the anim-name range `[0x01030993,0x0105B320)`, **266**
+  into the skel pool `[0x011A2201,0x011A2D94)` and **2,113** into the bone/motion table
+  `[0x0119EE6A,0x011A2201)`; an any-offset u64 scan adds unaligned coincidences (14,407 / 266 /
+  2,151). The engine's `CP3Shadow` path templates
+  (`$/cp3shadow/`, `/app0/CP3Shadow/%s`, `$/cp3shadow/****/cp3shadowprecache.calt`, …) are separate
+  strings; the ones followed here lead to dev tooling (a config UI registering the `.calt` files —
+  `FUN_00533100`; a path-data export tool — `FUN_00689b80`; a text config parser — `FUN_007f6f90`).
+
+### 4.7 Not reached / next pass
+
+- The `.anb` **record layout and keyframe sampling** are not decoded here: the load path stops at
+  `FUN_0066fe60` + the three per-element fix-ups (§4.4). Next: decompile `FUN_0066dec0`,
+  `FUN_0066f9a0`, `FUN_0066e460`, then the motion-object methods (`FUN_00670300`,
+  `FUN_006c17f0`'s callee) to reach the sampler.
+- The **`.skb` container parse** (the §1.1 header/tag scheme) was not located: `loadCdXffFile` loads
+  and registers by name; the object construction (`FUN_00589310`) is the next lead.
+- The **registry dispatcher** (who looks a loader up by name) is not referenced from anywhere —
+  next pass should follow `0x015FFC68`-style descriptors (`{table_ptr, …}` slots pointing into the
+  registry) and the asset-type descriptor tables at `0x017EFC38` / `0x024C0E78`.
+- `.cani` runtime loading: no evidence in this pass (§4.5); the format's runtime consumer is still
+  open, and B2's `.cani` decode stands on the offline probe alone.
