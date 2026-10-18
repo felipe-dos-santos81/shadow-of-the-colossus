@@ -33,8 +33,9 @@ The family is the **`xff` container**: little-endian, magic `78 66 66 00` (`"xff
 extensions in the tree (measured, whole tree): `.nmo` 5,297 · `.anb` 4,455 · `.nto` 1,723 ·
 `.clb` 1,042 · **`.skb` 57** · `.cls` 45. The banks are grouped by extension and directory —
 `.anb` only in `cp3shadow/anim/` (4,455), `.skb` + `.weightinfo` only in `cp3shadow/skel/`
-(57 + 57). The `.cani` family (2,869 files, 52 `…/animation/_cmn/` directories) is a **separate
-container** with its own magic but the same little-endian field style; see §1.2.
+(57 + 57). The `.cani` family (2,869 files, 52 `_cmn` directories — 51 of them under `animation/`,
+the other `objects/actors/arena_14/polec_wallc/_cmn`) is a **separate container** with its own magic
+but the same little-endian field style; see §1.2.
 
 ### 1.1 `xff` header (measured on all 4,512 `.anb` + `.skb` files)
 
@@ -45,9 +46,9 @@ container** with its own magic but the same little-endian field style; see §1.2
 | `0x08` | u32 | 0 (all files) | `0` |
 | `0x0C` | u16 | **bank variant flag**: 1 for 4,150 `.anb`, 0 for 305 `.anb` and all `.skb` | `0` |
 | `0x0E` | u16 | 0 (all files) | `0` |
-| `0x10` | u32 | offset of the file's **last section** (≤ size in all files; the section is ≥ 400 B) | `0x1060` |
+| `0x10` | u32 | offset of the file's **last section** (≤ size in all files; the section is ≥ 396 B) | `0x1060` |
 | `0x14` | u32 | **file size**, exact in all 4,512 files | `0x139C` = 5,020 |
-| `0x18` | 8 B | opaque: all zero in 3,451 files, otherwise 4 ASCII bytes + 4 zeros | `"yubi\0\0\0\0"` |
+| `0x18` | 8 B | opaque: all zero in 3,451 files; otherwise 4 bytes of packer text + 4 zeros (of the 1,061 non-zero fields: 647 fully printable, 162 with control bytes, 252 with high-bit bytes) | `"yubi\0\0\0\0"` |
 | `0x1C` | u32 | 0 (all files) | `0` |
 | `0x20` | u32 | tagged pointer | `0x0A1D00DC` |
 | `0x22` | u16 | **the file's 16-bit tag** — the high half of every pointer | `0x0A1D` |
@@ -65,18 +66,24 @@ container** with its own magic but the same little-endian field style; see §1.2
   `offset` is a file offset. Verified for all 8 pointer fields in all 4,512 files (the tag field
   varies per file — e.g. `0x0A1D` here, `0x0A25` for `player_a_stand.anb` — and is the same value in
   every pointer of a file). The `0x50` mirror table always reproduces the offsets.
-- **`0x18` is opaque.** The 4 ASCII bytes differ per file, never relate to that file's own names or
+- **`0x10` (last section).** Measured ≤ size in all 4,512 files; the section it starts is ≥ 396 B —
+  the four smallest are the 556-byte banks `gextail_a.skb`, `guard_c_head.skb`, `guard_d_head.skb`,
+  `guard_e_head.skb` (396 B each; the next smallest is 412 B).
+- **`0x18` is opaque.** The 4 text bytes differ per file, never relate to that file's own names or
   to its siblings, and mostly consist of fragments of unrelated text (`"yubi"`, `"nigh"`, `"wpos"`,
-  `"ssio"`, `" 100"`, …). Working hypothesis: a packer buffer leftover (uninitialized field). Treat
-  as opaque; do not read as a pointer.
+  `"ssio"`, `" 100"`, …); they are fully printable in 647 of the 1,061 non-zero fields, contain
+  control bytes in 162, and bytes ≥ `0x80` in 252. Working hypothesis: a packer buffer leftover
+  (uninitialized field). Treat as opaque; do not read as a pointer.
 - **Tail tables.** Every container ends with one or two adjacent tables of 8-byte
   `{u32 offset, u32 tag}` entries, tags `0x102` (measured: `.skb` bone records / `.anb` descriptor
   fields) and `0x000`. Offsets are **relative to the container's string/data base `0x110`**
   (verified for `.skb` by resolving names; the same base resolves the `.anb` descriptor fields).
   Reading the tables back-to-front from EOF is exact for `.skb` (measured 64 = 32 + 32 entries in
-  `player_a.skb`, every `0x000` entry resolving into the name blob); for `.anb` the same walk can
-  absorb leading zero padding (measured 119 vs ~116 entries for `player_a_stand.anb`), so treat
-  `.anb` tail counts as approximate until B2 decodes that bank.
+  `player_a.skb`: 30 of the 32 `0x000` entries resolve to names — the 29 core offsets plus the
+  `OptBone_*` run start — while the other two are section starts, `0x180` record array and `0xAA0`
+  bind region); for `.anb` the same walk can absorb leading zero padding (measured 119 vs ~116
+  entries for `player_a_stand.anb`), so treat `.anb` tail counts as approximate until B2 decodes
+  that bank.
 - The vendored `CANI` parser (`third_party/PSO2-Aqua-Library`) **does not fit** this family: it
   reads big-endian while these containers are little-endian (and it expects `int_14 // Usually 0x30`
   where the `xff` files store the file size), so every parse throws — the spike recorded
@@ -96,11 +103,12 @@ container** with its own magic but the same little-endian field style; see §1.2
 - **12-byte `MINA` footer** at the end of every file: magic `MINA`, version byte `9`, then the
   uncompressed size (`size - 12` for plaintext files). For compressed files the footer is carried
   verbatim in the compressed file and re-appended after decompression.
-- Plaintext header fields (measured on the sample): `float fps = 30.0` at `0x08`; `u16` count at
-  `0x0C` (e.g. 720, 1136, 256 — key/frame-ish); **`u16` joint count at `0x0E`** (348 for every
-  wander file, 132 for agro, 35 for `kame_a`, 34 for the bull, 1 for camera files) — the joint-count
-  cross-check against the sibling skeleton is the spike's `5/5` agreement and is re-observed here
-  (wander 348 = `wander.cskl` boneCount 348 = `wander.glb` 348 skin joints).
+- Plaintext header fields (measured on the sample): `float fps` at `0x08` — bits `0x41EFFFFF`
+  = 29.999998 (30 − 1 ULP) in all 1,745 plain files (the probe prints `fps=30` through `%g`);
+  `u16` count at `0x0C` (e.g. 720, 1136, 256 — key/frame-ish); **`u16` joint count at `0x0E`** (348
+  for every wander file, 132 for agro, 35 for `kame_a`, 34 for the bull, 1 for camera files) — the
+  joint-count cross-check against the sibling skeleton is the spike's `5/5` agreement and is
+  re-observed here (wander 348 = `wander.cskl` boneCount 348 = `wander.glb` 348 skin joints).
 - Compressed files have **no readable header**: the `0x14` read has the high bit set in 45% of the
   1,124 compressed files and the `0x0C` read yields float-looking garbage (e.g. `0x4144CCCD`).
 
@@ -148,11 +156,15 @@ all 57 banks (0 failures).
 - **Bone records** (tail table tag `0x102`): a leading run at **stride `0x40`** — 29 records for
   `player_a.skb` (blob `0x180 + 0x40k`, file `0x290…`) — followed by **3 trailing section
   descriptors** (measured 3 in 56/57 files, 2 in `obj_bat_a.skb`). Record fields measured:
-  `f0` name offset (blob-relative), `f1`/`f2` = `0xFFFFFFFF`, `f3` = 0, `f4..f7` quat (w = 1.0),
-  `f8..f11` second quat (the same floats the sibling `.weightinfo` carries, verified on
-  `Bone_KOSI`/`Bone_MOMO_L`), `f12` 1-based index or `0xFFFFFFFF` for leaves, `f13` related index
-  (unverified), `f14` **parent index** (`-1` = root; equals the parent's `f12 - 1`, verified for all
-  29 records — `Bone_KOSI` and `Bone_HARA` are the two roots), `f15` 0.
+  `f0` name offset (blob-relative), `f1`/`f2` = `0xFFFFFFFF`, `f3` = 0, `f4..f7` quat (w = 1.0) —
+  `f4..f6` are the first three hex words of the bone's `.weightinfo` line (29/29 records) —
+  `f8..f11` second quat (its relation to the sidecar is unresolved for 27 records: it equals the
+  `.weightinfo`'s last four hex words for the two roots `Bone_KOSI` and `Bone_HARA` only),
+  `f12` 1-based index or `0xFFFFFFFF` for leaves, `f13` related index (unverified), `f14`
+  **parent index** (`-1` = root; equals the parent's `f12 - 1`, verified for all 29 records — the two
+  roots are `Bone_KOSI` and `Bone_HARA`), `f15` = 0 for 28 of 29 records: `Bone_OYAYUBI_B_R`'s `f15`
+  is the first four bytes of the `OptBone_*` run, which starts where its record ends (file `0x9CC`) —
+  section data, not a field.
 - **Name-offset table** (tag `0x000`): the 29 core name offsets in blob order, then three section
   starts — `0x180` (record array), `0xAA0` (second bind region), `0x8BC` (the `OptBone_*` run).
   The 23 `OptBone_*` names have **no record** in this bank: they are joints only.
@@ -162,12 +174,15 @@ all 57 banks (0 failures).
 1. **Naming.** Every `.skb` name must appear in the full skeleton's joint names. Measured for
    `player_a.skb`: 52/52 names are present in `wander.glb`'s 348 skin joints (`skb - glb = ∅`).
 2. **Sibling list.** The `.skb` name set equals the sibling `.weightinfo` name set — **57/57** pairs
-   (the `.weightinfo` is an ASCII sidecar, one line per bone: `[#]Name` + 9 hex words + 3 ints).
+   (the `.weightinfo` is an ASCII sidecar: core lines are `Name` + 10 hex words + 3 ints, 14 fields,
+   and optional lines are bare `#OptBone_*`).
 3. **Joint count.** The animation-side count (`u16 @0x0E` in the `.cani`, spike `5/5`; re-observed
    wander 348) must equal the skeleton's bone count (`wander.cskl` 348 / `wander.glb` 348 joints).
 4. **Bank granularity.** The bank is a **model part's** subset, not the whole skeleton: `player_a.skb`
-   = body (52), `player_a_head.skb` = face (36, `Bone_KAO` first), `wander_fringe.glb` holds the
-   fringe bones. A bank's names are therefore always a proper subset of the full skeleton's.
+   = body (52), `player_a_head.skb` = face (36, `Bone_KAO` first). The full skeleton's remaining
+   joints (fringe, facial, twist, …) are carried by the same `wander.glb` (348 joints — including the
+   28 `Bone_Fringe_*`); `wander_fringe.glb` is mesh-only (1 node, 0 skins). A bank's names are
+   therefore always a proper subset of the full skeleton's.
 
 ### 2.3 Delta from the plan's pinned values (recorded, not forced)
 
