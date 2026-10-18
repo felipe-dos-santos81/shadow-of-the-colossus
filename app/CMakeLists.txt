@@ -23,7 +23,7 @@ add_custom_command(TARGET sotc-viewer POST_BUILD
 
 enable_testing()
 add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/test_asset_io.cpp
-  src/asset_io.cpp src/camera.cpp)
+  tests/test_anim.cpp src/asset_io.cpp src/camera.cpp)
 target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3)
 target_include_directories(sotc-app-tests PRIVATE third_party src)
 add_test(NAME unit_tests COMMAND sotc-app-tests)

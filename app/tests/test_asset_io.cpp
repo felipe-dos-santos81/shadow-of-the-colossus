@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -110,6 +111,140 @@ std::string fixture_gltf_json(const std::string& image_uri = "missing.png") {
     return json;
 }
 
+// --- The skin/animation fixture ----------------------------------------------
+
+// The fixture's binary buffer, assembled in code — the S1 pattern, through
+// `base64_encode` above — so every value stays reviewable instead of hiding in
+// a pasted blob. Layout (little-endian, like glTF; every offset 4-byte aligned):
+//
+//   offset  bytes  contents
+//   0       36     POSITION  3 x float3  (0,2,0) (1,2,0) (0,1,0)
+//   36      24     JOINTS_0  3 x ushort4 (1,0,0,0)
+//   60      48     WEIGHTS_0 3 x float4  (1,0,0,0)
+//   108     128    IBM       2 x mat4    translate(0,-1,0), translate(0,-2,0)
+//   236     8      input     2 x float   [0, 1]
+//   244     32     output    2 x float4  (0,0,0,1), (0,0,sin 45deg,cos 45deg)
+//   276 total
+std::string skin_fixture_buffer_uri() {
+    std::vector<uint8_t> bytes;
+    const auto append_floats = [&bytes](const float* values, std::size_t count) {
+        const uint8_t* raw = reinterpret_cast<const uint8_t*>(values);
+        bytes.insert(bytes.end(), raw, raw + count * sizeof(float));
+    };
+    const auto append_u16s = [&bytes](const uint16_t* values, std::size_t count) {
+        const uint8_t* raw = reinterpret_cast<const uint8_t*>(values);
+        bytes.insert(bytes.end(), raw, raw + count * sizeof(uint16_t));
+    };
+
+    const float positions[3][3] = {{0.0f, 2.0f, 0.0f}, {1.0f, 2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+    append_floats(&positions[0][0], 9);
+    const uint16_t joints[3][4] = {{1, 0, 0, 0}, {1, 0, 0, 0}, {1, 0, 0, 0}};
+    append_u16s(&joints[0][0], 12);
+    const float weights[3][4] = {
+        {1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}};
+    append_floats(&weights[0][0], 12);
+    // Inverse bind matrices: the inverse of each joint's bind world transform
+    // ("Root" is identity, JointA sits at y = 1, JointB at y = 2).
+    const float inverse_bind[2][16] = {
+        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -1.0f,
+         0.0f, 1.0f},
+        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -2.0f,
+         0.0f, 1.0f}};
+    append_floats(&inverse_bind[0][0], 32);
+    const float input[2] = {0.0f, 1.0f};
+    append_floats(input, 2);
+    const float output[2][4] = {
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, std::sin(kPi / 4.0f), std::cos(kPi / 4.0f)}};  // 90 degrees about Z
+    append_floats(&output[0][0], 8);
+
+    REQUIRE(bytes.size() == 276);
+    return "data:application/octet-stream;base64," + base64_encode(bytes.data(), bytes.size());
+}
+
+// The skin fixture: nodes Root -> JointA -> JointB (the joints carry their rest
+// translation), a skin over [JointA, JointB] with inverse bind matrices, one
+// triangle bound to joint 1, and an animation "turn" rotating JointA 90 degrees
+// about Z over one second.
+//
+// Variants: `skinned = false` drops JOINTS_0/WEIGHTS_0 from the primitive (the
+// loader must default them); `extra_channel` adds a channel targeting the
+// non-joint node "Helper"; `interpolation` selects the sampler's interpolation;
+// `matrix_joint` gives JointB an equivalent `matrix` node instead of TRS.
+struct SkinFixtureOptions {
+    std::string interpolation = "LINEAR";
+    bool skinned = true;
+    bool extra_channel = false;
+    bool matrix_joint = false;
+};
+std::string skin_fixture_gltf_json(const SkinFixtureOptions& options = {}) {
+    std::string json = R"({
+  "asset": {"version": "2.0"},
+  "buffers": [{"uri": "%%BUFFER_URI%%", "byteLength": 276}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 24},
+    {"buffer": 0, "byteOffset": 60, "byteLength": 48},
+    {"buffer": 0, "byteOffset": 108, "byteLength": 128},
+    {"buffer": 0, "byteOffset": 236, "byteLength": 8},
+    {"buffer": 0, "byteOffset": 244, "byteLength": 32}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+     "min": [0, 1, 0], "max": [1, 2, 0]},
+    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "VEC4"},
+    {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4"},
+    {"bufferView": 3, "componentType": 5126, "count": 2, "type": "MAT4"},
+    {"bufferView": 4, "componentType": 5126, "count": 2, "type": "SCALAR"},
+    {"bufferView": 5, "componentType": 5126, "count": 2, "type": "VEC4"}
+  ],
+  "meshes": [{"primitives": [{"attributes": %%ATTRIBUTES%%}]}],
+  "skins": [{"joints": [1, 2], "inverseBindMatrices": 3}],
+  "nodes": [
+    {"name": "Root", "children": [1]},
+    {"name": "JointA", "translation": [0, 1, 0], "children": [2]},
+    %%JOINTB_NODE%%,
+    {"name": "Helper"},
+    {"name": "Skinned", "mesh": 0, "skin": 0}
+  ],
+  "scenes": [{"nodes": [0, 4]}],
+  "scene": 0,
+  "animations": [{"name": "turn", "channels": %%CHANNELS%%,
+                  "samplers": [{"input": 4, "output": 5, "interpolation": "%%INTERPOLATION%%"}]}]
+}
+)";
+    const auto replace_once = [&json](const std::string& placeholder, const std::string& value) {
+        const std::size_t at = json.find(placeholder);
+        REQUIRE(at != std::string::npos);
+        json.replace(at, placeholder.size(), value);
+    };
+
+    replace_once("%%BUFFER_URI%%", skin_fixture_buffer_uri());
+    replace_once("%%ATTRIBUTES%%",
+                 options.skinned ? R"({"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2})"
+                                 : R"({"POSITION": 0})");
+    // JointB's node, either as TRS or as the equivalent column-major matrix
+    // T(0,2,0) * R(90 deg Z) * S(2,2,2).
+    replace_once(
+        "%%JOINTB_NODE%%",
+        options.matrix_joint
+            ? R"({"name": "JointB", "matrix": [0, 2, 0, 0, -2, 0, 0, 0, 0, 0, 2, 0, 0, 2, 0, 1]})"
+            : R"({"name": "JointB", "translation": [0, 1, 0]})");
+    std::string channels = R"({"sampler": 0, "target": {"node": 1, "path": "rotation"}})";
+    if (options.extra_channel) {
+        channels += R"(, {"sampler": 0, "target": {"node": 3, "path": "translation"}})";
+    }
+    replace_once("%%CHANNELS%%", "[" + channels + "]");
+    replace_once("%%INTERPOLATION%%", options.interpolation);
+    return json;
+}
+
+void write_text(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream out(path);
+    REQUIRE(out.good());
+    out << text;
+}
+
 // A 1x1 red PNG (69 bytes), generated offline: valid enough for stb_image.
 const unsigned char kPng1x1Red[] = {
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
@@ -205,6 +340,163 @@ TEST_CASE("image URIs that escape the library are rejected") {
         REQUIRE(scene.materials.size() == 1);
         CHECK(scene.materials[0].baseColorTexture == -1);
     }
+}
+
+TEST_CASE("wander carries its 348-joint skeleton") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    CHECK(scene.skin.joints.size() == 348);
+    CHECK(scene.skin.joints[0].name == "Bone_root");
+    CHECK(scene.animations.empty());
+    const auto& v = scene.meshes[0].vertices[0];
+    CHECK(v.j[0] == 102); CHECK(v.j[1] == 73); CHECK(v.j[2] == 0); CHECK(v.j[3] == 0);
+    CHECK(v.w[0] == doctest::Approx(0.9094f).epsilon(1e-3));
+    CHECK(v.w[1] == doctest::Approx(0.0906f).epsilon(1e-3));
+}
+
+TEST_CASE("wander's joint rest transforms decompose from their node matrices") {
+    // The converter emits `matrix` nodes; the fixture below uses TRS nodes, so
+    // this test is what exercises the matrix path on real data. The expected
+    // values were derived outside this code (decomposing the glb's node
+    // matrices independently).
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    REQUIRE(scene.skin.joints.size() == 348);
+
+    // Bone_root: an identity node matrix and no parent node at all.
+    CHECK(scene.skin.joints[0].parent == -1);
+    CHECK(scene.skin.joints[0].restT.y == doctest::Approx(0.0f));
+    CHECK(scene.skin.joints[0].restR.w == doctest::Approx(1.0f));
+    CHECK(scene.skin.joints[0].restS.x == doctest::Approx(1.0f));
+
+    // Bone_HARA: a rotation about X (~80 degrees), parented to Bone_root.
+    CHECK(scene.skin.joints[1].name == "Bone_HARA");
+    CHECK(scene.skin.joints[1].parent == 0);
+    CHECK(scene.skin.joints[1].restR.x == doctest::Approx(0.6392f).epsilon(1e-3));
+    CHECK(scene.skin.joints[1].restR.y == doctest::Approx(0.0f).epsilon(1e-3));
+    CHECK(scene.skin.joints[1].restR.z == doctest::Approx(0.0f).epsilon(1e-3));
+    CHECK(scene.skin.joints[1].restR.w == doctest::Approx(0.7690f).epsilon(1e-3));
+
+    // Bone_KOSI: a 180 degree rotation (w = 0), the branch that a trace-based
+    // decomposition alone cannot recover.
+    CHECK(scene.skin.joints[2].name == "Bone_KOSI");
+    CHECK(scene.skin.joints[2].parent == 0);
+    CHECK(scene.skin.joints[2].restR.w == doctest::Approx(0.0f).epsilon(1e-3));
+
+    // Bone_MOMO_L: a joint with a real translation, two levels down the tree.
+    CHECK(scene.skin.joints[20].name == "Bone_MOMO_L");
+    CHECK(scene.skin.joints[20].parent == 2);
+    CHECK(scene.skin.joints[20].restT.x == doctest::Approx(-0.06125f).epsilon(1e-3));
+    CHECK(scene.skin.joints[20].restT.y == doctest::Approx(0.018739f).epsilon(1e-3));
+    CHECK(scene.skin.joints[20].restT.z == doctest::Approx(-0.108982f).epsilon(1e-3));
+}
+
+TEST_CASE("a two-joint fixture parses skin and animation") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+
+    auto scene = load_scene(dir.path(), "skin.gltf");
+
+    // The skin: "Root" is not a joint, so JointA is a root and JointB its child.
+    // Both keep their local rest translation; the glTF defaults fill in the
+    // rest rotation and scale.
+    REQUIRE(scene.skin.joints.size() == 2);
+    CHECK(scene.skin.joints[0].name == "JointA");
+    CHECK(scene.skin.joints[0].parent == -1);
+    CHECK(scene.skin.joints[1].name == "JointB");
+    CHECK(scene.skin.joints[1].parent == 0);
+    CHECK(scene.skin.joints[0].restT.y == doctest::Approx(1.0f));
+    CHECK(scene.skin.joints[0].restR.w == doctest::Approx(1.0f));
+    CHECK(scene.skin.joints[0].restS.y == doctest::Approx(1.0f));
+    // Inverse bind matrices: the inverse of the joints' bind world transforms.
+    CHECK(scene.skin.joints[0].inverseBind.m[13] == doctest::Approx(-1.0f));
+    CHECK(scene.skin.joints[1].inverseBind.m[13] == doctest::Approx(-2.0f));
+
+    // The vertex carries its JOINTS_0/WEIGHTS_0 pair: joint 1, weight 1.
+    REQUIRE(scene.meshes.size() == 1);
+    REQUIRE(scene.meshes[0].vertices.size() == 3);
+    CHECK(scene.meshes[0].vertices[0].j[0] == 1);
+    CHECK(scene.meshes[0].vertices[0].j[1] == 0);
+    CHECK(scene.meshes[0].vertices[0].w[0] == doctest::Approx(1.0f));
+    CHECK(scene.meshes[0].vertices[0].w[1] == doctest::Approx(0.0f));
+
+    // The clip: one LINEAR rotation channel on JointA, keys at 0 s and 1 s.
+    REQUIRE(scene.animations.size() == 1);
+    const AnimationCpu& clip = scene.animations[0];
+    CHECK(clip.name == "turn");
+    CHECK(clip.duration == doctest::Approx(1.0f));
+    REQUIRE(clip.channels.size() == 1);
+    const AnimationChannelCpu& channel = clip.channels[0];
+    CHECK(channel.joint == 0);
+    CHECK(channel.path == 1);
+    CHECK(channel.interpolation == 0);
+    const std::vector<float> expected_times = {0.0f, 1.0f};
+    CHECK(channel.times == expected_times);
+    CHECK(channel.values.size() == 8);
+    // The second key's quaternion is 90 degrees about Z: (0, 0, sin 45, cos 45).
+    CHECK(channel.values[6] == doctest::Approx(std::sin(kPi / 4.0f)).epsilon(1e-4));
+    CHECK(channel.values[7] == doctest::Approx(std::cos(kPi / 4.0f)).epsilon(1e-4));
+}
+
+TEST_CASE("a joint node carrying a matrix decomposes into its rest TRS") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "matrix.gltf", skin_fixture_gltf_json({.matrix_joint = true}));
+
+    auto scene = load_scene(dir.path(), "matrix.gltf");
+
+    // JointB's node is T(0,2,0) * R(90 degrees about Z) * S(2,2,2): the
+    // translation is column 3, the scale the basis column lengths, the rotation
+    // the normalized basis.
+    REQUIRE(scene.skin.joints.size() == 2);
+    const JointCpu& joint = scene.skin.joints[1];
+    CHECK(joint.restT.x == doctest::Approx(0.0f));
+    CHECK(joint.restT.y == doctest::Approx(2.0f));
+    CHECK(joint.restT.z == doctest::Approx(0.0f));
+    CHECK(joint.restS.x == doctest::Approx(2.0f));
+    CHECK(joint.restS.y == doctest::Approx(2.0f));
+    CHECK(joint.restS.z == doctest::Approx(2.0f));
+    CHECK(joint.restR.x == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(joint.restR.y == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(joint.restR.z == doctest::Approx(std::sin(kPi / 4.0f)).epsilon(1e-4));
+    CHECK(joint.restR.w == doctest::Approx(std::cos(kPi / 4.0f)).epsilon(1e-4));
+}
+
+TEST_CASE("a primitive without JOINTS_0 defaults to joint 0, weight 1") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "unskinned.gltf", skin_fixture_gltf_json({.skinned = false}));
+
+    auto scene = load_scene(dir.path(), "unskinned.gltf");
+
+    // The model still has its skin — only the primitive lacks the attributes,
+    // which must default to joint 0 at full weight (bind pose, no collapse).
+    REQUIRE(scene.skin.joints.size() == 2);
+    REQUIRE(scene.meshes.size() == 1);
+    REQUIRE(scene.meshes[0].vertices.size() == 3);
+    for (const Vertex& vertex : scene.meshes[0].vertices) {
+        for (int i = 0; i < 4; ++i) {
+            CHECK(vertex.j[i] == 0);
+            CHECK(vertex.w[i] == doctest::Approx(i == 0 ? 1.0f : 0.0f));
+        }
+    }
+}
+
+TEST_CASE("a channel targeting a non-joint node is skipped") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "helper.gltf", skin_fixture_gltf_json({.extra_channel = true}));
+
+    auto scene = load_scene(dir.path(), "helper.gltf");
+
+    // "Helper" is not in skin.joints: its channel is dropped, the joint's stays.
+    REQUIRE(scene.animations.size() == 1);
+    REQUIRE(scene.animations[0].channels.size() == 1);
+    CHECK(scene.animations[0].channels[0].joint == 0);
+    CHECK(scene.animations[0].channels[0].path == 1);
+}
+
+TEST_CASE("a CUBICSPLINE sampler is refused loudly") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "cubic.gltf", skin_fixture_gltf_json({.interpolation = "CUBICSPLINE"}));
+
+    CHECK_THROWS_WITH_AS(load_scene(dir.path(), "cubic.gltf"),
+                         doctest::Contains("CUBICSPLINE"), std::runtime_error);
 }
 
 TEST_CASE("a model that cannot be parsed throws") {

@@ -14,6 +14,12 @@ struct Mat4 {
     float m[16];
 };
 
+// Quaternion: (x, y, z) vector part, w scalar part — the same layout as a glTF
+// rotation accessor. Rotations are right-handed, matching the matrices above.
+struct Quat {
+    float x, y, z, w;
+};
+
 inline float vec3_dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 inline Vec3 vec3_cross(Vec3 a, Vec3 b) {
@@ -92,5 +98,84 @@ inline Mat4 mat4_perspective(float fovYDeg, float aspect, float nearPlane, float
     out.m[10] = farPlane / (nearPlane - farPlane);
     out.m[11] = -1.0f;
     out.m[14] = nearPlane * farPlane / (nearPlane - farPlane);
+    return out;
+}
+
+// Returns the identity (0, 0, 0, 1) for zero-length input (never NaN), like
+// vec3_normalize returns the zero vector.
+inline Quat quat_normalize(Quat q) {
+    const float length_squared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (length_squared <= 0.0f) {
+        return Quat{0.0f, 0.0f, 0.0f, 1.0f};
+    }
+    const float inv_length = 1.0f / std::sqrt(length_squared);
+    return Quat{q.x * inv_length, q.y * inv_length, q.z * inv_length, q.w * inv_length};
+}
+
+// Hamilton product: rotation a applied after b (R(a * b) = R(a) R(b)).
+inline Quat quat_mul(Quat a, Quat b) {
+    return Quat{a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+// Shortest-path spherical interpolation; t in [0, 1]. Near-parallel inputs take
+// a normalized lerp: the sin(theta) form divides by zero there, and the two
+// paths are within float precision of each other.
+inline Quat quat_slerp(Quat a, Quat b, float t) {
+    float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    if (dot < 0.0f) {
+        // Opposite hemispheres describe the same rotation: negate to take the
+        // short way around.
+        b = Quat{-b.x, -b.y, -b.z, -b.w};
+        dot = -dot;
+    }
+    if (dot > 0.9995f) {
+        return quat_normalize(Quat{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                                   a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t});
+    }
+    const float theta = std::acos(dot);
+    const float sin_theta = std::sin(theta);
+    const float scale_a = std::sin((1.0f - t) * theta) / sin_theta;
+    const float scale_b = std::sin(t * theta) / sin_theta;
+    return Quat{a.x * scale_a + b.x * scale_b, a.y * scale_a + b.y * scale_b,
+                a.z * scale_a + b.z * scale_b, a.w * scale_a + b.w * scale_b};
+}
+
+// Column-major rotation matrix; q is normalized first, so a quaternion that
+// drifted off the unit sphere still yields a rotation.
+inline Mat4 quat_to_mat4(Quat q) {
+    q = quat_normalize(q);
+    const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    const float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+
+    Mat4 out{};
+    out.m[0] = 1.0f - 2.0f * (yy + zz);
+    out.m[1] = 2.0f * (xy + wz);
+    out.m[2] = 2.0f * (xz - wy);
+    out.m[4] = 2.0f * (xy - wz);
+    out.m[5] = 1.0f - 2.0f * (xx + zz);
+    out.m[6] = 2.0f * (yz + wx);
+    out.m[8] = 2.0f * (xz + wy);
+    out.m[9] = 2.0f * (yz - wx);
+    out.m[10] = 1.0f - 2.0f * (xx + yy);
+    out.m[15] = 1.0f;
+    return out;
+}
+
+// T * R * S: the rotation's basis columns scaled by s, the translation in
+// column 3 — the local transform of a glTF node or skin joint.
+inline Mat4 mat4_from_trs(Vec3 t, Quat r, Vec3 s) {
+    Mat4 out = quat_to_mat4(r);
+    for (int row = 0; row < 3; ++row) {
+        out.m[row] *= s.x;
+        out.m[4 + row] *= s.y;
+        out.m[8 + row] *= s.z;
+    }
+    out.m[12] = t.x;
+    out.m[13] = t.y;
+    out.m[14] = t.z;
     return out;
 }
