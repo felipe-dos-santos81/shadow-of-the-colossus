@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
 # re0-acceptance.sh — the RE-0 acceptance pass: unwrap the retail eboot.bin (PS4 SELF) with the
-# port's own prepare.py and verify the artifacts. Re-runnable end to end.
+# port's own prepare.py, verify the artifacts, and baseline them in a headless Ghidra project.
+# Re-runnable end to end.
 #
 # Steps (RE-0 foundation: the unwrap everything downstream reads):
 #
-#   1. preflight — the inputs exist ($SOTC_UROOT/eboot.bin, the port's scripts/prepare.py),
-#      python3 and java are on PATH, and the pinned Ghidra bundle's analyzeHeadless is executable;
+#   1. preflight — the inputs exist ($SOTC_UROOT/eboot.bin, the port's scripts/prepare.py, the
+#      committed tools/re/ghidra/PrintSummary.java), python3 and java are on PATH, and the
+#      pinned Ghidra bundle's analyzeHeadless is executable;
 #   2. stage + unwrap — the extraction keeps PKG-level metadata in extracted/pkg-meta/ and the
 #      PKG filesystem in extracted/uroot/, so its uroot carries no sce_sys/param.sfo (which
 #      prepare.py requires): out/re/uroot is a staged view — symlinks to the read-only tree,
@@ -17,7 +19,18 @@
 #      parses as JSON; the eboot.bin sha256 matches the extraction manifest's `uroot/eboot.bin`
 #      line (a mismatch is dump drift — fail);
 #   4. negative check (Review Focus #1) — the same prepare.py invocation on junk input must fail
-#      with `expected PS4 SELF`; the check is silent on success.
+#      with `expected PS4 SELF`; the check is silent on success;
+#   5. headless Ghidra baseline (Review Focus #2/#3) — analyzeHeadless imports out/re/eboot.elf
+#      into the project out/re/ghidra/sotc and runs tools/re/ghidra/PrintSummary.java, whose one
+#      stable `summary program=… functions=…` line the script asserts with a floor of 1000 (a
+#      truncated import is a failure, not a green run); the project is rebuilt every run, so
+#      re-runs are deterministic. Ghidra's ProjectLocator rejects '.'-prefixed path elements
+#      (this worktree lives under ~/.local), so the location is passed as a dot-free temp
+#      symlink to out/re/ghidra. Headless prefixes script output with the script name and
+#      appends its logger name (actual format:
+#      `INFO  PrintSummary.java> summary … (GhidraScript)`), so the match is on the message body,
+#      not the start of the line. The full log is out/re/ghidra.log; ERROR lines are counted and
+#      printed, informational only. Analysis of a game eboot takes minutes.
 #
 # Inputs are read-only: the extracted uroot, the port repo, and the Ghidra bundle are never
 # written to — prepare.py consumes the staged view under out/re/, not the tree. The only output
@@ -46,6 +59,8 @@ out="$repo_root/out/re"
 stamp() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { echo "re0-acceptance: $*" >&2; exit 1; }
 
+started="$(date +%s)"
+
 # SOTC_UROOT must be absolute (the staged symlinks point into it); the manifest default hangs
 # off the resolved path: <uroot>/../../logs/uroot.sha256 = SOTC-extract/logs/uroot.sha256.
 resolved="$(cd "$SOTC_UROOT" && pwd)" || fail "SOTC_UROOT is not a directory: $SOTC_UROOT"
@@ -57,6 +72,8 @@ SOTC_UROOT="$resolved"
 [[ -f "$SOTC_UROOT/eboot.bin" ]] || fail "input not found: $SOTC_UROOT/eboot.bin (set SOTC_UROOT)"
 [[ -f "$SOTC_PC_PORT/scripts/prepare.py" ]] ||
   fail "port script not found: $SOTC_PC_PORT/scripts/prepare.py (set SOTC_PC_PORT)"
+[[ -f "$repo_root/tools/re/ghidra/PrintSummary.java" ]] ||
+  fail "Ghidra summary script not found: $repo_root/tools/re/ghidra/PrintSummary.java"
 command -v python3 >/dev/null 2>&1 || fail "python3 not on PATH"
 command -v java >/dev/null 2>&1 || fail "java not on PATH"
 [[ -x "$GHIDRA_HOME/support/analyzeHeadless" ]] ||
@@ -93,7 +110,12 @@ if [[ ! -f "$stage/sce_sys/param.sfo" ]]; then
   stamp "stage: param.sfo <- $sfo (uroot lacks one)"
 fi
 stamp "unwrap: $SOTC_PC_PORT/scripts/prepare.py $stage --out $out"
-python3 "$SOTC_PC_PORT/scripts/prepare.py" "$stage" --out "$out"
+# Captured (then printed) so the summary block can quote prepare.py's own entry/image and
+# imports/relocations lines; stderr still streams and a failure still exits with its message.
+prepare_out="$(python3 "$SOTC_PC_PORT/scripts/prepare.py" "$stage" --out "$out")"
+printf '%s\n' "$prepare_out"
+prepare_entry_line="$(printf '%s\n' "$prepare_out" | grep -m1 'entry=' || true)"
+prepare_imports_line="$(printf '%s\n' "$prepare_out" | grep -m1 'imported symbols' || true)"
 
 # --- Step 3: artifact verification + digest cross-check -----------------------
 
@@ -138,10 +160,64 @@ if ! grep -q 'expected PS4 SELF' "$tmp/err"; then
 fi
 rm -rf "$tmp"
 
-# --- Summary ------------------------------------------------------------------
+# --- Step 5: headless Ghidra baseline (Review Focus #2/#3) ---------------------
+#
+# Import + auto-analyze the unwrapped ELF into a fresh project on every run — the rm -rf is what
+# makes re-runs deterministic (Review Focus #3). Ghidra requires the project location directory
+# to exist, and its ProjectLocator rejects any path element starting with '.' (this worktree
+# lives under ~/.local), so the location is passed as a dot-free temp symlink to out/re/ghidra —
+# the project files land under out/re/ghidra through it (verified: the location string is checked
+# once, at ProjectLocator construction). Script output is prefixed by headless — the log carries
+# `INFO  PrintSummary.java> summary … (GhidraScript)` — so the anchor matches the message body,
+# not the start of the line. Everything goes to out/re/ghidra.log; analysis of a game eboot takes
+# minutes.
 
+rm -rf "$out/ghidra" "$out/ghidra.log"
+mkdir -p "$out/ghidra"
+proj_link_dir="$(mktemp -d)"
+ln -s "$out/ghidra" "$proj_link_dir/ghidra"
+stamp "ghidra: analyzeHeadless $out/ghidra sotc -import $out/eboot.elf (takes minutes; log: $out/ghidra.log)"
+if ! "$GHIDRA_HOME/support/analyzeHeadless" "$proj_link_dir/ghidra" sotc \
+     -import "$out/eboot.elf" \
+     -scriptPath "$repo_root/tools/re/ghidra" \
+     -postScript PrintSummary.java \
+     -analysisTimeoutPerFile 3600 > "$out/ghidra.log" 2>&1; then
+  rm -rf "$proj_link_dir"
+  tail -n 40 "$out/ghidra.log" >&2
+  fail "analyzeHeadless failed — see $out/ghidra.log"
+fi
+rm -rf "$proj_link_dir"
+
+summary_line="$(grep -m1 'summary program=' "$out/ghidra.log" || true)"
+if [[ -z "$summary_line" ]]; then
+  tail -n 40 "$out/ghidra.log" >&2
+  fail "no summary line in $out/ghidra.log — the import or PrintSummary.java failed"
+fi
+printf '%s\n' "$summary_line"
+functions="$(printf '%s\n' "$summary_line" | sed -n 's/.*functions=\([0-9][0-9]*\).*/\1/p')"
+[[ -n "$functions" ]] || fail "cannot parse functions= from the Ghidra summary line: $summary_line"
+if [[ "$functions" -lt 1000 ]]; then
+  tail -n 40 "$out/ghidra.log" >&2
+  fail "Ghidra baseline is truncated: functions=$functions < 1000 — see $out/ghidra.log"
+fi
+error_count="$(grep -c 'ERROR' "$out/ghidra.log" || true)"
+stamp "ghidra: functions=$functions (>= 1000); ERROR lines: $error_count"
+
+# --- Summary ------------------------------------------------------------------
+# The block the RE notes quote: prepare.py's entry/image and imports/relocations lines, the
+# Ghidra summary line + ERROR count, the input's SHA-256, artifact paths, and total elapsed.
+
+elapsed="$(( $(date +%s) - started ))"
 stamp "summary"
-printf 're0-acceptance: uroot    %s\n' "$SOTC_UROOT"
-printf 're0-acceptance: elf      %s  %s bytes\n' "$out/eboot.elf" "$elf_bytes"
-printf 're0-acceptance: analysis %s\n' "$out/analysis.json"
-printf 're0-acceptance: PASS — SELF unwrapped via the port prepare.py; ELF + analysis.json verified; digest matches the extraction manifest; junk input rejected\n'
+printf 're0-acceptance: uroot     %s\n' "$SOTC_UROOT"
+printf 're0-acceptance: prepare   %s\n' "$prepare_entry_line"
+printf 're0-acceptance: prepare   %s\n' "$prepare_imports_line"
+printf 're0-acceptance: ghidra    %s\n' "$summary_line"
+printf 're0-acceptance: ghidra    ERROR lines: %s\n' "$error_count"
+printf 're0-acceptance: sha256    %s  eboot.bin\n' "$actual_hash"
+printf 're0-acceptance: elf       %s  %s bytes\n' "$out/eboot.elf" "$elf_bytes"
+printf 're0-acceptance: analysis  %s\n' "$out/analysis.json"
+printf 're0-acceptance: project   %s  (project sotc)\n' "$out/ghidra"
+printf 're0-acceptance: log       %s\n' "$out/ghidra.log"
+printf 're0-acceptance: elapsed   %ss\n' "$elapsed"
+printf 're0-acceptance: PASS — SELF unwrapped via the port prepare.py; ELF + analysis.json verified; digest matches the extraction manifest; junk input rejected; Ghidra baseline functions=%s >= 1000\n' "$functions"
