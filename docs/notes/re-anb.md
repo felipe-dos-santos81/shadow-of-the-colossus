@@ -1,10 +1,12 @@
 # RE-1 animation containers — `xff` family (`.anb` / `.skb`) + `.cani` (2026-10-18)
 
-RE-1 (first-playable plan, "decode the game's animation container family"): **"container family +
-skeleton bank (`.skb`) + the probe"**. Deliverables: `tools/re/anb/probe.py` and §1–§2 of this file.
-Every value below is measured with that probe (or quoted from the spike, marked as such); inputs
-stay read-only, derived artifacts land in the gitignored `out/re/anb/`, and only counts, offsets,
-tags, and identifiers appear here — no game content.
+RE-1 (first-playable plan, "decode the game's animation container family"): the `xff` container
+family (`.anb` / `.skb`), the sibling `.cani` bank, and the Ghidra front on the animation runtime in
+`eboot.elf`. Deliverables: `tools/re/anb/probe.py`, `tools/re/ghidra/FindAnim.java`, and §1–§5 of
+this file (the gate decision is §5). Every value below is measured with those tools (or quoted from
+the spike, marked as such); inputs stay read-only, derived artifacts land in the gitignored
+`out/re/anb/` and `out/re/`, and only counts, offsets, tags, and identifiers appear here — no game
+content.
 
 | | |
 |---|---|
@@ -12,7 +14,7 @@ tags, and identifiers appear here — no game content.
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; `python3` 3.12.12 (stdlib only) |
 | Repo / branch | `sotc-native`, `re1-decode` (base `2aa1d89`) |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
-| Probe | **`tools/re/anb/probe.py`** — `skb <file> [--json out]`, `classify <pat>... [--limit N] [--json out]`, `check-skb [--file F] [--glb G] [--json out] [--strict-plan]` |
+| Probe | **`tools/re/anb/probe.py`** — `skb <file> [--json out]`, `classify <pat>... [--limit N] [--json out]`, `anb <file> [--json out] [--curves out.json]`, `check-skb [--file F] [--glb G] [--json out] [--strict-plan]`, `check-curves [--file F] [--cani F] [--json out]` |
 | Spike (read-only) | `sotc-native/scratch/anb-probe/{report.txt,Program.cs}` (throwaway C# probe, 2026-10-18) |
 
 ```bash
@@ -322,7 +324,7 @@ Four content classes, all measured with the probe's per-record flags (`anb` mode
    convention-independent; only the counts move.
    `player_a_stand`'s hits include
    blocks of 4 at `0x1520` and `0x1A10`, e.g. `(0.74762, 0.03297, 0.03722, 0.66226)`, and
-   axis-aligned values like `(-1,0,0,0)`, `(0,0,0,1)`; the horse's include
+   axis-aligned values like `(-1,0,0,0)`, `(0,0,0,-1)`; the horse's include
    `(0.42626, 0.53636, -0.48916, -0.53976)` at `0x590`. They are **too sparse to be a curve** (no
    per-joint series), and their role (bind pose? pose snapshots? sparse keys?) is not decoded.
 2. **16-bit streams** dominate the payload. They are smooth under some stride readings (the probe's
@@ -418,7 +420,7 @@ part bank's bone list (a finding, not a gate failure). The horse: 69 tracks vs a
 
 | hypothesis | checkable prediction | outcome |
 |---|---|---|
-| int16 `(x,y,z)` Q15 triplets + derived `w` (6-byte keys) | unit norms; adjacent dots > 0.9 | **FAILS** — 428 keys `|v| > 1`; 693/1111 dots < 0.9; norm error 0.732 |
+| int16 `(x,y,z)` Q15 triplets + derived `w` (6-byte keys) | unit norms; adjacent dots > 0.9 | **FAILS** — 428 keys `\|v\| > 1`; 693/1111 dots < 0.9; norm error 0.732 |
 | same triplets as rotation vectors (×π, ×2π, ×1 rad) | continuous rotations | **FAILS** — 780/967, 759/967, 570/967 bad dots (per-record too) |
 | float32 quaternions are the keys | unit norms; a per-joint series | quaternions **verified** (norm 1.0000000) but only 17 (player) / 14 (horse) and no series — not a curve |
 | int8 quaternions (4-byte keys) | norm ≈ 127 | **FAILS** — norms 13…161 |
@@ -437,7 +439,7 @@ to stop before it) or a capture-derived reference pose to match against — beca
 smoothness is not self-verifying. Until then the S2 converter cannot consume `.anb` clips and the
 capture-derived fallback (first-playable design §5) is the armed path.
 
-## 4. Ghidra findings — the animation runtime in eboot.elf
+## 4 · Ghidra findings — the animation runtime in eboot.elf
 
 The RE-1 Ghidra front: where the retail runtime touches the `xff` family and the `.cani` bank.
 Everything below is quoted from the committed script and the logs it writes under the gitignored
@@ -448,7 +450,7 @@ Everything below is quoted from the committed script and the logs it writes unde
 | Date | 2026-10-18 (run stamps UTC) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64 |
 | Repo / branch | `sotc-native`, `re1-ghidra` (base `2c768cb`) |
-| Baseline | RE-0 acceptance re-run in this worktree: project `out/re/ghidra`, program `eboot.elf`, `x86:LE:64:default`, image base 0, **38,845 functions** (exit 0, 451 s) |
+| Baseline | RE-0 acceptance re-run in the `re1-ghidra` worktree: project `out/re/ghidra`, program `eboot.elf`, `x86:LE:64:default`, image base 0, **38,845 functions** (exit 0, 451 s) |
 | Script | **`tools/re/ghidra/FindAnim.java`** — mode 1 scan (default), mode 2 `decompile <addr>…`, mode 3 `follow <addr>…` (references to each address + decompile of the referencing functions) |
 | Scan log | `out/re/ghidra-anim.log` (16,674 lines; re-run twice — the `FindAnim:` lines are byte-identical, so the scan is deterministic) |
 | Follow / decompile logs | `out/re/ghidra-anim-follow{,2,3,4}.log`, `out/re/ghidra-anim-decompile.log`, `out/re/ghidra-anim-motion.log` |
@@ -461,10 +463,10 @@ proj_link_dir=$(mktemp -d); ln -s "$PWD/out/re/ghidra" "$proj_link_dir/ghidra"
 # mode 3 example (the loading-path walk): -postScript FindAnim.java follow 0x00671e70 0x00670680
 ```
 
-The dot-free `proj_link_dir` is the RE-0 R-E6 workaround, not a choice: this worktree lives under
-`~/.local`, and the plan's verbatim `… out/re/ghidra sotc …` form dies in `ProjectLocator` with
-`Path element starting with '.' is not permitted` (verified — the failure log is
-`out/re/ghidra-anim-verbatim.log`). `-scriptPath` is passed absolute for the same reason (the
+The dot-free `proj_link_dir` is the RE-0 R-E6 workaround, not a choice: the `re1-ghidra` worktree
+lives under `~/.local`, and the plan's verbatim `… out/re/ghidra sotc …` form dies in
+`ProjectLocator` with `Path element starting with '.' is not permitted` (verified — the failure log
+is `out/re/ghidra-anim-verbatim.log`). `-scriptPath` is passed absolute for the same reason (the
 verbatim relative form resolved fine, but absolute is what the record uses).
 
 ### 4.1 Scan totals (9 initialized blocks, 77,245,752 bytes)
@@ -570,15 +572,15 @@ list `DAT_03017840` (both `loadCdXffFile` and `loadCdMotionFile` push the basena
 
 After the fix-up, `FUN_00670680` allocates a `0x88`-byte runtime object, copies the 64-bit pair at
 data `+0x10` into its first 8 bytes, stores the path at `+0x10` of the object and registers it
-(`FUN_006c17f0`). **Feeds B2:** the runtime treats the container's header fields as **31-bit
-base-relative offsets with bit 31 as a state flag**, and re-bases/rotates them in place at load —
-the field set above (`+0x08…+0x44`) is the list B2's record-layout hypotheses should line up against
-the §1.1 header. Of the re-based fields only `0x28`, `0x3C` and `0x44` are tagged-pointer fields in
-§1.1's table, while §1.1 measures `0x08`/`0x1C` as 0, `0x0C` as the bank-variant flag, `0x24`/`0x40`
-as the constant 2 and `0x18` as opaque — so the re-based structure is not the raw file header (a
-runtime sub-structure, or a repurposed header), to be pinned down by B2. The per-element fix-ups
-(`FUN_0066dec0`, `FUN_0066f9a0`, `FUN_0066e460`) are the next pass's entry point to the record layout
-and to keyframe sampling; they are not decoded here.
+(`FUN_006c17f0`). **Feeds the record layout:** the runtime treats the container's header fields as
+**31-bit base-relative offsets with bit 31 as a state flag**, and re-bases/rotates them in place at
+load — the field set above (`+0x08…+0x44`) is the list the record-layout hypotheses should line up
+against the §1.1 header. Of the re-based fields only `0x28`, `0x3C` and `0x44` are tagged-pointer
+fields in §1.1's table, while §1.1 measures `0x08`/`0x1C` as 0, `0x0C` as the bank-variant flag,
+`0x24`/`0x40` as the constant 2 and `0x18` as opaque — so the re-based structure is not the raw
+file header (a runtime sub-structure, or a repurposed header); §3's decode does not pin it down.
+The per-element fix-ups (`FUN_0066dec0`, `FUN_0066f9a0`, `FUN_0066e460`) are the next pass's entry
+point to the record layout and to keyframe sampling; they are not decoded here.
 
 ### 4.5 `.cani` / `MINA` — the only code reference is a dev console command
 
@@ -599,7 +601,7 @@ entry**, and an exact-case scan for the string `cani` matches only once more in 
 `motsyncanim_def`; a case-insensitive scan finds 8 — the other 7 inside `CAnim…`/`SyncAnim…` C++
 symbol names).
 
-### 4.6 Where the names live — the asset name pools (for B2)
+### 4.6 Where the names live — the asset name pools
 
 - **Anim names.** 4,696 `anim/*.anb` names in one string region (first anim name start `0x01030993`,
   last `0x0105B300`) — the region holds 5,563 NUL-terminated strings, the other 867 being
@@ -621,7 +623,7 @@ symbol names).
   name `0x01030993` is pointed at by `0x016724B0` (a `0x40`-stride record whose `+0x30` field points
   back at the record start) and by the slot at file offset `0x2ED2168` (Ghidra
   `segment_8::000F7068` — the dynlibdata segment maps into its own address space, space = file −
-  `0x2DDB100`; the file−`0x4000` pseudo-VA `0x02ECE168` used elsewhere in this note lands in
+  `0x2DDB100`; the file−`0x4000` pseudo-VA `0x02ECE168` lands in
   `segment_2`'s zero-filled bss and reads as zeros), inside a `0x30`-stride index region. A raw
   u64-slot scan of the dump (rule: every 8-byte-aligned little-endian u64 in `out/re/eboot.elf` whose
   value lands in the stated range; the committed script does not scan pointer slots, so the rule is
@@ -646,3 +648,25 @@ symbol names).
   registry) and the asset-type descriptor tables at `0x017EFC38` / `0x024C0E78`.
 - `.cani` runtime loading: no evidence in this pass (§4.5); the format's runtime consumer is still
   open, and B2's `.cani` decode stands on the offline probe alone.
+
+## 5 · Conventions for later targets + the gate decision
+
+- RE notes are **`docs/notes/re-<target>.md`** — one per target, in this file's shape: measured
+  values quoted verbatim from the committed probe/scripts and their outputs, inputs read-only,
+  derived artifacts under the gitignored `out/` (counts, offsets, tags, and identifiers only — no
+  game content).
+- Findings that would change a converter are **proposals against the design docs**, never app-side
+  parsing: the app never parses original game containers at runtime, only converted assets — an RE
+  result feeds the offline converter pipeline (or proposes a spec change), never a runtime shortcut.
+
+**Gate decision — RE-1's S2 gate (`player_a_stand`'s per-joint curves, extracted and verified):**
+
+> **NOT MET** — the decode did not reach verified extraction → the capture-derived path activates (its plan is written against the port rig); decoding continues as background work.
+
+The evidence is §3: the container is decoded to the byte (§3.1–§3.2), the payload is classified
+(§3.3), but the key encoding is open (§3.5–§3.7) — `check-curves` exits 1 with the negative pinned
+(§3.6), and the joint-count cross-check is pinned to what the data shows. The capture-derived path
+(first-playable design §5) is therefore the armed path for S2, and decoding `.anb` clips continues
+as background work (§3.8: semantic ground truth for one record — the keyframe sampler or a
+capture-derived reference pose). The skeleton-bank front (`check-skb`, §2) is green and does not
+change this verdict.
