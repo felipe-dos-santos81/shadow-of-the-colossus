@@ -24,13 +24,19 @@ identifiers only.
 | Ghidra | **12.1.4**, portable bundle `~/code/mine/ghidra-bundle/dist/ghidra_12.1.4_PUBLIC` (`Ghidra/application.properties`: `application.version=12.1.4`) | headless import + auto-analysis (`support/analyzeHeadless`) |
 | JDK | bundle run: **Temurin 21.0.12.1** (`openjdk version "21.0.12.1" 2026-08-18 LTS`, first line of `out/re/ghidra.log`); PATH `java` is 27 (preflight checks existence only) | runs `analyzeHeadless` + the Java script |
 | `prepare.py` (port, read-only use) | `/Users/felipe.dos.santos/code/mine/ShadowOfTheColossus-PC/scripts/prepare.py`, 13,962 B, sha256 `9459d439056e9ca61758ad8f3023f0c1e46b085dd1524644446af00374856890` | SELF→ELF unwrap + `analysis.json` |
-| Ghidra-MCP bridge | bundle venv `bridge-mcp-ghidra` (port 8089); GUI launch: `make -C ~/code/mine/ghidra-bundle run` | interactive follow-up (§6) |
+| Ghidra-MCP bridge | bundle `.venv` executable `bridge-mcp-ghidra` (port 8089); GUI launch: `make -C ~/code/mine/ghidra-bundle run` | interactive follow-up (§6) |
 | REA | **6.3.0** (bundle `.rea/rea`, npm `rea-agents@6.3.0`) | artifact interrogation; analyzes through the same Ghidra without the GUI |
 
 Input: `eboot.bin` 65,314,052 B, sha256
 `21982727c6f97fd415b3af5e99c5e071619c4dcc2248787a701a31a45ab0a4e0` — matches the `uroot/eboot.bin`
 line of `SOTC-extract/logs/uroot.sha256` (the script fails on any mismatch, so a different dump is
 visible — Review Focus #5).
+
+Executable inventory: `eboot.bin` + the SDK modules `sce_module/libc.prx` and
+`sce_module/libSceFios2.prx` — the payload executables spec §2 names; the staged tree (§4) exposes
+the same set. The tree also carries `sce_sys/about/right.sprx` (16,025 B, SELF magic `4F153D1F` —
+the PS4 About module, outside the payload set). REA **6.3.0** is installed in the bundle; its
+payload-inventory run is **deferred until a target needs it** — no payload inventory is claimed here.
 
 ## 2 · Commands + artifacts
 
@@ -74,7 +80,7 @@ Committed tooling: `scripts/re0-acceptance.sh` + `tools/re/ghidra/PrintSummary.j
 
 ## 3 · Measured results
 
-prepare.py's stdout (verbatim):
+prepare.py's stdout + the script's digest line (verbatim):
 
 ```text
 SHADOW OF THE COLOSSUS™ | entry=0xf120 | image=60,123,812 bytes
@@ -138,8 +144,8 @@ re0-acceptance: PASS — SELF unwrapped via the port prepare.py; ELF + analysis.
    discovery needs the extraction's other outputs or a different pass, not this tree.
 4. **`entry=none` in the Ghidra line is the honest report (R-E7).** Ghidra's loader registers no
    external entry point for this probe ELF (`entry=none`, `imageBase=00000000`), while prepare.py
-   records the ELF-header entry `0xf120` — which the summary block prints directly above the
-   Ghidra line. No consumer parses `entry=` from the Java line.
+   records the ELF-header entry `0xf120` — which the summary block prints two lines above the
+   Ghidra line (the imports line sits between). No consumer parses `entry=` from the Java line.
 5. **Dot-prefixed path elements are rejected by Ghidra (R-E6).** `ProjectLocator` refuses any path
    element starting with `.` (no bypass property), and this worktree lives under `~/.local/…` — so
    both headless and GUI/MCP project opens must reach `out/re/ghidra/sotc.gpr` through a dot-free
@@ -181,9 +187,11 @@ Checklist to verify (free the port → GUI → MCP):
 2. `make -C ~/code/mine/ghidra-bundle run`.
 3. Open the project through a **dot-free alias** of `out/re/ghidra/sotc.gpr` (R-E6; e.g. `ln -s`
    into a temp dir — the GUI checks paths the same way headless does).
-4. From OpenCode: `list_instances` → `connect_instance` → `get_current_program_info` reports
-   `eboot.elf` (imported + analyzed).
-5. Record the instance/project names here (and spot-check `functions=38845`).
+4. From OpenCode: `list_instances` → `connect_instance`.
+5. Open `eboot.elf` in the CodeBrowser (or via the bridge's `open_program`, which operates on the
+   already-open project) — `get_current_program_info` needs a program open, not just a connection.
+6. `get_current_program_info` reports `eboot.elf` (imported + analyzed); record the instance/project
+   names here (and spot-check `functions=38845`).
 
 Note: **REA 6.3.0** (bundle) can analyze through the same Ghidra **without the GUI** — the
 interactive path is for follow-up/human inspection, not a prerequisite for headless analysis.
