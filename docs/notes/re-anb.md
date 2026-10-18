@@ -225,7 +225,7 @@ verbatim relative form resolved fine, but absolute is what the record uses).
 | `xff-magic` bytes `78 66 66 00` (u32 LE `0x00666678`) | **1** | data — inside the ASCII string `.xff` (§4.2) |
 | `xff-magic-rev` bytes `00 66 66 78` (u32 LE `0x78666600`) | **0** | — |
 | `oodle-8c0a` bytes `8c 0a` (u16 LE `0x0A8C`) | 156 | 61 code / 95 data — byte-pattern noise (§4.2) |
-| `str-anb` (`anb`, ci) | 4,697 | all data — the anim name pool (§4.6) |
+| `str-anb` (`anb`, ci) | 4,697 | all data — 4,696 pool names + the format string `anb %s` at `0x012D173B` (§4.6) |
 | `str-dot-anb` (`.anb`, ci) | 4,696 | all data — the same pool |
 | `str-skb` (`skb`, ci) | 83 | all data — 64 `skel/*.skb` names + 18 `skbush` texture names + the bare `.skb` (§4.6, §4.3) |
 | `str-mina` (`MINA`, ci) | 104 | **1 code** / 103 data (§4.5) |
@@ -276,11 +276,11 @@ handler pointer into code"), holding the asset loaders and the script-callable f
 | `loadCdWinTexFile` | `0x01606780` | `FUN_00671d30` |
 | `load_npe_file_main` | `0x016067e0` | `FUN_00696560` |
 
-(the name strings themselves are packed at `0x010253C0`–`0x010254A9`)
+(all 116 registry name strings are packed in `0x01024F2F`–`0x01025980`)
 
 Evidence: `follow 0x00671e70` → data references from `0x016066A0`, `0x017EFC38`, `0x024C0E78` — the
 handler pair `{load, unload}` also appears in asset-type descriptor tables at `0x017EFC38` /
-`0x024C0E78` (those also carry a sample asset name; `0x024C0E98` holds the logical name `OLD_BIRD`).
+`0x024C0E78` (those also carry a sample asset name; `0x024C0EA0` holds the logical name `OLD_BIRD`).
 The registry has **no incoming references** (`follow 0x01606630` and `follow 0x01606750` → 0), so the
 dispatcher reaches it by computing addresses — not resolved in this pass.
 
@@ -305,22 +305,29 @@ list `DAT_03017840` (both `loadCdXffFile` and `loadCdMotionFile` push the basena
 
 - the u32 triple at `+0x10/+0x14/+0x18` is rotated in place (new `+0x10` = old `+0x14`,
   new `+0x14` = old `+0x18`, new `+0x18` = old `+0x10`);
-- nine 32-bit fields — `+0x08`, `+0x0C`, `+0x10`, `+0x14`, `+0x18`, `+0x1C`, `+0x28`, `+0x40`,
-  `+0x44` — are checked as offsets: bit 31 clear, low 31 bits non-zero, and
+- nine 32-bit fields **of the header** — `+0x08`, `+0x0C`, `+0x18`, `+0x1C`, `+0x24`, `+0x28`,
+  `+0x3C`, `+0x40`, `+0x44` — are checked as offsets: bit 31 clear, low 31 bits non-zero, and
   `value + DAT_02f3b8c0 < DAT_02f08000` → bit 31 is set (`DAT_02f3b8c0` = the load base,
-  `DAT_02f08000` = the region limit). The resolved pointer is `(bit31 ? base : 0) + (value & 0x7FFFFFFF)`;
-- arrays reached from those fields are walked with per-element fix-ups `FUN_0066dec0`,
-  `FUN_0066f9a0` (selected by header flag `0x10000`) and `FUN_0066e460`, with counts read from the
-  same header (`+0x10`/`+0x14`).
+  `DAT_02f08000` = the region limit). The resolved pointer is `(bit31 ? base : 0) + (value & 0x7FFFFFFF)`.
+  The set is re-derived from the decompile and the raw disassembly (`orl $0x80000000` followed by
+  `movl …, 0xNN(%r13)` at `0x66FEB6`, `0x66FEEE`, `0x66FF1E`, `0x66FF4D`, `0x66FF81`, `0x66FFB5`,
+  `0x66FFE9`, `0x670255`, `0x6702BF`); `+0x24` is re-based only when the header's version byte is > 3
+  and flag `0x10000` is clear, `+0x3C` only when it is > 8 and the flag is clear;
+- `+0x10`/`+0x14` are **counts**, never re-based: the arrays reached from the re-based fields are
+  walked with per-element fix-ups `FUN_0066dec0`, `FUN_0066f9a0` (selected by header flag `0x10000`)
+  and `FUN_0066e460`. The same predicate also hits a nested field (`+0x18` of the structure a header
+  field points at, when the version is > 5 and `(header & 0xf000000000000) == 0x2000000000000`) and
+  array elements (stride 4).
 
 After the fix-up, `FUN_00670680` allocates a `0x88`-byte runtime object, copies the 64-bit pair at
 data `+0x10` into its first 8 bytes, stores the path at `+0x10` of the object and registers it
 (`FUN_006c17f0`). **Feeds B2:** the runtime treats the container's header fields as **31-bit
 base-relative offsets with bit 31 as a state flag**, and re-bases/rotates them in place at load —
 the field set above (`+0x08…+0x44`) is the list B2's record-layout hypotheses should line up against
-the §1.1 header (only `0x28` and `0x44` of it are tagged-pointer fields in §1.1's table; `0x10`/`0x14`
-are its last-section-offset/file-size pair — so the loader is reading a *sub-structure* of the
-container, or a second header variant; to be pinned down by B2). The per-element fix-ups
+the §1.1 header. Of the re-based fields only `0x28`, `0x3C` and `0x44` are tagged-pointer fields in
+§1.1's table, while §1.1 measures `0x08`/`0x1C` as 0, `0x0C` as the bank-variant flag, `0x24`/`0x40`
+as the constant 2 and `0x18` as opaque — so the re-based structure is not the raw file header (a
+runtime sub-structure, or a repurposed header), to be pinned down by B2. The per-element fix-ups
 (`FUN_0066dec0`, `FUN_0066f9a0`, `FUN_0066e460`) are the next pass's entry point to the record layout
 and to keyframe sampling; they are not decoded here.
 
@@ -339,14 +346,15 @@ FUN_001444e0(param_1,0x63616e69,local_d8);           /* fourcc: big-endian "cani
 byte 9** — and `0x63616E69` is the big-endian fourcc of `cani` (the engine's short-name encoding;
 memory bytes read `inac`). So the `.cani` signature exists in the binary, but in a **dev tool**
 (handler `FUN_00a26cf0`), not in a runtime loader: the loader registry (§4.3) has **no `.cani`
-entry**, and the string `cani` does not occur anywhere else in the image (the one other `cani`
-byte match is inside `motsyncanim_def`).
+entry**, and an exact-case scan for the string `cani` matches only once more in the image (inside
+`motsyncanim_def`; a case-insensitive scan finds 8 — the other 7 inside `CAnim…`/`SyncAnim…` C++
+symbol names).
 
 ### 4.6 Where the names live — the asset name pools (for B2)
 
-- **Anim names.** 4,696 `anim/*.anb` names in one string region (first anim name `0x01030993`, last
-  `0x0105B31B`) — the region holds 5,563 NUL-terminated strings, the other 867 being script/symbol
-  names; **613** of the `.anb` names are immediately followed by a logical name
+- **Anim names.** 4,696 `anim/*.anb` names in one string region (first anim name start `0x01030993`,
+  last `0x0105B300`) — the region holds 5,563 NUL-terminated strings, the other 867 being
+  script/symbol names; **613** of the `.anb` names are immediately followed by a logical name
   (`anim/camera_home_e3_start_cam.anb` → `E3_HOME_START_CAM`), the rest sit in runs of consecutive
   `.anb` names (last: `anim/objanim_boss_blood_bow.anb`).
 - **Skeleton names.** `skel/*.skb` and the matching `skel/*.weightinfo` as **64 adjacent pairs**
@@ -362,9 +370,16 @@ byte match is inside `motsyncanim_def`).
 - **`follow` on a name returns 0 references** — auto-analysis created no xrefs, because the names
   are reached through **absolute 64-bit pointers in static tables it did not annotate**: the anim
   name `0x01030993` is pointed at by `0x016724B0` (a `0x40`-stride record whose `+0x30` field points
-  back at the record start) and by `0x02ECE168` (a `0x30`-stride index region); a raw scan of the
-  image finds **14,935** 8-byte slots pointing into the anim pool, **394** into the skel pool and
-  **1,353** into the bone/motion table. The engine's `CP3Shadow` path templates
+  back at the record start) and by the slot at file offset `0x2ED2168` (Ghidra
+  `segment_8::000F7068` — the dynlibdata segment maps into its own address space, space = file −
+  `0x2DDB100`; the file−`0x4000` pseudo-VA `0x02ECE168` used elsewhere in this note lands in
+  `segment_2`'s zero-filled bss and reads as zeros), inside a `0x30`-stride index region. A raw
+  u64-slot scan of the dump (rule: every 8-byte-aligned little-endian u64 in `out/re/eboot.elf` whose
+  value lands in the stated range; the committed script does not scan pointer slots, so the rule is
+  stated here) finds **14,177** slots into the anim-name range `[0x01030993,0x0105B320)`, **266**
+  into the skel pool `[0x011A2201,0x011A2D94)` and **2,113** into the bone/motion table
+  `[0x0119EE6A,0x011A2201)`; an any-offset u64 scan adds unaligned coincidences (14,407 / 266 /
+  2,151). The engine's `CP3Shadow` path templates
   (`$/cp3shadow/`, `/app0/CP3Shadow/%s`, `$/cp3shadow/****/cp3shadowprecache.calt`, …) are separate
   strings; the ones followed here lead to dev tooling (a config UI registering the `.calt` files —
   `FUN_00533100`; a path-data export tool — `FUN_00689b80`; a text config parser — `FUN_007f6f90`).
