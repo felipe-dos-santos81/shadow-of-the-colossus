@@ -50,7 +50,7 @@ but the same little-endian field style; see §1.2.
 | `0x0E` | u16 | 0 (all files) | `0` |
 | `0x10` | u32 | offset of the file's **last section** (≤ size in all files; the section is ≥ 396 B) | `0x1060` |
 | `0x14` | u32 | **file size**, exact in all 4,512 files | `0x139C` = 5,020 |
-| `0x18` | 8 B | opaque: all zero in 3,451 files; otherwise 4 bytes of packer text + 4 zeros (of the 1,061 non-zero fields: 647 fully printable, 162 with control bytes, 252 with high-bit bytes) | `"yubi\0\0\0\0"` |
+| `0x18` | 8 B | opaque: all zero in 3,451 files; otherwise 4 bytes of packer text + 4 zeros (of the 1,061 non-zero fields: 647 fully printable, 162 control-only, 252 with high-bit bytes) | `"yubi\0\0\0\0"` |
 | `0x1C` | u32 | 0 (all files) | `0` |
 | `0x20` | u32 | tagged pointer | `0x0A1D00DC` |
 | `0x22` | u16 | **the file's 16-bit tag** — the high half of every pointer | `0x0A1D` |
@@ -78,9 +78,10 @@ but the same little-endian field style; see §1.2.
   full 4,512-file scope it is 400 B — 104 `.anb`, first `camera_debug_camera.anb`).
 - **`0x18` is opaque.** The 4 text bytes differ per file, never relate to that file's own names or
   to its siblings, and mostly consist of fragments of unrelated text (`"yubi"`, `"nigh"`, `"wpos"`,
-  `"ssio"`, `" 100"`, …); they are fully printable in 647 of the 1,061 non-zero fields, contain
-  control bytes in 162, and bytes ≥ `0x80` in 252. Working hypothesis: a packer buffer leftover
-  (uninitialized field). Treat as opaque; do not read as a pointer.
+  `"ssio"`, `" 100"`, …); they are fully printable in 647 of the 1,061 non-zero fields, contain a
+  control byte in 181 (162 of those with no byte ≥ `0x80`), and bytes ≥ `0x80` in 252. Working
+  hypothesis: a packer buffer leftover (uninitialized field). Treat as opaque; do not read as a
+  pointer.
 - **Tail tables.** Every container ends with one or two adjacent tables of 8-byte
   `{u32 offset, u32 tag}` entries, tags `0x102` (measured: `.skb` bone records / `.anb` descriptor
   fields) and `0x000`. Offsets are **relative to the container's string/data base `0x110`**
@@ -158,7 +159,7 @@ all 57 banks (0 failures).
 - **Name blob.** Starts at `0x110` in **57/57** files. Names are NUL-terminated ASCII, `Bone_*` /
   `OptBone_*`, in two runs: `player_a.skb` holds **52 names** — 29 core (`Bone_KOSI` … 
   `Bone_OYAYUBI_B_R`, blob `0x110..0x284`) then 23 optional (`OptBone_sword` … `OptBone_swordcase3`,
-  blob `0x9CC..0xBA3`). Extraction rule used by the probe: every NUL-terminated printable string
+  blob `0x9CC..0xBA2`). Extraction rule used by the probe: every NUL-terminated printable string
   whose text starts with `Bone_`/`OptBone_`, in file order.
 - **Bone records** (tail table tag `0x102`): a leading run at **stride `0x40`** — 29 records for
   `player_a.skb` (blob `0x180 + 0x40k`, file `0x290…`) — followed by **3 trailing section
@@ -244,8 +245,8 @@ file, not a pointer target.
 
 | offset | width | measured (both samples; full-population numbers in §3.1) | meaning |
 |---|---|---|---|
-| `0x90..0xC0` | 12 × u32 | `{0, X, ext_ptr, ptr, data_size, 0x10, 1, 0, 0, 0x110, 0, 0}` | "motion" descriptor: `X`/`ext_ptr` are pointers with *external* tags (0 for the character samples, non-zero in `objanim_*`), `ptr` = the data start |
-| `0xA0` | u32 | 7224 (`player_a_stand`), 2900 (horse) | **data size** = `table1_start − 0xB4` (4455/4455 against the *located* table 1; it fails only against the masked pointer read, §3.1) |
+| `0x90..0xC0` | 12 × u32 | `{0, X, ext_ptr, ptr, data_size, 0x10, 1, 0, 0, 0x110, 0, 0}` | "motion" descriptor: `ext_ptr` is a pointer with an *external* tag (all 4,455 files; its tag is below the file's); `X` is 0 in 3,188/4,455 (both samples 0) and mostly text-like when non-zero — opaque-with-exceptions, not read as a pointer; `ptr` = the data start |
+| `0xA0` | u32 | 7224 (`player_a_stand`), 2900 (horse) | **data size** = `table1_start − 0x110` (the value at `0xB4`; 4455/4455 against the *located* table 1; it fails only against the masked pointer read, §3.1) |
 | `0xB4` | u32 | `0x110` (4455/4455) | data offset — the same string/data base as `.skb` |
 | `0xC0` | u32 | **9** (4455/4455) | constant, semantics open |
 | `0xC4` | u32 | 58 / 69 | **count of *both* tail tables** |
@@ -279,7 +280,8 @@ file, not a pointer target.
   **walk-back-from-EOF rule *with the exact count*** — walking back stops at the first
   non-`{0x102,0x000}` tag and the **last `2*count` entries are [table 1][table 2]** (the walk's extra
   leading entries are the data region's trailing zero bytes, exactly as B1 saw). The `@0xA0`
-  data-size cross-check (`data_size == table1_start − 0xB4`) confirms the fallback's table 1 start.
+  data-size cross-check (`data_size == table1_start − 0x110`, the value at `0xB4`) confirms the
+  fallback's table 1 start.
   The probe reports which method it used; a future pass can read `@0xD4`/`@0xD8` directly and keep
   the walk-back purely as a cross-check.
 - **11 tagged pointers per file** (measured, both samples, no others anywhere): the 8 B1 fields
@@ -335,9 +337,9 @@ Four content classes, all measured with the probe's per-record flags (`anb` mode
 4. **4-byte-group blocks** at the end of many records where **three of the four stride-4 byte planes
    vary smoothly and the fourth is low-order noise** — the signature of a fixed-point value whose
    high bytes vary. Read big-endian and scaled by 2⁻³¹ the values lie in [−1, 1] and several blocks
-   are *symmetric with first == last* (`player_a_stand` `0x2F4..0x334`: 0.306678058 → 0.007934333 →
-   0.306678058, 16 values; 4-dp rounding gives 0.3067 → 0.0079 → 0.3067) — i.e. they look like a
-   looping component series, but a single 4-byte value is not a
+   are *symmetric with first == last* (`player_a_stand` `0x2F4..0x334`: 16 values, first == last =
+   0.306678058, trough 0.007934333 at index 10 (`0x31C`); at 4 dp: 0.3067 first/last, 0.0079
+   trough) — i.e. they look like a looping component series, but a single 4-byte value is not a
    quaternion and the packing is not decoded.
 
 ### 3.4 Timing model (inference and its evidence)
@@ -421,15 +423,19 @@ part bank's bone list (a finding, not a gate failure). The horse: 69 tracks vs a
 | hypothesis | checkable prediction | outcome |
 |---|---|---|
 | int16 `(x,y,z)` Q15 triplets + derived `w` (6-byte keys) | unit norms; adjacent dots > 0.9 | **FAILS** — 428 keys `\|v\| > 1`; 693/1111 dots < 0.9; norm error 0.732 |
-| same triplets as rotation vectors (×π, ×2π, ×1 rad) | continuous rotations | **FAILS** — 780/967, 759/967, 570/967 bad dots (per-record too) |
+| same triplets as rotation vectors (×π, ×2π, ×1 rad) | continuous rotations | **FAILS** — 780/967, 759/967, 570/967 bad dots (per-record too) † |
 | float32 quaternions are the keys | unit norms; a per-joint series | quaternions **verified** (norm 1.0000000) but only 17 (player) / 14 (horse) and no series — not a curve |
-| int8 quaternions (4-byte keys) | norm ≈ 127 | **FAILS** — norms 13…161 |
-| 4 × int16 quaternions (8/12/16/24/32-byte keys; LE/BE; 2³¹/2³⁰/2¹⁵) | unit-norm fraction high | **FAILS** — best unit fraction 0.20 |
-| `.cani` `CANIFrameData`-style records (variant codes `0x315`–`0x318`, `0x40F`–`0x41E`) | codes present | **FAILS** — 0 hits for `0x315`–`0x318` in the plaintext `.cani`; 3 incidental `0x412/0x418` hits only — the SOTC revision differs (B1 §1.2) |
+| int8 quaternions (4-byte keys) | norm ≈ 127 | **FAILS** — norms 13…161 † |
+| 4 × int16 quaternions (8/12/16/24/32-byte keys; LE/BE; 2³¹/2³⁰/2¹⁵) | unit-norm fraction high | **FAILS** — best unit fraction 0.20 † |
+| `.cani` `CANIFrameData`-style records (variant codes `0x315`–`0x318`, `0x40F`–`0x41E`) | codes present | **FAILS** — 0 hits for `0x315`–`0x318` in the plaintext `.cani`; 3 incidental `0x412/0x418` hits only — the SOTC revision differs (B1 §1.2) † |
 | `t2[i] = t1[i] + 4` (rotation/translation block pairs) | holds for all i | not a rule, but it recurs: the leading run is non-empty in **2749/4455** files and covers the whole table in **0/4455** (run length spans 0…112; 1706 have no leading match — §3.2) — semantics open |
 | record = `[240][32][u32][64]` (player 340-byte records) | the 8-word block = keys | structure **measured** (records 0/1/3/15 fit it, with a 4-byte marker before the floats in record 1); the float blocks are **not** unit quaternions (norms 0.17…0.97) |
 | the "wave" blocks are component curves | monotonic time or unit data | values are smooth and symmetric (first == last) but in [−1,1] as fixed-point; not times, not quaternions as stored |
 | bit-packed values (fixed N-bit fields) | N-bit extraction reproduces the smoothness | not found (no N tried made the noisy byte plane smooth) |
+
+† Exploration runs on uncommitted scratch scripts (2026-10-18) — the committed probe and
+`FindAnim.java` implement none of those readings, so the exact counts are as measured then, not
+reproducible from the committed tools.
 
 ### 3.8 Stopping point
 
