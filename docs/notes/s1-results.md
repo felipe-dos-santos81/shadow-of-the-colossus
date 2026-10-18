@@ -7,9 +7,9 @@ and listed with what *is* verified for each).
 
 | | |
 |---|---|
-| Date | 2026-10-17 (local −03; acceptance run stamped 2026-10-17T23:49Z) |
+| Date | 2026-10-17 (local −03; acceptance run stamped 2026-10-18T00:19Z) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64 (`uname -m` = `arm64`) |
-| Repo / branch | `sotc-native`, `s1-sdl-re0`; results recorded at `9f412d2` |
+| Repo / branch | `sotc-native`, `s1-sdl-re0`; app code `9f412d2`, acceptance script + notes `5f4ae50`, final-review fixes `ba535a7` |
 | Library (gitignored) | `SOTC_LIB` = `/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library` (main checkout's converted library; this worktree has no `out/library`) |
 | Acceptance script | **`scripts/s1-acceptance.sh`** (re-runnable: build → ctest → selftest status → 2 screenshots → summary) |
 | Run log (gitignored) | `out/s1-acceptance-run.log` |
@@ -26,16 +26,18 @@ SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library ./scrip
 
 The script configures/builds `app/` (viewer + tests + `mesh.metal` copied next to the binary — MSL
 source compiled by SDL at runtime; no metallib, plan ruling R2), runs the suite, requires the exact
-status line, and takes two screenshots (each checked for the `\x89PNG` magic and > 5000 bytes;
-the target file is deleted first so a stale PNG cannot mask a failed write). Unset `SOTC_LIB`
-falls back to `<repo>/out/library` and fails fast with a clear message when that directory is
-absent (verified: exit 1, `asset library not found: … (set SOTC_LIB)`).
+status line, and takes two screenshots (each checked for the `\x89PNG` magic, > 5000 bytes, and a
+non-uniform frame — a ≥ 30-level span in some channel of the viewer's own `s1-pixels` stats, since a
+solid clear-colour 2560×1440 frame compresses to ~146 KB and would pass the size floor; the target
+file is deleted first so a stale PNG cannot mask a failed write). Unset `SOTC_LIB` falls back to
+`<repo>/out/library` and fails fast with a clear message when that directory is absent (verified:
+exit 1, `asset library not found: … (set SOTC_LIB)`).
 
 **Suite** (`ctest --test-dir app/build --output-on-failure`):
 
 ```text
-1/2 Test #1: unit_tests .......................   Passed    3.05 sec
-2/2 Test #2: windowed_selftest ................   Passed    0.16 sec
+1/2 Test #1: unit_tests .......................   Passed    3.11 sec
+2/2 Test #2: windowed_selftest ................   Passed    0.15 sec
 100% tests passed out of 2
 ```
 
@@ -105,5 +107,5 @@ narrow window the arms clip at the sides (the camera fit uses the vertical FOV o
 - `out/s1/wander.png`, `out/s1/plank.png` — the acceptance screenshots.
 - `out/s1/window-wander.png`, `out/s1/window-wander-portrait.png` — live window captures
   (windowed presentation; portrait after the live resize).
-- `out/s1-acceptance-run.log` — the full script output quoted above.
+- `out/s1-acceptance-run.log` — the full script output quoted above (the kept run, from `ba535a7`).
 - `out/s1-interactive.log` — the interactive run's stdout (`s1-gpu`/`s1-scene` lines only, no errors).
