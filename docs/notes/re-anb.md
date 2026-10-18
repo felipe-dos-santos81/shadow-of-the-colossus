@@ -294,11 +294,13 @@ file, not a pointer target.
   1 × 8 B, 1 × 20 B, 1 × 280 B**.
 - **The t2 table's relation to t1 is not decoded (sample-scoped observations only).** In the two
   samples `t2[0] == 0` and `t2[i] == t1[i-1] + 4` for the leading run (16/57 entries for
-  `player_a_stand`, 27/68 for the horse). Neither part is a general rule: over all 4,455 files
-  `t2[0] == 0` holds for **1613/4455**, and the leading run length spans **0…112** —
-  `{0:1706, 1:335, 2:148, 3:105, 4:280, …, 32:82, …, 62:16, 76:6, 111:1, 112:1}` (files) — so the
-  "+4 shift" is an artifact of the two samples, not a format rule. What t2 means is **open**; it is
-  *not* a per-record "data pointer".
+  `player_a_stand`, 27/68 for the horse). Neither is a format *rule*, but the shift does recur: over
+  all 4,455 files `t2[0] == 0` holds for **1613/4455**, and the leading run is non-empty in
+  **2749/4455 (62%)** while covering the whole table in **0/4455** and being empty in **1706/4455**;
+  the run length spans 0…112 —
+  `{0:1706, 1:335, 2:148, 3:105, 4:280, …, 32:82, …, 62:16, 76:6, 111:1, 112:1}` (files). The two
+  samples made the "+4 shift" look like a rule; it is a majority pattern, not a universal one. What
+  t2 means is **open**; it is *not* a per-record "data pointer".
 - The horse's t1 list **starts with the three descriptor structures** (`0x78`, `0xB0`, `0xE8`);
   `player_a_stand`'s does not, although both files' `0x70..0x110` regions are structurally identical.
   Why the lists differ is open.
@@ -309,12 +311,15 @@ Four content classes, all measured with the probe's per-record flags (`anb` mode
 
 1. **Unit float32 quaternions — the only *verified* quaternion data in the files.** Norms are
    1.0000000 in float32 (well inside the gate's 1e-3). The counts are **convention-dependent and
-   stated as such**: the probe's flag is a per-record scan (16-byte stride, restarting after each
-   hit, records scanned independently), giving **17** quats in 9/58 records for `player_a_stand` and
-   **14** in 10/69 for the horse; a whole-file non-overlapping scan gives 17 / **15** (the horse's
-   extra window straddles a record boundary), and an independent 4-byte-aligned *overlapping* window
-   scan gives **19 / 27** (it also counts shifted windows, e.g. `0x1CCC`/`0x1CD0` inside the `0x1CC8`
-   window). The *unit norms* are convention-independent; only the counts move.
+   stated as such**: the probe's flag is a per-record scan that advances **4 bytes by default and 16
+   after each hit** (a literal 16-byte stride would give 12 / 7), records scanned independently —
+   giving **17** quats in 9/58 records for `player_a_stand` and **14** in 10/69 for the horse. The
+   same scan over the whole file gives 17 / **15**: for the horse it finds two windows the per-record
+   scan lacks (`0x590`, straddling records 14/15; `0x5A0`, fully inside record 15 — a phase artifact
+   of the `0x590` hit skipping it) and loses one (`0x59C`, fully inside record 15), net +1. An
+   independent 4-byte-aligned *overlapping* window scan gives **19 / 27** (it also counts shifted
+   windows, e.g. `0x1CCC`/`0x1CD0` inside the `0x1CC8` window). The *unit norms* are
+   convention-independent; only the counts move.
    `player_a_stand`'s hits include
    blocks of 4 at `0x1520` and `0x1A10`, e.g. `(0.74762, 0.03297, 0.03722, 0.66226)`, and
    axis-aligned values like `(-1,0,0,0)`, `(0,0,0,1)`; the horse's include
@@ -419,7 +424,7 @@ part bank's bone list (a finding, not a gate failure). The horse: 69 tracks vs a
 | int8 quaternions (4-byte keys) | norm ≈ 127 | **FAILS** — norms 13…161 |
 | 4 × int16 quaternions (8/12/16/24/32-byte keys; LE/BE; 2³¹/2³⁰/2¹⁵) | unit-norm fraction high | **FAILS** — best unit fraction 0.20 |
 | `.cani` `CANIFrameData`-style records (variant codes `0x315`–`0x318`, `0x40F`–`0x41E`) | codes present | **FAILS** — 0 hits for `0x315`–`0x318` in the plaintext `.cani`; 3 incidental `0x412/0x418` hits only — the SOTC revision differs (B1 §1.2) |
-| `t2[i] = t1[i] + 4` (rotation/translation block pairs) | holds for all i | sample-scoped only: in the two samples it holds for the leading run and **shifted by one** (`t2[i] = t1[i-1] + 4`); across all 4,455 files 1706 have no match and the run length spans 0…112 (§3.2) — semantics open |
+| `t2[i] = t1[i] + 4` (rotation/translation block pairs) | holds for all i | not a rule, but it recurs: the leading run is non-empty in **2749/4455** files and covers the whole table in **0/4455** (run length spans 0…112; 1706 have no leading match — §3.2) — semantics open |
 | record = `[240][32][u32][64]` (player 340-byte records) | the 8-word block = keys | structure **measured** (records 0/1/3/15 fit it, with a 4-byte marker before the floats in record 1); the float blocks are **not** unit quaternions (norms 0.17…0.97) |
 | the "wave" blocks are component curves | monotonic time or unit data | values are smooth and symmetric (first == last) but in [−1,1] as fixed-point; not times, not quaternions as stored |
 | bit-packed values (fixed N-bit fields) | N-bit extraction reproduces the smoothness | not found (no N tried made the noisy byte plane smooth) |
