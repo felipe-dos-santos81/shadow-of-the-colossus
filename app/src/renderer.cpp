@@ -18,11 +18,6 @@ struct MaterialUniforms {
 };
 static_assert(sizeof(MaterialUniforms) == 32, "Material uniform size changed");
 
-// No per-mesh transforms exist yet (the converter emits world-space geometry),
-// but vertex slot 1 is part of the shader contract, so every mesh draws with
-// the shared identity from math3d.h.
-const Mat4 kIdentity = mat4_identity();
-
 [[noreturn]] void throw_sdl_error(const std::string& what) {
     const char* error = SDL_GetError();
     if (error != nullptr && error[0] != '\0') {
@@ -600,8 +595,9 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
             continue;
         }
 
-        // Vertex slot 1: this mesh's model matrix (identity for now).
-        SDL_PushGPUVertexUniformData(cmd, 1, &kIdentity, sizeof(Mat4));
+        // Vertex slot 1: this mesh's model matrix — identity for a single-glb
+        // load, the instance's baked TRS in a composed scene.
+        SDL_PushGPUVertexUniformData(cmd, 1, &scene.meshes[i].model, sizeof(Mat4));
 
         // Fragment slot 0: this mesh's material factors.
         MaterialUniforms material{};

@@ -132,9 +132,188 @@ LocalTrs node_local_trs(const cgltf_node& node) {
     return out;
 }
 
-}  // namespace
+// The glb's skeleton — the converted models carry exactly one — appended to
+// `scene`, returning the node -> joint-slot map its clips resolve channels
+// against. `joint_of_node` maps a node index to its slot in the joint list, so
+// both parent links and animation channels can be resolved against the skin's
+// own order.
+std::vector<int> load_skin_into(Scene& scene, const cgltf_data& data) {
+    std::vector<int> joint_of_node(data.nodes_count, -1);
+    if (data.skins_count == 0) {
+        return joint_of_node;
+    }
 
-Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glbRelPath) {
+    const cgltf_skin& skin = data.skins[0];
+    for (cgltf_size i = 0; i < skin.joints_count; ++i) {
+        if (skin.joints[i] != nullptr) {
+            joint_of_node[cgltf_node_index(&data, skin.joints[i])] = static_cast<int>(i);
+        }
+    }
+
+    scene.skin.joints.resize(skin.joints_count);
+    for (cgltf_size i = 0; i < skin.joints_count; ++i) {
+        JointCpu& joint = scene.skin.joints[i];
+        joint.parent = -1;
+        joint.inverseBind = mat4_identity();
+
+        const cgltf_node* node = skin.joints[i];
+        if (node == nullptr) {
+            continue;  // malformed joint entry: keep the slot, not the data
+        }
+        joint.name = node->name != nullptr ? node->name : "";
+        const LocalTrs rest = node_local_trs(*node);
+        joint.restT = rest.t;
+        joint.restR = rest.r;
+        joint.restS = rest.s;
+        // Only a joint can be a joint's parent: an enclosing armature node
+        // (or the scene) leaves this joint a skeleton root.
+        if (node->parent != nullptr) {
+            joint.parent = joint_of_node[cgltf_node_index(&data, node->parent)];
+        }
+    }
+
+    // Inverse bind matrices; a skin without them binds in rest pose.
+    if (skin.inverse_bind_matrices != nullptr) {
+        const cgltf_accessor* inverse_bind = skin.inverse_bind_matrices;
+        for (cgltf_size i = 0; i < skin.joints_count && i < inverse_bind->count; ++i) {
+            float matrix[16] = {};
+            if (cgltf_accessor_read_float(inverse_bind, i, matrix, 16)) {
+                for (int k = 0; k < 16; ++k) {
+                    scene.skin.joints[i].inverseBind.m[k] = matrix[k];
+                }
+            }
+        }
+    }
+    return joint_of_node;
+}
+
+// The glb's clips, appended to `scene`: only channels that drive a skin joint
+// survive — a clip's helper-bone or camera channels have no joint to land on.
+// What is dropped is counted once per clip, so the loader never discards data
+// silently.
+void load_animations_into(Scene& scene, const cgltf_data& data,
+                          const std::vector<int>& joint_of_node,
+                          const std::string& model_path_string) {
+    for (cgltf_size a = 0; a < data.animations_count; ++a) {
+        const cgltf_animation& animation = data.animations[a];
+
+        AnimationCpu clip;
+        clip.name = animation.name != nullptr ? animation.name : "";
+        clip.duration = 0.0f;
+        int skipped_non_joint = 0;
+        int skipped_unsupported = 0;
+
+        for (cgltf_size c = 0; c < animation.channels_count; ++c) {
+            const cgltf_animation_channel& channel = animation.channels[c];
+            const cgltf_animation_sampler* sampler = channel.sampler;
+
+            if (sampler == nullptr || sampler->input == nullptr || sampler->output == nullptr) {
+                ++skipped_unsupported;
+                continue;
+            }
+            // A CUBICSPLINE key holds three values (in-tangent, value,
+            // out-tangent): reading them as LINEAR would mis-animate silently,
+            // so refuse the whole load instead.
+            if (sampler->interpolation == cgltf_interpolation_type_cubic_spline) {
+                throw std::runtime_error("animation \"" + clip.name + "\" channel " +
+                                         std::to_string(c) + " in " + model_path_string +
+                                         " uses CUBICSPLINE interpolation, which is not supported");
+            }
+            if (channel.target_node == nullptr) {
+                ++skipped_unsupported;
+                continue;
+            }
+            const int joint = joint_of_node[cgltf_node_index(&data, channel.target_node)];
+            if (joint < 0) {
+                ++skipped_non_joint;
+                continue;
+            }
+
+            int path = -1;
+            switch (channel.target_path) {
+                case cgltf_animation_path_type_translation: path = 0; break;
+                case cgltf_animation_path_type_rotation: path = 1; break;
+                case cgltf_animation_path_type_scale: path = 2; break;
+                default: break;  // morph-target weights are not TRS
+            }
+            if (path < 0) {
+                ++skipped_unsupported;
+                continue;
+            }
+
+            AnimationChannelCpu out;
+            out.joint = joint;
+            out.path = path;
+            out.interpolation =
+                sampler->interpolation == cgltf_interpolation_type_step ? 1 : 0;
+
+            const cgltf_accessor* input = sampler->input;
+            out.times.resize(input->count);
+            for (cgltf_size k = 0; k < input->count; ++k) {
+                float time = 0.0f;
+                cgltf_accessor_read_float(input, k, &time, 1);
+                out.times[k] = time;
+            }
+
+            // Rotations carry 4 floats per key, translations and scales 3.
+            const std::size_t components = path == 1 ? 4u : 3u;
+            const cgltf_accessor* output = sampler->output;
+            out.values.resize(output->count * components);
+            for (cgltf_size k = 0; k < output->count; ++k) {
+                float value[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                cgltf_accessor_read_float(output, k, value, components);
+                for (std::size_t i = 0; i < components; ++i) {
+                    out.values[k * components + i] = value[i];
+                }
+            }
+
+            if (!out.times.empty()) {
+                clip.duration =
+                    std::max(clip.duration, *std::max_element(out.times.begin(), out.times.end()));
+            }
+            clip.channels.push_back(std::move(out));
+        }
+
+        if (skipped_non_joint > 0 || skipped_unsupported > 0) {
+            std::fprintf(stderr,
+                         "sotc-viewer: animation \"%s\": skipped %d channel(s) "
+                         "(non-joint targets: %d, unsupported: %d)\n",
+                         clip.name.c_str(), skipped_non_joint + skipped_unsupported,
+                         skipped_non_joint, skipped_unsupported);
+        }
+        scene.animations.push_back(std::move(clip));
+    }
+}
+
+// A point through a column-major matrix (w = 1): the world position a composed
+// instance places a vertex at.
+Vec3 transform_point(const Mat4& matrix, Vec3 point) {
+    return Vec3{
+        matrix.m[0] * point.x + matrix.m[4] * point.y + matrix.m[8] * point.z + matrix.m[12],
+        matrix.m[1] * point.x + matrix.m[5] * point.y + matrix.m[9] * point.z + matrix.m[13],
+        matrix.m[2] * point.x + matrix.m[6] * point.y + matrix.m[10] * point.z + matrix.m[14]};
+}
+
+// How one glb lands in the target scene: the world matrix baked into every mesh
+// it contributes, the index its materials start at, and whether its skeleton
+// and clips are kept (only the player's are: a composed scene has one rig).
+struct GlbPlacement {
+    Mat4 model = mat4_identity();
+    int materialOffset = 0;
+    bool includeRig = false;
+};
+
+// Loads one glb into `scene`, appending its meshes, materials and textures —
+// and, when `placement.includeRig`, its skeleton and clips. Every contributed
+// mesh carries `placement.model`; material indices shift by
+// `placement.materialOffset` (texture indices need no shift: images append to
+// the scene's shared texture list, so their index already is global).
+// `have_bounds` is the caller's running "some vertex was seen" flag: the
+// scene's bounds are set from the first glb that has vertices and grown by each
+// later one, always in world space.
+void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
+                   const std::string& glbRelPath, const GlbPlacement& placement,
+                   bool& have_bounds) {
     const std::filesystem::path library = std::filesystem::weakly_canonical(libraryDir);
     const std::filesystem::path model_path = library / glbRelPath;
     const std::filesystem::path model_dir = model_path.parent_path();
@@ -145,18 +324,18 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 
     cgltf_result result = cgltf_parse_file(&options, model_path_string.c_str(), &document.data);
     if (result != cgltf_result_success) {
-        throw std::runtime_error("load_scene: cannot parse " + model_path_string + ": " +
+        throw std::runtime_error("cannot parse " + model_path_string + ": " +
                                  cgltf_result_name(result));
     }
     // GLB buffers are embedded; .gltf fixtures carry data URIs. Both are handled
     // here, so no external .bin is required.
     result = cgltf_load_buffers(&options, document.data, model_path_string.c_str());
     if (result != cgltf_result_success) {
-        throw std::runtime_error("load_scene: cannot load buffers of " + model_path_string + ": " +
+        throw std::runtime_error("cannot load buffers of " + model_path_string + ": " +
                                  cgltf_result_name(result));
     }
 
-    Scene scene;
+    // This glb's own vertex extent; merged into the scene's bounds at the end.
     Vec3 bounds_min{};
     Vec3 bounds_max{};
     bool have_vertex = false;
@@ -245,9 +424,11 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
                 cgltf_find_accessor(&primitive, cgltf_attribute_type_weights, 0);
 
             MeshCpu out;
+            out.model = placement.model;
             out.materialIndex =
                 primitive.material != nullptr
-                    ? static_cast<int>(cgltf_material_index(document.data, primitive.material))
+                    ? static_cast<int>(cgltf_material_index(document.data, primitive.material)) +
+                          placement.materialOffset
                     : -1;
 
             out.vertices.resize(position->count);
@@ -305,17 +486,21 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
                     }
                 }
 
+                // Bounds are world-space: the instance's placement, not the raw
+                // vertex (the identity model leaves a single-glb load unchanged).
+                const Vec3 world =
+                    transform_point(placement.model, Vec3{vertex.px, vertex.py, vertex.pz});
                 if (!have_vertex) {
-                    bounds_min = Vec3{vertex.px, vertex.py, vertex.pz};
-                    bounds_max = bounds_min;
+                    bounds_min = world;
+                    bounds_max = world;
                     have_vertex = true;
                 } else {
-                    bounds_min.x = std::min(bounds_min.x, vertex.px);
-                    bounds_min.y = std::min(bounds_min.y, vertex.py);
-                    bounds_min.z = std::min(bounds_min.z, vertex.pz);
-                    bounds_max.x = std::max(bounds_max.x, vertex.px);
-                    bounds_max.y = std::max(bounds_max.y, vertex.py);
-                    bounds_max.z = std::max(bounds_max.z, vertex.pz);
+                    bounds_min.x = std::min(bounds_min.x, world.x);
+                    bounds_min.y = std::min(bounds_min.y, world.y);
+                    bounds_min.z = std::min(bounds_min.z, world.z);
+                    bounds_max.x = std::max(bounds_max.x, world.x);
+                    bounds_max.y = std::max(bounds_max.y, world.y);
+                    bounds_max.z = std::max(bounds_max.z, world.z);
                 }
             }
 
@@ -358,150 +543,77 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
         scene.materials.push_back(std::move(out));
     }
 
-    // Skin: the converted models carry exactly one. `joint_of_node` maps a node
-    // index to its slot in the joint list, so both parent links and animation
-    // channels can be resolved against the skin's own order.
-    std::vector<int> joint_of_node(document.data->nodes_count, -1);
-    if (document.data->skins_count > 0) {
-        const cgltf_skin& skin = document.data->skins[0];
-        for (cgltf_size i = 0; i < skin.joints_count; ++i) {
-            if (skin.joints[i] != nullptr) {
-                joint_of_node[cgltf_node_index(document.data, skin.joints[i])] =
-                    static_cast<int>(i);
-            }
+    // The rig: a composed scene has exactly one skeleton and one clip list —
+    // the player's. An instance glb's rig is skipped, loudly, rather than
+    // folded in with joint indices that mean something else.
+    if (placement.includeRig) {
+        const std::vector<int> joint_of_node = load_skin_into(scene, *document.data);
+        load_animations_into(scene, *document.data, joint_of_node, model_path_string);
+    } else if (document.data->skins_count > 0 || document.data->animations_count > 0) {
+        std::fprintf(stderr,
+                     "sotc-viewer: %s: skeleton/clips skipped (a composed scene keeps the "
+                     "player's rig)\n",
+                     glbRelPath.c_str());
+    }
+
+    // Merge this glb's world-space extent into the scene's; a caller whose
+    // scene saw no vertices at all zeroes the bounds itself.
+    if (have_vertex) {
+        if (!have_bounds) {
+            scene.boundsMin = bounds_min;
+            scene.boundsMax = bounds_max;
+            have_bounds = true;
+        } else {
+            scene.boundsMin.x = std::min(scene.boundsMin.x, bounds_min.x);
+            scene.boundsMin.y = std::min(scene.boundsMin.y, bounds_min.y);
+            scene.boundsMin.z = std::min(scene.boundsMin.z, bounds_min.z);
+            scene.boundsMax.x = std::max(scene.boundsMax.x, bounds_max.x);
+            scene.boundsMax.y = std::max(scene.boundsMax.y, bounds_max.y);
+            scene.boundsMax.z = std::max(scene.boundsMax.z, bounds_max.z);
         }
+    }
+}
 
-        scene.skin.joints.resize(skin.joints_count);
-        for (cgltf_size i = 0; i < skin.joints_count; ++i) {
-            JointCpu& joint = scene.skin.joints[i];
-            joint.parent = -1;
-            joint.inverseBind = mat4_identity();
+}  // namespace
 
-            const cgltf_node* node = skin.joints[i];
-            if (node == nullptr) {
-                continue;  // malformed joint entry: keep the slot, not the data
-            }
-            joint.name = node->name != nullptr ? node->name : "";
-            const LocalTrs rest = node_local_trs(*node);
-            joint.restT = rest.t;
-            joint.restR = rest.r;
-            joint.restS = rest.s;
-            // Only a joint can be a joint's parent: an enclosing armature node
-            // (or the scene) leaves this joint a skeleton root.
-            if (node->parent != nullptr) {
-                joint.parent = joint_of_node[cgltf_node_index(document.data, node->parent)];
-            }
-        }
+Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glbRelPath) {
+    Scene scene;
+    bool have_bounds = false;
+    load_glb_into(scene, libraryDir, glbRelPath, GlbPlacement{.includeRig = true}, have_bounds);
+    if (!have_bounds) {
+        scene.boundsMin = Vec3{0.0f, 0.0f, 0.0f};
+        scene.boundsMax = Vec3{0.0f, 0.0f, 0.0f};
+    }
+    return scene;
+}
 
-        // Inverse bind matrices; a skin without them binds in rest pose.
-        if (skin.inverse_bind_matrices != nullptr) {
-            const cgltf_accessor* inverse_bind = skin.inverse_bind_matrices;
-            for (cgltf_size i = 0; i < skin.joints_count && i < inverse_bind->count; ++i) {
-                float matrix[16] = {};
-                if (cgltf_accessor_read_float(inverse_bind, i, matrix, 16)) {
-                    for (int k = 0; k < 16; ++k) {
-                        scene.skin.joints[i].inverseBind.m[k] = matrix[k];
-                    }
-                }
-            }
+Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
+                    const std::string& playerGlbRelPath) {
+    Scene scene;
+    bool have_bounds = false;
+
+    for (const ManifestInstance& instance : manifest.instances) {
+        const GlbPlacement placement{
+            .model = mat4_from_trs(instance.position, instance.rotation, instance.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+        };
+        try {
+            load_glb_into(scene, libraryDir, instance.glbRelPath, placement, have_bounds);
+        } catch (const std::runtime_error& error) {
+            // Name the manifest's own glb token: the resolved path alone is
+            // harder to match back to the instance that placed it.
+            throw std::runtime_error("compose_scene: instance \"" + instance.glbRelPath +
+                                     "\": " + error.what());
         }
     }
 
-    // Animations: only channels that drive a skin joint survive — a clip's
-    // helper-bone or camera channels have no joint to land on. What is dropped
-    // is counted once per clip, so the loader never discards data silently.
-    for (cgltf_size a = 0; a < document.data->animations_count; ++a) {
-        const cgltf_animation& animation = document.data->animations[a];
+    // The player: identity model, and the only rig the scene keeps.
+    load_glb_into(scene, libraryDir, playerGlbRelPath, GlbPlacement{.includeRig = true},
+                  have_bounds);
 
-        AnimationCpu clip;
-        clip.name = animation.name != nullptr ? animation.name : "";
-        clip.duration = 0.0f;
-        int skipped_non_joint = 0;
-        int skipped_unsupported = 0;
-
-        for (cgltf_size c = 0; c < animation.channels_count; ++c) {
-            const cgltf_animation_channel& channel = animation.channels[c];
-            const cgltf_animation_sampler* sampler = channel.sampler;
-
-            if (sampler == nullptr || sampler->input == nullptr || sampler->output == nullptr) {
-                ++skipped_unsupported;
-                continue;
-            }
-            // A CUBICSPLINE key holds three values (in-tangent, value,
-            // out-tangent): reading them as LINEAR would mis-animate silently,
-            // so refuse the whole load instead.
-            if (sampler->interpolation == cgltf_interpolation_type_cubic_spline) {
-                throw std::runtime_error("load_scene: animation \"" + clip.name + "\" channel " +
-                                         std::to_string(c) + " in " + model_path_string +
-                                         " uses CUBICSPLINE interpolation, which is not supported");
-            }
-            if (channel.target_node == nullptr) {
-                ++skipped_unsupported;
-                continue;
-            }
-            const int joint =
-                joint_of_node[cgltf_node_index(document.data, channel.target_node)];
-            if (joint < 0) {
-                ++skipped_non_joint;
-                continue;
-            }
-
-            int path = -1;
-            switch (channel.target_path) {
-                case cgltf_animation_path_type_translation: path = 0; break;
-                case cgltf_animation_path_type_rotation: path = 1; break;
-                case cgltf_animation_path_type_scale: path = 2; break;
-                default: break;  // morph-target weights are not TRS
-            }
-            if (path < 0) {
-                ++skipped_unsupported;
-                continue;
-            }
-
-            AnimationChannelCpu out;
-            out.joint = joint;
-            out.path = path;
-            out.interpolation =
-                sampler->interpolation == cgltf_interpolation_type_step ? 1 : 0;
-
-            const cgltf_accessor* input = sampler->input;
-            out.times.resize(input->count);
-            for (cgltf_size k = 0; k < input->count; ++k) {
-                float time = 0.0f;
-                cgltf_accessor_read_float(input, k, &time, 1);
-                out.times[k] = time;
-            }
-
-            // Rotations carry 4 floats per key, translations and scales 3.
-            const std::size_t components = path == 1 ? 4u : 3u;
-            const cgltf_accessor* output = sampler->output;
-            out.values.resize(output->count * components);
-            for (cgltf_size k = 0; k < output->count; ++k) {
-                float value[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                cgltf_accessor_read_float(output, k, value, components);
-                for (std::size_t i = 0; i < components; ++i) {
-                    out.values[k * components + i] = value[i];
-                }
-            }
-
-            if (!out.times.empty()) {
-                clip.duration =
-                    std::max(clip.duration, *std::max_element(out.times.begin(), out.times.end()));
-            }
-            clip.channels.push_back(std::move(out));
-        }
-
-        if (skipped_non_joint > 0 || skipped_unsupported > 0) {
-            std::fprintf(stderr,
-                         "sotc-viewer: animation \"%s\": skipped %d channel(s) "
-                         "(non-joint targets: %d, unsupported: %d)\n",
-                         clip.name.c_str(), skipped_non_joint + skipped_unsupported,
-                         skipped_non_joint, skipped_unsupported);
-        }
-        scene.animations.push_back(std::move(clip));
+    if (!have_bounds) {
+        scene.boundsMin = Vec3{0.0f, 0.0f, 0.0f};
+        scene.boundsMax = Vec3{0.0f, 0.0f, 0.0f};
     }
-
-    scene.boundsMin = have_vertex ? bounds_min : Vec3{0.0f, 0.0f, 0.0f};
-    scene.boundsMax = have_vertex ? bounds_max : Vec3{0.0f, 0.0f, 0.0f};
     return scene;
 }
