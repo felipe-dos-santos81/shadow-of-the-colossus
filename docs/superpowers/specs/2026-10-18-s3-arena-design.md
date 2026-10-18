@@ -25,6 +25,18 @@ Done = a runnable artifact on this Mac: arena ground + props + composition from 
 cycle — reference captures of Wander's idle + the horse. The S2 sign-off ("plays a
 converted clip correctly") lands when a real clip exists; §4 pins what happens meanwhile.
 
+**Builder calls pinned here (2026-10-18, flagged for veto):**
+
+- **Extent** — the arena is the bounded walkable complex: the `arena_01` +
+  `arena_01_entrance` level sets. The surrounding region is out of scope (wider map
+  scales are a later milestone; the user's "first walkable place" framing).
+- **Movement model** — ground-follow + arena-edge clamp; no wall/prop collision
+  (A-2: no physics engine; collision is S4's RE-5 pull). Clipping is accepted for S3.
+- **Animation scope** — S3 requires S2's delivered clip (the idle demo) and uses the
+  labeled stand-in for locomotion. If the decode cracks during W3, an idle/walk swap is
+  an allowed stretch; locomotion clip selection and the converter's `player_*`
+  locomotion scope are the follow-on milestone, not S3.
+
 ## 2 · Workstreams (≤4 agents)
 
 | # | Workstream | Delivers | RE dependency |
@@ -85,6 +97,11 @@ Independence: W1 never blocks on W2/W3; findings cross as manifests/notes, never
   new mining tool or a `bp-convert` extension, following the M0 catalog/acceptance pattern.
 - The app's composition loader consumes **manifests only** (offline-first: no original
   containers at runtime).
+- **If reference resolution stalls (builder call, 2026-10-18):** a bounded Ghidra pass on
+  the `.fs`/workspace loader is the allowed escalation (same pattern as RE-1's "data
+  mining first; Ghidra as needed"). A curated composition may appear only as a **labeled
+  demo aid** — the done-line's "composition from data" must hold; if neither data nor
+  Ghidra resolves it, stop and re-plan with the user.
 
 ## 6 · Constraints (inherited, unchanged)
 
@@ -92,7 +109,21 @@ Windowed; cursor never captured; game tree read-only; offline-first; personal us
 redistribution; ≤4 concurrent agents; typed commits; docs are the spec; acceptance =
 scripts + measured numbers; RE answers land as `docs/notes/re-*.md` + converter inputs.
 
-## 7 · What's left to the builder
+## 7 · Builder-check resolutions (2026-10-18)
+
+A cold-read planner raised four questions; all four resolved as builder calls (flagged for
+veto) — no question round was needed:
+
+1. **Arena extent** → bounded complex (`arena_01` + `arena_01_entrance`); region out of
+   scope (§1).
+2. **Movement/collision model** → ground-follow + edge clamp; no prop collision; clipping
+   accepted for S3 (§1).
+3. **Animation scope** → S2's delivered clip + labeled stand-in; conditional idle/walk
+   swap allowed; locomotion selection is the follow-on (§1).
+4. **Mining-stall fallback** → bounded Ghidra escalation; curated composition only as a
+   labeled aid; full stall → stop + re-plan (§5).
+
+## 8 · What's left to the builder
 
 The three implementation plans; the manifest format's fields; movement/camera feel
 constants; the capture script's exact interface; the composition loader's boundaries; the
