@@ -53,12 +53,15 @@ Findings that shaped this cycle's direction — recorded here, not decisions:
   bone names (Bone_root, Bone_HARA, fringe…), JOINTS_0/WEIGHTS_0 skin weights; no
   animation tracks yet; joints hold bind matrices until animation lands (aqua notes
   §11: switching to TRS is a mechanical substitution).
-- **RE-1 lead** — the vendored library already parses BluePoint's `CANI` animation
-  container (position/quaternion/scale channels, fps, frame sets, vertex-morph tracks,
-  compression handling; community-credited notes). Object animations ship as `.cani`
-  files in the tree; the actor bank is `.anb` (`xff` magic `78 66 66 00`, recorded in
-  the 2026-10-15 design). The RE-1 spike's first experiment: how close `.anb` sits to
-  that parser; Ghidra + the community notes remain the fallback.
+- **RE-1 spike outcome (2026-10-18)** — the vendored library's `CANI` parser does
+  **not** fit these files: 0/900 real files parse (it matches a different revision;
+  the library's author publicly confirms SOTC's animations were never decoded). RE-1
+  is genuine reverse engineering. The decode starts from mapped structure —
+  Oodle-compressed `.cani`/`.skb` (the compression handler works), a 30 fps field,
+  joint counts matching sibling skeletons, offset tables, `MINA` ("ANIM") v9 footers —
+  plus the strongest lever: the animation runtime is Bluepoint's own code inside
+  `eboot.bin`, already in the RE-0 Ghidra baseline. The capture-derived path remains
+  the labeled fallback (§5).
 - **Reference captures have a workflow** — the dev-only port records/replays pad
   routes (`BB_PAD_RECORD`, F9) and compares screenshots.
 
@@ -77,5 +80,7 @@ capture"; no captures exist yet. The workflow:
 - It captures **Wander's idle and the horse**; the comparison is side-by-side stills
   at pinned times.
 - **The user signs off** on "correctly" — reference-tuned, not frame-exact (D7).
+- **Activation:** this workflow runs when RE-1's decode gate is not met (§3); with the
+  gate met, clips come from the normal converter pipeline instead.
 
 *Personal-use fan project. No game assets are distributed from this repository.*
