@@ -62,10 +62,14 @@ but the same little-endian field style; see §1.2.
 | `0x50..0x70` | 8 × u32 | the **untagged offsets of the 8 pointers, in the same order** | `DC DC 104 78 B8 C0 70 FC` |
 | `0x70..0x110` | 0xA0 B | opaque descriptor region (measured shape, semantics not decoded) | — |
 
-- **Tagged pointers.** A pointer is `tag << 16 | offset`, where `tag` is the u16 at `0x22` and
+- **Tagged pointers.** A pointer is `(tag << 16) + offset`, where `tag` is the u16 at `0x22` and
   `offset` is a file offset. Verified for all 8 pointer fields in all 4,512 files (the tag field
   varies per file — e.g. `0x0A1D` here, `0x0A25` for `player_a_stand.anb` — and is the same value in
   every pointer of a file). The `0x50` mirror table always reproduces the offsets.
+  **B2 correction (§3.1):** the form is *addition with carry*, not `tag<<16 | offset16` — an offset
+  `≥ 0x10000` carries into the tag half (measured on the `.anb` table pointers: 83 files for table 1,
+  86 for table 2, deltas up to `0xB0000`). Every one of these 8 header pointers has an offset
+  `< 0x10000` in all 4,455 `.anb`, so B1's bitwise-or reading coincides with the arithmetic here.
 - **`0x10` (last section).** Measured ≤ size in all 4,512 files; the section it starts is ≥ 396 B —
   the four smallest are the 556-byte banks `gextail_a.skb`, `guard_c_head.skb`, `guard_d_head.skb`,
   `guard_e_head.skb` (396 B each; among `.skb` only, the next smallest is 412 B, while across the
@@ -236,52 +240,65 @@ region turns out to be a fixed set of descriptor structures — the *same shape 
 (`{0,1,0,0}` + `0x00010003` + the literal string `.rodata` at `0xFC`) — the string is part of the
 file, not a pointer target.
 
-| offset | width | measured (both samples + 300-file sample) | meaning |
+| offset | width | measured (both samples; full-population numbers in §3.1) | meaning |
 |---|---|---|---|
 | `0x90..0xC0` | 12 × u32 | `{0, X, ext_ptr, ptr, data_size, 0x10, 1, 0, 0, 0x110, 0, 0}` | "motion" descriptor: `X`/`ext_ptr` are pointers with *external* tags (0 for the character samples, non-zero in `objanim_*`), `ptr` = the data start |
-| `0xA0` | u32 | 7224 (`player_a_stand`), 2900 (horse) | **data size** = `table1_start − 0xB4` (300/300 sampled; the 5 exceptions are the §3.1 variant) |
-| `0xB4` | u32 | `0x110` (300/300) | data offset — the same string/data base as `.skb` |
-| `0xC0` | u32 | **9** (300/300) | constant, semantics open |
+| `0xA0` | u32 | 7224 (`player_a_stand`), 2900 (horse) | **data size** = `table1_start − 0xB4` (4455/4455 against the *located* table 1; it fails only against the masked pointer read, §3.1) |
+| `0xB4` | u32 | `0x110` (4455/4455) | data offset — the same string/data base as `.skb` |
+| `0xC0` | u32 | **9** (4455/4455) | constant, semantics open |
 | `0xC4` | u32 | 58 / 69 | **count of *both* tail tables** |
-| `0xC8` | u32 | **1** (300/300) | constant |
-| `0xCC`, `0xD0` | u32 | tagged pointers | table 1 / table 2 pointers; `0xD4`/`0xD8` mirror the offsets untagged |
+| `0xC8` | u32 | **1** (4455/4455) | constant |
+| `0xCC`, `0xD0` | u32 | tagged pointers | table 1 / table 2 pointers: `(tag<<16) + offset`, **addition with carry** (§3.1); `0xD4`/`0xD8` hold the exact offsets untagged |
 | `0x10` | u32 | 0x1BF4 / 0xB10 | "last section" — in the character samples this is a block boundary *inside* the data region, not a separate tail (B1's §1.1 scope note); `objanim_*` samples can point into the header instead (`objanim_leo_a_run.anb`: `0x44`) |
 
 - **The tail tables are exact now.** B1 walked back from EOF and absorbed leading zero bytes, so its
   counts were "approximate" (119 vs ~116 for `player_a_stand`). The header's pointers give the exact
   rule: **both** tables hold `count` = u32 `@0xC4` entries of 8-byte `{u32 offset, u32 tag}`; table 1
-  starts at `@0xCC`'s low half (tags all `0x102`), table 2 at `@0xD0`'s (tags all `0x000`), and the two
-  are **contiguous**: `t2p == t1p + 8*count`. Measured: contiguity **300/300** sampled `.anb`
-  (plus 60/60 `anb-v0`), `@0xD0` agrees 299/300 (`eel_b_death.anb`'s points into the header —
-  contiguity still locates the table), tables end at EOF **293/300**. `player_a_stand`: table 1
-  `@0x1D48` (58 entries), table 2 `@0x1F18` (58), ends at EOF. The "119 entries" B1 measured for this
-  file = 116 real entries + 3 trailing zero entries of the data region (the 24 bytes at
-  `0x1D30..0x1D48`).
-- **7/300 sampled files are a variant** (`girl_a_demo_end08_cut015.anb`, `eel_b_death.anb`, and five
-  other `*_demo*`/`*_cut*` clips; 4/120 in a second sample): there the **header's table pointers are
-  0x10000 short of the real tables** (`girl_a…`: `@0xCC` says `0x10B4`, the real table 1 is at
-  `0x110B4`; `player_a_demo01_cut15.anb`: `0xBC58` vs `0x1BC58`) and the entries at the stale
-  location are payload bytes, not offsets. The **walk-back-from-EOF rule *with the exact count*
-  locates them**: walking back stops at the first non-`{0x102,0x000}` tag, and the **last `2*count`
-  entries are [table 1][table 2]** (the walk's extra leading entries are the data region's trailing
-  zero bytes, exactly as B1 saw). The probe uses the header pointers when they are plausible and
-  falls back to this rule otherwise, reporting which was used; the `@0xA0` data-size cross-check
-  (`data_size == table1_start − 0xB4`) confirms the fallback's table 1 start in both variants.
-  The gate file is the common variant.
+  starts at the offset in `@0xD4` (tags all `0x102`), table 2 at `@0xD8`'s (tags all `0x000`), and the
+  two are **contiguous**: `t2p == t1p + 8*count`. Measured on all 4,455 `.anb`: the untagged mirrors
+  locate valid contiguous tables that end exactly at EOF — **4455/4455** (plus 60/60 `anb-v0`).
+  `player_a_stand`: table 1 `@0x1D48` (58 entries), table 2 `@0x1F18` (58), ends at EOF. The
+  "119 entries" B1 measured for this file = 116 real entries + 3 trailing zero entries of the data
+  region (the 24 bytes at `0x1D30..0x1D48`).
+- **The tagged pointer is `(tag<<16) + offset` — addition with carry, not `tag<<16 | offset16`.**
+  Measured on all 4,455 `.anb`: `u32@0xCC == (tag<<16) + u32@0xD4` and `u32@0xD0 == (tag<<16) +
+  u32@0xD8` — **4455/4455**; the untagged `@0xD4`/`@0xD8` equal the exact offsets (4455/4455). B1's
+  §1.1 read (`tag<<16 | offset16`) coincides with this while the offset is `< 0x10000` — true for
+  every one of the 8 header pointers (`0x20..0x48`) in all 4,455 files — but **not** for the table
+  pointers: an offset `>= 0x10000` carries into the tag half, so the low 16 bits are a truncation.
+  Measured: 83 files have table 1's offset `>= 0x10000` (deltas `0x10000×{1:63, 2:14, 3:2, 4:1, 8:2,
+  11:1}`, i.e. up to `0xB0000` — `objanim_demo_end07_cut001.anb`), 86 files for table 2 (table 2
+  straddles the boundary in 3 more). The class is **not** a demo/cut quirk: it is exactly "the table
+  lies beyond 64 KiB" and includes boot files (`bird_a_boot`, `snake_c_boot`, `eel_b_boot`) and large
+  `objanim_*`. `eel_b_death.anb` is *not* an exception: `@0xD0` = `0x0B120108` → offset `0x10108`
+  (its `@0xD8` mirror), the correct table 2 — my B2 draft misread it through the mask.
+- **The probe's behavior is unaffected** (verified 4455/4455): it reads the low half (B1's shape) and,
+  when that read cannot locate a plausible contiguous pair, falls back to the
+  **walk-back-from-EOF rule *with the exact count*** — walking back stops at the first
+  non-`{0x102,0x000}` tag and the **last `2*count` entries are [table 1][table 2]** (the walk's extra
+  leading entries are the data region's trailing zero bytes, exactly as B1 saw). The `@0xA0`
+  data-size cross-check (`data_size == table1_start − 0xB4`) confirms the fallback's table 1 start.
+  The probe reports which method it used; a future pass can read `@0xD4`/`@0xD8` directly and keep
+  the walk-back purely as a cross-check.
 - **11 tagged pointers per file** (measured, both samples, no others anywhere): the 8 B1 fields
-  (`0x20..0x48`), `0x9C` (data start, offset `0x110`), and `0xCC`/`0xD0` (the tables).
+  (`0x20..0x48`, offsets `< 0x10000` in all files), `0x9C` (data start, offset `0x110`), and
+  `0xCC`/`0xD0` (the tables).
 
 ### 3.2 The record map (measured)
 
 - Table 1's offsets are **record starts**; a record runs to the next t1 offset (the last one to
-  `t1p`). Sizes are heterogeneous but always multiples of 4:
+  `t1p`). Sizes are heterogeneous but always multiples of 4 (full histograms, summing to the record
+  count):
   `player_a_stand` 58 records: 32 × 4 B, 12 × 340 B, 4 × 176 B, 2 × 12 B, singles 356/360/412/72/516/44/20/300;
-  horse 69 records: 35 × 4 B, 18 × 100 B, 9 × 56 B, 1 × 136 B, 1 × 88 B, 1 × 64 B.
-- **The t2 pairing rule**: `t2[0] == 0` and `t2[i] == t1[i-1] + 4` for the leading run (measured
-  16/57 entries for `player_a_stand`, 27/68 for the horse); the rule then breaks and the t2 values
-  continue as a second ascending run that points *inside* the records. What t2 means is **not**
-  decoded; it is *not* a per-record "data pointer" (the rule is shifted by one and only holds for the
-  leading run).
+  horse 69 records: 35 × 4 B, 18 × 100 B, 9 × 56 B, 1 × 136 B, 1 × 88 B, 1 × 64 B, **1 × 12 B,
+  1 × 8 B, 1 × 20 B, 1 × 280 B**.
+- **The t2 table's relation to t1 is not decoded (sample-scoped observations only).** In the two
+  samples `t2[0] == 0` and `t2[i] == t1[i-1] + 4` for the leading run (16/57 entries for
+  `player_a_stand`, 27/68 for the horse). Neither part is a general rule: over all 4,455 files
+  `t2[0] == 0` holds for **1613/4455**, and the leading run length spans **0…112** —
+  `{0:1706, 1:335, 2:148, 3:105, 4:280, …, 32:82, …, 62:16, 76:6, 111:1, 112:1}` (files) — so the
+  "+4 shift" is an artifact of the two samples, not a format rule. What t2 means is **open**; it is
+  *not* a per-record "data pointer".
 - The horse's t1 list **starts with the three descriptor structures** (`0x78`, `0xB0`, `0xE8`);
   `player_a_stand`'s does not, although both files' `0x70..0x110` regions are structurally identical.
   Why the lists differ is open.
@@ -291,10 +308,17 @@ file, not a pointer target.
 Four content classes, all measured with the probe's per-record flags (`anb` mode):
 
 1. **Unit float32 quaternions — the only *verified* quaternion data in the files.** Norms are
-   1.0000000 in float32 (well inside the gate's 1e-3). `player_a_stand`: 17 quats in 9/58 records
-   (blocks of 4 at `0x1520` and `0x1A10`, e.g. `(0.74762, 0.03297, 0.03722, 0.66226)`, and
-   axis-aligned values like `(-1,0,0,0)`, `(0,0,0,1)`); horse: 14 quats in 10/69 records (e.g.
-   `(0.42626, 0.53636, -0.48916, -0.53976)` at `0x590`). They are **too sparse to be a curve** (no
+   1.0000000 in float32 (well inside the gate's 1e-3). The counts are **convention-dependent and
+   stated as such**: the probe's flag is a per-record scan (16-byte stride, restarting after each
+   hit, records scanned independently), giving **17** quats in 9/58 records for `player_a_stand` and
+   **14** in 10/69 for the horse; a whole-file non-overlapping scan gives 17 / **15** (the horse's
+   extra window straddles a record boundary), and an independent 4-byte-aligned *overlapping* window
+   scan gives **19 / 27** (it also counts shifted windows, e.g. `0x1CCC`/`0x1CD0` inside the `0x1CC8`
+   window). The *unit norms* are convention-independent; only the counts move.
+   `player_a_stand`'s hits include
+   blocks of 4 at `0x1520` and `0x1A10`, e.g. `(0.74762, 0.03297, 0.03722, 0.66226)`, and
+   axis-aligned values like `(-1,0,0,0)`, `(0,0,0,1)`; the horse's include
+   `(0.42626, 0.53636, -0.48916, -0.53976)` at `0x590`. They are **too sparse to be a curve** (no
    per-joint series), and their role (bind pose? pose snapshots? sparse keys?) is not decoded.
 2. **16-bit streams** dominate the payload. They are smooth under some stride readings (the probe's
    `triplet` column: relative mean |Δ| of the stride-6 channel, 0.05–0.52 for the player's records)
@@ -304,8 +328,9 @@ Four content classes, all measured with the probe's per-record flags (`anb` mode
 4. **4-byte-group blocks** at the end of many records where **three of the four stride-4 byte planes
    vary smoothly and the fourth is low-order noise** — the signature of a fixed-point value whose
    high bytes vary. Read big-endian and scaled by 2⁻³¹ the values lie in [−1, 1] and several blocks
-   are *symmetric with first == last* (`player_a_stand` `0x2F4..0x334`: 0.3066 → 0.0079 → 0.3066,
-   16 values) — i.e. they look like a looping component series, but a single 4-byte value is not a
+   are *symmetric with first == last* (`player_a_stand` `0x2F4..0x334`: 0.306678058 → 0.007934333 →
+   0.306678058, 16 values; 4-dp rounding gives 0.3067 → 0.0079 → 0.3067) — i.e. they look like a
+   looping component series, but a single 4-byte value is not a
    quaternion and the packing is not decoded.
 
 ### 3.4 Timing model (inference and its evidence)
@@ -394,7 +419,7 @@ part bank's bone list (a finding, not a gate failure). The horse: 69 tracks vs a
 | int8 quaternions (4-byte keys) | norm ≈ 127 | **FAILS** — norms 13…161 |
 | 4 × int16 quaternions (8/12/16/24/32-byte keys; LE/BE; 2³¹/2³⁰/2¹⁵) | unit-norm fraction high | **FAILS** — best unit fraction 0.20 |
 | `.cani` `CANIFrameData`-style records (variant codes `0x315`–`0x318`, `0x40F`–`0x41E`) | codes present | **FAILS** — 0 hits for `0x315`–`0x318` in the plaintext `.cani`; 3 incidental `0x412/0x418` hits only — the SOTC revision differs (B1 §1.2) |
-| `t2[i] = t1[i] + 4` (rotation/translation block pairs) | holds for all i | holds only for the leading run and **shifted by one** (`t2[i] = t1[i-1] + 4`); semantics open |
+| `t2[i] = t1[i] + 4` (rotation/translation block pairs) | holds for all i | sample-scoped only: in the two samples it holds for the leading run and **shifted by one** (`t2[i] = t1[i-1] + 4`); across all 4,455 files 1706 have no match and the run length spans 0…112 (§3.2) — semantics open |
 | record = `[240][32][u32][64]` (player 340-byte records) | the 8-word block = keys | structure **measured** (records 0/1/3/15 fit it, with a 4-byte marker before the floats in record 1); the float blocks are **not** unit quaternions (norms 0.17…0.97) |
 | the "wave" blocks are component curves | monotonic time or unit data | values are smooth and symmetric (first == last) but in [−1,1] as fixed-point; not times, not quaternions as stored |
 | bit-packed values (fixed N-bit fields) | N-bit extraction reproduces the smoothness | not found (no N tried made the noisy byte plane smooth) |

@@ -204,6 +204,9 @@ def xff_header(data):
                 "value": hexs(value, 8),
                 "tag": hexs(value >> 16, 4),
                 "tag_matches": (value >> 16) == tag,
+                # Low 16 bits: exact for these 8 fields (their offsets are < 0x10000
+                # in all 4,455 .anb); the general pointer form is (tag<<16)+offset,
+                # so a >= 0x10000 offset would carry into the tag half — see §3.1.
                 "offset": value & 0xFFFF,
             }
         )
@@ -377,7 +380,7 @@ def cmd_skb(args):
     )
     out.write("  0x1C u32               %d\n" % header["u32_0x1c"])
     out.write("  0x22 u16 tag           0x%s\n" % header["tag_0x22"])
-    out.write("tagged pointers (value = tag<<16 | offset)\n")
+    out.write("tagged pointers (value = (tag<<16) + offset)\n")
     for ptr in header["pointers"]:
         mark = "" if ptr["tag_matches"] else "  tag mismatch"
         out.write(
@@ -617,27 +620,34 @@ def anb_header(data):
 
 
 def anb_tables(data):
-    """Read the two tail tables (exact counts, robust to the §3.1 variant).
+    """Read the two tail tables (exact counts, robust to offsets >= 0x10000).
 
-    Measured (300-file sample): both tables hold `count` = u32@0xC4 entries of
-    8-byte {u32 offset, u32 tag}; table 1 (tags all 0x102) starts at u32@0xCC's
-    low half, table 2 (tags all 0x000) at u32@0xD0's, they are *contiguous*
-    (t2p == t1p + 8*count), and for 293/300 the pair ends exactly at EOF.
-    The 7 exceptions are a variant where the header's table pointers are 0x10000
-    short of the real tables (girl_a_demo_end08_cut015.anb); there the
-    walk-back-from-EOF rule *with the exact count* locates them — walking back
-    stops at the first non-{0x102,0x000} tag, and the last 2*count entries are
-    [table 1][table 2] (the walk's extra leading entries are the data region's
-    trailing zero bytes, exactly as B1 saw).
+    Measured on all 4,455 `.anb`: both tables hold `count` = u32@0xC4 entries of
+    8-byte {u32 offset, u32 tag}; table 1 (tags all 0x102) starts at the offset in
+    u32@0xD4, table 2 (tags all 0x000) at u32@0xD8's, they are *contiguous*
+    (t2p == t1p + 8*count) and end exactly at EOF — 4,455/4,455 each.
+
+    **The tagged pointer is `(tag<<16) + offset` — addition with carry**, not
+    `tag<<16 | offset16`: `u32@0xCC == (tag<<16) + u32@0xD4` and
+    `u32@0xD0 == (tag<<16) + u32@0xD8` — 4,455/4,455.  Offsets >= 0x10000
+    therefore carry into the tag half (83 files for table 1, deltas
+    0x10000-0xB0000; 86 for table 2), so the low 16 bits read here are a
+    *truncation*.  The untagged mirrors @0xD4/@0xD8 hold the exact offsets; this
+    function keeps the low-half read (B1's shape) and falls back to the
+    walk-back-from-EOF rule *with the exact count*, which recovers the true
+    tables in every case (walking back stops at the first non-{0x102,0x000} tag;
+    the last 2*count entries are [table 1][table 2], the walk's extra leading
+    entries being the data region's trailing zero bytes, exactly as B1 saw).
     """
     count = u32le(data, 0xC4)
     size = len(data)
-    t1p = u32le(data, 0xCC) & 0xFFFF
+    t1p = u32le(data, 0xCC) & 0xFFFF  # truncates offsets >= 0x10000 (see docstring)
     t2p = u32le(data, 0xD0) & 0xFFFF
     header_t2p = t2p
     if t2p != t1p + 8 * count:
-        # Measured: contiguity holds even where the @0xD0 pointer disagrees
-        # (eel_b_death.anb: @0xD0 points into the header).  Trust contiguity.
+        # Measured: contiguity holds for all 4,455 files (t2p == t1p + 8*count,
+        # and @0xD8 == @0xD4 + 8*count); a truncated low half breaks it, so
+        # contiguity restores the true table-2 offset.
         t2p = t1p + 8 * count
 
     def read(p):
@@ -944,7 +954,10 @@ def cmd_anb(args):
         header["data_offset_0xb4"], header["data_size_0xa0"], header["data_size_0xa0"]))
     out.write("  0xB0 table descriptor  count %d, table1 ptr 0x%08X, table2 ptr 0x%08X\n" % (
         header["table_count_0xc4"], header["table1_ptr_0xcc"], header["table2_ptr_0xd0"]))
-    out.write("tagged pointers (value = tag<<16 | offset)\n")
+    out.write("  untagged mirrors       table1 @0xD4 0x%X, table2 @0xD8 0x%X "
+              "(the exact offsets; ptr == (tag<<16) + offset)\n" % (
+        header["table1_off_0xd4"], header["table2_off_0xd8"]))
+    out.write("tagged pointers (value = (tag<<16) + offset)\n")
     for ptr in header["pointers"]:
         mark = "" if ptr["tag_matches"] else "  tag mismatch"
         out.write(
@@ -957,8 +970,10 @@ def cmd_anb(args):
         "  location: %s%s\n"
         % (
             tables["method"],
-            "  (variant: the header's pointers do not locate the tables; the\n"
-            "   walk-back-from-EOF + count rule does — §3.1)"
+            "  (the low-half read truncates offsets >= 0x10000: the tagged\n"
+            "   pointer is (tag<<16) + offset (carry), and @0xD4/@0xD8 hold the\n"
+            "   exact offsets.  The walk-back-from-EOF + count rule recovers the\n"
+            "   true tables here — a cross-check, not a writer quirk; see §3.1)"
             if tables["method"] != "header-pointers"
             else "",
         )
@@ -1131,7 +1146,7 @@ def cmd_check_curves(args):
     add("tables are contiguous and end at EOF", "structure", True,
         (tables["contiguous"], tables["ends_at_eof"]),
         tables["contiguous"] and tables["ends_at_eof"], skip=variant,
-        reason="variant: header table pointers are stale (walk-back used)")
+        reason="offset >= 0x10000: located via the walk-back cross-check")
     add("table1 tags are all 0x102", "structure", "0x102", tables["tags_table1"],
         tables["tags_table1"] == ["102"])
     add("table2 tags are all 0x000", "structure", "0x000", tables["tags_table2"],
