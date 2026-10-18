@@ -46,6 +46,13 @@ float animation_loop_time(float time, float duration) {
 }
 
 void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
+    if (!std::isfinite(t)) {
+        // A non-finite time (NaN, ±inf) compares false against both clamp
+        // branches below and would index times[] out of bounds; sample the
+        // clip's start instead. The CLI rejects a non-finite --anim-time, so
+        // this only hardens the public API for any caller.
+        t = 0.0f;
+    }
     if (!has_sampleable_keys(ch)) {
         return;  // empty or truncated: nothing to write, the caller keeps its default
     }

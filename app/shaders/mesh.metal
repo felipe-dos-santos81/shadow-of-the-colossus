@@ -1,10 +1,11 @@
-// Mesh shader for the S1 viewer: one lit, textured pass.
+// Mesh shader for the viewer: one lit, textured, skinned pass.
 //
 // SDL_GPU MSL conventions: vertex attributes arrive through [[stage_in]];
-// uniform buffers are numbered in push order starting at 0; textures and
-// samplers have their own [[texture(n)]] / [[sampler(n)]] namespaces. SDL
-// compiles this source at runtime with newLibraryWithSource: (plan ruling R2:
-// the build machine has no Xcode Metal toolchain, so there is no metallib).
+// uniform buffers are numbered in push order starting at 0, storage buffers
+// follow them; textures and samplers have their own [[texture(n)]] /
+// [[sampler(n)]] namespaces. SDL compiles this source at runtime with
+// newLibraryWithSource: (plan ruling R2: the build machine has no Xcode Metal
+// toolchain, so there is no metallib).
 //
 // Keep the entry points named `mesh_vertex` / `mesh_fragment` — the renderer
 // passes those names to SDL_CreateGPUShader.
@@ -16,6 +17,8 @@ struct VertexIn {
     float3 pos [[attribute(0)]];
     float3 nrm [[attribute(1)]];
     float2 uv  [[attribute(2)]];
+    ushort4 joints [[attribute(3)]];   // JOINTS_0: indices into the palette
+    float4 weights [[attribute(4)]];   // WEIGHTS_0: normalized, sums to 1
 };
 
 // Vertex uniform slot 0: pushed once per frame.
@@ -40,13 +43,31 @@ struct VSOut {
     float2 uv;
 };
 
+// Vertex storage buffer 0 (`[[buffer(2)]]`: SDL_GPU numbers uniform buffers
+// first, storage buffers after): one worldJoint * inverseBind matrix per skin
+// joint, uploaded per frame. A scene without a skin keeps a single identity
+// matrix here — which is also what an unskinned vertex (joint 0, weight 1)
+// selects — so the same path draws skinned and unskinned geometry.
 vertex VSOut mesh_vertex(VertexIn in [[stage_in]],
                          constant Uniforms& u [[buffer(0)]],
-                         constant PerDraw& d [[buffer(1)]]) {
+                         constant PerDraw& d [[buffer(1)]],
+                         device const float4x4* palette [[buffer(2)]]) {
     VSOut out;
-    float4 world = d.model * float4(in.pos, 1.0);
+    // Linear-blend skinning: blend the four joint matrices per vertex. The
+    // blended normal is normalized by the fragment shader.
+    float4 skinned = in.weights.x * (palette[in.joints.x] * float4(in.pos, 1.0))
+                   + in.weights.y * (palette[in.joints.y] * float4(in.pos, 1.0))
+                   + in.weights.z * (palette[in.joints.z] * float4(in.pos, 1.0))
+                   + in.weights.w * (palette[in.joints.w] * float4(in.pos, 1.0));
+    float4 skinned_normal = in.weights.x * (palette[in.joints.x] * float4(in.nrm, 0.0))
+                          + in.weights.y * (palette[in.joints.y] * float4(in.nrm, 0.0))
+                          + in.weights.z * (palette[in.joints.z] * float4(in.nrm, 0.0))
+                          + in.weights.w * (palette[in.joints.w] * float4(in.nrm, 0.0));
+    // Re-normalize w: a vertex whose weights do not sum to exactly 1 must not
+    // pick up the perspective divide.
+    float4 world = d.model * float4(skinned.xyz, 1.0);
     out.position = u.viewProj * world;
-    out.normal = (d.model * float4(in.nrm, 0.0)).xyz;
+    out.normal = (d.model * float4(skinned_normal.xyz, 0.0)).xyz;
     out.uv = in.uv;
     return out;
 }

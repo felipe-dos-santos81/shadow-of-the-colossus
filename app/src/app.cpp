@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include "anim.h"
 #include "asset_io.h"
 #include "camera.h"
 #include "renderer.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -120,6 +122,84 @@ void print_status_line(const AppOptions& opts, SDL_Window* win) {
                 windowed ? 1 : 0, relative_mouse ? 1 : 0, auto_capture_off ? 0 : 1, opts.frames);
 }
 
+// The clip list and the playback state. clips[0] is the built-in procedural
+// wave when the model has a skin, followed by the model's own glTF clips;
+// `time` is unwrapped seconds (every pose wraps it into the clip's duration).
+struct Playback {
+    std::vector<AnimationCpu> clips;
+    int index = -1;  // -1 = nothing to play (no skin and no clips)
+    float time = 0.0f;
+    bool playing = false;
+    bool has_procedural = false;
+};
+
+// Fills `playback` from the scene and starts on the first clip.
+void init_playback(Playback& playback, const Scene& scene) {
+    if (!scene.skin.joints.empty()) {
+        playback.clips.push_back(make_procedural_wave(scene));
+        playback.has_procedural = true;
+    }
+    playback.clips.insert(playback.clips.end(), scene.animations.begin(), scene.animations.end());
+    if (!playback.clips.empty()) {
+        playback.index = 0;
+        playback.playing = true;
+    }
+}
+
+// Resolves an `--anim` value: an exact clip name, or a 0-based index. -1 when
+// nothing matches.
+int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want) {
+    char* end = nullptr;
+    const long index = std::strtol(want.c_str(), &end, 10);
+    if (!want.empty() && end != want.c_str() && *end == '\0') {
+        return (index >= 0 && static_cast<size_t>(index) < clips.size()) ? static_cast<int>(index)
+                                                                         : -1;
+    }
+    for (size_t i = 0; i < clips.size(); ++i) {
+        if (clips[i].name == want) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+// The `s2-anim` line reports the selected clip: its name, the palette's joint
+// count, whether it is the built-in procedural clip, and the current (wrapped)
+// time. Printed at startup and on every clip change; a model with no clip at
+// all prints nothing.
+void print_anim_status(const Playback& playback, const Scene& scene) {
+    if (playback.index < 0) {
+        return;
+    }
+    const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
+    const bool procedural = playback.has_procedural && playback.index == 0;
+    std::printf("s2-anim clip=%s joints=%zu procedural=%d t=%.3f\n", clip.name.c_str(),
+                scene.skin.joints.size(), procedural ? 1 : 0,
+                animation_loop_time(playback.time, clip.duration));
+}
+
+// Selects a clip by index, restarts it at t = 0, and reports the change.
+void select_clip(Playback& playback, const Scene& scene, int index) {
+    playback.index = index;
+    playback.time = 0.0f;
+    print_anim_status(playback, scene);
+}
+
+// Advances playback by `dt` and uploads the resulting pose. Called once per
+// frame, before the draw; a no-op when the model has no clip (and the palette
+// upload itself is a no-op when the scene has no skin).
+void update_pose(Renderer& renderer, const Scene& scene, Playback& playback, float dt) {
+    if (playback.index < 0) {
+        return;
+    }
+    if (playback.playing) {
+        playback.time += dt;
+    }
+    const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
+    const float wrapped = animation_loop_time(playback.time, clip.duration);
+    renderer.upload_pose(animation_pose(scene, clip, wrapped));
+}
+
 }  // namespace
 
 int run_app(const AppOptions& opts) {
@@ -208,7 +288,36 @@ int run_app(const AppOptions& opts) {
         Camera camera{};
         camera_frame(camera, scene.boundsMin, scene.boundsMax);
 
+        // Playback: the clip list starts with the built-in procedural wave when
+        // the model has a skin; --anim picks a clip by name or index, and
+        // --anim-time pins the time and starts paused (deterministic captures).
+        Playback playback;
+        init_playback(playback, scene);
+        if (!opts.animClip.empty()) {
+            const int index = resolve_clip(playback.clips, opts.animClip);
+            if (index < 0) {
+                std::fprintf(stderr, "sotc-viewer: --anim %s: no such clip", opts.animClip.c_str());
+                if (playback.clips.empty()) {
+                    std::fprintf(stderr, " (the model has no animation clips)\n");
+                } else {
+                    std::fprintf(stderr, "; available clips:");
+                    for (size_t i = 0; i < playback.clips.size(); ++i) {
+                        std::fprintf(stderr, " %zu=%s", i, playback.clips[i].name.c_str());
+                    }
+                    std::fprintf(stderr, "\n");
+                }
+                return 2;
+            }
+            playback.index = index;
+        }
+        if (opts.animTimeSet) {
+            playback.time = opts.animTime;
+            playback.playing = false;
+        }
+        print_anim_status(playback, scene);
+
         if (opts.selftest) {
+            update_pose(renderer, scene, playback, /*dt=*/0.0f);
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
             print_status_line(opts, shell.win);
@@ -216,7 +325,12 @@ int run_app(const AppOptions& opts) {
         }
 
         if (!opts.screenshotPath.empty()) {
+            Uint64 last_ticks = SDL_GetTicks();
             for (int frame = 0; frame < opts.frames; ++frame) {
+                const Uint64 now = SDL_GetTicks();
+                const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
+                last_ticks = now;
+                update_pose(renderer, scene, playback, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                       /*acquire_swapchain=*/true);
             }
@@ -251,13 +365,15 @@ int run_app(const AppOptions& opts) {
             return 0;
         }
 
-        // Interactive: left-drag orbits, the wheel zooms, F reframes, Escape or
+        // Interactive: left-drag orbits, the wheel zooms, F reframes, Space
+        // plays/pauses, [ and ] switch clips, R restarts the clip, Escape or
         // the close button quits. Input needs no capture: plain mouse-motion
         // events with SDL_BUTTON_LMASK held (never relative mode, never
         // SDL_CaptureMouse) — the cursor stays visible and free.
         bool running = true;
         std::deque<Uint64> frame_ticks;  // frame arrival times within the last second
         Uint64 last_title_update = SDL_GetTicks();
+        Uint64 last_ticks = SDL_GetTicks();
         while (running) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
@@ -270,6 +386,16 @@ int run_app(const AppOptions& opts) {
                             running = false;
                         } else if (event.key.key == SDLK_F) {
                             camera_frame(camera, scene.boundsMin, scene.boundsMax);
+                        } else if (event.key.key == SDLK_SPACE) {
+                            playback.playing = !playback.playing;
+                        } else if (event.key.key == SDLK_R) {
+                            playback.time = 0.0f;
+                        } else if (!playback.clips.empty() &&
+                                   (event.key.key == SDLK_LEFTBRACKET ||
+                                    event.key.key == SDLK_RIGHTBRACKET)) {
+                            const int count = static_cast<int>(playback.clips.size());
+                            const int step = (event.key.key == SDLK_LEFTBRACKET) ? count - 1 : 1;
+                            select_clip(playback, scene, (playback.index + step) % count);
                         }
                         break;
                     case SDL_EVENT_MOUSE_MOTION:
@@ -288,13 +414,17 @@ int run_app(const AppOptions& opts) {
                 }
             }
 
+            const Uint64 now = SDL_GetTicks();
+            const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
+            last_ticks = now;
+            update_pose(renderer, scene, playback, dt);
+
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
 
             // The S1 fps HUD: the window title shows the rolling average over
             // the last second, refreshed twice a second (drawn text arrives
             // with SDL_ttf when a HUD needs it).
-            const Uint64 now = SDL_GetTicks();
             frame_ticks.push_back(now);
             while (!frame_ticks.empty() && frame_ticks.front() + 1000 < now) {
                 frame_ticks.pop_front();

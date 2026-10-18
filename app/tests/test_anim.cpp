@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -205,6 +206,37 @@ TEST_CASE("STEP holds until the next key") {
     animation_sample(channel, 1.0f, out);
     CHECK(out[2] == std::sin(kPi / 4.0f));
     CHECK(out[3] == std::cos(kPi / 4.0f));
+}
+
+TEST_CASE("a non-finite time samples the clip start instead of reading out of bounds") {
+    const AnimationChannelCpu channel = turn_channel(0);
+
+    // NaN and ±inf compare false against both clamp branches in
+    // animation_sample: without the guard the key search runs off the end of
+    // times[] (ASan-confirmed in the A2 review). The guard pins them to t = 0,
+    // so the first key's value comes out.
+    const float non_finite[] = {std::nanf(""), std::numeric_limits<float>::infinity(),
+                                -std::numeric_limits<float>::infinity()};
+    for (float t : non_finite) {
+        float out[4] = {9.0f, 9.0f, 9.0f, 9.0f};
+        animation_sample(channel, t, out);
+        CHECK(out[0] == 0.0f);
+        CHECK(out[1] == 0.0f);
+        CHECK(out[2] == 0.0f);
+        CHECK(out[3] == 1.0f);
+    }
+
+    // The pose path stays finite and equals the t = 0 pose element for element.
+    const Scene scene = turn_fixture_scene();
+    const std::vector<Mat4> at_nan = animation_pose(scene, turn_clip(0), std::nanf(""));
+    const std::vector<Mat4> at_zero = animation_pose(scene, turn_clip(0), 0.0f);
+    REQUIRE(at_nan.size() == at_zero.size());
+    REQUIRE(!at_nan.empty());
+    for (size_t i = 0; i < at_nan.size(); ++i) {
+        for (int element = 0; element < 16; ++element) {
+            CHECK(at_nan[i].m[element] == at_zero[i].m[element]);
+        }
+    }
 }
 
 TEST_CASE("sampling clamps outside the key range") {

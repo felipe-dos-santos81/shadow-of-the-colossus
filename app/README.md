@@ -4,10 +4,16 @@ The native macOS viewer for the converted *Shadow of the Colossus* asset library
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb` + `.png`) — never the game tree or original containers.
 
-**Status (milestone S1, task 4): the windowed viewer with an orbit camera.**
+**Status (milestone S2, task 3): skeletal skinning and animation playback.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
-bounds on load. Drag to orbit, scroll to zoom, press `F` to reframe; the window
+bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
+is evaluated on the CPU per frame (`worldJoint × inverseBind`) and uploaded as a
+vertex storage buffer, blended per vertex by four joint weights. The built-in
+`procedural-wave` clip plays by default so a converted rig moves before the
+converter emits real clips; `--anim` selects a clip and `--anim-time` pins a
+time for deterministic captures. Drag to orbit, scroll to zoom, press `F` to
+reframe; `Space` plays/pauses, `[`/`]` switch clips, `R` restarts. The window
 title shows the fps readout. Escape or the window's close button quits.
 `--screenshot` writes the same frame to a PNG.
 
@@ -28,6 +34,10 @@ app/build/sotc-viewer --library out/library
 app/build/sotc-viewer --library out/library --model models/objects/props/_cmn/obj_plank_01.glb
 app/build/sotc-viewer --library out/library --model models/objects/props/_cmn/obj_plank_01.glb \
   --screenshot out/s1/smoke.png --frames 2
+# A skinned model plays procedural-wave by default; pin the time for captures:
+app/build/sotc-viewer --library out/library \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --anim procedural-wave --anim-time 0.5 --screenshot out/s2-wave-t05.png
 ```
 
 The converted library comes from `--library DIR`, else `$SOTC_LIB`; one of the two
@@ -37,6 +47,8 @@ is required. Escape or the close button quits.
 | --- | --- |
 | `--library DIR` | converted asset library (default: `$SOTC_LIB`) |
 | `--model REL` | model to load, relative to the library |
+| `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: `procedural-wave` when the model has a skeleton, else the model's first clip); an unknown name or index exits 2 |
+| `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag |
 | `--screenshot PNG` | render `--frames` frames into the offscreen target, write the PNG, exit |
 | `--frames N` | frames the `--screenshot` path renders first (default 3) |
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
@@ -49,7 +61,23 @@ Controls (no mouse capture: the cursor stays visible and free):
 | Left-drag | Orbit: yaw freely, pitch stops at ±89° |
 | Scroll | Zoom: distance clamped to [0.5, 500] |
 | `F` | Reframe the scene bounds (keeps the viewing direction) |
+| `Space` | Play/pause the current clip |
+| `[` / `]` | Previous / next clip (restarts the clip at t = 0) |
+| `R` | Restart the current clip |
 | Escape / close button | Quit |
+
+A model whose source has a skeleton starts playing `procedural-wave` (a 2-second
+deterministic wobble of the first joints) so the skinning path is demonstrable
+before the converter emits real clips; without `--anim-time` the captured time
+depends on the frames' wall-clock spacing. The run reports the animation state
+at startup and on every clip change:
+
+```text
+s2-anim clip=procedural-wave joints=348 procedural=1 t=0.500
+```
+
+(`joints` is the skin's joint count — the palette size; `procedural=1` marks the
+built-in clip. A model without a skeleton and without clips prints no such line.)
 
 A screenshot run also prints its size and a per-channel pixel summary, e.g.
 
@@ -65,11 +93,15 @@ export SOTC_LIB=…/out/library   # repo convention: app tests fail fast without
 ctest --test-dir app/build --output-on-failure
 ```
 
-- `unit_tests` — doctest cases (asset IO and camera math).
+- `unit_tests` — doctest cases (asset IO, camera math, quaternion/pose math,
+  animation sampling).
 - `windowed_selftest` — opens the window, compiles the shader, renders one
   frame, and asserts the `s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0`
   line. `mesh.metal` must sit next to the binary (the build copies it; a bad
-  shader fails this test loudly).
+  shader fails this test loudly). Run it with `--model` for a skinned model to
+  exercise the playback path as well:
+  `app/build/sotc-viewer --library "$SOTC_LIB" --model models/shadow/characters/wander/_cmn/wander.glb --selftest`
+  — it prints the `s2-anim` line and renders one skinned frame.
 
 ## Guarantees
 
@@ -83,6 +115,10 @@ ctest --test-dir app/build --output-on-failure
   CMake copies `shaders/mesh.metal` next to the binary and the renderer loads it
   from `SDL_GetBasePath()`. A shader that cannot be read or compiled aborts the
   run with a non-zero exit — never a silent fallback.
+- **Unskinned geometry draws in bind pose.** Every vertex is skinned through the
+  same path (a primitive without JOINTS_0/WEIGHTS_0 defaults to joint 0, weight
+  1), and a model without a skeleton keeps a single identity palette matrix —
+  so unskinned models and sub-meshes render unchanged, never collapsed.
 
 ## Vendored dependencies
 
