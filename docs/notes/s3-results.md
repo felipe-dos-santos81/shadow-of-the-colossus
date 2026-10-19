@@ -193,6 +193,8 @@ export SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library
 
 ## 7 · Known limitations
 
+> **Superseded by S2** (`docs/notes/s2-results.md`): real decoded clips and locomotion now play.
+
 - **No wall/prop collision — by spec §1** (ground-follow + edge clamp only; collision is S4's
   RE-5 pull; clipping is accepted). Consequence to expect in the walk: the max-Y heightmap can
   lift the player onto a surface above the walkable floor — the bowl-rim step of §2 is the

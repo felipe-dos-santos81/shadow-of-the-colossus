@@ -329,6 +329,8 @@ per-run driver logs (pad writes, shot collection, anchor) and the port’s stdou
 
 ### 4.1 The gate decision — verbatim
 
+> **Superseded by S2** (`docs/notes/s2-results.md`): real decoded clips and locomotion now play.
+
 **NOT MET** — the decode is **not confirmed**: RE-1's gate stands, and C3's sampler read-out
 did not crack it. The decision, in the plan's words:
 
@@ -361,6 +363,8 @@ The evidence walk, one line per input:
   stride-6 int16 series (§6.5.3) are the lead to test against that parse.
 - **§5 cross-reference (re-anb.md).** The sampler changed no part of the decision, so §5's text
   is not updated; §6.7 records the standing explicitly (this is the cross-reference's home).
+
+> **Superseded by S2** (`docs/notes/s2-results.md`): real decoded clips and locomotion now play.
 
 So: the decode stays open; the reference stills (§3) stand as the S2 reference-capture artifact
 (first-playable design §5); S2's sign-off ("plays a converted `.anb` clip correctly vs a
@@ -404,6 +408,8 @@ SOTC_LIB=…/out/library app/build/sotc-viewer --library …/out/library \
 (the other three: the same command with `--anim procedural-wave --anim-time 0.5` for
 `app-wave-t050.png`, and `--model models/shadow/characters/agro/_cmn/agro.glb` for
 `app-agro-t0.png` / `app-agro-wave-t050.png`; Agro prints `joints=132`.)
+
+> **Superseded by S2** (`docs/notes/s2-results.md`): real decoded clips and locomotion now play.
 
 **`compare/README.md` states exactly what is and is not claimed** (its text is the authority;
 summarized here):
