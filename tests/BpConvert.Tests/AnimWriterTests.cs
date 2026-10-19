@@ -55,7 +55,9 @@ public class AnimWriterTests : IDisposable
         for (var index = 0; index < rotations.Count; index++)
             if (rotationKeys[index].Count == 1) Assert.Equal(0f, rotationKeys[index][0].Key);
 
-        // Pin the bridge direction, not just unit length: (x, -y, -z, w) on the decoded key.
+        // Pin the bridge direction, not just unit length: (-x, y, z, w) on the decoded key —
+        // the conjugate of the RE tool's row-vector bridge, i.e. what a glTF loader's
+        // column-vector node rotation needs (see AnimBridge.ToGlb).
         var track0 = clip.Tracks[0];
         Assert.False(track0.IsStatic);
         var raw = track0.Keys[0];
@@ -129,6 +131,113 @@ public class AnimWriterTests : IDisposable
     }
 
     [Fact]
+    public void Bridge_negates_the_vector_x_and_keeps_y_z_w()
+    {
+        // The decoded quaternion is in the RE tool's row-vector convention; a glTF node
+        // rotation is applied as a column-vector local transform, so the emitted value is
+        // the inverse/conjugate of the tool's bridged quaternion: raw (x, y, z, w) becomes
+        // (-x, y, z, w). Pinned on a raw value with four distinct components, so any sign
+        // slip in the map is visible independently of the writer.
+        var bridged = AnimBridge.ToGlb(new Vector3(0.1f, 0.2f, 0.3f), 0.4f);
+        Assert.Equal(-0.1f, bridged.X);
+        Assert.Equal(0.2f, bridged.Y);
+        Assert.Equal(0.3f, bridged.Z);
+        Assert.Equal(0.4f, bridged.W);
+    }
+
+    [Fact]
+    public void Stand_rotation_keys_stay_inside_the_xval_bands_of_their_bind_locals()
+    {
+        // The semantic pose pin: emit the real stand clip, reload the glb, and compare
+        // every rotation channel's key 0 with the target joint's bind local rotation (the
+        // node's TRS before animation). The bands are the decode's own cross-validation
+        // bands (docs/notes/re2-xval.md §4): the idle pose is within 40° of the bind on the
+        // core chain, 60° on the arm chain, and the relaxed-hand finger statics sit inside
+        // 30–110°.
+        //
+        // This is the pin Task 7's acceptance was missing. With the old bridge
+        // (x, -y, -z, w) the same angles read ~156° on HARA and ~176° on HAND_A_L — a
+        // vertical mirror of the pose — so the assertion catches the exact defect.
+        var gltf = LoadStandGltf();
+        var animation = Assert.Single(gltf.LogicalAnimations);
+
+        var observed = new List<(string Category, string Name, double Angle)>();
+        foreach (var channel in animation.Channels.Where(c => c.TargetNodePath == PropertyPath.rotation))
+        {
+            var name = channel.TargetNode.Name;
+            var bind = BindLocal(channel.TargetNode).Rotation;
+            var key0 = channel.GetRotationSampler().GetLinearKeys().First().Value;
+            observed.Add((CategoryOf(name), name, QuaternionAngleDegrees(bind, key0)));
+        }
+
+        // The stand clip's 29 tracks: 13 core, 8 arm, 8 finger statics — no track may be
+        // dropped or left unclassified.
+        Assert.Equal(29, observed.Count);
+        Assert.Equal(13, observed.Count(o => o.Category == "core"));
+        Assert.Equal(8, observed.Count(o => o.Category == "arm"));
+        Assert.Equal(8, observed.Count(o => o.Category == "finger"));
+
+        // One aggregated assertion so a failing run lists every offending channel.
+        var offenders = observed
+            .Where(o => o.Angle < Band(o.Category).Lower || o.Angle > Band(o.Category).Upper)
+            .Select(o => $"{o.Name} {o.Angle:F1}° (band {Band(o.Category).Lower}–{Band(o.Category).Upper}°)")
+            .ToList();
+        Assert.True(offenders.Count == 0,
+            "rotation keys outside the xval band of their bind local: " + string.Join(", ", offenders));
+    }
+
+    [Fact]
+    public void Stand_world_pose_puts_the_head_and_hands_at_the_decoded_heights()
+    {
+        // The world-pose pin: substitute key 0 of every channel (rotation keys, root
+        // translation) into the reloaded node locals and compose down the tree, in glTF's
+        // column-vector semantics (System.Numerics' row-vector matrices: world = local ×
+        // parent world). The decoder's frame-0 world heights are Bone_KAO y 1.1165 and
+        // Bone_HAND_A_L y 0.6269 (tools/re/anb/pose_dump.py pose). With the old bridge the
+        // head reads y 0.3758 — below the pelvis at 0.7429 — which is Task 7 §5.1.
+        var gltf = LoadStandGltf();
+        var animation = Assert.Single(gltf.LogicalAnimations);
+
+        var local = gltf.LogicalNodes
+            .Where(node => node.IsSkinJoint)
+            .ToDictionary(node => node, BindLocal);
+        foreach (var channel in animation.Channels)
+        {
+            if (!local.TryGetValue(channel.TargetNode, out var current)) continue;
+            if (channel.TargetNodePath == PropertyPath.rotation)
+                current.Rotation = channel.GetRotationSampler().GetLinearKeys().First().Value;
+            else if (channel.TargetNodePath == PropertyPath.translation)
+                current.Translation = channel.GetTranslationSampler().GetLinearKeys().First().Value;
+            local[channel.TargetNode] = current;
+        }
+
+        var world = new Dictionary<Node, Matrix4x4>();
+        Matrix4x4 WorldOf(Node node)
+        {
+            if (world.TryGetValue(node, out var cached)) return cached;
+            var (translation, rotation, scale) = local[node];
+            var matrix = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) *
+                         Matrix4x4.CreateTranslation(translation);
+            if (node.VisualParent != null) matrix *= WorldOf(node.VisualParent);
+            world[node] = matrix;
+            return matrix;
+        }
+
+        var byName = gltf.LogicalNodes.Where(node => node.IsSkinJoint).ToDictionary(node => node.Name);
+        var head = WorldOf(byName["Bone_KAO"]);
+        var leftHand = WorldOf(byName["Bone_HAND_A_L"]);
+        Assert.InRange(head.Translation.Y, 1.1065f, 1.1265f);
+        Assert.InRange(leftHand.Translation.Y, 0.6169f, 0.6369f);
+
+        // The head must sit above the pelvis (the fold's signature is the reverse), and
+        // the standard glTF evaluator must agree with the manual composition.
+        var pelvis = WorldOf(byName["Bone_KOSI"]);
+        Assert.True(head.Translation.Y > pelvis.Translation.Y + 0.3f);
+        var evaluated = byName["Bone_KAO"].GetWorldMatrix(animation, 0f);
+        Assert.InRange(Math.Abs(evaluated.Translation.Y - head.Translation.Y), 0f, 1e-3f);
+    }
+
+    [Fact]
     public void No_animations_keeps_todays_output()
     {
         // M0/M1 pin: an empty Animations list changes nothing — no `animations` array and every
@@ -195,6 +304,72 @@ public class AnimWriterTests : IDisposable
         Assert.NotNull(model.Skeleton);
         return model with { Meshes = new(), Materials = new(), ReferencedTexturePaths = new() };
     }
+
+    /// <summary>The stand clip through the real decode chain, written and reloaded as glTF.</summary>
+    private ModelRoot LoadStandGltf()
+    {
+        var model = LoadWanderSkeleton();
+        var clip = AnbReader.Read(TestAssets.Sample(StandAnbRel));
+        var bank = SkbReader.Read(TestAssets.Sample(PlayerBankRel));
+        var joints = model.Skeleton!.Joints.Select(joint => joint.Name).ToList();
+        var map = TrackMap.Map(clip, bank, joints, out var unresolved);
+        Assert.Equal(0, unresolved);
+        for (var track = 0; track < map.Length; track++) clip.Tracks[track].JointIndex = map[track];
+        model.Animations.Add(clip);
+        return ModelRoot.Load(GlbWriter.Write(model, _dir, "stand-pose", new Dictionary<string, string>()).GlbPath);
+    }
+
+    /// <summary>A node's bind local TRS, from its SRT transform or its bind-pose matrix.</summary>
+    private static (Vector3 Translation, Quaternion Rotation, Vector3 Scale) BindLocal(Node node)
+    {
+        var transform = node.LocalTransform;
+        if (transform.IsSRT)
+            return (transform.Translation, Quaternion.Normalize(transform.Rotation), transform.Scale);
+        if (!Matrix4x4.Decompose(transform.Matrix, out var scale, out var rotation, out var translation))
+            throw new InvalidOperationException($"Node '{node.Name}': the bind matrix does not decompose.");
+        return (translation, Quaternion.Normalize(rotation), scale);
+    }
+
+    /// <summary>The track-name family and the xval band its bind-local residual must meet.</summary>
+    private static string CategoryOf(string name)
+    {
+        // The glb's joint names carry the "Bone_" prefix the brief's xval families omit.
+        var bone = name.StartsWith("Bone_", StringComparison.Ordinal) ? name["Bone_".Length..] : name;
+        if (bone.StartsWith("YUBI_", StringComparison.Ordinal) ||
+            bone.StartsWith("OYAYUBI_", StringComparison.Ordinal))
+            return "finger";
+        if (bone.StartsWith("KATA_", StringComparison.Ordinal) ||
+            bone.StartsWith("JOWA_", StringComparison.Ordinal) ||
+            bone.StartsWith("UDE_", StringComparison.Ordinal) ||
+            bone.StartsWith("HAND_", StringComparison.Ordinal))
+            return "arm";
+        if (bone is "KOSI" or "HARA" or "MUNE" or "KUBI" or "KAO" ||
+            bone.StartsWith("MOMO_", StringComparison.Ordinal) ||
+            bone.StartsWith("SUNE_", StringComparison.Ordinal) ||
+            bone.StartsWith("TOE_", StringComparison.Ordinal) ||
+            bone.StartsWith("TUMASAKI_", StringComparison.Ordinal))
+            return "core";
+        throw new InvalidOperationException($"Track '{name}' is outside the xval's core/arm/finger families.");
+    }
+
+    private static (double Lower, double Upper) Band(string category) => category switch
+    {
+        "core" => (0.0, 40.0),
+        "arm" => (0.0, 60.0),
+        "finger" => (30.0, 110.0),
+        _ => throw new ArgumentOutOfRangeException(nameof(category)),
+    };
+
+    /// <summary>
+    /// The rotation angle between two unit quaternions, in degrees, taking q and −q as the
+    /// same rotation (the sign-insensitive glTF reading).
+    /// </summary>
+    private static double QuaternionAngleDegrees(Quaternion a, Quaternion b)
+    {
+        var dot = Math.Abs(Quaternion.Dot(Quaternion.Normalize(a), Quaternion.Normalize(b)));
+        return 2.0 * Math.Acos(Math.Clamp(dot, 0.0, 1.0)) * 180.0 / Math.PI;
+    }
+
 
     private static AnimClip Clip(string name, int frames, params AnimTrack[] tracks) => new()
     {

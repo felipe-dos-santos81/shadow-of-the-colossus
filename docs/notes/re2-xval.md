@@ -98,6 +98,20 @@ convention error; they are applied as-is (pinned by `verify`).
 Without the bridge the same composition produces crossed arms and a torn-up
 stance — the bridge is what makes the decode a *pose*.
 
+**Consumer note — the row/column transpose (2026-10-19).** The tool composes its locals as
+**row-vector** matrices (`matrix_of_quat` placed into row-vector locals); glTF applies node
+rotations as **column-vector** local transforms. A consumer that copies the bridged numbers
+into a glTF animation therefore has to emit the **inverse** of what the tool composed: for a
+decoded raw key `(x, y, z, w)` the glTF rotation key is **`(−x, y, z, w)`** — the conjugate
+of the tool's bridged `(x, −y, −z, w)`. The converter's writer does exactly that
+(`AnimClip.cs`, `AnimBridge.ToGlb`); the bind path already carries the transpose through the
+IBM-derived node matrices. Cross-check on `wander.glb`: with the uncorrected map, a
+column-vector glTF load of `player_a_stand` frame 0 puts `Bone_KAO` **0.367 below**
+`Bone_KOSI` (`y 0.3758` vs `0.7429`), the vertical mirror of the decode; with the corrected
+map the same load reproduces the decoded world pose exactly (`Bone_KAO` y **1.1165**,
+`Bone_HAND_A_L` **0.6269**, max |Δy| **0.0000** over the tested bones). This note does not
+change the tool or its `verify` bands — the tool's convention is self-consistent.
+
 ## 3 · The comparison (quantified)
 
 **Model (frame 0; height = head joint − lowest foot = 1.0915 units):**

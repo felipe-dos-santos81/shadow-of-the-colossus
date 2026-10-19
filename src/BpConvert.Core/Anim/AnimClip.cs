@@ -54,12 +54,24 @@ public sealed class AnimTrack
 
 /// <summary>
 /// The game → glTF rotation bridge (RE-2 cross-validation, <c>docs/notes/re2-xval.md</c> §2):
-/// the decoded quaternions live in the game's frame, whose Y and Z axes are mirrored relative to
-/// glTF's, so the rotation is emitted as <c>(x, −y, −z, w)</c>. The root position series needs no
-/// bridge (it is already in the glb frame).
+/// the decoded quaternions are bridged by the RE tool to <c>(x, −y, −z, w)</c>, but the tool
+/// composes them as <b>row-vector</b> local matrices, while a glTF node rotation is applied as
+/// a <b>column-vector</b> local transform. The emitted glTF rotation is therefore the
+/// inverse of the tool's bridged quaternion — <c>(−x, y, z, w)</c>, the same map with every
+/// vector component negated. The root position series needs no bridge (it is already in the
+/// glb frame, applied raw).
 /// </summary>
+/// <remarks>
+/// Evidence (stand clip, frame 0): with the old row-vector map the reloaded glb put the head
+/// below the pelvis (<c>Bone_KAO</c> y 0.3758 vs <c>Bone_KOSI</c> 0.7429 — Blender's own glTF
+/// import agrees); the corrected map reproduces the decoder's upright pose
+/// (<c>pose_dump.py pose</c>): <c>Bone_KAO</c> 1.117 (decode 1.1165), <c>Bone_HAND_A_L</c>
+/// 0.627 (0.6269), <c>Bone_HAND_A_R</c> 0.624 (0.6243), toe tips 0.025/0.029
+/// (0.0250/0.0286). The remaining bind-local residuals are the xval's own bands
+/// (<c>AnimWriterTests</c>): core ≤ 40°, arm ≤ 60°.
+/// </remarks>
 public static class AnimBridge
 {
-    /// <summary>Converts a game-convention quaternion's XYZ and W to the glTF frame: <c>(x, −y, −z, w)</c>.</summary>
-    public static Quaternion ToGlb(Vector3 xyz, float w) => new(xyz.X, -xyz.Y, -xyz.Z, w);
+    /// <summary>Converts a game-convention quaternion's XYZ and W to the glTF frame: <c>(−x, y, z, w)</c>.</summary>
+    public static Quaternion ToGlb(Vector3 xyz, float w) => new(-xyz.X, xyz.Y, xyz.Z, w);
 }
