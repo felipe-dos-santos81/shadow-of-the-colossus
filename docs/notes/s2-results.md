@@ -9,7 +9,10 @@ first acceptance pass found two blocking product-path defects — the converted 
 a **folded pose** and the single-model camera framed the **bind pose** — both are fixed and
 re-measured here: the glbs now play the decoded pose (the animation bridge emits the
 conjugate), and the single-model captures frame the animated subject with the whole body in
-view. The walk table in §6 is still the user's to run.
+view. Both sides were independently re-verified (separate converter/pose and app/capture
+passes): the glbs match the decode oracle to float32 precision, the six captures reproduce
+byte-identically, and no subject pixel touches an image edge. The walk table in §6 is still
+the user's to run.
 
 | | |
 |---|---|
@@ -84,6 +87,8 @@ historical).
 Framing is measured on the 1920×1080 PNGs as the bounding box of pixels differing from the
 flat stage background (26, 26, 26) by more than 10 levels. **No subject pixel touches any
 image edge in any single-model still** (the pre-fix set all had subject pixels on row 0).
+(The fix report's preliminary frame check used a >8 threshold; the boxes below are the >10
+re-measure. Both report zero edge contact; only a few boundary pixels differ.)
 
 **Stand — `s2-wander-stand-t000` vs the +5 s reference.** The subject is upright and fully
 in frame, bbox `(810, 67, 1109, 968)`: head above the shoulders, arms hanging at the sides,
@@ -97,17 +102,21 @@ body stays upright, hands at the hips, feet planted. Same phase-free caveat.
 
 **Walk — `s2-wander-walk-t050`.** No reference exists. The leg cycle is legible and
 upright (bbox `(786, 135, 1170, 971)`): the right leg is lifted and swung forward with a
-bent knee, the left leg planted, arms near the sides. Not obviously mirrored at the visible
+bent knee, the left leg planted, forearms swinging out from the front (hands ≈0.24–0.28 m
+lateral of the pelvis, vs ≈0.21 m in the stand). Not obviously mirrored at the visible
 joints. **PASS in kind.**
 
 **Run — `s2-wander-run-t050`.** No reference. Larger lift/stride than the walk (bbox
-`(807, 191, 1066, 1005)`): one knee driven high, the support leg extended, arms swinging.
-The body stays upright and the whole figure is in frame. **PASS in kind.**
+`(807, 191, 1066, 1005)`): the support leg extended, the trailing leg in heel-up recovery
+and occluded by the torso in this front view (the high-knee phase is earlier, ≈0.13 s —
+t=0.5 is frame 15 of a 30 fps clip), arms swinging. The body stays upright and the whole
+figure is in frame. **PASS in kind.**
 
 **Agro — `s2-agro-kick-t000` / `t025` vs the standing references.** The whole horse is in
 frame in both stills (bbox `(853, 264, 1051, 912)` and `(856, 261, 1061, 894)`): head and
-ears at the top, the four legs and all hooves above the bottom edge, saddle and bridle
-visible. The references show a 3/4 standing view; ours is front-on, so no frame-to-frame
+ears at the top, the four legs and all hooves above the bottom edge, bridle visible (the
+saddle is only partly visible from the front). The references show a 3/4 standing view;
+ours is front-on, so no frame-to-frame
 correspondence is claimed (the kick has no reference, per the design). The hoof/hock
 positions change between 0 and 0.25 s, so the clip advances. **The frame-0 rig check is now
 performable** (whole horse, upright); the kick itself remains the user's live check.
@@ -175,16 +184,16 @@ positions when there is no skin). Single-model mode frames at the resolved start
 past the edge, so a tall narrow figure would otherwise still touch the top. Manifest mode
 and its follow camera are unchanged, as is the S3 ground lift.
 
-Post-fix framing (whole subject, edge margin in px):
+Post-fix framing (whole subject; margins are edge distances, `W−1−x1` / `H−1−y1`):
 
 | still | bbox (x0, y0, x1, y1) | margin left/top/right/bottom |
 |---|---|---|
-| `s2-wander-stand-t000` | 810, 67, 1109, 968 | 810 / 67 / 811 / 112 |
-| `s2-wander-stand-t250` | 807, 59, 1113, 946 | 807 / 59 / 807 / 134 |
-| `s2-wander-walk-t050` | 786, 135, 1170, 971 | 786 / 135 / 750 / 109 |
-| `s2-wander-run-t050` | 807, 191, 1066, 1005 | 807 / 191 / 854 / 75 |
-| `s2-agro-kick-t000` | 853, 264, 1051, 912 | 853 / 264 / 869 / 168 |
-| `s2-agro-kick-t025` | 856, 261, 1061, 894 | 856 / 261 / 859 / 186 |
+| `s2-wander-stand-t000` | 810, 67, 1109, 968 | 810 / 67 / 810 / 111 |
+| `s2-wander-stand-t250` | 807, 59, 1113, 946 | 807 / 59 / 806 / 133 |
+| `s2-wander-walk-t050` | 786, 135, 1170, 971 | 786 / 135 / 749 / 108 |
+| `s2-wander-run-t050` | 807, 191, 1066, 1005 | 807 / 191 / 853 / 74 |
+| `s2-agro-kick-t000` | 853, 264, 1051, 912 | 853 / 264 / 868 / 167 |
+| `s2-agro-kick-t025` | 856, 261, 1061, 894 | 856 / 261 / 858 / 185 |
 
 ## 5 · Known limits (accepted scope)
 
@@ -194,11 +203,16 @@ Post-fix framing (whole subject, edge margin in px):
   in place (root x/z zeroed); speed-matched playback is out of scope (design §3).
 - **Phase-free comparison:** the capture's animation phase is unknown and no
   frame-to-frame correspondence is claimed (`re2-xval.md` §3).
-- **Source-data finger-bone gaps:** walk **track 26 `Bone_YUBI_B_R`** differs from key 0
-  by **11.4°** at the last key; run **track 18 `Bone_YUBI_B_L`** by **6.7°** — a finger
-  snap at the loop point in the authored data, not a converter regression.
+- **Source-data finger-bone loop gaps:** the played walk loop is open on
+  `Bone_YUBI_A_R` (**22.87°**) and `Bone_YUBI_B_R` (**22.86°**); run on
+  `Bone_YUBI_A_L` (**6.66°**), `Bone_YUBI_B_L` (**6.68°**) and `Bone_OYAYUBI_B_R`
+  (**21.20°**). These keys are authored in the `.anb` and emitted unchanged (the writer
+  drops only the surplus `0xD` key beyond the engine duration) — a finger snap at the
+  loop point in the source data, not a converter regression. The body/root loops close.
 - The horse's clip is standalone; in-arena multi-rig animation is deferred (design §3).
-- Frames: stand 76 keys / 15 fps / 5.0 s; walk 21; run 18; horse kick 16.
+- Frames: stand 76 keys / 15 fps / 5.0 s; walk 21 keys / 15 fps / 1.333 s; run 18 keys /
+  **30 fps** / 0.567 s; horse kick 16 keys / 15 fps / 1.0 s. (The run's source rate field
+  is 1.0 → 30 fps; the others 0.5 → 15 fps.)
 
 ## 6 · The user's walk — PENDING
 
