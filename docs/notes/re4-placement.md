@@ -123,7 +123,7 @@ translation, distance to the player start, and the bar:
 | `North_MinoA_Relay` | 0x0006a4 | 3 | (374.785, 49.126, 380.973) | 0.00 | 42.05 | +21.18 | relay; y not near floor |
 | `Central_MinoA_Sensor1` | 0x008fda | 2 | (332.852, 47.202, 306.821) | 30.94 | 43.17 | +19.25 | sensor |
 | `Central_MinoA_Relay1` | 0x009158 | 3 | (338.963, 47.589, 342.036) | 0.00 | 14.35 | +19.64 | relay; y not near floor |
-| `Sourh_MinoA_Sensor2` | 0x00d415 | 2 | (270.354, 46.264, 297.527) | −17.64 | 95.31 | +18.31 | sensor |
+| `Sourh_MinoA_Sensor2` | 0x00d415 | 2 | (270.354, 46.264, 297.527) | −17.64 | 95.31 | +18.31 | sensor; outside bowl (0.03 m) |
 | `South_MinoA_Relay` | 0x00d591 | 3 | (269.005, 52.793, 327.295) | 0.00 | 85.84 | +24.84 | relay; y not near floor |
 | `Cutscene_MinotaurARelay` | 0x014ecd | 9 | (300.941, 51.608, 317.180) | 0.00 | 59.03 | +23.66 | relay; y not near floor |
 | `North_West_MinoA_Sensor1` | 0x01609e | 2 | (446.161, 45.288, 380.403) | 62.64 | 99.66 | +17.34 | sensor; outside bowl |
@@ -149,9 +149,9 @@ translation, distance to the player start, and the bar:
 
 Every one of the 27 fails **(a)**: the names are sensors/relays, the exact categories the bar
 excludes. Independently they also fail **(b)**: their y is **45.288–52.793**, i.e. **+17.3 to
-+24.8 m above the player-start floor** — wall-mounted trigger volumes, not floor placements. Five
-sensors are outside the `arena_01.glb` footprint (they sit on the surrounding wall, whose union
-extends to z ≈ 502), and `Sourh_MinoA_Sensor4` is 109.2 m from the start. The relays repeat one
++24.8 m above the player-start floor** — wall-mounted trigger volumes, not floor placements. Six
+sensors are outside the `arena_01.glb` footprint (one by 0.03 m; the rest sit on the surrounding
+wall, whose union extends to z ≈ 502), and `Sourh_MinoA_Sensor4` is 109.2 m from the start. The relays repeat one
 transform per group (all five north relays at `(374.785, 49.126, 380.973)`; all four central at
 `(338.963, 47.589, 342.036)`), which is graph structure, not a placement.
 
@@ -226,11 +226,12 @@ instance 4 at `(410.210, 29.775, 374.631)`, instance 6 at `(411.180, 29.395, 367
 static props (skirt, rocks, debris) are placed this way. **The colossus is not one of them.**
 
 Tree-wide check (all **189** `.csml` in the tree, **264,018 instances**): **17** model refs match
-`coloss|minotaur|mino`, and **all 17 are `dead_colossi` meshes** (e.g.
-`.../colossus_01_minotaur_a_deadbody/****/c01_minotaur_a_dead_body_5e2e6107.cmdl`) — the corpse
-meshes, which live in their own entity `.csml`, not the arena scene. There is **no live-colossus
-instance** and no `$/scripts/` entity ref in any arena `.csml` (0 script refs in all four arena
-files).
+`coloss|minotaur|mino` — **16 `dead_colossi` dead-body meshes** (e.g.
+`.../colossus_01_minotaur_a_deadbody/****/c01_minotaur_a_dead_body_5e2e6107.cmdl`, which live in
+their own entity `.csml`, not the arena scene) and **one non-colossus prop**:
+`arena_02_minotaur_doorframe_5917d87b.cmdl` (`arena_02.csml:0x0b63c6`, a doorframe named after the
+arena). **None is a live colossus.** There is no live-colossus instance and no `$/scripts/` entity
+ref in any arena `.csml` (0 script refs in all four arena files).
 
 Two sibling families were checked and excluded:
 
@@ -321,31 +322,47 @@ timebox, and not needed (design §7.3: the pull never blocks the milestone).
 ## 8 · The builder-pick fallback (for Task 6)
 
 The design's fallback: a labeled **builder pick** on the bowl floor, feet on the ground, facing the
-player's data-derived spawn. The pick below is on open floor, inside the bowl, on the player's
-forward (+Z) side, in the north fight-staging cluster (the Mino relays' column
-`(374.785, 380.973)` is 4.9 m away — corroboration only; the relays themselves are rejected data).
+player's data-derived spawn. The pick is on open floor, inside the bowl, on the player's forward
+(+Z) side, 13.1 m from the Mino relays' column `(374.785, 380.973)` (corroboration only — the
+relays themselves are rejected data). It is placed far enough south that the **yawed** bind
+footprint fits inside the bowl (see the footprint check below).
+
+**Entity (Valus) — provenance `builder-pick`:**
 
 | field | value | source |
 |---|---|---|
 | provenance | **`builder-pick`** | this note; manifest header carries the value |
-| x | **370.000** | chosen |
-| z | **380.000** | chosen |
-| y (feet) | **28.789** | ray-cast on `out/library/models/shadow/levels/arena_01/_cmn/arena_01_ground.glb` (8,258 tris), column (370, 380); the composer re-samples |
-| yaw (Valus) | **−154.09°** (equivalently 205.91°) | Valus faces the player start; `atan2(353−370, 345−380)` |
-| quaternion (x,y,z,w) | (0, **−0.974553**, 0, **0.224156**) | the same yaw about +Y |
-| player spawn yaw | **+25.91°** | faces Valus; `atan2(370−353, 380−345)` (q = (0, 0.224156, 0, 0.974553)) |
+| x | **382.000** | chosen |
+| z | **370.000** | chosen |
+| y (manifest; ground sample) | **28.369** | ray-cast on `out/library/models/shadow/levels/arena_01/_cmn/arena_01_ground.glb` (8,258 tris), column (382, 370); the composer re-samples. This is the **manifest y**, not the model origin: the origin is this + the origin-to-feet lift (8.739 m, or the clip's root series). |
+| yaw (Valus) | **−130.76°** (equivalently 229.24°) | Valus faces the player start; `atan2(353−382, 345−370)` |
+| quaternion (x,y,z,w) | (0, **−0.909104**, 0, **0.416570**) | the same yaw about +Y |
 
-Checks (measured): x ∈ [237.37, 431.39] ✔; z ∈ [297.56, 390.04] ✔; y = 28.789 ∈ [28, 31] ✔;
-distance to `(353, 345)` = **38.91 m** < 100 ✔; the column has **no** `arena_01.glb` or
-`arena_01_shared-source.glb` triangle above it (0 hits — open floor), and the ground ray-cast
-hits at 28.789 ✔. The colossus's 35 m-wide bind footprint spans x[352.5, 387.5], z[375.6, 384.4],
-inside the bowl; the floor under the footprint varies 27.97–28.71 m, so the feet-on-floor rule uses
-the placement column's 28.789 m and the origin-to-feet lift (8.739 m, or the clip's root series)
-on top.
+**Player spawn — provenance `data-position` + `builder-yaw`:**
 
-If Task 6 prefers a spot straight ahead of the S3 spawn yaw (0, +Z), `(353, 385)` is the equivalent
-candidate (floor 28.73, 40.0 m, same clearance); the pick above is 17.7 m away from it, closer to
-the staging cluster.
+| field | value | source |
+|---|---|---|
+| provenance | **`data-position` + `builder-yaw`** | position from `misc/playerstartpositions.txt:1`; yaw chosen to face Valus |
+| x / z | **353.000 / 345.000** | data (`353 29 345`) |
+| y (manifest; ground sample) | **27.951** | ray-cast on the same glb at (353, 345); the file's own y is 29, not the feet height |
+| yaw (spawn) | **+49.24°** | faces Valus; `atan2(382−353, 370−345)` |
+| quaternion (x,y,z,w) | (0, **0.416570**, 0, **0.909104**) | the same yaw about +Y |
+
+Checks (measured at the final pick):
+
+- pick point: x = 382 ∈ [237.37, 431.39] ✔; z = 370 ∈ [297.56, 390.04] ✔; ground 28.369 ∈ [28, 31] ✔;
+  distance to `(353, 345)` = **38.29 m** < 100 ✔; 0 `arena_01.glb`/`shared-source` triangles above
+  the column (open floor) ✔.
+- **yawed** bind footprint (local x[−17.481, 17.481], z[−4.439, 5.367] rotated by −130.76°):
+  **x[366.521, 396.776] z[353.255, 386.139]** — fully inside the bowl; margins west 129.15 m,
+  east 34.61 m, south 55.70 m, **north 3.90 m**. (The unrotated footprint is not the placed one:
+  at the previous pick (370, 380) the yawed z reached ≈391.6, past the bowl's z max 390.04.)
+- floor under the **rotated** footprint: 5×5 sample, **25/25 hits, 28.139–29.441 m**; the
+  feet-on-floor rule uses the pick's 28.369 m + the origin-to-feet lift.
+
+If Task 6 prefers a spot straight ahead of the S3 spawn yaw (0, +Z), `(353, 385)` at yaw 180° is
+geometrically valid (yawed AABB x[335.519, 370.481] z[379.633, 389.439], floor 28.731, 40.0 m), but
+its z margin is only 0.60 m; the pick above is preferred.
 
 ## 9 · Reproduce
 
@@ -360,7 +377,7 @@ python3 tools/re/stage/spawn_probe.py scan cgpr --pattern "spawn|placement"   # 
 python3 tools/re/stage/spawn_probe.py scan csml --pattern "coloss|minotaur|mino"  # 189 files / 264,018 instances
 python3 tools/re/stage/spawn_probe.py path cp3shadow/path/pathdata/minotaur.path
 python3 tools/re/stage/spawn_probe.py ground \
-    out/library/models/shadow/levels/arena_01/_cmn/arena_01_ground.glb 370,380 353,385
+    out/library/models/shadow/levels/arena_01/_cmn/arena_01_ground.glb 382,370 353,385 353,345
 python3 tools/re/stage/spawn_probe.py cwks --match minotaur  # 407,965 entries
 python3 tools/re/stage/probe.py check-fs                    # 10/10, gate MET
 ```

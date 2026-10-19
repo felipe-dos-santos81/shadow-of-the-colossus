@@ -10,6 +10,7 @@ scripts and the families already mined in RE-3:
   cwks [file] [--match S]    the workspace dependency pool (strings only)
   path <file>                 the .path nodes (the minotaur patrol path)
   ground <glb> X,Z...         downward ray-cast on a converted glb (floor height)
+  pick <glb> X Z             placement check: ground, facing yaw, yawed AABB, floor range
   scan cgpr|csml [--pattern]  tree-wide sweep of the script families for a name
   arena                       run the whole bounded pull and print the acceptance table
 
@@ -469,6 +470,66 @@ def cmd_ground(args):
             x, z, "%.3f m" % y if y is not None else "no hit"))
 
 
+def _triangle_hits(tris, x, z):
+    n = 0
+    for a, b, c in tris:
+        d = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])
+        if abs(d) < 1e-9:
+            continue
+        u = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / d
+        v = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / d
+        if u < 0 or v < 0 or u + v > 1:
+            continue
+        n += 1
+    return n
+
+
+def cmd_pick(args):
+    """Evaluate a placement: ground, facing yaw, yawed bind AABB, clearance, floor range."""
+    ground = glb_triangles(resolve(args.glb))
+    x, z = args.x, args.z
+    sx, sz = args.spawn
+    yaw = math.degrees(math.atan2(sx - x, sz - z))
+    rad = math.radians(yaw)
+    c, s = math.cos(rad), math.sin(rad)
+    x0, x1, z0, z1 = args.extents
+    corners = [(x + c * lx + s * lz, z - s * lx + c * lz)
+               for lx in (x0, x1) for lz in (z0, z1)]
+    ax0 = min(p[0] for p in corners)
+    ax1 = max(p[0] for p in corners)
+    az0 = min(p[1] for p in corners)
+    az1 = max(p[1] for p in corners)
+    gy = ground_height(ground, x, z)
+    d = math.hypot(x - sx, z - sz)
+    print("pick (%g, %g)  spawn (%g, %g)" % (x, z, sx, sz))
+    print("  ground y        %s" % ("%.6f" % gy if gy is not None else "no hit"))
+    print("  yaw (face spawn) %.6f deg  q=(0, %.6f, 0, %.6f)" % (
+        yaw, math.sin(math.radians(yaw) / 2), math.cos(math.radians(yaw) / 2)))
+    print("  yawed AABB      x[%.3f, %.3f] z[%.3f, %.3f]" % (ax0, ax1, az0, az1))
+    print("  bowl margins    west %.2f  east %.2f  south %.2f  north %.2f" % (
+        ax0 - BOWL["x"][0], BOWL["x"][1] - ax1, az0 - BOWL["z"][0], BOWL["z"][1] - az1))
+    print("  distance        %.3f m" % d)
+    for label, path in (("main", args.main), ("shared", args.shared)):
+        if path:
+            tris = glb_triangles(resolve(path))
+            print("  %-6s hits     %d above the column" % (label, _triangle_hits(tris, x, z)))
+    ys = []
+    for i in range(5):
+        lx = x0 + (x1 - x0) * i / 4.0
+        for j in range(5):
+            lz = z0 + (z1 - z0) * j / 4.0
+            y = ground_height(ground, x + c * lx + s * lz, z - s * lx + c * lz)
+            if y is not None:
+                ys.append(y)
+    if ys:
+        print("  floor 5x5       %d/25 hits  %.3f..%.3f m" % (len(ys), min(ys), max(ys)))
+    sy = math.degrees(math.atan2(x - sx, z - sz))
+    sgy = ground_height(ground, sx, sz)
+    print("  spawn: ground %s  yaw %.6f deg  q=(0, %.6f, 0, %.6f)" % (
+        "%.6f" % sgy if sgy is not None else "no hit", sy,
+        math.sin(math.radians(sy) / 2), math.cos(math.radians(sy) / 2)))
+
+
 def cmd_scan(args):
     """Tree-wide sweep of the compiled-script families (read-only)."""
     root = game_root()
@@ -535,7 +596,7 @@ ARENA = [
 PATHS = ["cp3shadow/path/pathdata/minotaur.path"]
 
 # acceptance bar (design §7.3)
-BOWL = {"x": (237.0, 431.6), "z": (297.4, 390.2), "y": (28.0, 31.0)}
+BOWL = {"x": (237.37, 431.39), "z": (297.56, 390.04), "y": (28.0, 31.0)}
 PLAYER = (353.0, 345.0)
 MAX_DIST = 100.0
 
@@ -640,6 +701,18 @@ def main(argv=None):
     p.add_argument("columns", nargs="+", metavar="X,Z",
                    type=lambda s: tuple(float(v) for v in s.split(",")))
     p.set_defaults(func=cmd_ground)
+
+    p = sub.add_parser("pick", help="evaluate a placement (ground, yawed AABB, floor range)")
+    p.add_argument("glb")
+    p.add_argument("--x", type=float, required=True)
+    p.add_argument("--z", type=float, required=True)
+    p.add_argument("--spawn", type=lambda s: tuple(float(v) for v in s.split(",")),
+                   default=(353.0, 345.0))
+    p.add_argument("--extents", type=lambda s: tuple(float(v) for v in s.split(",")),
+                   default=(-17.481, 17.481, -4.439, 5.367))
+    p.add_argument("--main")
+    p.add_argument("--shared")
+    p.set_defaults(func=cmd_pick)
 
     p = sub.add_parser("scan", help="tree-wide sweep of a script family for a name")
     p.add_argument("family", choices=["cgpr", "csml"])
