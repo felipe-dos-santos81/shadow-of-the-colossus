@@ -125,11 +125,7 @@ corpus tracks** (one degenerate zero-axis track). `s` spans the full angle circl
 continuity does not discriminate sin from cos (both readings give identical dots — verified on
 `player_a_stand` t2), so the assignment is **INFERRED** (see §3): the disassembly pins the helper
 structure (`f(x,1)` → w, `f(x,0)` → vector) but not its name, and the reading rests on the
-standard sincos-quaternion form — the alternative is the nonstandard π − s mapping — plus a
-naturalness check on the rotation magnitude: the samples' `s` sits near 0 or near 2π (e.g. `t2`
-`s` ∈ [0.12, 0.39]; `t6` `f0` = 5.77; `t15` `f0` = 5.89), which under sin is a rotation of `s`
-modulo 2π — small for every sample track (≈0.1–0.8 rad) — while the alternative would put them all
-near π.
+standard sincos-quaternion form — the alternative is the nonstandard π − s mapping.
 
 **Type `0x0E` (MEASURED, 34 tracks).** One u32: `x = sext(bits 31..21, 11)/1023*scale + offset`,
 `y = sext(bits 20..11, 10)/511*...`, `z = sext(bits 10..1, 10)/511*...`, bit 0 = the w sign.
@@ -310,9 +306,11 @@ series' samples base `param_4[6]` is the open item above.)
   `f(x,0)` → vector, θ = s/2) but not the helper's name (an import thunk); `s` spans the full
   circle (per-track max&#124;s&#124; median 5.02 rad; only 23.4 % ≤ π/2) and both readings give
   identical dots, so continuity does not discriminate. The *vector = sin* reading rests on the
-  standard sincos-quaternion form (the alternative is the nonstandard π − s mapping) and the
-  naturalness check: the samples' `s` sits near 0 or near 2π, which under sin is a small rotation
-  (≈0.1–0.8 rad), while the alternative puts every sample track near π;
+  standard sincos-quaternion form (the alternative is the nonstandard π − s mapping); a
+  rotation-magnitude naturalness check does **not** settle it — the sample is mixed (8 of the 13
+  sample 0xD tracks sit near 0/2π, where sin gives a 4–46° rotation, but
+  `horse_a_add_horse_kick` t1 sits at `s` ≈ π, where the alternative gives ≈ 0, and t4/t5/t15/t19
+  give 71–84° under sin);
 - the **sign conventions** (`set → negative` for 3–6/0xC/0xE) — decompile + the sign table
   constant; **not discriminable from continuity alone**: the sign bit flips mark zero *crossings* of
   the derived component between frames (measured on `player_a_jump_run` tracks 1/5: the flips sit
