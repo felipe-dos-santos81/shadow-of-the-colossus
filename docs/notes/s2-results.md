@@ -4,15 +4,16 @@ Spec milestone S2 (`2026-10-19-s2-motion-design.md` §1–§2): **"Wander (and �
 plays a converted `.anb` clip correctly vs a dev-only reference capture"**, extended with
 controller-driven locomotion (still → stand, move → walk, +Shift → run).
 
-**Status: the converter/app checks are ACCEPTED; the user's walk and horse check (§6) are
-PENDING.** The first acceptance pass found two blocking product-path defects — the converted glbs played
-a **folded pose** and the single-model camera framed the **bind pose** — both are fixed and
-re-measured here: the glbs now play the decoded pose (the animation bridge emits the
-conjugate), and the single-model captures frame the animated subject with the whole body in
-view. Both sides were independently re-verified (separate converter/pose and app/capture
-passes): the glbs match the decode oracle to float32 precision, the six captures reproduce
-byte-identically, and no subject pixel touches an image edge. The walk table in §6 is still
-the user's to run.
+**Status: ACCEPTED (2026-10-19) — converter/app checks and the user's live walk and horse
+sign-off all passed.** The first acceptance pass found two blocking product-path defects —
+the converted glbs played a **folded pose** and the single-model camera framed the **bind
+pose** — both are fixed and re-measured here: the glbs now play the decoded pose (the
+animation bridge emits the conjugate), and the single-model captures frame the animated
+subject with the whole body in view. Both sides were independently re-verified (separate
+converter/pose and app/capture passes): the glbs match the decode oracle to float32
+precision, the six captures reproduce byte-identically, and no subject pixel touches an
+image edge. The user then ran the arena walk and the standalone horse check and reported
+all checks pass (§6).
 
 | | |
 |---|---|
@@ -233,7 +234,7 @@ Post-fix framing (whole subject; margins are edge distances, `W−1−x1` / `H�
   **30 fps** / 0.567 s; horse kick 16 keys / 15 fps / 1.0 s. (The run's source rate field
   is 1.0 → 30 fps; the others 0.5 → 15 fps.)
 
-## 6 · The user's walk and horse check — PENDING
+## 6 · The user's walk and horse check — PASS (2026-10-19)
 
 Run the arena and walk the bowl floor:
 
@@ -245,13 +246,13 @@ export SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library
 
 | # | check | do this | expected | result |
 |---|---|---|---|---|
-| 1 | still → stand | start; press no movement | status `clip=player_a_stand`; the stand loop | ☐ |
-| 2 | move → walk | W/A/S/D | status `clip=player_a_walk`; feet cycle | ☐ |
-| 3 | +Shift → run | W+Shift | status `clip=player_a_run` | ☐ |
-| 4 | feet grounded | walk onto the bowl floor | feet track the heightmap; no float/sink | ☐ |
-| 5 | hard cuts | switch still/walk/run | immediate switch; no blend (accepted) | ☐ |
-| 6 | controls | `F`; Escape | reframe; clean quit | ☐ |
-| 7 | horse (standalone) | open `agro.glb` standalone and play `horse_a_add_horse_kick` (below) | the standing frame is a four-legged horse (head, saddle, all four hooves); the kick swings a hind leg | ☐ |
+| 1 | still → stand | start; press no movement | status `clip=player_a_stand`; the stand loop | ✅ |
+| 2 | move → walk | W/A/S/D | status `clip=player_a_walk`; feet cycle | ✅ |
+| 3 | +Shift → run | W+Shift | status `clip=player_a_run` | ✅ |
+| 4 | feet grounded | walk onto the bowl floor | feet track the heightmap; no float/sink | ✅ |
+| 5 | hard cuts | switch still/walk/run | immediate switch; no blend (accepted) | ✅ |
+| 6 | controls | `F`; Escape | reframe; clean quit | ✅ |
+| 7 | horse (standalone) | open `agro.glb` standalone and play `horse_a_add_horse_kick` (below) | the standing frame is a four-legged horse (head, saddle, all four hooves); the kick swings a hind leg | ✅ |
 
 Standalone horse check (no manifest, so the arena's controller selection is not involved):
 
@@ -261,13 +262,13 @@ Standalone horse check (no manifest, so the arena's controller selection is not 
     --anim horse_a_add_horse_kick --anim-time 0
 ```
 
-- [ ] **Finger snap:** accept the authored finger snap at the walk/run loop (§5's
-  independent re-measurement: walk 22.87°/22.86°, run 6.66°/6.68°/21.20°; the first pass's
-  11.4°/6.7° readings were superseded).
+- [x] **Finger snap:** accepted — the authored walk/run loop snap is source data, not a
+  converter regression (§5's independent re-measurement: walk 22.87°/22.86°, run
+  6.66°/6.68°/21.20°; the first pass's 11.4°/6.7° readings were superseded).
 
-**The user's verdict: PENDING — the walk and the horse's standing frame/kick have not been
-performed.** The two blockers are fixed, so both can now be run against a build that shows the
-decoded, upright pose.
+**The user's verdict: PASS (2026-10-19)** — the walk switches stand/walk/run with the feet
+on the bowl floor, `F`/Escape behave, the horse's frame 0 is a standing four-legged rig, the
+kick swings a hind leg, and the authored finger snap is accepted. **S2 is accepted.**
 
 ## 7 · Evidence files (all gitignored)
 
