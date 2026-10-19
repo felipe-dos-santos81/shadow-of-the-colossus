@@ -120,6 +120,7 @@ public static class BatchRunner
 
         var watch = Stopwatch.StartNew();
         var sources = EnumerateSources(root, underScopes, extensions, outLib);
+        EnsureExplicitFilesInScope(root, underScopes.Files, sources, extensions, outLib);
         var data = Catalog.Load(outLib);
 
         int skipped = 0, pending = 0, converted = 0, failed = 0, completed = 0;
@@ -129,10 +130,10 @@ public static class BatchRunner
             {
                 if (clips.Count > 0)
                 {
-                    // The recorded output predates this clip scope: say so, and say how to proceed.
+                    // The catalog has no provenance: say what is recorded and how to proceed.
                     Interlocked.Increment(ref pending);
-                    log?.Invoke($"pending {source}: already converted without --clips "
-                        + $"({string.Join(",", clips.Select(clip => clip.Name))}); re-convert with --force");
+                    log?.Invoke($"pending {source}: recorded ok; re-convert with --force to bake the requested clips "
+                        + $"({string.Join(",", clips.Select(clip => clip.Name))})");
                 }
                 else
                 {
@@ -223,6 +224,30 @@ public static class BatchRunner
 
         sources.Sort(StringComparer.Ordinal);
         return sources;
+    }
+
+    /// <summary>
+    /// Rejects an explicit <c>--under &lt;file&gt;</c> that the filters removed: a file scope is a
+    /// deliberate single-source invocation, so "in scope: 0" with exit 0 would hide the mistake.
+    /// </summary>
+    /// <exception cref="ArgumentException">A named file matched no source.</exception>
+    private static void EnsureExplicitFilesInScope(string root, List<string> files, List<string> sources,
+        HashSet<string> extensions, string outLib)
+    {
+        if (files.Count == 0) return;
+
+        var inScope = sources.ToHashSet(StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (inScope.Contains(relative)) continue;
+
+            var reason = IsBelow(file, outLib)
+                ? "it is below --out"
+                : $"--ext {string.Join(",", extensions.OrderBy(extension => extension, StringComparer.Ordinal))} "
+                    + $"does not match its '{Path.GetExtension(file)}' extension";
+            throw new ArgumentException($"--under source '{relative}' produced no source: {reason}.");
+        }
     }
 
     /// <summary>

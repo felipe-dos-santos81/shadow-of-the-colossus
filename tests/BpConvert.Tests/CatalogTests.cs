@@ -227,6 +227,7 @@ public class CatalogTests : IDisposable
         Assert.Equal(0, second.Skipped);
         Assert.Equal(0, second.Converted);
         Assert.Equal(0, second.Failed);
+        Assert.Contains(log, line => line.Contains("recorded ok", StringComparison.Ordinal));
         Assert.Contains(log, line => line.Contains("re-convert with --force", StringComparison.Ordinal));
 
         // The ok entry (and its outputs) is untouched: nothing was re-baked without --force.
@@ -275,6 +276,33 @@ public class CatalogTests : IDisposable
         Assert.Equal(0, summary.Failed);
         Assert.Equal(new[] { PlankRel }, Catalog.Load(lib).Entries.Select(entry => entry.Key));
         Assert.False(File.Exists(Under(lib, "models/objects/props/_cmn/other.glb")));
+    }
+
+    [Fact]
+    public void Convert_UnderFile_FilteredOut_Throws()
+    {
+        // An explicit file scope is a deliberate one-model invocation: a filter that removes it
+        // must fail the invocation loudly, never report "in scope: 0" and exit 0.
+        var root = Path.Combine(_dir, "game");
+        WriteCorrupt(root, "models/objects/props/_cmn/other.cmdl");
+
+        var extensionError = Assert.Throws<ArgumentException>(() => BatchRunner.Run(new BatchOptions
+        {
+            GameRoot = root, OutLibDir = Path.Combine(_dir, "lib"),
+            Under = ["models/objects/props/_cmn/other.cmdl"], Extensions = ["cmsh"], Jobs = 1,
+        }));
+        Assert.Contains("other.cmdl", extensionError.Message);
+        Assert.Contains("--ext cmsh", extensionError.Message);
+
+        // Same for a source below the output library (the library may live inside the tree).
+        WriteCorrupt(root, "lib/inside.cmsh");
+        var outputError = Assert.Throws<ArgumentException>(() => BatchRunner.Run(new BatchOptions
+        {
+            GameRoot = root, OutLibDir = Path.Combine(root, "lib"),
+            Under = ["lib/inside.cmsh"], Extensions = ["cmsh"], Jobs = 1,
+        }));
+        Assert.Contains("inside.cmsh", outputError.Message);
+        Assert.Contains("below --out", outputError.Message);
     }
 
     [Fact]

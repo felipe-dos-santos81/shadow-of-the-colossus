@@ -28,7 +28,10 @@ static void PrintUsage()
     Console.Error.WriteLine("  bp-convert inspect <file>    print size, first 32 header bytes and a library parse summary");
     Console.Error.WriteLine("  bp-convert convert --root <game> --out <lib> [--under <dir|file>]... [--ext cmsh] [--clips <name,...>] [--jobs N] [--force]");
     Console.Error.WriteLine("                               convert every matching source; outcomes recorded in <lib>/catalog.json");
-    Console.Error.WriteLine("                               --clips bakes <game>/cp3shadow/anim/<name>.anb into each glb");
+    Console.Error.WriteLine("                               --clips bakes <game>/cp3shadow/anim/<name>.anb into each glb;");
+    Console.Error.WriteLine("                               scope it to one model with --under <file>: every baked track must");
+    Console.Error.WriteLine("                               map into that model's skeleton, so a directory-scope run fails on");
+    Console.Error.WriteLine("                               non-matching sources. Recorded-ok sources need --force to rebake.");
     Console.Error.WriteLine("  bp-convert report --out <lib> [--top N]");
     Console.Error.WriteLine("                               print catalog counts and the top-N failure reasons");
 }
@@ -158,6 +161,13 @@ static int ConvertCommand(string[] args)
         + $"ext={string.Join(",", options.Extensions)}{clipsLabel} jobs={options.Jobs} "
         + $"force={force.ToString().ToLowerInvariant()}");
 
+    if (options.Clips.Count > 0 && IsDirectoryScope(root, under))
+    {
+        Console.Error.WriteLine("bp-convert convert: warning: --clips is set with a directory scope; every source in "
+            + "scope gets the clips baked in, and sources whose baked tracks do not map into their skeleton will "
+            + "fail to convert. Use --under <file> to bake clips into a single model.");
+    }
+
     try
     {
         var summary = BatchRunner.Run(options, Console.WriteLine);
@@ -269,6 +279,11 @@ static int ReportCommand(string[] args)
         return 1;
     }
 }
+
+/// <summary>True when <c>--under</c> names a directory or is empty (the whole tree).</summary>
+static bool IsDirectoryScope(string root, List<string> under) =>
+    under.Count == 0
+    || under.Any(path => Directory.Exists(Path.Combine(root, path.Replace('\\', '/'))));
 
 static bool TryValue(string[] args, ref int i, out string? value)
 {
