@@ -78,4 +78,22 @@ public class AssetResolverTests
 
         Assert.Equal(130_155, resolver.Count);
     }
+
+    [Fact]
+    public void Count_SkipsAppleMetadataFiles()
+    {
+        // Finder drops .DS_Store beside real content; it is not game data and must not be indexed.
+        var dir = Directory.CreateTempSubdirectory("bpconvert-resolver-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "wander.cmsh"), "not a real model");
+            File.WriteAllText(Path.Combine(dir, ".DS_Store"), "junk");
+
+            Assert.Equal(1, new AssetResolver(dir).Count);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

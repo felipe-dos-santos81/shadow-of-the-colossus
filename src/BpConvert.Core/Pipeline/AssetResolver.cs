@@ -110,6 +110,13 @@ public sealed class AssetResolver
 
         foreach (var path in Directory.EnumerateFiles(_gameRoot, "*", SearchOption.AllDirectories))
         {
+            // Apple metadata (.DS_Store, ._*) is not game data: it must not reach the index, and
+            // skipping it keeps Count equal to the tree's file count at extraction time.
+            if (Path.GetFileName(path).StartsWith('.'))
+            {
+                continue;
+            }
+
             var fullPath = Path.GetFullPath(path);
             var folded = RelativeToRoot(fullPath).ToLowerInvariant();
             if (index.TryAdd(folded, fullPath))
