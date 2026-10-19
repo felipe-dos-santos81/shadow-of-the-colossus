@@ -4,9 +4,9 @@ RE-3 (S3 "the arena" design §5): the composition family — `cp3shadow/data/fs/
 `cp3shadow/data/fs/stagetexseg_def/*.fs`, `cp3shadow/data/fs/rootseg.fs`,
 `workspaces/_ps4/shadow.cwks`, `cp3shadow/path/**/*.path`, `cp3shadow/camdata/*.csv` — mined
 from measured structure, not binary RE. This file grows with the workstream: **§1 (commit 1)** is
-the `.fs` family + the inventory; **§2 (this commit)** the workspace dependencies file
-(`shadow.cwks`) + the arena path list; §3–§4 the arena manifest and the escalation decision
-(W2.2/W2.3).
+the `.fs` family + the inventory; **§2 (commit 2)** the workspace dependencies file
+(`shadow.cwks`) + the arena path list; **§3–§4 (this commit)** the arena manifest (the
+composition) + the escalation decision.
 
 Every value below is measured with `tools/re/stage/probe.py`; the 2026-10-18 recon's starting
 facts were **re-verified, not trusted** — the two deltas found are recorded in place (§1.2).
@@ -19,13 +19,19 @@ offsets, sizes, and identifiers appear here — no game content.
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; `python3` 3.12.12 (stdlib only) |
 | Repo / branch | `sotc-native`, `re3-stage` |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
-| Probe | **`tools/re/stage/probe.py`** — `fs <file> [--json out]`, `classify`, `check-fs`, `cwks [<file>] [--json out] [--arena-out out]`, `check-cwks` |
+| Converted library | `/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library` (the main checkout's `out/library`, ~12 GB, gitignored — a worktree has none) |
+| Probe | **`tools/re/stage/probe.py`** — `fs <file> [--json out]`, `classify`, `check-fs`, `cwks [<file>] [--json out] [--arena-out out] [--match substr]`, `check-cwks`, `compose --library <dir> --out <file> [--paths <file>]`, `check-manifest [<file>] --library <dir>` |
 
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 python3 tools/re/stage/probe.py check-fs                 # 10/10 gating assertions pass (exit 0)
 python3 tools/re/stage/probe.py classify                 # one line per family (verbatim below)
 python3 tools/re/stage/probe.py fs 1010.fs --json out/re/stage/1010.fs.json
+python3 tools/re/stage/probe.py check-cwks               # 13/13 gating assertions pass (exit 0)
+python3 tools/re/stage/probe.py compose --library /Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library \
+    --out out/re/stage/valus.manifest
+python3 tools/re/stage/probe.py check-manifest --library /Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library \
+    out/re/stage/valus.manifest                          # 11/11 gating assertions pass (exit 0)
 ```
 
 Files resolve against the game tree; a bare `.fs` name also resolves inside the family's
@@ -408,3 +414,142 @@ stage segment lists + 3 texture-segment defs exactly once, at the end:
 All 13 are `[u8 L]$path` tagged entries; the 10 stage ids are among the 1,896 stage `.fs` files
 (§1), the 3 defs among the 112 `stagetexseg_def` files. Evidence dumps (gitignored):
 `out/re/stage/cwks.dump.txt`, `check-cwks.dump.txt`, `shadow.cwks.json`, `arena_paths.txt`.
+
+## 3 · The arena manifest (the composition)
+
+### 3.1 The instance set — the two level sets, minus the collision glbs
+
+W2's deliverable to W1 is **`out/re/stage/valus.manifest`** (gitignored, regenerable at any
+time): the Valus arena composed from the converted library, in the W1↔W2 schema
+(`docs/notes/scene-manifest.md`, W1's committed doc). The instance set is the library's two
+arena level sets (the spec §1 extent), collision geometry excluded:
+
+| set (under the library) | glb files | `*_collision*` | instances |
+|---|---|---|---|
+| `models/shadow/levels/arena_01/` | 13 | 1 | **12** |
+| `models/shadow/levels/arena_01_entrance/` | 22 | 4 | **18** |
+| total | **35** | **5** | **30** |
+
+**The delta against the plan's pin** (re-measured, recorded, not forced): the plan's
+`check-manifest` pin says "35 instances (13 + 22)"; the two directories hold 35 glb *files*,
+of which 5 are `*_collision*` — under the plan's own set definition ("every non-`_collision`
+`.glb`") the instance count is **30**, and `check-manifest` pins the derivation
+(35 files − 5 collision = 30) instead of forcing 35.
+
+**Why 30 is the data-supported reading — the cross-check against W2.2's path list.** The
+pool answers it twice:
+
+- **`arena_01`** — the saved 142-entry list (`out/re/stage/arena_paths.txt`, sha256
+  `13e3bb60…`, §2.3) references **12/12** non-collision `cmsh` and **0** collision `cmsh`
+  (the arena's collision *definition* is the sibling `arena_01.cclm`); `compose`
+  cross-checks both directions and fails loudly on any mismatch.
+- **`arena_01_entrance`** — outside the saved list's pattern (`levels/arena_01/`); the
+  pool's own entrance entries (extracted with `cwks --match arena_01_entrance --arena-out
+  out/re/stage/entrance_paths.txt`: **187 entries, 43 distinct**) contain exactly the
+  **18/18** non-collision `cmsh` and **no** collision `cmsh` — the pool names their
+  collision *definitions* instead (4 distinct `.cclm` + 11 distinct `.cmdl` entrance
+  entries, none a `.cmsh`).
+
+I.e. the workspace's dependency list references exactly the 30 non-collision meshes and
+none of the 5 collision ones — the collision `cmsh` are collision geometry (what the
+workspace names are their `.cclm` definitions), not render dependencies; consistent with
+spec §1 ("no wall/prop collision; collision is S4's RE-5 pull"). The 4 entrance collision
+`cmsh` sources exist in the game tree but are not part of the render composition.
+
+### 3.2 Transforms — identity, the glbs are already world-positioned
+
+Every instance carries the identity TRS (`0 0 0 0 0 0 1 1 1 1`): the converted arena glbs
+are authored in world coordinates, so there is no placement transform to apply. The bounds
+evidence (re-derived from the accessors on every `check-manifest` run; the plan's numbers
+are these rounded — x/z to integers, the entrance's y to 1 dp):
+
+| level glb | x | y | z |
+|---|---|---|---|
+| `arena_01.glb` | `[237.37, 431.39]` | `[27.87, 69.85]` | `[297.56, 390.04]` |
+| `arena_01_entrance.glb` | `[258.60, 345.35]` | `[-1.68, 81.49]` | `[249.30, 306.56]` |
+
+The sets meet near `z ≈ 300` (the arena starts at `z = 297.56`, the entrance reaches
+`z = 306.56`). The union bounds over each whole set are larger than its level glb's (the
+occluders/shadow-casters/skirts extend past it — the arena set's union is
+`x[186.1, 490.4] y[13.5, 110.9] z[286.2, 502.3]`), and the per-glb positions are world
+coordinates (e.g. the hero rock sits at `x[295.50, 298.13] z[303.43, 306.51]`, the
+entrance occluder at `x[264.96, 345.03]`), which is what makes identity correct for every
+instance.
+
+### 3.3 The spawn — a labeled builder pick
+
+The manifest's spawn is a **builder pick, not data-derived** — the manifest's header
+comment says so, and this section records why and what the candidates were:
+
+- **The pick** — `spawn 309.312 4.394 285.403 0`: the `arena_01_entrance_ground.glb`
+  footprint's centre `(309.3118, 285.4028)` at its surface height `4.3940 m` (ray-cast on
+  the mesh's triangles), facing `+Z` (yaw `0` — the app's convention is yaw 0 = +Z). The
+  passage floor climbs from `y ≈ 4.4` at `z ≈ 285` to the bowl floor at `y ≈ 30` where
+  the sets meet, so the player starts at the entrance floor and walks into the arena. The
+  pick lies well inside the entrance bounds; `check-manifest` re-verifies it against the
+  re-derived bounds.
+- **Candidate 1, not usable as measured** — `cp3shadow/path/pathdata/f4_small.path`: the
+  first float4 at offset `0x40` is `(-0.307, 10.457, 20.034, 1.0)` (re-verified), but its
+  space does not match the arena's world (|x| ≈ 0.3 vs the arena's `x[237, 431]`; `z ≈ 20`
+  vs `[249, 391]`), so no spawn point can be placed from it as measured. The file opens
+  `qath` + `u32 3376` (= its own size) + `u32 48 …` — the `.path` format and its
+  coordinate space stay unresolved (recorded for later targets, §4).
+- **Candidate 2, not usable as measured** — the camdata camera tables: the MINO stages
+  `16 / 55 / 63` (re-measured: `stage16` holds `MINO_BOOT_CAMERA1/2` + `MINO_C_*` names,
+  `stage55` `MINO_A_*` incl. `st17a_mino_A_start_camera`, `stage63` `MINO_B_*`) are the
+  minotaur-family (MINO A/B/C) candidates for the Valus arena, but the tables hold camera
+  *parameters* (`Camera, Frame, Focal Distance, Parallax, FOVAdjust, NearPlaneAdj,
+  CharMotionBlur`) — no position or facing column — so no spawn follows from them as
+  measured.
+
+### 3.4 The manifest + its checks
+
+```bash
+python3 tools/re/stage/probe.py compose --library <out/library> --out out/re/stage/valus.manifest
+python3 tools/re/stage/probe.py check-manifest --library <out/library> out/re/stage/valus.manifest
+```
+
+As emitted (2026-10-18; 31 directive lines = 30 `instance` + 1 `spawn`, plus a 10-line
+provenance header; sha256 `088e621894ecd38312526bdac11916fb355a645ecef4d0bace91e53b2440c1d0`):
+one `instance` per line, sorted (the `arena_01` block, then `arena_01_entrance`), every
+transform the identity, then the labeled spawn. `compose` writes nothing unless the
+instance set, the count pins, and the path-list cross-check all hold, and round-trips the
+text through the schema before writing. `check-manifest` (11/11 gating assertions, exit 0)
+re-derives the library-side facts rather than trusting the manifest: the 13 + 22 file
+counts and the 1 + 4 collision split, the exact instance set (both directions, duplicates
+rejected), every glb's existence, the identity transforms, one spawn, the spawn inside the
+re-derived entrance bounds, and both bounds-evidence matches above. A malformed manifest
+(unknown directive, wrong token count, `nan`/`inf`/`1e999`/`1.5x`) renders as structured
+FAILs with `<file>:<line>: <reason>` and exit 1 — the schema's own failure shape; a
+missing library or path list is a one-line cause, exit 2. The manifest is gitignored and
+never committed; W1.5's acceptance consumes exactly this path (the schema doc, §Output
+path).
+
+## 4 · The escalation decision (Ghidra: not triggered)
+
+Spec §5 allows one escalation — "if reference resolution stalls, a bounded Ghidra pass on
+the `.fs`/workspace loader" — and pins that a curated composition may appear only as a
+**labeled demo aid**. **It was not triggered, and it was not needed**: the manifest's
+instance set is resolved from data (the converted library's level sets, cross-checked
+against the workspace pool, §3.1), and the one non-data element — the spawn — is labeled
+as a builder pick (§3.3), not presented as data-derived.
+
+What remains open, recorded for later targets (not on S3's critical path):
+
+1. **The `.fs` hash32 namespace** (§1.3) — unresolved; no convention covers more than 8 of
+   the 17,686 targets, and the near-misses are birthday collisions.
+2. **The stage↔set mapping** — which stage id names the arena's composition. The
+   workspace's own stage-family paths (the cwks tail's 13, §2.5) are the only stage lists
+   it names; the mapping stage-id ↔ level-set (and thus a per-stage instance set) is
+   unresolved. The arena's set did not need it: the level directories + the pool's arena
+   paths gave the set.
+3. **The `.path` space** — `f4_small.path`'s float4 lives in a space that does not match
+   the arena's world (§3.3), so the `.path` family's coordinate frame and role stay
+   unresolved; a data-derived spawn needs it.
+4. **The `.cwks` record semantics** (§2.4) — the four record fields remain undecoded.
+
+If a future milestone needs these (a data-derived spawn, per-stage composition, the
+dependency graph), the escalation is the same bounded Ghidra pass on the shipped eboot's
+stage/workspace loader (`ResourcePool::LoadResourceDependencies` and the `.fs`/stage
+loader) — RE-1's "data mining first; Ghidra as needed" pattern. For S3 it stayed unused:
+W1 consumes the manifest only, and the manifest is complete without them.
