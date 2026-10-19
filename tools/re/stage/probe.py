@@ -619,6 +619,7 @@ def cmd_cwks(args):
     if args.json:
         out = os.path.abspath(args.json)
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        first = min(5, len(records))
         with open(out, "w") as fh:
             json.dump(
                 {
@@ -629,14 +630,30 @@ def cmd_cwks(args):
                     "record_count": parsed["count"],
                     "record_start": "0x%X" % CWKS_RECORD_START,
                     "record_size": CWKS_RECORD_SIZE,
+                    "records_sample": {
+                        "first": [list(r) for r in records[:first]],
+                        "last": [list(r) for r in records[-first:]],
+                    },
+                    "field0": {
+                        "non_decreasing": decreases == 0,
+                        "min": records[0][0],
+                        "max": records[-1][0],
+                        "equal_adjacent_pairs": equals,
+                    },
                     "pool_start": "0x%X" % parsed["pool_start"],
-                    "records": [list(r) for r in records],
                     "entry_count": len(entries),
                     "tagged": sum(1 for _, k, _ in entries if k == "tagged"),
                     "bare": sum(1 for _, k, _ in entries if k == "bare"),
-                    "entries": [
-                        {"offset": "0x%X" % o, "kind": k, "path": p} for o, k, p in entries
-                    ],
+                    "entries_sample": {
+                        "first": [
+                            {"offset": "0x%X" % o, "kind": k, "path": p}
+                            for o, k, p in entries[:first]
+                        ],
+                        "last": [
+                            {"offset": "0x%X" % o, "kind": k, "path": p}
+                            for o, k, p in entries[-first:]
+                        ],
+                    },
                     "arena": {
                         "match": CWKS_ARENA_MATCH,
                         "count": len(arena),
