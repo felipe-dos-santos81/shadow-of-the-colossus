@@ -105,10 +105,10 @@ Plus two nested walks:
 - the table-descriptor array (`+0x3C` target, count `*(int*)(file+0x38)`, stride `0x1C`): per entry,
   `+0x0C` ← `+0x14` and `+0x10` ← `+0x18`.
 
-**The mirror table is the loader's input, not a copy**: the raw `tag<<16 + offset` form is never read by the
-runtime (RE-1 §1.1's "tagged pointer" is a packer artifact; the untagged mirror at `+0x50..0x6C` is what the
-loader consumes). The RE-1 §3.1 correction ("addition with carry") stays true as a *property of the raw
-bytes* but is moot at runtime.
+**The mirror table is the loader's input, not a copy**: on this loader/fixup path the raw `tag<<16 + offset`
+form is never read — the untagged mirror at `+0x50..0x6C` is what the loader consumes (RE-1 §1.1's tag half
+is a packer artifact *for this path*; a whole-binary absence is not claimed here). The RE-1 §3.1 correction
+("addition with carry") stays true as a *property of the raw bytes* but is moot at runtime.
 
 ### 1.3 `FUN_00588900` — the attach
 
@@ -130,9 +130,10 @@ Measured behaviour for a real `.anb`/`.skb` (`file+0x1C == 0`, `param_6 != 0` �
    passes to `FUN_0066fe60` (assembly `0x00588d0e`–`0x00588d3d`);
 9. `node+0x40 = file`; frees the +0x30-array entries whose `+0x38` state is set (`FUN_0057aa50`) and the file.
 
-`FUN_00589310` (the wrapper): allocates the node (`FUN_00577840(…, 0x88, 0x88 + extra, …)`; the extra is
-`iVar7*0x20 + 0xa0` with `iVar7 = 1 − max(file+0xC, 1)` = **0** for `.anb`/`.skb`, so the node is exactly
-0x88 B), calls `FUN_00588900`; on success `node+0x40 = *returned` (the 0x70 object), `node+0x48 = **returned`
+`FUN_00589310` (the wrapper): allocates the node (`FUN_00577840(pool, 1, 0x88, extra, …)` with
+`extra = (iVar7 ? iVar7*0x20 + 0xa0 : 0) + (iVar2 ? iVar2*0x20 + 0xa0 : 0)`, `iVar7 = 1 − max(file+0xC, 1)`,
+`iVar2 = file+0x1C` — both terms are 0 for `.anb`/`.skb`, so the node is exactly 0x88 B), calls
+`FUN_00588900`; on success `node+0x40 = *returned` (the 0x70 object), `node+0x48 = **returned`
 (its first 8 bytes = the re-based `file+0x10`); on failure `FUN_00588e80(node, file, re-based(file+0x10), …)`.
 `FUN_00588830` is the alternate attach (pre-allocated node) and calls `FUN_00588e80` in both branches.
 
@@ -152,7 +153,8 @@ file+0x10 = 31-bit(lVar15 + file+0x4C);   /* lVar15 = the first materialized blo
 **So the runtime patches `file+0x10` (using the duplicate `+0x4C`) to point at
 `materialized_data_region + (+0x4C)` — the motion structure lives *inside the materialized copy of the data
 region*.** For both samples the single section record is the data region (`src = file+0x110`,
-`size = file+0x2A0−0x110` per file, `type = 1`, `align = 0x10`), so:
+`size = 7224` (player) / `2900` (horse) — the data size = `table1_start − 0x110`, the value at `@0xA0`,
+`type = 1`, `align = 0x10`), so:
 
 ```
 motion structure (file) = file[0x110 + *(u32)@0x10]
@@ -198,16 +200,16 @@ the frame count via `FUN_005fc5d0` → `(int)*(short *)(motion + 4)`. So the sam
 
 | offset | `player_a_stand` | `horse_a_add_horse_kick` | meaning (measured/inferred) |
 |---|---|---|---|
-| `+0x00` | `0x0000000C` | `0x0000000C` | version word: byte 0 = version (12; population 7…12), bit 16 = the **12-byte-record flag** (clear here) |
+| `+0x00` | `0x0000000C` | `0x0000000C` | version word: byte 0 = version (12 here; full population 4…12 — v4:3, v5:6, all flag-set `objanim_*`), bit 16 = the **12-byte-record flag** (clear here) |
 | `+0x04` | `0x8002004C` | `0x80020010` | low u16 = **frame count** (76 / 16) — read by `FUN_005fc5d0`/sampler |
 | `+0x08` | `0x000019B4` | `0x00000A7C` | offset → the per-track **type byte array** |
-| `+0x0C` | `0x000001C8` | `0x00000060` | offset → the **pre-region descriptor** (§2.3); the version>5 nested fixup re-bases its `+0x18` ([6] slot) — applies to the player (`0x8002004C…` has the `0x2…` flag nibble), not the horse (`0x80020010…`); both samples' slot is 0 (no-op) |
+| `+0x0C` | `0x000001C8` | `0x00000060` | offset → the **pre-region descriptor** (§2.3); the version>5 nested fixup re-bases its `+0x18` ([6] slot) — the condition holds for both samples (version 12, bits 48–51 nibble = `0x2` in both `0x8002xxxx` words); the slot is 0 in both → no-op |
 | `+0x10` | `0x00001940` | `0x00000A04` | offset → the per-track **blob pointer array** (u32 × tracks) — runtime `+0x18` |
 | `+0x14` | `0x0000001D` | `0x0000001E` | **track count** (29 / 30) — runtime `+0x10` |
 | `+0x18` | `0x00000001` | `0x00000001` | count of the `+0x1C` array — runtime `+0x14` |
 | `+0x1C` | `0x00001BDC` | `0x00000ACC` | offset → a 16-byte-element array |
 | `+0x24` | `0x00000000` | `0x00000AE0` | offset (version>3 fixup) |
-| `+0x28` | `0x00001BF0` | `0x00000AF0` | offset (a 2-word mini-table `{5, 12}` precedes the structure — `player`: file `0x1D00`) |
+| `+0x28` | `0x00001BF0` | `0x00000AF0` | offset → one word (`5`) immediately before the structure (`player`: file `0x1D00` = `0x00000005`; the next word is the structure's own `+0x00`); horse: `{0, 0}` |
 | `+0x3C` | `0x00000000` | `0x00000B00` | offset (version>8 fixup) |
 | `+0x44` | `0x000001E0` | `0x00000078` | offset → **t1[0]** — the first track region (§2.3), confirmed by the region's first word = `t2[0] = 0` |
 
@@ -229,8 +231,8 @@ All offsets are **data-region-relative** (data region = file `0x110 .. t1p`; `t1
     smooth descent); `horse` track 0 at file `0x18C` (`32767 23238 4039 −16637 −30832 −32766 −31121 … 21256`
     — a sine-like curve). Matches §6.3 case `0xD` ("1 × int16 per key").
   - **types 3–6 (quaternion-ish)**: a u32 series whose **low int16 is a smooth symmetric component**
-    (e.g. `player` track 0 at file `0x2F4`: lo16 `16679 16166 15139 12575 11034 8468 6414 4361 2309 1282
-    769 1282 2822 5893 10505 16679` — U-shaped, **first == last**), while the high half carries the other
+    (e.g. `player` track 0 at file `0x2F4`: lo16 `16679 16166 15139 13087 11034 8468 6414 4361 2309 1282
+    769 1282 2822 5901 10520 16679` — U-shaped, **first == last**), while the high half carries the other
     components. The exact 4-component packing is **open** (§4) — the §6.3 packed formulas (cases 3–6, 0xE) do
     not reproduce smooth quaternions on these words (tested, dots ≫ 1).
 - **The leading-run relation** (RE-1 §3.2's "t2[i] = t1[i−1]+4", now explained): the region tables t1/t2 are
@@ -248,7 +250,8 @@ The data region starts with a **per-frame key series**: file `0x110` up to the f
   count, dots `0.9734..1.0000`, ending at file `0x2D8`; then **6 float32s** (24 B) = the §6.2 sample-descriptor
   offset/scale pairs (`0x3c11aa3e 0x3c8167b3 0x3f3eb8b4 0x3b9639fe 0xbccd3e19 0x3d88a329`).
 - `horse_a_add_horse_kick`: 16 keys = the frame count, 6-byte stride, same layout (its int16 triplets are
-  *not* in [−1,1] as raw values — the descriptor's offset/scale is needed to normalize them); 6 floats follow.
+  *not* in [−1,1] as raw values — norms² ≈ 2.0–2.25 on the first keys; that the descriptor's offset/scale
+  normalizes them is **INFERRED**, not yet verified); 6 floats follow.
 - Layout: `[frames × 6 B keys][6 × float32]` = the whole pre-region (`0x1E0` B for the player, `0x78` for the
   horse — both exact). The structure's `+0x0C` points at the 6-float tail: i.e. the tail **is** the start of
   the §6.2 sample descriptor (`floats[0..5]` = the offset/scale pairs; its `[6]` pointer slot at descriptor
@@ -267,11 +270,14 @@ Re-derived under the C3 rule (6-byte int16 triplets, `|v| ≤ 1`, dots of derive
 `0xD0` into the data region — i.e. **4 bytes into key 34 of the pre-region series** (0xD0 = 34·6 + 4). The
 "series" is the tail of the real pre-region series read at a 4-byte phase shift; the recorded break lands
 where the series ends and the descriptor floats begin (~file `0x2D8`). **The real series is at file `0x110`
-with 76 keys (§2.3) — the C3 lead is a phase artifact of it, not a record's key data.** The other C3 leads
+with 76 keys (§2.3) — the C3 lead is a phase artifact of it, not a record's key data.** (The dot figures use
+the unsigned derived-`w` variant, as C3's recorded numbers do; the §6.3 `0xB` sign bit is not applied —
+applying it makes the series non-smooth — a precision note from the verification.) The other C3 leads
 (record 48's run at `0x1A3A`; the 178-window cluster at `0x1CB8`; record 57's two runs at `0x1C1C`/`0x1CB8`)
-fall inside blob/key data regions under the §2 mapping and are the same class of shifted readings — they are
-recorded as **superseded by the structure** (the key data itself is int16-ish streams that pass the norm test
-in shifted alignments).
+fall inside track regions under the §2 mapping (measured: `0x1A3A` → region 19; `0x1CB8`/`0x1C1C` → region
+48); that they are the same class of shifted readings is **INFERRED** (not re-derived) — they are recorded as
+**superseded by the structure** (the key data is int16-ish streams that pass the norm test in shifted
+alignments).
 
 ### 3.2 t1/t2 tables (RE-1 §3.2's open relation, now resolved)
 
@@ -283,13 +289,19 @@ size histograms exactly (e.g. `player`: 340, 340, 176, 340, 356, 176 … and the
 ### 3.3 The flag-set variant (the 12-byte records) — validated on real data
 
 Population scan (300 random `.anb` of 4,455, `out/re/`): **92/300 (31%) have bit 16 of the version word set**
-(version byte histogram 7:3, 8:1, 9:2, 10:3, 11:16, 12:275; frame counts 1…851). For flag-set files the
-records at `0x110 + (disk +0x10)` are 12-byte `{type, p1, p2}` groups with types in `1..0x30` — e.g.
-`objanim_leo_a_jump_fall.anb` (v8, 21 frames, 15 tracks): 15 records of type 13 with `p1 = 0, 0x15, 0x2A,
-0x3F, 0x54, 0x69 …` (**k × the frame count** — a key-index base) and `p2 = 0x14C, 0x18C, 0x1CC, 0x20C …`
-(+0x40 per track — key-data offsets); `camera_demo_end07_cut007.anb` (v12, 481 frames, 1 track): type 36,
-`p1 = 0`, `p2 = 0x2214` (just before the structure at `0x2228`). **The C3 sampler's 12-byte record layout is
-confirmed** — for the flag-set variant, whose records the sampler reads at stride `0xC` (§1.6).
+(version byte histogram 7:3, 8:1, 9:2, 10:3, 11:16, 12:275; frame counts 1…851). Full population (4,455 files,
+0 unreadable): **1,461 (32.8%) flag-set**; versions 4:3, 5:6, 7:30, 8:5, 9:23, 10:93, 11:145, 12:4,150 — the
+v4/v5 files are all flag-set `objanim_*`. For flag-set files the records at `0x110 + (disk +0x10)` are
+12-byte `{type, p1, p2}` groups with types in `1..0x30` (all 1,461 flag-set files type-checked: range 1..0x30,
+0 violations) — e.g. `objanim_leo_a_jump_fall.anb` (v8, 21 frames, 15 tracks): 15 records of type 13 with
+`p1 = 0, 0x15, 0x2A, 0x3F, 0x54, 0x69, 0x7C, 0x8C, 0x9F, 0xAF, 0xC2, 0xD2, 0xE5, 0xF5, 0x108` — a
+**monotone key-index base** whose first six values coincide with `k × frames` (21) but then diverge (124 vs
+126 … 264 vs 294); only **44/92** flag-set sample files fit `k × frames` at all (e.g. `objanim_tree_down_xm`:
+0, 10, 20, 31 with 24 frames) — and `p2 = 0x14C, 0x18C, 0x1CC, 0x20C …` (+0x40 per track — key-data offsets);
+`camera_demo_end07_cut007.anb` (v12, 481 frames, 1 track): type 36, `p1 = 0`, `p2 = 0x2214` (=
+`struct+0x10 − 0x14`; the record array sits at file `0x2338` = `struct − 0x10`, the structure at file `0x2348`).
+**The C3 sampler's 12-byte record layout is confirmed** — for the flag-set variant, whose records the sampler
+reads at stride `0xC` (§1.6).
 
 ## 4 · What this changes / open questions
 
@@ -311,6 +323,8 @@ confirmed** — for the flag-set variant, whose records the sampler reads at str
      are measured; their application to the type-`0xD`/3–6 key values is not yet verified.
   5. **`FUN_0058a110`/`FUN_00b23a50`** (the name/object and table walks) — decoded at the call-shape level
      only; not needed for the key decode.
+  6. **The pre-region "root" series' role** — decoded (the per-frame 6-byte keys + the descriptor) but the
+     code path that samples it is open; folded into T1.
 
 ## 5 · Feasibility verdict
 
@@ -324,8 +338,8 @@ blockers were found; Ghidra is fully usable (headless, deterministic, project co
 
 | # | goal | inputs | outputs | verification idea |
 |---|---|---|---|---|
-| T1 | **Flag-clear key formats end-to-end**: for each blob type (0, 2, 3, 4, 5, 6, `0xC`, `0xD`, `0xE`) pin the blob layout, key-data format (stride/packing), the descriptor application and the key count | `player_a_stand`, `horse_a_add_horse_kick`, a flag-clear corpus (208/300 of the sample) | `tools/re/anb/parse2.py` (or an extended `probe.py` mode) emitting per-track key arrays | adjacent-key dots > 0.9 on long tracks; first == last on looped tracks; type-`0xD` scalar smoothness; descriptor-normalized norms ≤ 1 |
-| T2 | **Flag-set variant**: the `{type, p1, p2}` semantics (key-index base / key offset) and the sampler's per-type dispatch for types 1…0x30 | `objanim_leo_a_jump_fall.anb`, `camera_*` (92/300 flag-set sample) | the record-role table + a per-type sample reader | key index base = k × frames (measured); decode one type-13 track and check smoothness |
+| T1 | **Flag-clear key formats end-to-end**: for each blob type (0, 2, 3, 4, 5, 6, `0xC`, `0xD`, `0xE`) pin the blob layout, key-data format (stride/packing), the descriptor application, the key count, and the pre-region root series' role (consumer/application) | `player_a_stand`, `horse_a_add_horse_kick`, a flag-clear corpus (208/300 of the sample) | `tools/re/anb/parse2.py` (or an extended `probe.py` mode) emitting per-track key arrays | adjacent-key dots > 0.9 on long tracks; first == last on looped tracks; type-`0xD` scalar smoothness; descriptor-normalized norms ≤ 1 |
+| T2 | **Flag-set variant**: the `{type, p1, p2}` semantics (key-index base / key offset) and the sampler's per-type dispatch for types 1…0x30 | `objanim_leo_a_jump_fall.anb`, `camera_*` (92/300 flag-set sample) | the record-role table + a per-type sample reader | `p1` = a monotone key-index base with per-track increments (measured: `objanim_leo_a_jump_fall` = 0, 21, 42, 63, 84, 105, 124, 140, 159, 175, 194, 210, 229, 245, 264; only 44/92 sample files fit `k × frames`); decode one type-13 track and check smoothness |
 | T3 | **Sampler loop closed**: connect `FUN_005fd900`'s dispatch to both variants; pin the seconds→frames conversion (above `FUN_005fc6b0`) and confirm the frame count source (`motion+4`) | Ghidra project, C3 logs | notes §7 addition + the conversion chain | `FUN_005fc6b0`'s callers walked; the 30.0 constant cross-checked |
 | T4 | **Re-run the gate**: update the curve extraction to the §2 model and re-run `check-curves`; flip RE-1 §5's verdict if it passes | `probe.py`, the new reading | `check-curves` output + `docs/notes/re-anb.md` §7 (append) | the gate's own assertions (norms, dots, timing) |
 | T5 | **Capture cross-validation** (if the capture workstream is ready): compare a decoded pose at a known frame with a captured reference | the port rig (capture-decode) | a pose-diff report | semantic ground truth for one record |
