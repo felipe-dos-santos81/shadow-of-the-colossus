@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using BpConvert.Core.Anim;
 using BpConvert.Core.Aqua;
 using BpConvert.Core.Gltf;
+using BpConvert.Core.Model;
 using BpConvert.Core.Textures;
 
 namespace BpConvert.Core.Pipeline;
@@ -42,8 +44,14 @@ public static class ModelConverter
     /// <c>$</c>/<c>****</c> references, default-material fallbacks, skipped sub-meshes and refused
     /// textures are reported here — each is a degradation, not a failure.
     /// </param>
+    /// <param name="clips">
+    /// Optional <c>--clips</c> scope, resolved once by <see cref="ClipSet.Resolve"/>. Every track
+    /// is mapped against this model's skeleton joint names; a clip with any unresolved track fails
+    /// the conversion (never a partially attached animation). <c>null</c>/empty = M0 shape.
+    /// </param>
+    /// <exception cref="InvalidDataException">A clip has an unresolved track against this model.</exception>
     public static ConvertResult Convert(string gameRoot, string sourceRelPath, string outLibDir,
-        Action<string>? note = null)
+        Action<string>? note = null, IReadOnlyList<ClipSource>? clips = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(gameRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceRelPath);
@@ -59,6 +67,10 @@ public static class ModelConverter
                 $"model not found in the game tree: '{sourceSpelling}'", Path.Combine(root, sourceSpelling));
 
         var model = new AquaModelAdapter(resolver).Load(sourceAbsolute, note);
+
+        // Map before writing anything: a clip that cannot fully address this skeleton fails the
+        // source here, with no partial glb or texture side effects.
+        var animations = AttachClips(clips, model.Skeleton);
 
         var sourceRelative = Relative(root, sourceAbsolute);
         var glbPath = Path.Combine(outLibDir, ToHost(Path.ChangeExtension(sourceRelative, ".glb")));
@@ -99,11 +111,57 @@ public static class ModelConverter
             }).ToList(),
             ReferencedTexturePaths = model.ReferencedTexturePaths.Select(path => Relative(root, path)).ToList(),
         };
+        output.Animations.AddRange(animations);
 
         var written = GlbWriter.Write(output, glbDirectory, Path.GetFileName(glbPath), textureUriMap);
 
         return new ConvertResult(written.GlbPath, pngPaths, output.Meshes.Count,
             output.Meshes.Sum(mesh => mesh.Positions.Length / 3));
+    }
+
+    /// <summary>
+    /// Decodes every clip and maps all of its tracks against <paramref name="skeleton"/>'s joint
+    /// names (the exact list the writer emits). Any unresolved track aborts the whole source: the
+    /// message names the clip, the count and a sample of the missing joint names.
+    /// </summary>
+    private static List<AnimClip> AttachClips(IReadOnlyList<ClipSource>? clips, SkeletonData? skeleton)
+    {
+        var animations = new List<AnimClip>();
+        if (clips is null || clips.Count == 0)
+        {
+            return animations;
+        }
+
+        var jointNames = skeleton?.Joints.Select(joint => joint.Name).ToList() ?? [];
+        foreach (var source in clips)
+        {
+            var (clip, bank) = ClipSet.Load(source);
+            var map = TrackMap.Map(clip, bank, jointNames, out var unresolved);
+            if (unresolved > 0)
+            {
+                var missing = new List<string>();
+                for (var track = 0; track < map.Length && missing.Count < 5; track++)
+                {
+                    if (map[track] >= 0) continue;
+                    missing.Add(track < bank.Records.Count
+                        ? bank.Records[track].Name
+                        : $"track {track} (past bank)");
+                }
+
+                throw new InvalidDataException(
+                    $"Clip '{clip.Name}': {unresolved} of {clip.Tracks.Count} tracks unresolved against "
+                    + $"the model's {jointNames.Count} joints (missing e.g. {string.Join(", ", missing)}); "
+                    + "refusing to attach a partially mapped clip.");
+            }
+
+            for (var track = 0; track < map.Length; track++)
+            {
+                clip.Tracks[track].JointIndex = map[track];
+            }
+            animations.Add(clip);
+        }
+
+        return animations;
     }
 
     /// <summary>Tree-relative, '/'-separated path of an absolute path below <paramref name="root"/>.</summary>

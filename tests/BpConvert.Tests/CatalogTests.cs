@@ -36,6 +36,17 @@ public class CatalogTests : IDisposable
         File.WriteAllText(target, content);
     }
 
+    /// <summary>Copies one real clip and its sibling bank into the fixture's cp3shadow tree.</summary>
+    private static void CopyClipAssets(string root)
+    {
+        foreach (var rel in new[] { "cp3shadow/anim/player_a_stand.anb", "cp3shadow/skel/player_a.skb" })
+        {
+            var target = Under(root, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(TestAssets.Sample(rel), target);
+        }
+    }
+
     [Fact]
     public void Catalog_RoundTrips()
     {
@@ -186,6 +197,84 @@ public class CatalogTests : IDisposable
         // ...and wrote the mirrored glb.
         Assert.Equal("models/objects/props/_cmn/obj_plank_01.glb", entry.Glb);
         Assert.True(File.Exists(Under(lib, entry.Glb!)));
+    }
+
+    [Fact]
+    public void Convert_ClipsOnAlreadyOkSource_PendsUntilForce()
+    {
+        // Ruling: a source already recorded ok without --force is never silently skipped when the
+        // run carries --clips — it is reported as pending, with the way forward spelled out.
+        var root = Path.Combine(_dir, "game");
+        CopyPlank(root, PlankRel);
+        CopyClipAssets(root);
+
+        var lib = Path.Combine(_dir, "lib");
+        var first = BatchRunner.Run(new BatchOptions
+        {
+            GameRoot = root, OutLibDir = lib, Under = ["models"], Extensions = ["cmsh"], Jobs = 1,
+        });
+        Assert.Equal(1, first.Converted);
+
+        var log = new List<string>();
+        var second = BatchRunner.Run(new BatchOptions
+        {
+            GameRoot = root, OutLibDir = lib, Under = ["models"], Extensions = ["cmsh"], Jobs = 1,
+            Clips = ["player_a_stand"],
+        }, log.Add);
+
+        Assert.Equal(1, second.InScope);
+        Assert.Equal(1, second.Pending);
+        Assert.Equal(0, second.Skipped);
+        Assert.Equal(0, second.Converted);
+        Assert.Equal(0, second.Failed);
+        Assert.Contains(log, line => line.Contains("re-convert with --force", StringComparison.Ordinal));
+
+        // The ok entry (and its outputs) is untouched: nothing was re-baked without --force.
+        Assert.True(Catalog.Load(lib).TryGet(PlankRel, out var entry));
+        Assert.Equal("ok", entry.Status);
+        Assert.Equal("models/objects/props/_cmn/obj_plank_01.glb", entry.Glb);
+    }
+
+    [Fact]
+    public void Convert_UnknownClip_FailsFastNamingTheAnb()
+    {
+        var root = Path.Combine(_dir, "game");
+        CopyPlank(root, PlankRel);
+
+        var lib = Path.Combine(_dir, "lib");
+        var expected = Path.Combine(root, "cp3shadow", "anim", "does_not_exist.anb");
+
+        var error = Assert.Throws<ArgumentException>(() => BatchRunner.Run(new BatchOptions
+        {
+            GameRoot = root, OutLibDir = lib, Under = ["models"], Extensions = ["cmsh"], Jobs = 1,
+            Clips = ["does_not_exist"],
+        }));
+
+        Assert.Contains("does_not_exist", error.Message);
+        Assert.Contains(expected.Replace('\\', '/'), error.Message.Replace('\\', '/'));
+        Assert.False(File.Exists(Catalog.FilePath(lib)));   // failed before any conversion/catalog write
+    }
+
+    [Fact]
+    public void Convert_UnderFile_ScopesToOneSource()
+    {
+        // The demo conversion needs exactly one model out of a directory full of them; a file
+        // passed to --under is that source and nothing else.
+        var root = Path.Combine(_dir, "game");
+        CopyPlank(root, PlankRel);
+        WriteCorrupt(root, "models/objects/props/_cmn/other.cmsh");
+
+        var lib = Path.Combine(_dir, "lib");
+        var summary = BatchRunner.Run(new BatchOptions
+        {
+            GameRoot = root, OutLibDir = lib, Under = [PlankRel], Extensions = ["cmsh"], Jobs = 1,
+        });
+
+        Assert.Equal(1, summary.InScope);
+        Assert.Equal(1, summary.Converted);
+        Assert.Equal(0, summary.Failed);
+        Assert.Equal(new[] { PlankRel }, Catalog.Load(lib).Entries.Select(entry => entry.Key));
+        Assert.False(File.Exists(Under(lib, "models/objects/props/_cmn/other.glb")));
     }
 
     [Fact]
