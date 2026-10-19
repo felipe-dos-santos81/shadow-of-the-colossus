@@ -15,7 +15,11 @@ glb carries baked animation clips plays its first clip by default; the built-in
 `--anim` selects a clip and `--anim-time` pins a time for deterministic
 captures. In a composed arena (`--manifest`) the player's state drives the loop
 instead — still stands, movement walks, Shift runs — with hard clip switches;
-`--anim` / `--anim-time` pin a clip manually. The arena's ground lift is skipped
+`--anim` / `--anim-time` pin a clip manually. A composed scene keeps one palette
+and one playback per rig: the player's locomotion and each `entity`'s baked clip
+run on independent clocks, and every mesh draws with its own rig's palette.
+`--entity-time` pins an entity's clip for captures (clamped into the clip). The
+arena's ground lift is skipped
 while the active clip carries the root translation series (the series already
 holds the ground height), so the feet stay on the heightmap instead of floating
 by the model's origin-to-feet offset. Drag to orbit, scroll to zoom, press `F`
@@ -56,6 +60,7 @@ is required. Escape or the close button quits.
 | `--model REL` | model to load, relative to the library |
 | `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: the model's first clip; `procedural-wave` only when a skinned model carries no clips); in arena mode it is the manual override of stand/walk/run selection; an unknown name or index exits 2 |
 | `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag; it also pins the clip, so arena selection leaves it alone |
+| `--entity-time SEC` | pin every manifest `entity`'s clip at `SEC` seconds (clamped into the clip's duration) — the deterministic entity capture; needs `--manifest` with an entity |
 | `--screenshot PNG` | render `--frames` frames into the offscreen target, write the PNG, exit |
 | `--frames N` | frames the `--screenshot` path renders first (default 3) |
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
@@ -87,7 +92,9 @@ s2-anim clip=player_a_stand joints=348 procedural=0 t=0.500
 
 (`joints` is the skin's joint count — the palette size; `procedural=0` marks a
 real baked clip, `procedural=1` the built-in fallback. A model without a
-skeleton and without clips prints no such line.)
+skeleton and without clips prints no such line. A composed scene prints one
+line per rig: the player's as above, then one per entity — e.g.
+`s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000`.)
 
 A screenshot run also prints its size and a per-channel pixel summary, e.g.
 

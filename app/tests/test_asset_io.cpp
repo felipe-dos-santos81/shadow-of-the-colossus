@@ -14,7 +14,9 @@
 #include <vector>
 
 #include "asset_io.h"
+#include "anim.h"
 #include "heightmap.h"
+#include "player.h"
 
 namespace {
 
@@ -854,6 +856,75 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
     const Heightmap plain_ground = build_heightmap(plain, 1.0f);
     CHECK(heightmap_sample(plain_ground, Vec3{382.0f, 0.0f, 370.0f}) ==
           doctest::Approx(under_entity));
+
+    // --- S4 task 4: per-rig palettes, playback and grounding ------------------
+
+    // One playback per rig: the player keeps its three clips, the entity its
+    // one; each pose is sized by its own rig's joint count.
+    Playback player_playback;
+    Playback entity_playback;
+    build_playback(scene, 0, player_playback);
+    build_playback(scene, 1, entity_playback);
+    REQUIRE(player_playback.clips.size() == 3);
+    REQUIRE(entity_playback.clips.size() == 1);
+    CHECK(player_playback.clips[static_cast<std::size_t>(player_playback.index)].name ==
+          "player_a_stand");
+    CHECK(entity_playback.clips[static_cast<std::size_t>(entity_playback.index)].name ==
+          "minotaur_a_stand");
+    CHECK_FALSE(player_playback.has_procedural);
+    CHECK_FALSE(entity_playback.has_procedural);
+
+    const std::vector<Mat4> player_palette =
+        animation_pose(scene, 0, player_playback.clips[0], 0.0f);
+    const std::vector<Mat4> entity_palette =
+        animation_pose(scene, 1, entity_playback.clips[0], 0.8f);
+    CHECK(player_palette.size() == 348);
+    CHECK(entity_palette.size() == 238);
+
+    // The entity's palette of its own idle at t = 0.8 has moved off its t = 0
+    // pose (its root translation and 58 rotation tracks animate).
+    const std::vector<Mat4> entity_at_rest = animation_pose(scene, 1, entity_playback.clips[0], 0.0f);
+    bool moved = false;
+    for (std::size_t i = 0; i < entity_palette.size() && !moved; ++i) {
+        for (int k = 0; k < 16; ++k) {
+            if (std::abs(entity_palette[i].m[k] - entity_at_rest[i].m[k]) > 1e-4f) {
+                moved = true;
+                break;
+            }
+        }
+    }
+    CHECK(moved);
+
+    // Every mesh draws with its own rig's palette, and every joint index its
+    // vertices carry stays inside it: the entity's indices can never reach the
+    // player's buffer (nor the reverse).
+    for (const MeshCpu& mesh : scene.meshes) {
+        const std::size_t slot = mesh_palette_slot(scene, mesh);
+        REQUIRE(slot < scene.rigs.size());
+        CHECK((mesh.rig < 0 ? slot == 0 : static_cast<std::size_t>(mesh.rig) == slot));
+        const std::size_t palette_size = scene.rigs[slot].skin.joints.size();
+        std::size_t largest_joint = 0;
+        for (const Vertex& vertex : mesh.vertices) {
+            for (int k = 0; k < 4; ++k) {
+                largest_joint = std::max(largest_joint, static_cast<std::size_t>(vertex.j[k]));
+            }
+        }
+        CAPTURE(mesh.rig);  // -1 static, 0 player, 1 the entity
+        CHECK(largest_joint < palette_size);
+    }
+
+    // Grounding: the idle carries the root translation series on Bone_root, so
+    // the entity needs no lift; a root-less clip falls back to the rig's own
+    // origin-to-feet lift — the colossus' measured 8.739 m bind offset. The
+    // player's lift is its own 0.7596 m, untouched by the entity's range.
+    CHECK(clip_has_root_translation(scene, 1, entity.animations[0]));
+    CHECK(effective_rig_lift(scene, 1, entity.animations[0]) == 0.0f);
+    const AnimationCpu rootless{};
+    CHECK(effective_rig_lift(scene, 1, rootless) == doctest::Approx(8.739f).epsilon(1e-3));
+    CHECK(rig_ground_offset(scene, entity) == doctest::Approx(8.739f).epsilon(1e-3));
+    CHECK(rig_ground_offset(scene, player) == doctest::Approx(0.7596f).epsilon(1e-4));
+    CHECK(effective_player_lift(scene, player.animations[0], player.meshBegin, player.meshEnd) ==
+          0.0f);
 }
 
 TEST_CASE("compose_scene refuses an entity clip the model does not carry") {

@@ -144,42 +144,66 @@ int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want
     return -1;
 }
 
-// The `s2-anim` line reports the selected clip: its name, the player rig's
-// joint count, whether it is the built-in procedural clip, and the current
-// (wrapped) time. Printed at startup and on every clip change; a model with no
-// clip at all prints nothing. Real clips print procedural=0; the stand-in is
-// only ever the single clip of a model the converter could not animate.
-void print_anim_status(const Playback& playback, const Scene& scene) {
+// The `s2-anim` line reports one rig's selected clip: its name, that rig's own
+// joint count (the size of that rig's palette), whether it is the built-in
+// procedural clip, and the current time (the loop wrap, or the pinned capture
+// time). Printed at startup for every rig and on every player clip change; a
+// rig with no clip at all prints nothing. The player's line (Scene::playerRig)
+// keeps the S2 shape; every other rig's line carries a `rig=<n> ` prefix so two
+// playback clocks are never confused. Real clips print procedural=0; the
+// stand-in is only ever the single clip of a model the converter could not
+// animate.
+void print_anim_status(const Scene& scene, std::size_t rigIndex, const Playback& playback) {
     if (playback.index < 0) {
         return;
     }
     const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
     const bool procedural = playback.has_procedural && playback.index == 0;
-    std::printf("s2-anim clip=%s joints=%zu procedural=%d t=%.3f\n", clip.name.c_str(),
-                player_rig(scene).skin.joints.size(), procedural ? 1 : 0,
-                animation_loop_time(playback.time, clip.duration));
+    const std::size_t joints = rig_at(scene, rigIndex).skin.joints.size();
+    const float time = playback_time(playback, clip.duration);
+    if (rigIndex == scene.playerRig) {
+        std::printf("s2-anim clip=%s joints=%zu procedural=%d t=%.3f\n", clip.name.c_str(),
+                    joints, procedural ? 1 : 0, time);
+    } else {
+        std::printf("s2-anim rig=%zu clip=%s joints=%zu procedural=%d t=%.3f\n", rigIndex,
+                    clip.name.c_str(), joints, procedural ? 1 : 0, time);
+    }
 }
 
 // Selects a clip by index, restarts it at t = 0, and reports the change.
-void select_clip(Playback& playback, const Scene& scene, int index) {
+void select_clip(Playback& playback, const Scene& scene, std::size_t rigIndex, int index) {
     playback.index = index;
     playback.time = 0.0f;
-    print_anim_status(playback, scene);
+    print_anim_status(scene, rigIndex, playback);
 }
 
-// Advances playback by `dt` and uploads the resulting pose. Called once per
-// frame, before the draw; a no-op when the model has no clip (and the palette
-// upload itself is a no-op when the scene has no skin).
-void update_pose(Renderer& renderer, const Scene& scene, Playback& playback, float dt) {
+// Advances the rig's playback by `dt` and uploads the rig's palette. Called
+// once per frame per rig, before the draw; a no-op when the rig has no clip
+// (and the upload itself is a no-op for a rig with no skin). The palette is
+// returned so a per-frame consumer that needs the pose (the collision pass)
+// reads this frame's matrices instead of re-evaluating the clip.
+std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_t rigIndex,
+                              Playback& playback, float dt) {
     if (playback.index < 0) {
-        return;
+        return {};
     }
     if (playback.playing) {
         playback.time += dt;
     }
     const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
-    const float wrapped = animation_loop_time(playback.time, clip.duration);
-    renderer.upload_pose(animation_pose(scene, clip, wrapped));
+    const float time = playback_time(playback, clip.duration);
+    std::vector<Mat4> palette = animation_pose(scene, rigIndex, clip, time);
+    renderer.upload_pose(rigIndex, palette);
+    return palette;
+}
+
+// Every rig's pose for this frame: the player's (locomotion) and each entity's
+// (its own loop, on its own clock), each into its own palette buffer.
+void update_all_poses(Renderer& renderer, const Scene& scene, std::vector<Playback>& playbacks,
+                      float dt) {
+    for (std::size_t rigIndex = 0; rigIndex < playbacks.size(); ++rigIndex) {
+        update_pose(renderer, scene, rigIndex, playbacks[rigIndex], dt);
+    }
 }
 
 // Frames the single-model camera on the pose that is actually drawn. With a
@@ -194,10 +218,10 @@ void frame_single_model(Camera& camera, const Scene& scene, const Playback& play
         return;
     }
     const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
-    const float time = animation_loop_time(playback.time, clip.duration);
+    const float time = playback_time(playback, clip.duration);
     Vec3 bounds_min{};
     Vec3 bounds_max{};
-    posed_bounds(scene, animation_pose(scene, clip, time), bounds_min, bounds_max);
+    posed_bounds(scene, animation_pose(scene, scene.playerRig, clip, time), bounds_min, bounds_max);
 
     // camera_frame fits the bounds' half-diagonal with distance = r / tan(fov/2),
     // which leaves the bounding sphere tangent to the frustum only at
@@ -254,6 +278,28 @@ float active_player_lift(const Scene& scene, const Playback& playback, const Rig
                                  rig.meshBegin, rig.meshEnd);
 }
 
+// Applies every entity's grounding lift to its model transform, once for the
+// whole run (an entity's clock never changes which clip plays). compose_scene
+// baked the manifest TRS into each of the entity's mesh matrices; the manifest
+// y is the ground sample, so the rig's origin-to-feet lift raises the model's
+// origin to `y + lift` — 0 when the entity's clip already carries the root
+// series (the S2 rule, shared with the player). The player's meshes are not
+// touched here: its transform is rewritten from its own lift path each frame.
+void apply_entity_lifts(Scene& scene, const std::vector<Playback>& playbacks) {
+    for (std::size_t rigIndex = 0; rigIndex < scene.rigs.size(); ++rigIndex) {
+        if (rigIndex == scene.playerRig) {
+            continue;
+        }
+        float lift = rig_ground_offset(scene, scene.rigs[rigIndex]);
+        if (rigIndex < playbacks.size() && playbacks[rigIndex].index >= 0) {
+            const Playback& playback = playbacks[rigIndex];
+            lift = effective_rig_lift(scene, rigIndex,
+                                      playback.clips[static_cast<size_t>(playback.index)]);
+        }
+        apply_rig_lift(scene, rigIndex, lift);
+    }
+}
+
 // Applies the controller's locomotion choice unless a clip was pinned on the
 // command line (--anim or --anim-time): a hard switch — the chosen clip
 // restarts at t = 0 — only when the state asks for a different clip. No
@@ -265,7 +311,7 @@ void update_locomotion(Playback& playback, const Scene& scene, const PlayerInput
     }
     const int wanted = select_clip_index(playback, input);
     if (wanted >= 0 && wanted != playback.index) {
-        select_clip(playback, scene, wanted);
+        select_clip(playback, scene, scene.playerRig, wanted);
     }
 }
 
@@ -354,6 +400,13 @@ int run_app(const AppOptions& opts) {
         std::fprintf(stderr, "sotc-viewer: --s3-selftest needs --manifest\n");
         return 2;
     }
+    // --entity-time pins an entity's clip; entities only exist in a composed
+    // manifest scene, so the flag without one is a usage error, not a no-op.
+    if (opts.entityTimeSet && opts.manifestPath.empty()) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --entity-time needs --manifest (there is no entity to pin)\n");
+        return 2;
+    }
 
     // Cursor policy, part 1: SDL must never auto-capture the mouse when the
     // window gains focus. Set the hint before SDL_Init so the video subsystem
@@ -429,6 +482,10 @@ int run_app(const AppOptions& opts) {
                 std::fprintf(stderr, "sotc-viewer: %s\n", error.what());
                 return 2;
             }
+            if (opts.entityTimeSet && manifest.entities.empty()) {
+                std::fprintf(stderr, "sotc-viewer: --entity-time: the manifest has no entity\n");
+                return 2;
+            }
             scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath);
             renderer.upload(scene);
             print_scene_line(scene);
@@ -470,12 +527,19 @@ int run_app(const AppOptions& opts) {
                           /*moving=*/false, /*dtSeconds=*/10.0f);
         }
 
-        // Playback: the model's real clips first; the procedural wave is only
-        // the fallback for a skinned model that carries none. --anim picks a
-        // clip by name or index, and --anim-time pins the time and starts
-        // paused (deterministic captures).
-        Playback playback;
-        build_playback(scene, playback);
+        // Playback: one per rig (S4). The player's slot keeps the S2 meaning —
+        // the model's real clips first, the procedural wave only as the
+        // fallback for a skinned model that carries none; --anim picks a clip
+        // by name or index, and --anim-time pins the time and starts paused
+        // (deterministic captures). Each entity's rig loops the exact clip its
+        // manifest line named (compose_scene already refused a load whose model
+        // does not carry it); --entity-time pins that clock, clamped into the
+        // clip. A scene with no rig at all (a model-less run) keeps one slot for
+        // the player path, which stays silent.
+        const std::size_t playerRig = scene.rigs.empty() ? 0 : scene.playerRig;
+        std::vector<Playback> playbacks(std::max<std::size_t>(scene.rigs.size(), 1));
+        Playback& playback = playbacks[playerRig];
+        build_playback(scene, playerRig, playback);
         if (!opts.animClip.empty()) {
             const int index = resolve_clip(playback.clips, opts.animClip);
             if (index < 0) {
@@ -497,7 +561,30 @@ int run_app(const AppOptions& opts) {
             playback.time = opts.animTime;
             playback.playing = false;
         }
-        print_anim_status(playback, scene);
+        // The entities follow the player in rig order (compose_scene's pinned
+        // order: instances, player, entities). Each names its clip exactly.
+        for (std::size_t entity = 0; entity < manifest.entities.size(); ++entity) {
+            const std::size_t rigIndex = entity + 1;
+            if (rigIndex >= playbacks.size()) {
+                break;  // compose_scene pairs every entity with a rig
+            }
+            Playback& entity_playback = playbacks[rigIndex];
+            build_playback(scene, rigIndex, entity_playback);
+            if (const int index = clip_index_named(entity_playback, manifest.entities[entity].clip);
+                index >= 0) {
+                entity_playback.index = index;
+            }
+            if (opts.entityTimeSet && entity_playback.index >= 0) {
+                const AnimationCpu& named =
+                    entity_playback.clips[static_cast<std::size_t>(entity_playback.index)];
+                entity_playback.time = animation_clamp_time(opts.entityTime, named.duration);
+                entity_playback.playing = false;
+                entity_playback.pinned = true;  // the capture samples this exact time
+            }
+        }
+        for (std::size_t rigIndex = 0; rigIndex < playbacks.size(); ++rigIndex) {
+            print_anim_status(scene, rigIndex, playbacks[rigIndex]);
+        }
 
         // Single-model framing is on the pose, after --anim/--anim-time resolved
         // the start state: the clip's root series carries the ground height, so
@@ -512,6 +599,12 @@ int run_app(const AppOptions& opts) {
         // frame. --anim-time pins a deterministic capture, so it counts as
         // manual too: a selection must not reset its time.
         const bool manual_clip = !opts.animClip.empty() || opts.animTimeSet;
+
+        // The composed scene's initial placement: every entity's grounding lift
+        // lands on its model transform once (which clip plays never changes),
+        // and the player's transform follows its controller every frame.
+        // A single-model load has no entity rig, so nothing moves here.
+        apply_entity_lifts(scene, playbacks);
 
         // The initial player transform (also the one --selftest renders with):
         // the first clip already is the active one.
@@ -535,7 +628,7 @@ int run_app(const AppOptions& opts) {
                 player_update(player, input, kFixedFrameSeconds, heightmap,
                               camera_view_yaw(camera));
                 update_locomotion(playback, scene, input, manual_clip);
-                update_pose(renderer, scene, playback, kFixedFrameSeconds);
+                update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
             }
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
@@ -552,7 +645,7 @@ int run_app(const AppOptions& opts) {
         }
 
         if (opts.selftest) {
-            update_pose(renderer, scene, playback, /*dt=*/0.0f);
+            update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f);
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
             print_status_line(opts, shell.win);
@@ -578,7 +671,7 @@ int run_app(const AppOptions& opts) {
                                            active_player_lift(scene, playback,
                                                               player_rig_record));
                 }
-                update_pose(renderer, scene, playback, dt);
+                update_all_poses(renderer, scene, playbacks, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                       /*acquire_swapchain=*/true);
             }
@@ -640,7 +733,7 @@ int run_app(const AppOptions& opts) {
                             if (!follow_mode) {
                                 const int count = static_cast<int>(playback.clips.size());
                                 const int step = (event.key.key == SDLK_LEFTBRACKET) ? count - 1 : 1;
-                                select_clip(playback, scene, (playback.index + step) % count);
+                                select_clip(playback, scene, playerRig, (playback.index + step) % count);
                             }
                         }
                         break;
@@ -693,7 +786,7 @@ int run_app(const AppOptions& opts) {
                                        active_player_lift(scene, playback, player_rig_record));
             }
 
-            update_pose(renderer, scene, playback, dt);
+            update_all_poses(renderer, scene, playbacks, dt);
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);

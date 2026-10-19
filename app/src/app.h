@@ -14,6 +14,11 @@ struct AppOptions {
     std::string animClip;        // clip to play, by name or 0-based index (--anim)
     float animTime = 0.0f;       // fixed playback time in seconds (--anim-time)
     bool animTimeSet = false;    // --anim-time was given: start paused at animTime
+    // --entity-time: pin every manifest entity's clip to this time (clamped into
+    // the clip's duration) for deterministic captures; the entity starts paused.
+    // --anim/--anim-time keep their player/single-model meaning.
+    float entityTime = 0.0f;
+    bool entityTimeSet = false;
     // --manifest: compose the scene from a scene manifest; modelRelPath is then
     // the player's glb (required), the ground heightmap is built from the
     // player-less part of the scene, and the interactive loop drives the player

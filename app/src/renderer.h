@@ -27,16 +27,18 @@ public:
 
     // Buffers and textures for `scene` on the GPU. The handle arrays mirror
     // scene.meshes / scene.textures, so the scene layout must not change after
-    // this call (the app loads one model and keeps it). Also creates the joint
-    // palette buffer, sized from the player rig's joints (a single identity matrix
-    // when the scene has no skin).
+    // this call (the app loads one model and keeps it). Also creates one joint
+    // palette buffer per scene rig, each sized by that rig's own joint count (a
+    // single identity matrix when the rig has no skin, and one identity fallback
+    // buffer when the scene has no rigs at all).
     void upload(const Scene& scene);
 
-    // Copies `palette` (one matrix per skin joint, in the skin's joint order)
-    // into the palette buffer the vertex shader reads. Called once per frame
-    // with animation_pose()'s result. No-op when the scene has no skin;
-    // throws when the size does not match the skin uploaded at upload() time.
-    void upload_pose(const std::vector<Mat4>& palette);
+    // Copies `palette` (one matrix per joint of rig `rigIndex`, in that rig's
+    // joint order) into that rig's own palette buffer — never another rig's.
+    // Called once per frame per rig with animation_pose()'s result. No-op when
+    // the rig has no skin; throws when `rigIndex` is no rig of the uploaded
+    // scene or the size does not match that rig's uploaded joint count.
+    void upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palette);
 
     // Renders the offscreen target (clear + one draw per mesh, pushing the
     // view-projection once and the per-mesh model + material uniforms), then —
@@ -54,6 +56,16 @@ private:
         SDL_GPUBuffer* vertex_buffer;
         SDL_GPUBuffer* index_buffer;
         uint32_t index_count;
+    };
+
+    // One rig's joint palette (vertex storage buffer). `joint_count` is the
+    // rig's own skin joint count — the palette size upload_pose expects for this
+    // rig (0 = the rig has no skin, and the single identity matrix stands). The
+    // buffer always holds at least one matrix, so every draw has a valid
+    // binding.
+    struct PoseGpu {
+        SDL_GPUBuffer* buffer = nullptr;
+        uint32_t joint_count = 0;
     };
 
     void create_pipeline();
@@ -88,9 +100,8 @@ private:
     std::vector<SDL_GPUTexture*> textures_;
     bool uploaded_ = false;
 
-    // The joint palette (vertex storage buffer): one matrix per skin joint,
-    // created by upload() from the scene's skin. A scene without a skin gets a
-    // single identity matrix, so every draw always has a valid binding.
-    SDL_GPUBuffer* pose_buffer_ = nullptr;
-    uint32_t pose_joint_count_ = 0;  // matrices upload_pose expects; 0 = no skin
+    // One palette buffer per rig (index = Scene::rigs index), each sized by
+    // that rig's own joint count; a scene with no rigs keeps one identity
+    // fallback entry. render_frame binds a mesh's own entry before its draw.
+    std::vector<PoseGpu> pose_buffers_;
 };

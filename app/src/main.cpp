@@ -27,6 +27,8 @@ void print_usage(FILE* out) {
                  "                    the manual override of stand/walk/run selection\n"
                  "  --anim-time SEC   pause playback at SEC seconds (deterministic captures;\n"
                  "                    also pins the clip in arena mode)\n"
+                 "  --entity-time SEC pin every manifest entity's clip to SEC seconds\n"
+                 "                    (clamped into the clip; deterministic captures)\n"
                  "  --screenshot PNG  write a PNG after --frames frames, then exit\n"
                  "  --frames N        frames the --screenshot path renders first (default 3)\n"
                  "  --width N         window width in points (default 1280)\n"
@@ -78,7 +80,8 @@ int main(int argc, char** argv) {
 
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
-                                 arg == "--anim" || arg == "--anim-time" || arg == "--manifest";
+                                 arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
+                                 arg == "--entity-time";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -101,7 +104,7 @@ int main(int argc, char** argv) {
             opts.screenshotPath = value;
         } else if (arg == "--anim") {
             opts.animClip = value;
-        } else if (arg == "--anim-time") {
+        } else if (arg == "--anim-time" || arg == "--entity-time") {
             float seconds = 0.0f;
             if (!parse_seconds(value, seconds)) {
                 std::fprintf(stderr, "sotc-viewer: %s expects a finite number of seconds, got: %s\n",
@@ -109,8 +112,13 @@ int main(int argc, char** argv) {
                 print_usage(stderr);
                 return 2;
             }
-            opts.animTime = seconds;
-            opts.animTimeSet = true;
+            if (arg == "--anim-time") {
+                opts.animTime = seconds;
+                opts.animTimeSet = true;
+            } else {
+                opts.entityTime = seconds;
+                opts.entityTimeSet = true;
+            }
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -148,6 +156,11 @@ int main(int argc, char** argv) {
     }
     if (opts.s3Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s3-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.entityTimeSet && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --entity-time needs --manifest (there is no entity)\n");
         print_usage(stderr);
         return 2;
     }

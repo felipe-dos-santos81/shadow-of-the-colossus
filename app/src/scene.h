@@ -105,11 +105,27 @@ struct Scene {
     std::size_t playerRig = 0;  // index into rigs; 0 after a load
 };
 
-// The player's rig — rigs[playerRig], the one the S3 single-rig path drives. A
-// scene with no rigs at all (a default-constructed Scene, or a hand-built test
-// fixture) answers with a shared empty record, so the single-rig call sites
-// keep working and never index an empty vector: no joints, no clips.
-inline const RigCpu& player_rig(const Scene& scene) {
+// The rig at `rigIndex`. An index that is no rig of this scene (a default-
+// constructed Scene, or a hand-built test fixture) answers with a shared empty
+// record — no joints, no clips, an empty mesh range — so callers never index an
+// empty vector and every query has a defined answer.
+inline const RigCpu& rig_at(const Scene& scene, std::size_t rigIndex) {
     static const RigCpu kNoRig{};
-    return scene.playerRig < scene.rigs.size() ? scene.rigs[scene.playerRig] : kNoRig;
+    return rigIndex < scene.rigs.size() ? scene.rigs[rigIndex] : kNoRig;
+}
+
+// The player's rig — rigs[playerRig], the one the S3 single-rig path drives.
+inline const RigCpu& player_rig(const Scene& scene) { return rig_at(scene, scene.playerRig); }
+
+// The palette slot a mesh is drawn with: the mesh's own rig, or slot 0 for a
+// static mesh (rig < 0) — an unskinned vertex has zero weights, so the shader
+// reads whichever palette is bound and passes it through unchanged. Slots are
+// the renderer's per-rig palette buffers, one per `Scene::rigs` entry; a scene
+// with no rigs still has slot 0 (the renderer's identity fallback).
+inline std::size_t mesh_palette_slot(const Scene& scene, const MeshCpu& mesh) {
+    if (mesh.rig <= 0) {
+        return 0;  // static (or the player): slot 0
+    }
+    const std::size_t rig = static_cast<std::size_t>(mesh.rig);
+    return rig < scene.rigs.size() ? rig : 0;  // an index no rig of this scene: static slot
 }

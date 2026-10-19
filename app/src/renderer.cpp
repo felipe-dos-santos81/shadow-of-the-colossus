@@ -411,23 +411,26 @@ void Renderer::upload(const Scene& scene) {
         }
     }
 
-    // The joint palette (vertex storage buffer): one matrix per skin joint of
-    // the player's rig, or a single matrix for a scene without a skin — the
-    // shader always reads palette[joints], and an unskinned vertex defaults to
-    // joint 0 weight 1. The initial content is the bind pose (identity per
-    // joint), so any draw that happens before the first upload_pose is well
-    // defined. (One palette per rig is the next S4 task; the player's rig is
-    // what this path binds today.)
-    pose_joint_count_ = static_cast<uint32_t>(player_rig(scene).skin.joints.size());
-    const std::vector<Mat4> rest_palette(std::max<uint32_t>(pose_joint_count_, 1u),
-                                         mat4_identity());
-    {
+    // One joint palette per rig (vertex storage buffer), each sized by that
+    // rig's own joint count — a rig can only ever read its own palette, so the
+    // entity's 238 joint indices can never reach a smaller player buffer. A rig
+    // with no skin (and a scene with no rigs at all) gets a single identity
+    // matrix: an unskinned vertex has zero weights, so the shader never reads
+    // the palette for it, and any draw before the first upload_pose is well
+    // defined (the initial content is the bind pose, identity per joint).
+    pose_buffers_.resize(std::max<std::size_t>(scene.rigs.size(), 1));
+    for (std::size_t rig_index = 0; rig_index < pose_buffers_.size(); ++rig_index) {
+        PoseGpu& pose = pose_buffers_[rig_index];
+        pose.joint_count = static_cast<uint32_t>(rig_at(scene, rig_index).skin.joints.size());
+        const std::vector<Mat4> rest_palette(std::max<std::size_t>(pose.joint_count, 1),
+                                             mat4_identity());
         const uint32_t pose_size = static_cast<uint32_t>(rest_palette.size() * sizeof(Mat4));
+
         SDL_GPUBufferCreateInfo buffer_info{};
         buffer_info.size = pose_size;
         buffer_info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-        pose_buffer_ = SDL_CreateGPUBuffer(device_, &buffer_info);
-        if (pose_buffer_ == nullptr) {
+        pose.buffer = SDL_CreateGPUBuffer(device_, &buffer_info);
+        if (pose.buffer == nullptr) {
             throw_sdl_error("renderer: SDL_CreateGPUBuffer(pose)");
         }
 
@@ -450,7 +453,7 @@ void Renderer::upload(const Scene& scene) {
         SDL_GPUTransferBufferLocation source{};
         source.transfer_buffer = transfer;
         SDL_GPUBufferRegion destination{};
-        destination.buffer = pose_buffer_;
+        destination.buffer = pose.buffer;
         destination.size = pose_size;
         SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
     }
@@ -472,13 +475,19 @@ void Renderer::upload(const Scene& scene) {
     uploaded_ = true;
 }
 
-void Renderer::upload_pose(const std::vector<Mat4>& palette) {
-    if (pose_joint_count_ == 0) {
+void Renderer::upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palette) {
+    if (rigIndex >= pose_buffers_.size()) {
+        throw std::runtime_error("renderer: upload_pose: no rig " + std::to_string(rigIndex) +
+                                 " in this scene");
+    }
+    const PoseGpu& pose = pose_buffers_[rigIndex];
+    if (pose.joint_count == 0) {
         return;  // no skin: the identity palette stands
     }
-    if (palette.size() != pose_joint_count_) {
-        throw std::runtime_error("renderer: upload_pose got " + std::to_string(palette.size()) +
-                                 " matrices, expected " + std::to_string(pose_joint_count_));
+    if (palette.size() != pose.joint_count) {
+        throw std::runtime_error("renderer: upload_pose(rig " + std::to_string(rigIndex) +
+                                 ") got " + std::to_string(palette.size()) +
+                                 " matrices, expected " + std::to_string(pose.joint_count));
     }
 
     const uint32_t byte_count = static_cast<uint32_t>(palette.size() * sizeof(Mat4));
@@ -509,7 +518,7 @@ void Renderer::upload_pose(const std::vector<Mat4>& palette) {
     }
     SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(cmd);
     const SDL_GPUTransferBufferLocation source{transfer, 0};
-    const SDL_GPUBufferRegion destination{pose_buffer_, 0, byte_count};
+    const SDL_GPUBufferRegion destination{pose.buffer, 0, byte_count};
     SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
     SDL_EndGPUCopyPass(copy_pass);
 
@@ -585,12 +594,6 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     // Vertex slot 0: one view-projection for the whole frame.
     SDL_PushGPUVertexUniformData(cmd, 0, &viewProj, sizeof(Mat4));
 
-    // Vertex storage buffer 0: the joint palette, shared by every draw.
-    if (pose_buffer_ != nullptr) {
-        SDL_GPUBuffer* pose_buffers[1] = {pose_buffer_};
-        SDL_BindGPUVertexStorageBuffers(pass, 0, pose_buffers, 1);
-    }
-
     for (size_t i = 0; i < scene.meshes.size() && i < meshes_.size(); ++i) {
         const MeshGpu& mesh = meshes_[i];
         if (mesh.index_buffer == nullptr || mesh.index_count == 0) {
@@ -623,6 +626,15 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         if (texture_index >= 0 && static_cast<size_t>(texture_index) < textures_.size() &&
             textures_[static_cast<size_t>(texture_index)] != nullptr) {
             albedo = textures_[static_cast<size_t>(texture_index)];
+        }
+
+        // Vertex storage buffer 0: this mesh's own rig palette — never another
+        // rig's. A static mesh (rig < 0) binds slot 0, whose zero-weight
+        // vertices the shader passes through without reading it.
+        const std::size_t slot = mesh_palette_slot(scene, scene.meshes[i]);
+        if (slot < pose_buffers_.size() && pose_buffers_[slot].buffer != nullptr) {
+            SDL_GPUBuffer* palette_buffers[1] = {pose_buffers_[slot].buffer};
+            SDL_BindGPUVertexStorageBuffers(pass, 0, palette_buffers, 1);
         }
 
         const SDL_GPUBufferBinding vertex_binding{mesh.vertex_buffer, 0};
@@ -774,11 +786,13 @@ void Renderer::release_gpu_resources() {
         SDL_ReleaseGPUTexture(device_, white_texture_);
         white_texture_ = nullptr;
     }
-    if (pose_buffer_ != nullptr) {
-        SDL_ReleaseGPUBuffer(device_, pose_buffer_);
-        pose_buffer_ = nullptr;
+    for (PoseGpu& pose : pose_buffers_) {
+        if (pose.buffer != nullptr) {
+            SDL_ReleaseGPUBuffer(device_, pose.buffer);
+            pose.buffer = nullptr;
+        }
     }
-    pose_joint_count_ = 0;
+    pose_buffers_.clear();
     for (MeshGpu& mesh : meshes_) {
         if (mesh.vertex_buffer != nullptr) {
             SDL_ReleaseGPUBuffer(device_, mesh.vertex_buffer);

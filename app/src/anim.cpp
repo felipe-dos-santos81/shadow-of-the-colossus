@@ -45,6 +45,18 @@ float animation_loop_time(float time, float duration) {
     return wrapped;
 }
 
+float animation_clamp_time(float time, float duration) {
+    // An empty clip (duration <= 0, or a malformed NaN) has only t = 0, and a
+    // non-finite time has no place in a capture: both pin to the clip's start.
+    if (!(duration > 0.0f) || !std::isfinite(time)) {
+        return 0.0f;
+    }
+    if (time < 0.0f) {
+        return 0.0f;
+    }
+    return time > duration ? duration : time;
+}
+
 void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
     if (!std::isfinite(t)) {
         // A non-finite time (NaN, ±inf) compares false against both clamp
@@ -99,8 +111,9 @@ void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
     }
 }
 
-std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, float time) {
-    const std::vector<JointCpu>& joints = player_rig(scene).skin.joints;
+std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
+                                 const AnimationCpu& clip, float time) {
+    const std::vector<JointCpu>& joints = rig_at(scene, rigIndex).skin.joints;
     const std::size_t joint_count = joints.size();
     std::vector<Mat4> palette(joint_count);
     if (joint_count == 0) {
@@ -246,12 +259,12 @@ void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& ou
     }
 }
 
-AnimationCpu make_procedural_wave(const Scene& scene) {
+AnimationCpu make_procedural_wave(const Scene& scene, std::size_t rigIndex) {
     AnimationCpu clip;
     clip.name = "procedural-wave";
     clip.duration = 2.0f;
 
-    const std::vector<JointCpu>& joints = player_rig(scene).skin.joints;
+    const std::vector<JointCpu>& joints = rig_at(scene, rigIndex).skin.joints;
     const std::size_t joint_count = std::min<std::size_t>(12, joints.size());
     const Quat tilt = quat_about_x(15.0f);
     for (std::size_t i = 0; i < joint_count; ++i) {
@@ -271,17 +284,19 @@ AnimationCpu make_procedural_wave(const Scene& scene) {
     return clip;
 }
 
-void build_playback(const Scene& scene, Playback& playback) {
-    playback.clips = player_rig(scene).animations;
+void build_playback(const Scene& scene, std::size_t rigIndex, Playback& playback) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    playback.clips = rig.animations;
     playback.index = -1;
     playback.time = 0.0f;
     playback.playing = false;
     playback.has_procedural = false;
+    playback.pinned = false;
 
     // The stand-in is the fallback, never a peer of the model's own clips: it
-    // is appended only for a skinned model whose scene carries none.
-    if (playback.clips.empty() && !player_rig(scene).skin.joints.empty()) {
-        playback.clips.push_back(make_procedural_wave(scene));
+    // is appended only for a skinned rig whose record carries none.
+    if (playback.clips.empty() && !rig.skin.joints.empty()) {
+        playback.clips.push_back(make_procedural_wave(scene, rigIndex));
         playback.has_procedural = true;
     }
     if (!playback.clips.empty()) {
@@ -290,10 +305,7 @@ void build_playback(const Scene& scene, Playback& playback) {
     }
 }
 
-namespace {
-
-// The index of the clip named `name` in `playback`, or -1 when it is absent.
-int find_clip_named(const Playback& playback, const char* name) {
+int clip_index_named(const Playback& playback, const std::string& name) {
     for (std::size_t i = 0; i < playback.clips.size(); ++i) {
         if (playback.clips[i].name == name) {
             return static_cast<int>(i);
@@ -302,7 +314,10 @@ int find_clip_named(const Playback& playback, const char* name) {
     return -1;
 }
 
-}  // namespace
+float playback_time(const Playback& playback, float duration) {
+    return playback.pinned ? animation_clamp_time(playback.time, duration)
+                           : animation_loop_time(playback.time, duration);
+}
 
 int select_clip_index(const Playback& playback, const PlayerInput& input) {
     if (playback.clips.empty()) {
@@ -320,25 +335,28 @@ int select_clip_index(const Playback& playback, const PlayerInput& input) {
 
     // The requested clip, then the fallback chain: walk while moving, stand,
     // and finally the first real clip in scene order.
-    if (const int index = find_clip_named(playback, requested); index >= 0) {
+    if (const int index = clip_index_named(playback, requested); index >= 0) {
         return index;
     }
     if (moving) {
-        if (const int index = find_clip_named(playback, "player_a_walk"); index >= 0) {
+        if (const int index = clip_index_named(playback, "player_a_walk"); index >= 0) {
             return index;
         }
     }
-    if (const int index = find_clip_named(playback, "player_a_stand"); index >= 0) {
+    if (const int index = clip_index_named(playback, "player_a_stand"); index >= 0) {
         return index;
     }
     return 0;
 }
 
-bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
-    // The writer targets the joint named exactly "Bone_root" for the root
-    // series, so this query is name-based too: a joint index would tie the
-    // answer to one model's skin order.
-    const std::vector<JointCpu>& joints = player_rig(scene).skin.joints;
+namespace {
+
+// Whether `clip` carries the root translation series of a skin with these
+// joints: any translation channel (path 0) on the joint named exactly
+// "Bone_root" — the joint the converter's writer targets for the root series.
+// The joint is found by name, never by index, so the answer travels with the
+// rig; a channel on a joint outside this skin is not this rig's series.
+bool root_translation_on(const std::vector<JointCpu>& joints, const AnimationCpu& clip) {
     for (const AnimationChannelCpu& channel : clip.channels) {
         if (channel.path != 0 || channel.joint < 0 ||
             static_cast<std::size_t>(channel.joint) >= joints.size()) {
@@ -351,12 +369,42 @@ bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
     return false;
 }
 
-float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
-                            std::size_t meshBegin, std::size_t meshEnd) {
-    // A root-carrying clip already holds the character's ground height: the S3
-    // origin-to-feet lift on top would float the model by that offset.
-    if (clip_has_root_translation(scene, clip)) {
+// The one grounding rule behind both lift helpers: a root-carrying clip already
+// holds the ground height (lifting on top floats the model by the offset), so
+// it needs 0; otherwise the meshes' origin-to-feet offset applies.
+float lift_for(const Scene& scene, const std::vector<JointCpu>& joints,
+               const AnimationCpu& clip, std::size_t meshBegin, std::size_t meshEnd) {
+    if (root_translation_on(joints, clip)) {
         return 0.0f;
     }
     return mesh_ground_offset(scene, meshBegin, meshEnd);
+}
+
+}  // namespace
+
+bool clip_has_root_translation(const Scene& scene, std::size_t rigIndex,
+                               const AnimationCpu& clip) {
+    return root_translation_on(rig_at(scene, rigIndex).skin.joints, clip);
+}
+
+float effective_rig_lift(const Scene& scene, std::size_t rigIndex, const AnimationCpu& clip) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    return lift_for(scene, rig.skin.joints, clip, rig.meshBegin, rig.meshEnd);
+}
+
+void apply_rig_lift(Scene& scene, std::size_t rigIndex, float lift) {
+    if (!(lift > 0.0f) || rigIndex >= scene.rigs.size()) {
+        return;  // no lift, or no such rig: the placements stand as authored
+    }
+    const RigCpu& rig = scene.rigs[rigIndex];
+    const Mat4 lift_matrix =
+        mat4_from_trs(Vec3{0.0f, lift, 0.0f}, Quat{0.0f, 0.0f, 0.0f, 1.0f}, Vec3{1.0f, 1.0f, 1.0f});
+    for (std::size_t i = rig.meshBegin; i < rig.meshEnd && i < scene.meshes.size(); ++i) {
+        scene.meshes[i].model = mat4_mul(scene.meshes[i].model, lift_matrix);
+    }
+}
+
+float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
+                            std::size_t meshBegin, std::size_t meshEnd) {
+    return lift_for(scene, player_rig(scene).skin.joints, clip, meshBegin, meshEnd);
 }
