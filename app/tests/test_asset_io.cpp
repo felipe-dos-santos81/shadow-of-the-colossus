@@ -262,6 +262,50 @@ void write_binary(const std::filesystem::path& path, const unsigned char* data,
     out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
 }
 
+// One placed instance with an identity rotation and unit scale, at `position`:
+// the shape the compose tests place (W1.2).
+ManifestInstance placed_at(const std::string& glbRelPath, Vec3 position) {
+    ManifestInstance instance{};
+    instance.glbRelPath = glbRelPath;
+    instance.position = position;
+    instance.rotation = Quat{0.0f, 0.0f, 0.0f, 1.0f};
+    instance.scale = Vec3{1.0f, 1.0f, 1.0f};
+    return instance;
+}
+
+// The composed material at `composedIndex` must be the standalone glb's own
+// material: same name and the same base-color/normal PNG paths. A wrong but
+// in-range index offset passes a range check — this mapping check is what
+// catches it (it is how the player material-offset bug was found).
+void check_material_matches(const Scene& composed, int composedIndex, const Scene& source,
+                            int sourceIndex) {
+    // REQUIRE (not CHECK) so an out-of-range index aborts the case instead of
+    // reading past the material list. One comparison per assertion: doctest
+    // refuses compound expressions.
+    REQUIRE(composedIndex >= 0);
+    REQUIRE(static_cast<std::size_t>(composedIndex) < composed.materials.size());
+    REQUIRE(sourceIndex >= 0);
+    REQUIRE(static_cast<std::size_t>(sourceIndex) < source.materials.size());
+    const MaterialCpu& composedMaterial =
+        composed.materials[static_cast<std::size_t>(composedIndex)];
+    const MaterialCpu& sourceMaterial = source.materials[static_cast<std::size_t>(sourceIndex)];
+    CHECK(composedMaterial.name == sourceMaterial.name);
+
+    const auto texture_path = [](const Scene& scene, int textureIndex) {
+        if (textureIndex < 0) {
+            return std::string("<none>");
+        }
+        if (static_cast<std::size_t>(textureIndex) >= scene.textures.size()) {
+            return std::string("<out of range>");
+        }
+        return scene.textures[static_cast<std::size_t>(textureIndex)].sourceRelPath;
+    };
+    CHECK(texture_path(composed, composedMaterial.baseColorTexture) ==
+          texture_path(source, sourceMaterial.baseColorTexture));
+    CHECK(texture_path(composed, composedMaterial.normalTexture) ==
+          texture_path(source, sourceMaterial.normalTexture));
+}
+
 }  // namespace
 
 TEST_CASE("wander glb matches the converter catalog") {
@@ -459,21 +503,23 @@ TEST_CASE("a joint node carrying a matrix decomposes into its rest TRS") {
     CHECK(joint.restR.w == doctest::Approx(std::cos(kPi / 4.0f)).epsilon(1e-4));
 }
 
-TEST_CASE("a primitive without JOINTS_0 defaults to joint 0, weight 1") {
+TEST_CASE("a primitive without JOINTS_0 defaults to zero weights (unskinned)") {
     TempFixtureDir dir;
     write_text(dir.path() / "unskinned.gltf", skin_fixture_gltf_json({.skinned = false}));
 
     auto scene = load_scene(dir.path(), "unskinned.gltf");
 
-    // The model still has its skin — only the primitive lacks the attributes,
-    // which must default to joint 0 at full weight (bind pose, no collapse).
+    // The model still has its skin — only the primitive lacks the attributes.
+    // Zero weights are the "unskinned" signal the shader passes through
+    // untransformed: full weight on joint 0 would instead select palette[0],
+    // the player's animated root bone in a composed scene (F3).
     REQUIRE(scene.skin.joints.size() == 2);
     REQUIRE(scene.meshes.size() == 1);
     REQUIRE(scene.meshes[0].vertices.size() == 3);
     for (const Vertex& vertex : scene.meshes[0].vertices) {
         for (int i = 0; i < 4; ++i) {
             CHECK(vertex.j[i] == 0);
-            CHECK(vertex.w[i] == doctest::Approx(i == 0 ? 1.0f : 0.0f));
+            CHECK(vertex.w[i] == doctest::Approx(0.0f));
         }
     }
 }
@@ -503,4 +549,184 @@ TEST_CASE("a model that cannot be parsed throws") {
     const std::filesystem::path library = test_library();  // throws loudly when unset
     CHECK_THROWS_AS(load_scene(library, "models/objects/props/_cmn/no_such_model.glb"),
                     std::runtime_error);
+}
+
+// --- Composed scenes (W1.2) --------------------------------------------------
+//
+// The S3 fixtures: obj_plank_01.glb twice (at T(1,0,0) and T(0,0,2)) plus
+// wander.glb as the player. The plank contributes 1 mesh / 1 material / 2
+// textures, wander 12 / 12 / 21, so the composed totals below pin every index
+// offset.
+
+TEST_CASE("compose_scene places two plank instances and the player") {
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("models/objects/props/_cmn/obj_plank_01.glb",
+                                           Vec3{1.0f, 0.0f, 0.0f}));
+    manifest.instances.push_back(placed_at("models/objects/props/_cmn/obj_plank_01.glb",
+                                           Vec3{0.0f, 0.0f, 2.0f}));
+
+    const std::size_t instance_meshes = 2;
+    std::size_t player_mesh_begin = 999;
+    const Scene scene = compose_scene(test_library(), manifest,
+                                      "models/shadow/characters/wander/_cmn/wander.glb",
+                                      &player_mesh_begin);
+
+    // 2 x plank (1 mesh each) + wander (12).
+    REQUIRE(scene.meshes.size() == 14);
+
+    // The player's meshes start after the instances' (W1.4's player-less
+    // heightmap build splits on this index).
+    CHECK(player_mesh_begin == instance_meshes);
+
+    // Each instance mesh carries its instance's translation in column 3.
+    CHECK(scene.meshes[0].model.m[12] == doctest::Approx(1.0f));
+    CHECK(scene.meshes[0].model.m[13] == doctest::Approx(0.0f));
+    CHECK(scene.meshes[0].model.m[14] == doctest::Approx(0.0f));
+    CHECK(scene.meshes[1].model.m[12] == doctest::Approx(0.0f));
+    CHECK(scene.meshes[1].model.m[13] == doctest::Approx(0.0f));
+    CHECK(scene.meshes[1].model.m[14] == doctest::Approx(2.0f));
+
+    // The player's meshes are appended with an identity model.
+    for (std::size_t i = 2; i < scene.meshes.size(); ++i) {
+        for (int k = 0; k < 16; ++k) {
+            const float expected = (k % 5 == 0) ? 1.0f : 0.0f;
+            CHECK(scene.meshes[i].model.m[k] == doctest::Approx(expected));
+        }
+    }
+
+    // Materials and textures land at offset indices: every mesh's
+    // materialIndex and every material's texture indices stay valid. Each
+    // instance load appends its own textures (2 planks x 2 + wander's 21).
+    CHECK(scene.materials.size() == 14);
+    CHECK(scene.textures.size() == 25);
+    for (const MeshCpu& mesh : scene.meshes) {
+        REQUIRE(mesh.materialIndex >= 0);
+        REQUIRE(static_cast<std::size_t>(mesh.materialIndex) < scene.materials.size());
+        const MaterialCpu& material =
+            scene.materials[static_cast<std::size_t>(mesh.materialIndex)];
+        CHECK(material.baseColorTexture >= 0);
+        CHECK(static_cast<std::size_t>(material.baseColorTexture) < scene.textures.size());
+        CHECK(material.normalTexture >= -1);
+        CHECK(material.normalTexture < static_cast<int>(scene.textures.size()));
+    }
+
+    // The mapping, not just the range: each mesh must resolve to its own glb's
+    // material. The player's materials follow the instances', so a missing
+    // player material offset would hand the player instance materials — an
+    // in-range mistake only name/path equality can catch.
+    const Scene plank = load_scene(test_library(), "models/objects/props/_cmn/obj_plank_01.glb");
+    const Scene wander =
+        load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    REQUIRE(plank.meshes.size() == 1);
+    REQUIRE(wander.meshes.size() == 12);
+    CHECK(scene.meshes[0].materialIndex == 0);
+    CHECK(scene.meshes[1].materialIndex == 1);
+    check_material_matches(scene, 0, plank, plank.meshes[0].materialIndex);
+    check_material_matches(scene, 1, plank, plank.meshes[0].materialIndex);
+    for (std::size_t i = 0; i < wander.meshes.size(); ++i) {
+        const int composed_index = scene.meshes[2 + i].materialIndex;
+        CHECK(composed_index == 2 + wander.meshes[i].materialIndex);
+        check_material_matches(scene, composed_index, wander, wander.meshes[i].materialIndex);
+    }
+
+    // The composed scene keeps the player's skeleton.
+    CHECK(scene.skin.joints.size() == 348);
+
+    // Bounds are world-space: they cover both placed origins.
+    CHECK(scene.boundsMin.x <= 1.0f);
+    CHECK(scene.boundsMax.x >= 1.0f);
+    CHECK(scene.boundsMin.z <= 2.0f);
+    CHECK(scene.boundsMax.z >= 2.0f);
+}
+
+TEST_CASE("compose_scene bakes an instance's rotation and scale") {
+    SceneManifest manifest{};
+    ManifestInstance instance = placed_at("models/objects/props/_cmn/obj_plank_01.glb",
+                                          Vec3{3.0f, 1.0f, 0.0f});
+    instance.rotation = Quat{0.0f, std::sin(kPi / 4.0f), 0.0f, std::cos(kPi / 4.0f)};  // 90 deg Y
+    instance.scale = Vec3{2.0f, 2.0f, 2.0f};
+    manifest.instances.push_back(instance);
+
+    const Scene scene = compose_scene(test_library(), manifest,
+                                      "models/shadow/characters/wander/_cmn/wander.glb");
+
+    REQUIRE(scene.meshes.size() == 13);
+    const Mat4& model = scene.meshes[0].model;
+    // mat4_from_trs: T(3,1,0) * R(90 deg about Y) * S(2,2,2), column-major.
+    CHECK(model.m[0] == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(model.m[2] == doctest::Approx(-2.0f).epsilon(1e-4));
+    CHECK(model.m[5] == doctest::Approx(2.0f).epsilon(1e-4));
+    CHECK(model.m[8] == doctest::Approx(2.0f).epsilon(1e-4));
+    CHECK(model.m[10] == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(model.m[12] == doctest::Approx(3.0f));
+    CHECK(model.m[13] == doctest::Approx(1.0f));
+    CHECK(model.m[14] == doctest::Approx(0.0f));
+
+    // The bounds cover the placed vertices in world space, not the raw ones:
+    // the plank's local Z extent, rotated onto X and doubled, sits at x = 3.
+    const Scene plank = load_scene(test_library(), "models/objects/props/_cmn/obj_plank_01.glb");
+    CHECK(scene.boundsMin.x <= doctest::Approx(3.0f + 2.0f * plank.boundsMin.z));
+    CHECK(scene.boundsMax.x >= doctest::Approx(3.0f + 2.0f * plank.boundsMax.z));
+}
+
+TEST_CASE("compose_scene names the instance glb it cannot load") {
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("models/objects/props/_cmn/no_such_model.glb",
+                                           Vec3{0.0f, 0.0f, 0.0f}));
+
+    std::string message;
+    try {
+        compose_scene(test_library(), manifest,
+                      "models/shadow/characters/wander/_cmn/wander.glb");
+        FAIL("compose_scene did not throw for a missing instance glb");
+    } catch (const std::runtime_error& error) {
+        message = error.what();
+    }
+    CHECK(message.find("instance") != std::string::npos);
+    CHECK(message.find("no_such_model.glb") != std::string::npos);
+}
+
+TEST_CASE("compose_scene with no instances composes the player alone") {
+    SceneManifest manifest{};  // no instances: an empty loop, but a real path
+    std::size_t player_mesh_begin = 999;
+    const Scene scene = compose_scene(test_library(), manifest,
+                                      "models/shadow/characters/wander/_cmn/wander.glb",
+                                      &player_mesh_begin);
+    const Scene wander =
+        load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+
+    // With no instances the player's meshes start at 0.
+    CHECK(player_mesh_begin == 0);
+
+    REQUIRE(scene.meshes.size() == wander.meshes.size());
+    CHECK(scene.materials.size() == wander.materials.size());
+    for (std::size_t i = 0; i < wander.meshes.size(); ++i) {
+        CHECK(scene.meshes[i].materialIndex == wander.meshes[i].materialIndex);
+        check_material_matches(scene, scene.meshes[i].materialIndex, wander,
+                               wander.meshes[i].materialIndex);
+        for (int k = 0; k < 16; ++k) {
+            const float expected = (k % 5 == 0) ? 1.0f : 0.0f;
+            CHECK(scene.meshes[i].model.m[k] == doctest::Approx(expected));
+        }
+    }
+    CHECK(scene.boundsMin.x == doctest::Approx(wander.boundsMin.x));
+    CHECK(scene.boundsMax.y == doctest::Approx(wander.boundsMax.y));
+    CHECK(scene.skin.joints.size() == 348);
+}
+
+TEST_CASE("a composed scene keeps the player's skeleton, not an instance's") {
+    SceneManifest manifest{};
+    // Wander placed as an instance: its skeleton and clips cannot be folded
+    // into the scene's single rig, so they are skipped (with a warning) while
+    // its meshes still compose.
+    manifest.instances.push_back(placed_at("models/shadow/characters/wander/_cmn/wander.glb",
+                                           Vec3{1.0f, 0.0f, 0.0f}));
+
+    const Scene scene =
+        compose_scene(test_library(), manifest, "models/objects/props/_cmn/obj_plank_01.glb");
+
+    CHECK(scene.skin.joints.empty());
+    CHECK(scene.animations.empty());
+    REQUIRE(scene.meshes.size() == 13);
+    CHECK(scene.meshes[0].model.m[12] == doctest::Approx(1.0f));
 }

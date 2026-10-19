@@ -24,6 +24,10 @@ struct MeshCpu {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     int materialIndex;  // index into Scene::materials, -1 = none
+    // The world transform the renderer draws this mesh with: identity for a
+    // single-glb load, the placed instance's TRS in a composed scene. The
+    // vertices stay in the glb's own space.
+    Mat4 model = mat4_identity();
 };
 
 // One decoded PNG, RGBA8, top-down (glTF image origin).

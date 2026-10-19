@@ -3,12 +3,16 @@
 #include "anim.h"
 #include "asset_io.h"
 #include "camera.h"
+#include "heightmap.h"
+#include "manifest.h"
+#include "player.h"
 #include "renderer.h"
 #include "scene.h"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -58,7 +62,8 @@ Mat4 camera_view_proj(const Camera& camera, SDL_Window* win) {
     int height = 0;
     if (!SDL_GetWindowSizeInPixels(win, &width, &height)) {
         const char* error = SDL_GetError();
-        throw std::runtime_error(std::string("sotc-viewer: SDL_GetWindowSizeInPixels: ") +
+        // No "sotc-viewer: " prefix here: run_app's catch adds it once.
+        throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") +
                                  (error != nullptr ? error : "unknown error"));
     }
     const float aspect = static_cast<float>(width) / static_cast<float>(std::max(height, 1));
@@ -200,6 +205,94 @@ void update_pose(Renderer& renderer, const Scene& scene, Playback& playback, flo
     renderer.upload_pose(animation_pose(scene, clip, wrapped));
 }
 
+// --- Manifest mode (S3 W1.4) ------------------------------------------------
+
+constexpr float kHeightmapCellSize = 1.0f;        // metres between ground samples
+constexpr float kFixedFrameSeconds = 1.0f / 60.0f;  // the s3-selftest's fixed step
+constexpr int kSelftestFrames = 240;                // 4 simulated seconds
+
+// The camera's look-direction yaw in degrees — the convention player_update
+// takes. The orbit Camera stores the opposite direction (the eye sits at
+// `yaw`, so the look direction is yaw - 180).
+float camera_view_yaw(const Camera& camera) { return camera.yaw - 180.0f; }
+
+// Moves the composed scene's player meshes with the player: meshes
+// [playerMeshBegin, end) are the player's (compose_scene appends them last).
+// `groundOffsetY` is the player model's origin-to-feet lift (see
+// player_ground_offset), so the character stands on the ground point instead
+// of sinking into it.
+void apply_player_transform(Scene& scene, size_t playerMeshBegin, const PlayerState& player,
+                            float groundOffsetY) {
+    const Mat4 model = player_model_matrix(player, groundOffsetY);
+    for (size_t i = playerMeshBegin; i < scene.meshes.size(); ++i) {
+        scene.meshes[i].model = model;
+    }
+}
+
+// The spawn the s3-selftest and the interactive loop start from: the
+// manifest's own spawn when it has one, otherwise the composed scene's bounds
+// centre.
+Vec3 spawn_position(const SceneManifest& manifest, const Scene& scene) {
+    if (manifest.hasSpawn) {
+        return manifest.spawnPosition;
+    }
+    return Vec3{(scene.boundsMin.x + scene.boundsMax.x) * 0.5f,
+                (scene.boundsMin.y + scene.boundsMax.y) * 0.5f,
+                (scene.boundsMin.z + scene.boundsMax.z) * 0.5f};
+}
+
+// The `s1-scene` line: what the loaded scene holds (one line for either load
+// path — a single glb or a composed manifest).
+void print_scene_line(const Scene& scene) {
+    size_t vertices = 0;
+    for (const MeshCpu& mesh : scene.meshes) {
+        vertices += mesh.vertices.size();
+    }
+    std::printf("s1-scene meshes=%zu vertices=%zu materials=%zu textures=%zu\n",
+                scene.meshes.size(), vertices, scene.materials.size(), scene.textures.size());
+}
+
+// The `s3-status` line the W1.5 acceptance script greps: the manifest's
+// instance count, the chosen spawn, the player's position after the simulated
+// frames, and whether the ground under it is real (a finite heightmap sample).
+void print_s3_status(const SceneManifest& manifest, Vec3 spawn, Vec3 position, bool ground_ok) {
+    std::printf("s3-status instances=%zu spawn=%.3f,%.3f,%.3f pos=%.3f,%.3f,%.3f ground=%s "
+                "frames=%d\n",
+                manifest.instances.size(), spawn.x, spawn.y, spawn.z, position.x, position.y,
+                position.z, ground_ok ? "ok" : "none", kSelftestFrames);
+}
+
+// Reads back the last rendered frame and writes it as a PNG, printing the
+// s1-pixels stats (the acceptance script's non-uniformity proof). Throws
+// std::runtime_error when the readback size is unexpected or the write fails.
+// The messages carry no "sotc-viewer: " prefix — run_app's catch adds it once.
+void write_screenshot(Renderer& renderer, SDL_Window* win, const std::string& path) {
+    const std::vector<uint8_t> pixels = renderer.read_pixels();
+    int pixel_width = 0;
+    int pixel_height = 0;
+    if (!SDL_GetWindowSizeInPixels(win, &pixel_width, &pixel_height)) {
+        throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") +
+                                 SDL_GetError());
+    }
+    const size_t expected = static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height) * 4;
+    if (pixels.size() != expected) {
+        throw std::runtime_error("read " + std::to_string(pixels.size()) +
+                                 " pixels, expected " + std::to_string(expected));
+    }
+
+    const PixelStats stats = pixel_stats(pixels);
+    std::printf("s1-pixels min=%d,%d,%d max=%d,%d,%d mean=%.1f,%.1f,%.1f\n", stats.min_rgb[0],
+                stats.min_rgb[1], stats.min_rgb[2], stats.max_rgb[0], stats.max_rgb[1],
+                stats.max_rgb[2], stats.mean_rgb[0], stats.mean_rgb[1], stats.mean_rgb[2]);
+
+    if (stbi_write_png(path.c_str(), pixel_width, pixel_height, 4, pixels.data(),
+                       pixel_width * 4) == 0) {
+        throw std::runtime_error("cannot write " + path);
+    }
+    std::printf("s1-screenshot path=%s width=%d height=%d\n", path.c_str(), pixel_width,
+                pixel_height);
+}
+
 }  // namespace
 
 int run_app(const AppOptions& opts) {
@@ -209,6 +302,16 @@ int run_app(const AppOptions& opts) {
     }
     if (!opts.screenshotPath.empty() && opts.modelRelPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --screenshot needs --model: there is nothing to capture\n");
+        return 2;
+    }
+    // Manifest mode: --model names the player's glb (required); --s3-selftest
+    // only makes sense for a composed scene.
+    if (!opts.manifestPath.empty() && opts.modelRelPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --manifest needs --model (the player glb)\n");
+        return 2;
+    }
+    if (opts.s3Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s3-selftest needs --manifest\n");
         return 2;
     }
 
@@ -269,24 +372,62 @@ int run_app(const AppOptions& opts) {
         std::printf("s1-gpu format=%s\n",
                     texture_format_name(SDL_GetGPUSwapchainTextureFormat(shell.device, shell.win)));
 
+        // Scene: a single glb (--model alone) or a composed manifest scene
+        // (--manifest, with --model as the player's glb). `Scene scene{}` keeps
+        // zeroed bounds for a model-less run, so camera_frame stays finite even
+        // when there is nothing to draw.
         Scene scene{};
-        if (!opts.modelRelPath.empty()) {
+        SceneManifest manifest{};          // empty when --manifest is absent
+        size_t player_mesh_begin = 0;      // the player's first mesh in a composed scene
+        Heightmap heightmap{};             // an empty heightmap = no ground
+        const bool follow_mode = !opts.manifestPath.empty();
+        if (follow_mode) {
+            // The manifest is user data: a malformed line is a usage error
+            // (exit 2) carrying the file and line, never a crash.
+            try {
+                manifest = parse_manifest(opts.manifestPath);
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "sotc-viewer: %s\n", error.what());
+                return 2;
+            }
+            scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath,
+                                  &player_mesh_begin);
+            renderer.upload(scene);
+            print_scene_line(scene);
+
+            // The ground is built from the scene's instance meshes only: the
+            // player's own body must never rasterize into the ground it walks
+            // on (it stands on it). A scene with no ground at all (no instance
+            // meshes) leaves the heightmap empty — ground=none, no clamp.
+            try {
+                heightmap = build_heightmap(scene, kHeightmapCellSize, player_mesh_begin);
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "sotc-viewer: no ground: %s\n", error.what());
+            }
+        } else if (!opts.modelRelPath.empty()) {
             scene = load_scene(opts.libraryDir, opts.modelRelPath);
             renderer.upload(scene);
-            size_t vertices = 0;
-            for (const MeshCpu& mesh : scene.meshes) {
-                vertices += mesh.vertices.size();
-            }
-            std::printf("s1-scene meshes=%zu vertices=%zu materials=%zu textures=%zu\n",
-                        scene.meshes.size(), vertices, scene.materials.size(),
-                        scene.textures.size());
+            print_scene_line(scene);
         }
 
         // The real camera: framed on the scene bounds at load (and again on F).
-        // `Scene scene{}` above zeroes the bounds for a model-less run, so the
-        // fit stays finite even when there is nothing to draw.
         Camera camera{};
         camera_frame(camera, scene.boundsMin, scene.boundsMax);
+
+        // The player and its follow camera (manifest mode only): spawn at the
+        // manifest's spawn or the bounds centre, with the camera snapped behind
+        // the player (a huge dt makes camera_follow's first blend factor
+        // exactly 1 in float arithmetic; later frames smooth).
+        PlayerState player{spawn_position(manifest, scene),
+                           manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f};
+        CameraFollow follow;
+        float player_ground = 0.0f;  // the model's origin-to-feet lift
+        if (follow_mode) {
+            player_ground = player_ground_offset(scene, player_mesh_begin);
+            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                          /*moving=*/false, /*dtSeconds=*/10.0f);
+            apply_player_transform(scene, player_mesh_begin, player, player_ground);
+        }
 
         // Playback: the clip list starts with the built-in procedural wave when
         // the model has a skin; --anim picks a clip by name or index, and
@@ -316,6 +457,35 @@ int run_app(const AppOptions& opts) {
         }
         print_anim_status(playback, scene);
 
+        if (opts.s3Selftest) {
+            // The pinned W1.4 self-test: 240 fixed 1/60 s frames of
+            // forward+run (camera-relative movement, the follow camera
+            // recentring), then one rendered frame and the s3-status line. With
+            // --screenshot the frame is also captured (the F3/wave check).
+            const Vec3 spawn = player.position;
+            PlayerInput input;
+            input.forward = true;
+            input.run = true;
+            for (int frame = 0; frame < kSelftestFrames; ++frame) {
+                camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                              /*moving=*/true, kFixedFrameSeconds);
+                player_update(player, input, kFixedFrameSeconds, heightmap,
+                              camera_view_yaw(camera));
+                update_pose(renderer, scene, playback, kFixedFrameSeconds);
+            }
+            apply_player_transform(scene, player_mesh_begin, player, player_ground);
+
+            renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                  /*acquire_swapchain=*/true);
+            if (!opts.screenshotPath.empty()) {
+                write_screenshot(renderer, shell.win, opts.screenshotPath);
+            }
+            print_status_line(opts, shell.win);
+            print_s3_status(manifest, spawn, player.position,
+                            std::isfinite(heightmap_sample(heightmap, player.position)));
+            return 0;
+        }
+
         if (opts.selftest) {
             update_pose(renderer, scene, playback, /*dt=*/0.0f);
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
@@ -325,49 +495,35 @@ int run_app(const AppOptions& opts) {
         }
 
         if (!opts.screenshotPath.empty()) {
+            // A capture run: in manifest mode the player stands at its spawn
+            // (ground-followed, camera behind it) while the pose advances with
+            // the real frame times; then one PNG is written.
             Uint64 last_ticks = SDL_GetTicks();
             for (int frame = 0; frame < opts.frames; ++frame) {
                 const Uint64 now = SDL_GetTicks();
                 const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
                 last_ticks = now;
+                if (follow_mode) {
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                                  /*moving=*/false, dt);
+                    player_update(player, PlayerInput{}, dt, heightmap, camera_view_yaw(camera));
+                    apply_player_transform(scene, player_mesh_begin, player, player_ground);
+                }
                 update_pose(renderer, scene, playback, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                       /*acquire_swapchain=*/true);
             }
 
-            const std::vector<uint8_t> pixels = renderer.read_pixels();
-            int pixel_width = 0;
-            int pixel_height = 0;
-            if (!SDL_GetWindowSizeInPixels(shell.win, &pixel_width, &pixel_height)) {
-                std::fprintf(stderr, "sotc-viewer: SDL_GetWindowSizeInPixels: %s\n", SDL_GetError());
-                return 1;
-            }
-            const size_t expected = static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height) * 4;
-            if (pixels.size() != expected) {
-                std::fprintf(stderr, "sotc-viewer: read %zu pixels, expected %zu (%dx%d)\n",
-                             pixels.size(), expected, pixel_width, pixel_height);
-                return 1;
-            }
-
-            const PixelStats stats = pixel_stats(pixels);
-            std::printf("s1-pixels min=%d,%d,%d max=%d,%d,%d mean=%.1f,%.1f,%.1f\n",
-                        stats.min_rgb[0], stats.min_rgb[1], stats.min_rgb[2],
-                        stats.max_rgb[0], stats.max_rgb[1], stats.max_rgb[2],
-                        stats.mean_rgb[0], stats.mean_rgb[1], stats.mean_rgb[2]);
-
-            if (stbi_write_png(opts.screenshotPath.c_str(), pixel_width, pixel_height, 4,
-                               pixels.data(), pixel_width * 4) == 0) {
-                std::fprintf(stderr, "sotc-viewer: cannot write %s\n", opts.screenshotPath.c_str());
-                return 1;
-            }
-            std::printf("s1-screenshot path=%s width=%d height=%d\n", opts.screenshotPath.c_str(),
-                        pixel_width, pixel_height);
+            write_screenshot(renderer, shell.win, opts.screenshotPath);
             return 0;
         }
 
-        // Interactive: left-drag orbits, the wheel zooms, F reframes, Space
+        // Interactive: left-drag orbits (single-model mode) or turns the follow
+        // camera's view (manifest mode), the wheel zooms, F reframes (single
+        // model) or recenters behind the player (manifest mode), Space
         // plays/pauses, [ and ] switch clips, R restarts the clip, Escape or
-        // the close button quits. Input needs no capture: plain mouse-motion
+        // the close button quits. In manifest mode W/A/S/D walk (Shift runs)
+        // and the camera follows. Input needs no capture: plain mouse-motion
         // events with SDL_BUTTON_LMASK held (never relative mode, never
         // SDL_CaptureMouse) — the cursor stays visible and free.
         bool running = true;
@@ -375,6 +531,12 @@ int run_app(const AppOptions& opts) {
         Uint64 last_title_update = SDL_GetTicks();
         Uint64 last_ticks = SDL_GetTicks();
         while (running) {
+            // This frame's drag and wheel deltas (motion events arrive several
+            // per frame; the follow camera takes their sum).
+            float drag_dx = 0.0f;
+            float drag_dy = 0.0f;
+            float wheel_delta = 0.0f;
+
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 switch (event.type) {
@@ -385,7 +547,14 @@ int run_app(const AppOptions& opts) {
                         if (event.key.key == SDLK_ESCAPE) {
                             running = false;
                         } else if (event.key.key == SDLK_F) {
-                            camera_frame(camera, scene.boundsMin, scene.boundsMax);
+                            if (follow_mode) {
+                                // Recenter the follow camera behind the player.
+                                follow.yawOffsetDeg = 0.0f;
+                                follow.pitchOffsetDeg = 0.0f;
+                                follow.distance = CameraFollow{}.distance;
+                            } else {
+                                camera_frame(camera, scene.boundsMin, scene.boundsMax);
+                            }
                         } else if (event.key.key == SDLK_SPACE) {
                             playback.playing = !playback.playing;
                         } else if (event.key.key == SDLK_R) {
@@ -403,11 +572,20 @@ int run_app(const AppOptions& opts) {
                         // without relative mode, so a plain motion event with
                         // the button held is all a drag needs.
                         if ((event.motion.state & SDL_BUTTON_LMASK) != 0) {
-                            camera_orbit(camera, event.motion.xrel, event.motion.yrel);
+                            if (follow_mode) {
+                                drag_dx += event.motion.xrel;
+                                drag_dy += event.motion.yrel;
+                            } else {
+                                camera_orbit(camera, event.motion.xrel, event.motion.yrel);
+                            }
                         }
                         break;
                     case SDL_EVENT_MOUSE_WHEEL:
-                        camera_zoom(camera, event.wheel.y);
+                        if (follow_mode) {
+                            wheel_delta += event.wheel.y;
+                        } else {
+                            camera_zoom(camera, event.wheel.y);
+                        }
                         break;
                     default:
                         break;
@@ -417,6 +595,25 @@ int run_app(const AppOptions& opts) {
             const Uint64 now = SDL_GetTicks();
             const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
             last_ticks = now;
+
+            if (follow_mode) {
+                const bool* keys = SDL_GetKeyboardState(nullptr);
+                PlayerInput input;
+                input.forward = keys[SDL_SCANCODE_W];
+                input.back = keys[SDL_SCANCODE_S];
+                input.left = keys[SDL_SCANCODE_A];
+                input.right = keys[SDL_SCANCODE_D];
+                input.run = keys[SDL_SCANCODE_LSHIFT];
+                const bool moving = input.forward || input.back || input.left || input.right;
+
+                // The camera first: player_update's movement basis is the
+                // camera's current look direction.
+                camera_follow(camera, follow, player.position, player.yawDeg, drag_dx, drag_dy,
+                              wheel_delta, moving, dt);
+                player_update(player, input, dt, heightmap, camera_view_yaw(camera));
+                apply_player_transform(scene, player_mesh_begin, player, player_ground);
+            }
+
             update_pose(renderer, scene, playback, dt);
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
