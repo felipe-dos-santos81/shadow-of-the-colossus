@@ -59,8 +59,12 @@ extraction of the same fpkg, so it was verified rather than rebuilt:
 - **No 1.01 update tree exists** (checked `<staged>-UPDATE`/`<staged>-patch` next to the staged dir,
   `mdfind -name CUSA08809`, and the external volume): the only package on this machine is the base
   `…-A0100-V0100.pkg`. `sotc.py`'s update merge therefore has nothing to merge and the boot is pure
-  01.00 — the patch modes (`fps60`/`af16`, `SOTC_CVARS`) are 1.01-only and are simply not applied;
-  normal boot is not version-gated.
+  01.00 — the patch modes (`fps60`/`af16`, `SOTC_CVARS`) were *predicted* 1.01-only (the plan's
+  Global Constraint), but measurement superseded that: the port's gate is **signature-based**
+  (`scripts/sotc_modes.py`'s `is_supported` — both check sites `0x009367b9`/`0x01390090`
+  byte-match our `eboot.bin`), so the modes are not gated out and `SOTC_CVARS` **does apply** on
+  01.00 (all six `nointro` run logs carry `+nointro`; the boot log carries the applied default
+  cvars — §3.2). Normal boot is not version-gated.
 - `SOTC_SYS_MODULES` could not be set to anything useful: `libSceUlt.sprx` / `libSceNgs2.sprx` are
   **not present anywhere on this machine** (checked with `mdfind` and targeted `find`s). The run is
   silent by design; the log's first line is the port's own warning (`SOTC_SYS_MODULES not set: no
@@ -187,8 +191,9 @@ Caveats, stated plainly so they are not lost:
   dir).
 - The boot above ran with `BB_HDR=0` and a fresh user dir (§1.4). Neither is a product decision —
   they are the two knobs that made this machine's state workable.
-- No 1.01 update tree exists (§1.2): 01.00 boots as-is; the patch modes remain inapplicable. No
-  `libc.prx` `_init_env` problem (`init_env_is_ret: true`), no missing-module failure (silent only).
+- No 1.01 update tree exists (§1.2): 01.00 boots as-is; the patch modes are **not** gated out —
+  the signature gate passes on our eboot and `SOTC_CVARS` applies (§1.2/§3.2). No `libc.prx`
+  `_init_env` problem (`init_env_is_ret: true`), no missing-module failure (silent only).
 
 What this means for C2: the capture workflow can proceed against this rig — the port boots our dump,
 the pad-file and frame-dump hooks work, and screenshots land as PNGs in `<user>/screenshots/` (the

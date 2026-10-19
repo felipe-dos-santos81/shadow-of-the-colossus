@@ -855,8 +855,10 @@ the constant 30.0 has no other reference in the image).
      file-level statement is *not verified*, not *contradicted*.** These series are recorded as
      the **new lead** for the parse-chain pass — they may be the key data the decode was missing.
      (The reviewer's independent re-derivation reproduced the run/record-57/record-0 findings and
-     the break at −0.0642 exactly; its dot-range minimum read 0.9885 and its rule-variant scan
-     counts 24/90 differ from mine — rule-sensitive numbers, recorded as such.)
+     the break at −0.0642 exactly; its rule-variant scan counts 24/90 differ from mine — a
+     rule-variant number, recorded as such. Its dot-range minimum read 0.9885 vs the measured
+     0.9727 was a reviewer measurement slip (0.9885 is one specific dot, not the minimum), not
+     rule sensitivity.)
 
 ### 6.6 What the re-base pass actually operates on (resolves §4.4's open note)
 
@@ -867,9 +869,10 @@ starts are excluded by magic (`xff` family: `78 66 66 00`; `.cani`: `38 30 41 45
 signature scan for the structure (first byte 1…9, u16 count 1…4096 at `+4`, ≥3 of the nine
 31-bit offset fields nonzero and all < `0x10000`) matches **only table-like data, never a
 header**: 13 hits in `player_a_stand` — all inside tail table 1 (≥ `0x1D48`) — 72 in the horse
-(all at/after `0xC30`, its table region and immediate lead-in), and 0–1 per file in an 8-file
-plaintext-`.cani` sample. The reviewer's rule variant counted 24/90 on the same two files; the
-counts are rule-sensitive, the "no file header" reading is what reproduces. The conclusion
+(all at/after `0xC30`, its table region and immediate lead-in), and **0–3 per file across an
+18-file plaintext-`.cani` sample** (10 object + 8 character clips). The reviewer's rule variant
+counted 24/90 on the same two files; the counts are rule-sensitive, the "no file header" reading
+is what reproduces. The conclusion
 rests on the decompile legs: the structure is allocated and linked by the loader chain
 (`FUN_00589310` → `FUN_00588900`; the node's `+0x48` holds the pointer the re-base pass
 receives), and its 31-bit fields are **offsets relative to the load base `DAT_02f3b8c0`**, which
