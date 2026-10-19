@@ -18,6 +18,8 @@ void print_usage(FILE* out) {
                  "\n"
                  "  --library DIR     converted asset library (default: $SOTC_LIB)\n"
                  "  --model REL       model to load, relative to the library\n"
+                 "  --manifest PATH   compose the scene from a scene manifest; --model\n"
+                 "                    is then the player's glb (W/A/S/D walk, Shift runs)\n"
                  "  --anim NAME|IDX   clip to play, by name or 0-based index\n"
                  "                    (default: procedural-wave for a skinned model)\n"
                  "  --anim-time SEC   pause playback at SEC seconds (deterministic captures)\n"
@@ -25,7 +27,9 @@ void print_usage(FILE* out) {
                  "  --frames N        frames the --screenshot path renders first (default 3)\n"
                  "  --width N         window width in points (default 1280)\n"
                  "  --height N        window height in points (default 720)\n"
-                 "  --selftest        render one frame, print s1-status, exit\n");
+                 "  --selftest        render one frame, print s1-status, exit\n"
+                 "  --s3-selftest     compose --manifest, walk 240 fixed frames, print\n"
+                 "                    s3-status, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -63,10 +67,14 @@ int main(int argc, char** argv) {
             opts.selftest = true;
             continue;
         }
+        if (arg == "--s3-selftest") {
+            opts.s3Selftest = true;
+            continue;
+        }
 
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
-                                 arg == "--anim" || arg == "--anim-time";
+                                 arg == "--anim" || arg == "--anim-time" || arg == "--manifest";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -83,6 +91,8 @@ int main(int argc, char** argv) {
             opts.libraryDir = value;
         } else if (arg == "--model") {
             opts.modelRelPath = value;
+        } else if (arg == "--manifest") {
+            opts.manifestPath = value;
         } else if (arg == "--screenshot") {
             opts.screenshotPath = value;
         } else if (arg == "--anim") {
@@ -122,6 +132,19 @@ int main(int argc, char** argv) {
     }
     if (opts.libraryDir.empty()) {
         std::fprintf(stderr, "sotc-viewer: no asset library: pass --library DIR or set SOTC_LIB\n");
+        return 2;
+    }
+
+    // --manifest composes the scene, so --model is the player's glb (required);
+    // --s3-selftest only makes sense for a composed scene.
+    if (!opts.manifestPath.empty() && opts.modelRelPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --manifest needs --model (the player glb)\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s3Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s3-selftest needs --manifest\n");
+        print_usage(stderr);
         return 2;
     }
 
