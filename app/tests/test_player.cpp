@@ -495,7 +495,7 @@ TEST_CASE("player_model_matrix lifts the model by its origin-to-feet offset") {
     CHECK(lifted.m[0] == doctest::Approx(1.0f));
 }
 
-TEST_CASE("player_ground_offset reads the player meshes' lowest vertex") {
+TEST_CASE("rig_ground_offset reads the rig's meshes' lowest vertex") {
     Vertex low{};
     low.py = -5.0f;
     Vertex foot{};
@@ -510,16 +510,28 @@ TEST_CASE("player_ground_offset reads the player meshes' lowest vertex") {
     player.vertices = {hip, foot};
     scene.meshes = {instance, player};
 
-    // Only the player's meshes count: the instance's -5 does not leak in.
-    CHECK(player_ground_offset(scene, 1) == doctest::Approx(0.76f));
-    // Nothing below y = 0, and an empty range, need no lift.
-    CHECK(player_ground_offset(scene, 2) == doctest::Approx(0.0f));
-    CHECK(player_ground_offset(scene, 9) == doctest::Approx(0.0f));
+    // Only the rig's own meshes count: the instance's -5 does not leak in.
+    const RigCpu player_rig_record{/*skin=*/{}, /*animations=*/{}, /*meshBegin=*/1,
+                                   /*meshEnd=*/2, /*dynamic=*/true};
+    CHECK(rig_ground_offset(scene, player_rig_record) == doctest::Approx(0.76f));
+    // Nothing below y = 0, an empty range, and a past-the-end range need no
+    // lift.
+    const RigCpu empty_rig{/*skin=*/{}, /*animations=*/{}, 2, 2, false};
+    CHECK(rig_ground_offset(scene, empty_rig) == doctest::Approx(0.0f));
+    const RigCpu past_end{/*skin=*/{}, /*animations=*/{}, 9, 12, false};
+    CHECK(rig_ground_offset(scene, past_end) == doctest::Approx(0.0f));
+    // The mesh range primitive itself is half-open and clamped to the scene.
+    CHECK(mesh_ground_offset(scene, 0, 1) == doctest::Approx(5.0f));
+    CHECK(mesh_ground_offset(scene, 2, 9) == doctest::Approx(0.0f));
 }
 
-// --- The carried W1.3 fix: the heightmap excludes the player ----------------
+// --- The carried W1.3 fix: the heightmap excludes rigged meshes --------------
+//
+// S4 replaced the S3 "first meshCount meshes" split with the rig records: the
+// heightmap rasterizes `mesh.rig < 0` (static instances) only, so neither the
+// player's body nor a placed entity can become the ground.
 
-TEST_CASE("the player-less heightmap has ground, not the player's body") {
+TEST_CASE("the heightmap holds the static ground, not the player's body") {
     SceneManifest manifest{};
     // A plank at the origin gives the composed scene ground under the player.
     manifest.instances.push_back(
@@ -530,36 +542,36 @@ TEST_CASE("the player-less heightmap has ground, not the player's body") {
                                       "models/shadow/characters/wander/_cmn/wander.glb",
                                       &player_mesh_begin);
 
-    // The player's meshes are appended last: the manifest contributed one.
+    // The player's meshes are appended after the manifest's one static mesh,
+    // and rig 0's range starts there.
     REQUIRE(player_mesh_begin == 1);
     REQUIRE(scene.meshes.size() > player_mesh_begin);
+    const RigCpu& rig = player_rig(scene);
+    REQUIRE(rig.meshBegin == player_mesh_begin);
+    REQUIRE(rig.meshEnd == scene.meshes.size());
+    for (std::size_t i = 0; i < scene.meshes.size(); ++i) {
+        CHECK(scene.meshes[i].rig == (i < player_mesh_begin ? -1 : 0));
+    }
 
     // A 0.1 m grid so the player's thin body (its XZ footprint is ~1.2 m wide
-    // but only ~0.2 m deep, and the model is only 1.26 m tall) actually
-    // contains grid nodes: at 1 m cells the body can fall between nodes
-    // entirely, which is exactly the alignment dependence the player-less
-    // build removes.
-    const Heightmap with_player = build_heightmap(scene, 0.1f);
-    const Heightmap without_player = build_heightmap(scene, 0.1f, player_mesh_begin);
+    // but only ~0.2 m deep, and the model is only 1.26 m tall) would actually
+    // contain grid nodes: at 1 m cells the body can fall between nodes
+    // entirely, which is exactly the phantom the rig filter removes.
+    const Heightmap ground_only = build_heightmap(scene, 0.1f);
 
-    // The highest node in the full build is the player's own body; the
-    // player-less build holds the plank's top only. This is the carried W1.3
-    // phantom: built from the full composed scene, the ground under the player
-    // is the player itself.
-    const float max_with_player = max_height(with_player);
-    const float max_without_player = max_height(without_player);
+    // The highest node is the plank's top, not the player's body (which
+    // reaches ~1.26 m above its origin).
+    const float max_ground = max_height(ground_only);
+    CHECK(std::isfinite(max_ground));
+    CHECK(max_ground < 0.2f);  // the plank is a few cm thick
 
-    CHECK(max_with_player > 0.4f);           // the player's body rasterized
-    CHECK(max_without_player < 0.2f);        // the plank is a few cm thick
-    CHECK(max_with_player > max_without_player + 0.3f);
+    // The grid keeps the scene's own bounds: the walkable area is unchanged.
+    CHECK(ground_only.boundsMin.x == doctest::Approx(scene.boundsMin.x));
+    CHECK(ground_only.boundsMax.z == doctest::Approx(scene.boundsMax.z));
 
-    // Both grids share the scene's bounds: the walkable area is unchanged.
-    CHECK(without_player.boundsMin.x == doctest::Approx(scene.boundsMin.x));
-    CHECK(without_player.boundsMax.z == doctest::Approx(scene.boundsMax.z));
-
-    // The player-less ground under the player's spawn is finite and low: the
-    // app can stand the player on it without the phantom lift.
-    const float ground_at_origin = heightmap_sample(without_player, Vec3{0.0f, 0.0f, 0.0f});
+    // The ground under the player's spawn is finite and low: the app can stand
+    // the player on it without the phantom lift.
+    const float ground_at_origin = heightmap_sample(ground_only, Vec3{0.0f, 0.0f, 0.0f});
     CHECK(std::isfinite(ground_at_origin));
     CHECK(ground_at_origin < 0.5f);
 
@@ -569,6 +581,6 @@ TEST_CASE("the player-less heightmap has ground, not the player's body") {
     // ground instead of sinking into it.
     const Scene wander =
         load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
-    CHECK(player_ground_offset(scene, player_mesh_begin) == doctest::Approx(-wander.boundsMin.y));
-    CHECK(player_ground_offset(scene, player_mesh_begin) > 0.5f);
+    CHECK(rig_ground_offset(scene, rig) == doctest::Approx(-wander.boundsMin.y));
+    CHECK(rig_ground_offset(scene, rig) > 0.5f);
 }

@@ -28,7 +28,7 @@ public:
     // Buffers and textures for `scene` on the GPU. The handle arrays mirror
     // scene.meshes / scene.textures, so the scene layout must not change after
     // this call (the app loads one model and keeps it). Also creates the joint
-    // palette buffer, sized from scene.skin.joints (a single identity matrix
+    // palette buffer, sized from the player rig's joints (a single identity matrix
     // when the scene has no skin).
     void upload(const Scene& scene);
 

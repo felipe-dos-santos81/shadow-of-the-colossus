@@ -1,6 +1,7 @@
 // Scene-manifest parser tests: the W1.1 schema (S3 arena plan) — a
-// line-oriented list of placed instances plus an optional spawn, strict
-// finite-float numbers, and failures that name the file and line. Fixture text
+// line-oriented list of placed instances plus an optional spawn — extended by
+// S4 with placed, animated entities (`entity <glb> <trs...> <clip>`). Numbers
+// are strict finite floats and failures name the file and line. Fixture text
 // goes to a temp path through the same pattern as test_asset_io.cpp.
 #include <doctest.h>
 
@@ -84,6 +85,9 @@ TEST_CASE("a manifest with one instance and one spawn parses with exact values")
     const SceneManifest manifest = parse_manifest(path);
 
     REQUIRE(manifest.instances.size() == 1);
+    // No `entity` directive: the entity list stays empty (the S3 schema is
+    // unchanged by the S4 addition).
+    CHECK(manifest.entities.empty());
     const ManifestInstance& instance = manifest.instances[0];
     CHECK(instance.glbRelPath == "models/objects/props/_cmn/obj_plank_01.glb");
     CHECK(instance.position.x == doctest::Approx(1.5f));
@@ -101,6 +105,42 @@ TEST_CASE("a manifest with one instance and one spawn parses with exact values")
     CHECK(manifest.spawnPosition.y == doctest::Approx(0.25f));
     CHECK(manifest.spawnPosition.z == doctest::Approx(-4.5f));
     CHECK(manifest.spawnYawDeg == doctest::Approx(90.0f));
+}
+
+TEST_CASE("an entity line parses its placement and clip") {
+    TempFixtureDir dir;
+    // The builder-pick values from docs/notes/re4-placement.md §8, verbatim:
+    // the colossus at (382, 28.369, 370), yaw -130.76 degrees about +Y.
+    const std::string text =
+        "instance models/objects/props/_cmn/obj_plank_01.glb 0 0 0 0 0 0 1 1 1 1\n"
+        "entity models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb"
+        " 382 28.369 370 0 -0.909104 0 0.416570 1 1 1 minotaur_a_stand\n"
+        "spawn 353 27.951 345 49.24\n";
+    const std::filesystem::path path = write_manifest(dir, text);
+
+    const SceneManifest manifest = parse_manifest(path);
+
+    REQUIRE(manifest.entities.size() == 1);
+    const ManifestEntity& entity = manifest.entities[0];
+    CHECK(entity.placement.glbRelPath ==
+          "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb");
+    CHECK(entity.placement.position.x == doctest::Approx(382.0f));
+    CHECK(entity.placement.position.y == doctest::Approx(28.369f));
+    CHECK(entity.placement.position.z == doctest::Approx(370.0f));
+    CHECK(entity.placement.rotation.x == doctest::Approx(0.0f));
+    CHECK(entity.placement.rotation.y == doctest::Approx(-0.909104f));
+    CHECK(entity.placement.rotation.z == doctest::Approx(0.0f));
+    CHECK(entity.placement.rotation.w == doctest::Approx(0.416570f));
+    CHECK(entity.placement.scale.x == doctest::Approx(1.0f));
+    CHECK(entity.placement.scale.y == doctest::Approx(1.0f));
+    CHECK(entity.placement.scale.z == doctest::Approx(1.0f));
+    CHECK(entity.clip == "minotaur_a_stand");
+
+    // The other directives are untouched by the entity line.
+    CHECK(manifest.instances.size() == 1);
+    CHECK(manifest.hasSpawn);
+    CHECK(manifest.spawnPosition.x == doctest::Approx(353.0f));
+    CHECK(manifest.spawnPosition.z == doctest::Approx(345.0f));
 }
 
 TEST_CASE("comments and blank lines are skipped") {
@@ -152,6 +192,58 @@ TEST_CASE("a wrong token count fails naming the file and line") {
     // A `spawn` with too many tokens, on line 1.
     const std::filesystem::path spawn_path = write_manifest(dir, "spawn 1 2 3 4 5\n");
     CHECK(manifest_error(spawn_path).starts_with(spawn_path.string() + ":1:"));
+
+    // An `entity` with too few tokens (no clip) and too many (an extra
+    // trailing token): both are errors, never a silently truncated entity.
+    const std::string entity_prefix =
+        "entity models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb"
+        " 382 28.369 370 0 -0.909104 0 0.416570 1 1 1";
+    const std::filesystem::path entity_short = write_manifest(dir, entity_prefix + "\n");
+    CHECK(manifest_error(entity_short).starts_with(entity_short.string() + ":1:"));
+    CHECK(manifest_error(entity_short).find("entity") != std::string::npos);
+    const std::filesystem::path entity_long =
+        write_manifest(dir, entity_prefix + " minotaur_a_stand extra\n");
+    CHECK(manifest_error(entity_long).starts_with(entity_long.string() + ":1:"));
+    CHECK(manifest_error(entity_long).find("entity") != std::string::npos);
+}
+
+TEST_CASE("an entity's non-finite or partial number fails with its line number") {
+    TempFixtureDir dir;
+    const std::vector<std::string> entity_tokens = {
+        "entity", "models/x.glb", "0", "0", "0", "0", "0", "0",
+        "1",      "1",             "1", "1", "stand"};
+    REQUIRE(entity_tokens.size() == 13);
+
+    // The pristine fixture parses: the loop below only ever changes one numeric
+    // token, so a failure there is the bad token's, never a bad fixture's.
+    CHECK(parse_manifest(write_manifest(dir, "# header\n" + join_tokens(entity_tokens) + "\n"))
+              .entities.size() == 1);
+
+    for (const std::string& bad :
+         {std::string("nan"), std::string("inf"), std::string("-inf"), std::string("1.5x"),
+          std::string("1e999")}) {
+        for (int field = 0; field < 10; ++field) {
+            std::vector<std::string> tokens = entity_tokens;
+            tokens[2 + field] = bad;
+            const std::filesystem::path path =
+                write_manifest(dir, "# header\n" + join_tokens(tokens) + "\n");
+            CAPTURE(bad);
+            CAPTURE(field);
+            const std::string message = manifest_error(path);
+            CHECK(message.starts_with(path.string() + ":2:"));
+            CHECK(message.find("'" + bad + "'") != std::string::npos);
+        }
+    }
+
+    // The clip is a name, not a number: a numeric-looking token is still a
+    // valid clip name (the loader decides whether the model carries it).
+    std::vector<std::string> numeric_clip = entity_tokens;
+    numeric_clip[12] = "0";
+    const std::filesystem::path numeric_path =
+        write_manifest(dir, join_tokens(numeric_clip) + "\n");
+    const SceneManifest parsed = parse_manifest(numeric_path);
+    REQUIRE(parsed.entities.size() == 1);
+    CHECK(parsed.entities[0].clip == "0");
 }
 
 TEST_CASE("a non-finite or partial number fails with its line number") {

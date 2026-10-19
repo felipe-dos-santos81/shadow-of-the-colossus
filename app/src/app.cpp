@@ -144,11 +144,11 @@ int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want
     return -1;
 }
 
-// The `s2-anim` line reports the selected clip: its name, the palette's joint
-// count, whether it is the built-in procedural clip, and the current (wrapped)
-// time. Printed at startup and on every clip change; a model with no clip at
-// all prints nothing. Real clips print procedural=0; the stand-in is only ever
-// the single clip of a model the converter could not animate.
+// The `s2-anim` line reports the selected clip: its name, the player rig's
+// joint count, whether it is the built-in procedural clip, and the current
+// (wrapped) time. Printed at startup and on every clip change; a model with no
+// clip at all prints nothing. Real clips print procedural=0; the stand-in is
+// only ever the single clip of a model the converter could not animate.
 void print_anim_status(const Playback& playback, const Scene& scene) {
     if (playback.index < 0) {
         return;
@@ -156,7 +156,7 @@ void print_anim_status(const Playback& playback, const Scene& scene) {
     const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
     const bool procedural = playback.has_procedural && playback.index == 0;
     std::printf("s2-anim clip=%s joints=%zu procedural=%d t=%.3f\n", clip.name.c_str(),
-                scene.skin.joints.size(), procedural ? 1 : 0,
+                player_rig(scene).skin.joints.size(), procedural ? 1 : 0,
                 animation_loop_time(playback.time, clip.duration));
 }
 
@@ -228,14 +228,15 @@ constexpr int kSelftestFrames = 240;                // 4 simulated seconds
 // `yaw`, so the look direction is yaw - 180).
 float camera_view_yaw(const Camera& camera) { return camera.yaw - 180.0f; }
 
-// Moves the composed scene's player meshes with the player: meshes
-// [playerMeshBegin, end) are the player's (compose_scene appends them last).
-// `groundOffsetY` is the lift to apply (see active_player_lift), so the
-// character stands on the ground point instead of sinking into it.
-void apply_player_transform(Scene& scene, size_t playerMeshBegin, const PlayerState& player,
+// Moves the composed scene's player meshes with the player: the player rig's
+// half-open mesh range (compose_scene appends the entities after it, and they
+// must not follow the player). `groundOffsetY` is the lift to apply (see
+// active_player_lift), so the character stands on the ground point instead of
+// sinking into it.
+void apply_player_transform(Scene& scene, const RigCpu& rig, const PlayerState& player,
                             float groundOffsetY) {
     const Mat4 model = player_model_matrix(player, groundOffsetY);
-    for (size_t i = playerMeshBegin; i < scene.meshes.size(); ++i) {
+    for (size_t i = rig.meshBegin; i < rig.meshEnd && i < scene.meshes.size(); ++i) {
         scene.meshes[i].model = model;
     }
 }
@@ -245,13 +246,12 @@ void apply_player_transform(Scene& scene, size_t playerMeshBegin, const PlayerSt
 // root translation series — that series already holds the character's ground
 // height, so lifting on top of it would float the model by the offset
 // (~0.76 m for Wander). A model with no clip at all keeps the plain lift.
-float active_player_lift(const Scene& scene, const Playback& playback,
-                         size_t playerMeshBegin) {
+float active_player_lift(const Scene& scene, const Playback& playback, const RigCpu& rig) {
     if (playback.index < 0) {
-        return player_ground_offset(scene, playerMeshBegin);
+        return rig_ground_offset(scene, rig);
     }
     return effective_player_lift(scene, playback.clips[static_cast<size_t>(playback.index)],
-                                 playerMeshBegin);
+                                 rig.meshBegin, rig.meshEnd);
 }
 
 // Applies the controller's locomotion choice unless a clip was pinned on the
@@ -418,7 +418,6 @@ int run_app(const AppOptions& opts) {
         // when there is nothing to draw.
         Scene scene{};
         SceneManifest manifest{};          // empty when --manifest is absent
-        size_t player_mesh_begin = 0;      // the player's first mesh in a composed scene
         Heightmap heightmap{};             // an empty heightmap = no ground
         const bool follow_mode = !opts.manifestPath.empty();
         if (follow_mode) {
@@ -430,17 +429,17 @@ int run_app(const AppOptions& opts) {
                 std::fprintf(stderr, "sotc-viewer: %s\n", error.what());
                 return 2;
             }
-            scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath,
-                                  &player_mesh_begin);
+            scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath);
             renderer.upload(scene);
             print_scene_line(scene);
 
-            // The ground is built from the scene's instance meshes only: the
-            // player's own body must never rasterize into the ground it walks
-            // on (it stands on it). A scene with no ground at all (no instance
-            // meshes) leaves the heightmap empty — ground=none, no clamp.
+            // The ground is built from the scene's static meshes only: the
+            // player's own body and the placed entities must never rasterize
+            // into the ground they stand on. A scene with no ground at all (no
+            // static meshes) leaves the heightmap empty — ground=none, no
+            // clamp.
             try {
-                heightmap = build_heightmap(scene, kHeightmapCellSize, player_mesh_begin);
+                heightmap = build_heightmap(scene, kHeightmapCellSize);
             } catch (const std::exception& error) {
                 std::fprintf(stderr, "sotc-viewer: no ground: %s\n", error.what());
             }
@@ -449,6 +448,11 @@ int run_app(const AppOptions& opts) {
             renderer.upload(scene);
             print_scene_line(scene);
         }
+
+        // The player's rig record: its mesh range is what apply_player_transform
+        // moves and what the ground lift is measured from (the entities' own
+        // rigs follow in their tasks).
+        const RigCpu& player_rig_record = player_rig(scene);
 
         // The real camera: framed on the scene bounds at load (and again on F).
         Camera camera{};
@@ -512,8 +516,8 @@ int run_app(const AppOptions& opts) {
         // The initial player transform (also the one --selftest renders with):
         // the first clip already is the active one.
         if (follow_mode) {
-            apply_player_transform(scene, player_mesh_begin, player,
-                                   active_player_lift(scene, playback, player_mesh_begin));
+            apply_player_transform(scene, player_rig_record, player,
+                                   active_player_lift(scene, playback, player_rig_record));
         }
 
         if (opts.s3Selftest) {
@@ -533,8 +537,8 @@ int run_app(const AppOptions& opts) {
                 update_locomotion(playback, scene, input, manual_clip);
                 update_pose(renderer, scene, playback, kFixedFrameSeconds);
             }
-            apply_player_transform(scene, player_mesh_begin, player,
-                                   active_player_lift(scene, playback, player_mesh_begin));
+            apply_player_transform(scene, player_rig_record, player,
+                                   active_player_lift(scene, playback, player_rig_record));
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
@@ -570,8 +574,9 @@ int run_app(const AppOptions& opts) {
                     const PlayerInput still;
                     player_update(player, still, dt, heightmap, camera_view_yaw(camera));
                     update_locomotion(playback, scene, still, manual_clip);
-                    apply_player_transform(scene, player_mesh_begin, player,
-                                           active_player_lift(scene, playback, player_mesh_begin));
+                    apply_player_transform(scene, player_rig_record, player,
+                                           active_player_lift(scene, playback,
+                                                              player_rig_record));
                 }
                 update_pose(renderer, scene, playback, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
@@ -684,8 +689,8 @@ int run_app(const AppOptions& opts) {
                               wheel_delta, moving, dt);
                 player_update(player, input, dt, heightmap, camera_view_yaw(camera));
                 update_locomotion(playback, scene, input, manual_clip);
-                apply_player_transform(scene, player_mesh_begin, player,
-                                       active_player_lift(scene, playback, player_mesh_begin));
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
             }
 
             update_pose(renderer, scene, playback, dt);

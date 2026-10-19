@@ -23,14 +23,17 @@ float animation_loop_time(float time, float duration);
 void animation_sample(const AnimationChannelCpu& ch, float t, float* out);
 
 // The skin palette at `time`: one matrix per skin joint, worldJoint *
-// inverseBind. Channels override the component they target (T/R/S); joints and
-// components without a channel keep their rest values. `time` is taken as
-// given — wrap it with animation_loop_time first.
+// inverseBind. This is the single-rig path: it poses the player's rig
+// (Scene::playerRig), which is what the follower controller drives. Per-rig
+// posing lands with the per-rig playback in the next S4 task. Channels
+// override the component they target (T/R/S); joints and components without a
+// channel keep their rest values. `time` is taken as given — wrap it with
+// animation_loop_time first.
 std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, float time);
 
 // World-space bounds of the scene's vertices under a palette (worldJoint * inverseBind):
 // sum_i w_i * palette[j_i] * p, then the mesh's model transform. Falls back to bind
-// positions when the scene has no skin.
+// positions when the player's rig has no skin.
 void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette,
                   Vec3& outMin, Vec3& outMax);
 
@@ -73,8 +76,8 @@ bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip);
 // The lift to draw the composed scene's player meshes with while `clip` plays:
 // 0 when the clip carries the root translation series (that series already
 // holds the ground height), else the S3 origin-to-feet lift
-// (player_ground_offset), lifted from the player's meshes
-// [playerMeshBegin, end). Lifting on top of a root-carrying clip floats the
-// character by the offset (~0.76 m for Wander).
+// (mesh_ground_offset) over the player rig's meshes [meshBegin, meshEnd).
+// Lifting on top of a root-carrying clip floats the character by the offset
+// (~0.76 m for Wander).
 float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
-                            std::size_t playerMeshBegin);
+                            std::size_t meshBegin, std::size_t meshEnd);

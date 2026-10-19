@@ -22,21 +22,24 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 
 // Assembles a composed scene from a parsed manifest: every instance's glb is
 // loaded with `mat4_from_trs(instance.position, instance.rotation,
-// instance.scale)` as its meshes' model matrix, then the player's glb is
-// appended with the identity model. Materials keep their indices valid across
-// instances (each glb's material indices are offset by what the earlier loads
-// contributed; texture indices need no offset because images append to the
-// shared texture list directly), and `boundsMin/boundsMax` cover every placed
-// vertex in world space.
+// instance.scale)` as its meshes' model matrix (static: rig = -1), then the
+// player's glb is appended with the identity model and rig 0, then each
+// entity's glb with its own manifest placement and its own rig (1, 2, ... in
+// manifest order). Materials keep their indices valid across instances (each
+// glb's material indices are offset by what the earlier loads contributed;
+// texture indices need no offset because images append to the shared texture
+// list directly), and `boundsMin/boundsMax` cover every placed vertex in world
+// space.
 //
-// The composed scene has exactly one skeleton and one clip list, and they are
-// the player's: a rig on an instance glb is skipped with a warning (the app
-// animates the player). Throws std::runtime_error like load_scene, naming the
-// instance's manifest glb path when one cannot be loaded.
+// Every rigged glb keeps its own skeleton and clips as one RigCpu; the player's
+// rig is dynamic, an entity's plays the exact clip the manifest names. An
+// entity whose named clip the model does not carry (or a model that has no
+// clips at all) is a loud load error naming the glb path and the clip — never a
+// silent rest pose. Throws std::runtime_error like load_scene, naming the
+// instance's or entity's manifest glb path when one cannot be loaded.
 //
-// `playerMeshBegin` (optional) receives the index of the player's first mesh:
-// meshes [0, playerMeshBegin) are the manifest's instances and meshes
-// [playerMeshBegin, end) are the player's. The app uses it to build the ground
-// heightmap from the player-less part of the scene.
+// `playerMeshBegin` (optional) receives the player's rig's first mesh index:
+// the static instances precede it and the entities follow it. Kept for the S3
+// callers; the rig records carry the authoritative ranges now.
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
                     const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr);

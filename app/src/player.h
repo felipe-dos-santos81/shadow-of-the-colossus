@@ -62,8 +62,14 @@ void player_update(PlayerState& state, const PlayerInput& input, float dtSeconds
 // origin exactly at the position.
 Mat4 player_model_matrix(const PlayerState& state, float modelGroundOffsetY = 0.0f);
 
-// The lift `player_model_matrix` needs for a composed scene's player meshes:
-// the negated lowest vertex y of meshes [playerMeshBegin, end) (the player's
+// The lift `player_model_matrix` needs for a rig's meshes: the negated lowest
+// vertex y over the half-open mesh range [meshBegin, meshEnd) (a rigged glb's
 // meshes carry an identity model in a composed scene, so their vertex y's are
-// local). 0 when every vertex is at or above y = 0, and 0 for an empty range.
-float player_ground_offset(const Scene& scene, std::size_t playerMeshBegin);
+// local). 0 when every vertex is at or above y = 0, and 0 for an empty or
+// inverted range; a range past the end is clamped.
+float mesh_ground_offset(const Scene& scene, std::size_t meshBegin, std::size_t meshEnd);
+
+// The same lift for one rig record: mesh_ground_offset over the rig's own mesh
+// range. Used for the player's rig today; an entity's rig (which the design
+// grounds the same way) takes the same call.
+float rig_ground_offset(const Scene& scene, const RigCpu& rig);

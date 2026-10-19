@@ -122,6 +122,17 @@ JointCpu joint(std::string name, int parent, Vec3 restT, Mat4 inverseBind) {
     return out;
 }
 
+// A scene whose player rig (rig 0) holds `joints`: what load_scene produces for
+// a skinned model (and what the single-rig pose functions read).
+Scene scene_with_player_joints(std::vector<JointCpu> joints) {
+    Scene scene;
+    RigCpu rig;
+    rig.dynamic = true;
+    rig.skin.joints = std::move(joints);
+    scene.rigs.push_back(std::move(rig));
+    return scene;
+}
+
 // The same two-joint fixture test_asset_io.cpp loads from its inline glTF:
 // JointA (root) at (0,1,0) with inverse bind T(0,-1,0), JointB (child) one more
 // unit up with inverse bind T(0,-2,0), and the one-second "turn" clip rotating
@@ -129,12 +140,10 @@ JointCpu joint(std::string name, int parent, Vec3 restT, Mat4 inverseBind) {
 // the pose math is pinned against hand-derived values; the glb-load path is
 // exercised by the wander case below.
 Scene turn_fixture_scene() {
-    Scene scene;
-    scene.skin.joints = {
+    return scene_with_player_joints({
         joint("JointA", -1, {0.0f, 1.0f, 0.0f}, translation_matrix({0.0f, -1.0f, 0.0f})),
         joint("JointB", 0, {0.0f, 1.0f, 0.0f}, translation_matrix({0.0f, -2.0f, 0.0f})),
-    };
-    return scene;
+    });
 }
 
 AnimationChannelCpu turn_channel(int interpolation) {
@@ -342,8 +351,8 @@ TEST_CASE("posed_bounds applies the skin palette and the root lift") {
     // One joint at the origin bound to two vertices at y -1 and +1. A root
     // translation channel lifts the palette by 0.5, so the posed bounds move
     // with it; a scene with no skin keeps its bind bounds.
-    Scene scene;
-    scene.skin.joints = {joint("Bone_root", -1, {0.0f, 0.0f, 0.0f}, mat4_identity())};
+    Scene scene = scene_with_player_joints(
+        {joint("Bone_root", -1, {0.0f, 0.0f, 0.0f}, mat4_identity())});
     MeshCpu mesh;
     Vertex low{};
     low.px = -0.5f;
@@ -402,8 +411,8 @@ TEST_CASE("posed_bounds applies the mesh model transform and passes zero-weight 
     // The composited-scene contract: skinning happens in glb space, then the mesh's own model
     // transform places it in the world. A vertex with no weights (an unskinned primitive inside
     // a skinned scene) stays at its bind position, exactly as the shader's zero-weight path does.
-    Scene scene;
-    scene.skin.joints = {joint("Bone_root", -1, {0.0f, 0.0f, 0.0f}, mat4_identity())};
+    Scene scene = scene_with_player_joints(
+        {joint("Bone_root", -1, {0.0f, 0.0f, 0.0f}, mat4_identity())});
 
     MeshCpu mesh;
     Vertex weighted{};
@@ -471,7 +480,7 @@ TEST_CASE("the procedural wave animates every joint of a rig smaller than the ca
     // (wander's case above pins the cap with 348 joints).
     const Scene scene = turn_fixture_scene();  // 2 joints
     const AnimationCpu wave = make_procedural_wave(scene);
-    REQUIRE(scene.skin.joints.size() == 2);
+    REQUIRE(player_rig(scene).skin.joints.size() == 2);
     REQUIRE(wave.channels.size() == 2);
     CHECK(wave.channels[0].joint == 0);
     CHECK(wave.channels[1].joint == 1);
@@ -489,7 +498,7 @@ TEST_CASE("build_playback prefers real clips and falls back to the procedural wa
     // A scene with one animation: the model's own clip is the only clip played
     // — the stand-in exists only for models the converter cannot animate.
     Scene with_clip = turn_fixture_scene();
-    with_clip.animations.push_back(turn_clip(0));
+    with_clip.rigs[0].animations.push_back(turn_clip(0));
     Playback real;
     build_playback(with_clip, real);
     REQUIRE(real.clips.size() == 1);
@@ -512,10 +521,10 @@ TEST_CASE("build_playback prefers real clips and falls back to the procedural wa
 
 TEST_CASE("build_playback keeps every real clip in scene order") {
     Scene scene = turn_fixture_scene();
-    scene.animations.push_back(turn_clip(0));
+    scene.rigs[0].animations.push_back(turn_clip(0));
     AnimationCpu second = turn_clip(0);
     second.name = "second";
-    scene.animations.push_back(std::move(second));
+    scene.rigs[0].animations.push_back(std::move(second));
 
     Playback playback;
     build_playback(scene, playback);
@@ -607,12 +616,11 @@ TEST_CASE("select_clip_index keeps the procedural stand-in") {
 TEST_CASE("the ground lift is skipped when the clip carries the root series") {
     // Bone_root is joint 1, not joint 0: the query must be name-based. The
     // instance mesh at index 0 sits far below the player's meshes, so only the
-    // [1, end) range may contribute to the lift.
-    Scene scene;
-    scene.skin.joints = {
+    // player rig's [1, 2) range may contribute to the lift.
+    Scene scene = scene_with_player_joints({
         joint("Bone_KAO", -1, {0.0f, 0.0f, 0.0f}, mat4_identity()),
         joint("Bone_root", 0, {0.0f, 0.0f, 0.0f}, mat4_identity()),
-    };
+    });
     MeshCpu instance;
     Vertex deep{};
     deep.py = -5.0f;
@@ -624,18 +632,22 @@ TEST_CASE("the ground lift is skipped when the clip carries the root series") {
     hip.py = 0.2f;
     player.vertices = {feet, hip};
     scene.meshes = {instance, player};
+    scene.rigs[0].meshBegin = 1;
+    scene.rigs[0].meshEnd = 2;
+    const RigCpu& rig = player_rig(scene);
 
     // The clip the converter writes for a root series: translation on Bone_root.
     const AnimationCpu root_translation = one_channel_clip("root-motion", /*joint=*/1, /*path=*/0);
     CHECK(clip_has_root_translation(scene, root_translation));
-    CHECK(effective_player_lift(scene, root_translation, /*playerMeshBegin=*/1) == 0.0f);
+    CHECK(effective_player_lift(scene, root_translation, rig.meshBegin, rig.meshEnd) == 0.0f);
 
     // A rotation on Bone_root is not the root series; the S3 lift stands the
     // model on the ground: the player meshes' lowest vertex is 0.7596 below.
     const AnimationCpu root_rotation = one_channel_clip("wave", /*joint=*/1, /*path=*/1);
     CHECK_FALSE(clip_has_root_translation(scene, root_rotation));
-    CHECK(player_ground_offset(scene, 1) == doctest::Approx(0.7596f));
-    CHECK(effective_player_lift(scene, root_rotation, 1) == doctest::Approx(0.7596f));
+    CHECK(rig_ground_offset(scene, rig) == doctest::Approx(0.7596f));
+    CHECK(effective_player_lift(scene, root_rotation, rig.meshBegin, rig.meshEnd) ==
+          doctest::Approx(0.7596f));
 
     // A translation on another joint, an empty clip, and a channel whose joint
     // is outside the skin carry no root series either.
@@ -646,22 +658,24 @@ TEST_CASE("the ground lift is skipped when the clip carries the root series") {
 
 TEST_CASE("wander's baked clips carry the root series and skip the S3 lift") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
-    REQUIRE(scene.animations.size() == 3);
+    const RigCpu& rig = player_rig(scene);
+    REQUIRE(rig.animations.size() == 3);
 
     // The lift the S3 arena applies to a root-less model: Wander's origin sits
     // 0.7596 m above his feet.
-    const float offset = player_ground_offset(scene, 0);
+    const float offset = rig_ground_offset(scene, rig);
     CHECK(offset == doctest::Approx(0.7596f).epsilon(1e-4));
 
-    for (const AnimationCpu& clip : scene.animations) {
+    for (const AnimationCpu& clip : rig.animations) {
         CAPTURE(clip.name);
         CHECK(clip_has_root_translation(scene, clip));
-        CHECK(effective_player_lift(scene, clip, 0) == 0.0f);
+        CHECK(effective_player_lift(scene, clip, rig.meshBegin, rig.meshEnd) == 0.0f);
     }
 
     // A channel-less clip (the rest pose) carries no root series: the lift
     // applies as before.
     const AnimationCpu rest{};
     CHECK_FALSE(clip_has_root_translation(scene, rest));
-    CHECK(effective_player_lift(scene, rest, 0) == doctest::Approx(offset));
+    CHECK(effective_player_lift(scene, rest, rig.meshBegin, rig.meshEnd) ==
+          doctest::Approx(offset));
 }

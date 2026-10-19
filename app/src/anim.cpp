@@ -100,7 +100,7 @@ void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
 }
 
 std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, float time) {
-    const std::vector<JointCpu>& joints = scene.skin.joints;
+    const std::vector<JointCpu>& joints = player_rig(scene).skin.joints;
     const std::size_t joint_count = joints.size();
     std::vector<Mat4> palette(joint_count);
     if (joint_count == 0) {
@@ -180,8 +180,8 @@ void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& ou
 
     // Without a usable skin the vertices are drawn as authored: bind positions
     // (and the mesh's own model transform below) are the whole answer.
-    const bool skinned =
-        !scene.skin.joints.empty() && palette.size() == scene.skin.joints.size();
+    const SkinCpu& skin = player_rig(scene).skin;
+    const bool skinned = !skin.joints.empty() && palette.size() == skin.joints.size();
 
     bool have_vertex = false;
     Vec3 bounds_min{0.0f, 0.0f, 0.0f};
@@ -251,10 +251,11 @@ AnimationCpu make_procedural_wave(const Scene& scene) {
     clip.name = "procedural-wave";
     clip.duration = 2.0f;
 
-    const std::size_t joint_count = std::min<std::size_t>(12, scene.skin.joints.size());
+    const std::vector<JointCpu>& joints = player_rig(scene).skin.joints;
+    const std::size_t joint_count = std::min<std::size_t>(12, joints.size());
     const Quat tilt = quat_about_x(15.0f);
     for (std::size_t i = 0; i < joint_count; ++i) {
-        const Quat rest = quat_normalize(scene.skin.joints[i].restR);
+        const Quat rest = quat_normalize(joints[i].restR);
         const Quat raised = quat_normalize(quat_mul(rest, tilt));
 
         AnimationChannelCpu channel;
@@ -271,7 +272,7 @@ AnimationCpu make_procedural_wave(const Scene& scene) {
 }
 
 void build_playback(const Scene& scene, Playback& playback) {
-    playback.clips = scene.animations;
+    playback.clips = player_rig(scene).animations;
     playback.index = -1;
     playback.time = 0.0f;
     playback.playing = false;
@@ -279,7 +280,7 @@ void build_playback(const Scene& scene, Playback& playback) {
 
     // The stand-in is the fallback, never a peer of the model's own clips: it
     // is appended only for a skinned model whose scene carries none.
-    if (playback.clips.empty() && !scene.skin.joints.empty()) {
+    if (playback.clips.empty() && !player_rig(scene).skin.joints.empty()) {
         playback.clips.push_back(make_procedural_wave(scene));
         playback.has_procedural = true;
     }
@@ -337,12 +338,13 @@ bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
     // The writer targets the joint named exactly "Bone_root" for the root
     // series, so this query is name-based too: a joint index would tie the
     // answer to one model's skin order.
+    const std::vector<JointCpu>& joints = player_rig(scene).skin.joints;
     for (const AnimationChannelCpu& channel : clip.channels) {
         if (channel.path != 0 || channel.joint < 0 ||
-            static_cast<std::size_t>(channel.joint) >= scene.skin.joints.size()) {
+            static_cast<std::size_t>(channel.joint) >= joints.size()) {
             continue;  // not a translation channel, or not this skin's joint
         }
-        if (scene.skin.joints[static_cast<std::size_t>(channel.joint)].name == "Bone_root") {
+        if (joints[static_cast<std::size_t>(channel.joint)].name == "Bone_root") {
             return true;
         }
     }
@@ -350,11 +352,11 @@ bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
 }
 
 float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
-                            std::size_t playerMeshBegin) {
+                            std::size_t meshBegin, std::size_t meshEnd) {
     // A root-carrying clip already holds the character's ground height: the S3
     // origin-to-feet lift on top would float the model by that offset.
     if (clip_has_root_translation(scene, clip)) {
         return 0.0f;
     }
-    return player_ground_offset(scene, playerMeshBegin);
+    return mesh_ground_offset(scene, meshBegin, meshEnd);
 }

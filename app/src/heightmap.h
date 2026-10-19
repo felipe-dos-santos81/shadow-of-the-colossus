@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <limits>
 #include <vector>
 
 #include "math3d.h"
@@ -23,24 +22,24 @@ struct Heightmap {
     Vec3 boundsMin, boundsMax;
 };
 
-// Rasterizes the first `meshCount` meshes of `scene` into a heightmap of
-// `cellSize` steps over the scene's XZ bounds, keeping each node's maximum Y.
-// Vertices are taken in world space — each mesh's `model` matrix is applied,
-// the same one the renderer draws with — so a composed scene's placed
-// instances land where they stand. A triangle whose XZ footprint is a line (a
-// vertical wall) covers no node and is skipped. Nodes no triangle covers stay
-// NaN.
+// Rasterizes the scene's static meshes (`mesh.rig < 0` — the manifest's
+// instances) into a heightmap of `cellSize` steps over the scene's XZ bounds,
+// keeping each node's maximum Y. Vertices are taken in world space — each
+// mesh's `model` matrix is applied, the same one the renderer draws with — so a
+// composed scene's placed instances land where they stand. A triangle whose XZ
+// footprint is a line (a vertical wall) covers no node and is skipped. Nodes no
+// triangle covers stay NaN.
 //
-// `meshCount` defaults to every mesh; the W1.4 app passes the composed scene's
-// player-mesh index so the player's own body never rasterizes into the ground
-// it walks on (a composed scene appends the player last). The grid's bounds
-// are always the scene's own, player included: the walkable area is unchanged.
+// Rigged meshes never rasterize: the player's own body (rig 0) must not become
+// the ground it walks on, and a placed entity (rig 1..) must not raise it
+// either. The grid's bounds are always the scene's own, rigged meshes included:
+// the walkable area is unchanged.
 //
-// Throws std::runtime_error("no meshes") when the scene has no meshes or
-// `meshCount` is 0, and std::runtime_error when `cellSize` is not positive
-// and finite.
-Heightmap build_heightmap(const Scene& scene, float cellSize,
-                          std::size_t meshCount = std::numeric_limits<std::size_t>::max());
+// Throws std::runtime_error("no meshes") when the scene has no meshes at all,
+// std::runtime_error("no static meshes") when every mesh is rigged (there is no
+// ground to build), and std::runtime_error when `cellSize` is not positive and
+// finite.
+Heightmap build_heightmap(const Scene& scene, float cellSize);
 
 // The ground height under `p`: `p` is clamped into the heightmap's XZ bounds
 // first (a non-finite coordinate clamps to boundsMin, never a NaN index; Y is

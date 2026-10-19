@@ -411,12 +411,14 @@ void Renderer::upload(const Scene& scene) {
         }
     }
 
-    // The joint palette (vertex storage buffer): one matrix per skin joint, or
-    // a single matrix for a scene without a skin — the shader always reads
-    // palette[joints], and an unskinned vertex defaults to joint 0 weight 1.
-    // The initial content is the bind pose (identity per joint), so any draw
-    // that happens before the first upload_pose is well defined.
-    pose_joint_count_ = static_cast<uint32_t>(scene.skin.joints.size());
+    // The joint palette (vertex storage buffer): one matrix per skin joint of
+    // the player's rig, or a single matrix for a scene without a skin — the
+    // shader always reads palette[joints], and an unskinned vertex defaults to
+    // joint 0 weight 1. The initial content is the bind pose (identity per
+    // joint), so any draw that happens before the first upload_pose is well
+    // defined. (One palette per rig is the next S4 task; the player's rig is
+    // what this path binds today.)
+    pose_joint_count_ = static_cast<uint32_t>(player_rig(scene).skin.joints.size());
     const std::vector<Mat4> rest_palette(std::max<uint32_t>(pose_joint_count_, 1u),
                                          mat4_identity());
     {
