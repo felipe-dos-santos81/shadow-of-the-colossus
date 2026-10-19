@@ -398,6 +398,40 @@ TEST_CASE("posed_bounds applies the skin palette and the root lift") {
     CHECK(hi.z == doctest::Approx(0.25f));
 }
 
+TEST_CASE("posed_bounds applies the mesh model transform and passes zero-weight vertices through") {
+    // The composited-scene contract: skinning happens in glb space, then the mesh's own model
+    // transform places it in the world. A vertex with no weights (an unskinned primitive inside
+    // a skinned scene) stays at its bind position, exactly as the shader's zero-weight path does.
+    Scene scene;
+    scene.skin.joints = {joint("Bone_root", -1, {0.0f, 0.0f, 0.0f}, mat4_identity())};
+
+    MeshCpu mesh;
+    Vertex weighted{};
+    weighted.j[0] = 0;
+    weighted.w[0] = 1.0f;
+    Vertex unweighted{};
+    unweighted.px = 1.0f;
+    unweighted.pz = -1.0f;
+    unweighted.j[0] = 0;  // a valid joint index, but zero weight: pass-through
+    unweighted.w[0] = 0.0f;
+    mesh.vertices = {weighted, unweighted};
+    mesh.model = translation_matrix({0.0f, 2.0f, 0.0f});
+    scene.meshes = {mesh};
+
+    // A palette that lifts the weighted vertex by 3 m: (0,0,0) -> (0,3,0) -> model (0,5,0).
+    const std::vector<Mat4> palette{translation_matrix({0.0f, 3.0f, 0.0f})};
+    Vec3 lo{};
+    Vec3 hi{};
+    posed_bounds(scene, palette, lo, hi);
+
+    CHECK(lo.x == doctest::Approx(0.0f));
+    CHECK(lo.y == doctest::Approx(2.0f));   // the zero-weight vertex at its bind y, then model +2
+    CHECK(lo.z == doctest::Approx(-1.0f));
+    CHECK(hi.x == doctest::Approx(1.0f));
+    CHECK(hi.y == doctest::Approx(5.0f));
+    CHECK(hi.z == doctest::Approx(0.0f));
+}
+
 TEST_CASE("the procedural wave starts at rest and moves later") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     const AnimationCpu wave = make_procedural_wave(scene);
