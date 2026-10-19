@@ -12,8 +12,8 @@
 //
 //   decompile [<addr>...]   (default) — decompile each seed function (plus any explicit <addr>),
 //                           sorted by entry address. A bare address list means this mode.
-//   refs [<addr>...]        — print the references to/from each seed (plus explicit <addr>) — the
-//                           cheap reconnaissance mode (no decompile).
+//   refs [<addr>...]        — print the references to/from each seed (or only the explicit <addr>s,
+//                           which replace the seed set) — the cheap reconnaissance mode (no decompile).
 //   callers [<addr>...] [d] — walk incoming references to those functions, `d` levels (default 1);
 //                           with no addresses, walks the seed set.
 //   callees [<addr>...] [d] — walk outgoing calls of those functions, `d` levels (default 1);

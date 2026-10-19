@@ -53,6 +53,10 @@ proj_link_dir=$(mktemp -d); ln -s "$PWD/out/re/ghidra" "$proj_link_dir/ghidra"
 (`FUN_006abe10`, `FUN_005fc5d0`), `log-refs-1.log`, `log-disasm-1/2/3.log`. Re-run determinism is inherited
 from the RE-0/C3 scripts (sorted outputs, `-noanalysis`).
 
+**Committed scripts** (T6): `tools/re/ghidra/Disasm.java` and `tools/re/ghidra/FindParseChain.java` (this
+pass's seed set) — the headless invocation and the VA→file `+0x4000` mapping live in
+`tools/re/ghidra/README.md`.
+
 **The ELF mapping** (measured, `out/re/eboot.elf`): PT_LOAD[0] `off=0x4000 vaddr=0 filesz=0x1593978`,
 PT_LOAD[2] `off=0x1608000 vaddr=0x1604000 filesz=0x17d3100` → **file offset = VA + 0x4000** for every
 initialized byte (the RE-1 reviewer's mapping, re-verified here).
@@ -238,7 +242,7 @@ All offsets are **data-region-relative** (data region = file `0x110 .. t1p`; `t1
     769 1282 2822 5901 10520 16679` — U-shaped, **first == last**). The packing is now pinned (T1,
     `6686e3e`): three signed 9-bit fields + a 4-bit residual + a sign bit, descriptor pairs in *field* order,
     derived component = the case's omitted one — so the other components are **not** the high int16 (the
-    fields cross the int16 boundary); the §6.3 formulas above are superseded by T1's field windows
+    fields cross the int16 boundary); the RE-1 §6.3 formulas are superseded by T1's field windows
     (`docs/notes/re2-keys.md` §1).
 - **The leading-run relation** (RE-1 §3.2's "t2[i] = t1[i−1]+4", now explained): the region tables t1/t2 are
   **data-region-relative**; `t1[i]` = track *i*'s region start, `t2[i+1]` = track *i*'s key-data offset
@@ -263,10 +267,11 @@ The data region starts with a **per-frame key series**: file `0x110` up to the f
   `docs/notes/re2-keys.md` §1): `value_c = i16/32767 × scale_c + offset_c` with the pairs (f0,f1), (f2,f3),
   (f4,f5) — the arithmetic of the engine's **vector accessor `FUN_0060e0c0` format 2**. Evidence: the
   descriptor's shape is that accessor's `param_4`, and the `0xB`-style rotation reading (which reproduced the
-  memo's earlier dots `0.9734..1.0000` on the player) **fails on the horse** (`|v|` = 1.37–1.40 > 1 → the
-  derived `w` is invalid under the engine's guard), while the position reading fits both samples (player ≈
+  memo's earlier dots `0.9734..1.0000` on the player) **fails on the horse** (`|v|` = 1.37–1.40
+  descriptor-applied, 1.41–1.50 raw — both > 1 → the derived `w` is invalid under the engine's guard),
+  while the position reading fits both samples (player ≈
   (0.001..0.017, 0.743..0.747, −0.058..0.008); horse ≈ (0, 1.370..1.402, 0.0593) — a root at hip height).
-  Corpus (2,994 flag-clear files): **1,613 carry a root series** (1,381 descriptor offset 0);
+  Corpus (2,994 flag-clear files): **1,613 carry a root series** (the other 1,381 have descriptor offset 0);
   `descriptor offset = 6 × frames + pad` with `pad ∈ {0,2}` — 0 violations.
 - The root's **consumer/sample base is open**: the descriptor `[6]` slot = 0 in both samples (the keys are
   inline; decoded-but-consumer-open, T1 §3).
