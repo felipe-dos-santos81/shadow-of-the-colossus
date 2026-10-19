@@ -64,7 +64,9 @@ repo (SDL) and records the divergence as an open question (§7 Q1).
 - **The frame bridge** (`re2-xval.md` §2, MEASURED): `q_glb_local = conj_i(q_anb) = (x, −y, −z, w)`
   — one uniform map, validated cross-file through the `.skb`'s second quat (14.6° worst, 26/29
   within 1°) and semantically (arms at the sides, staggered stance). The decoded quats are in the
-  `.skb`/game convention, **not** the glb's.
+  `.skb`/game convention, **not** the glb's. This is the **row-vector** local convention of the RE
+  tool (`pose_dump.py`); a glTF consumer, which applies node rotations as column-vector local
+  transforms, emits the conjugate **`(−x, y, z, w)`** (the consumer note in `re2-xval.md` §2).
 - **The track→bone mapping** (`re2-xval.md` §1; `pose_dump.py:280-291`): **`.anb` track i ↔
   `.skb` record i (file order — the same part bank)**, and the record's **name** resolves into the
   converted glb's joint list by name (re-verified read-only: all **29/29** `player_a.skb` record

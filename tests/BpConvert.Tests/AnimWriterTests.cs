@@ -55,15 +55,17 @@ public class AnimWriterTests : IDisposable
         for (var index = 0; index < rotations.Count; index++)
             if (rotationKeys[index].Count == 1) Assert.Equal(0f, rotationKeys[index][0].Key);
 
-        // Pin the bridge direction, not just unit length: (-x, y, z, w) on the decoded key —
-        // the conjugate of the RE tool's row-vector bridge, i.e. what a glTF loader's
-        // column-vector node rotation needs (see AnimBridge.ToGlb).
+        // Pin the bridge direction with a literal expected quaternion, not by calling
+        // AnimBridge.ToGlb again: track 0 (Bone_KOSI) decodes to the raw key
+        // (0.225950, −0.643605, −0.717296, 0.142150), and the emitted glTF rotation is its
+        // conjugate (−x, y, z, w), normalized — what a glTF loader's column-vector node
+        // rotation needs. (The map itself is pinned independently by
+        // Bridge_negates_the_vector_x_and_keeps_y_z_w; the semantic/world pins cover the pose.)
         var track0 = clip.Tracks[0];
         Assert.False(track0.IsStatic);
-        var raw = track0.Keys[0];
-        var bridged = Quaternion.Normalize(AnimBridge.ToGlb(new Vector3(raw.X, raw.Y, raw.Z), raw.W));
+        var expected = new Quaternion(-0.22594991f, -0.64360452f, -0.71729589f, 0.14214940f);
         var track0Channel = Assert.Single(rotations, channel => channel.TargetNode.LogicalIndex == track0.JointIndex);
-        AssertQuaternionClose(bridged, track0Channel.GetRotationSampler().GetLinearKeys().First().Value);
+        AssertQuaternionClose(expected, track0Channel.GetRotationSampler().GetLinearKeys().First().Value);
 
         // The root series is one translation channel on the joint named exactly "Bone_root"; x and
         // z are zeroed (the controller owns horizontal position), y is the raw game value.

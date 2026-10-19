@@ -96,8 +96,10 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
   **translation** for the root series; LINEAR interpolation.
 - Times: `i / (rate × 30)` seconds, `duration = (frames − 1) / fps`, `fps = rate × 30`
   (`re2-sampler.md` §3.1). `player_a_stand` = 76 keys at rate 0.5 → 15 fps → 5.0 s.
-- The **bridge** `q_glb = (x, −y, −z, w)` applied to decoded quaternions (`re2-xval.md` §2); the
-  root series is already in the glb frame.
+- The **bridge** `q_gltf = (−x, y, z, w)` applied to decoded quaternions — the conjugate of the
+  RE tool's row-vector `(x, −y, −z, w)` bridge, because glTF applies node rotations as
+  column-vector local transforms (`re2-xval.md` §2, the consumer note). It applies uniformly to
+  keyed and static tracks; the root series is already in the glb frame and is applied raw.
 - **Root translation, in place.** The decoded series carries horizontal travel (walk ≈1.0 m over
   21 frames; run ≈2.5 m over 18 — not loop-closed). This milestone emits the series **raw in Y**
   (the pose-validated reading: it carries the character's ground height and the bob) with **x/z
