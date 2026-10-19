@@ -791,7 +791,8 @@ int run_app(const AppOptions& opts) {
 
         // Interactive: left-drag orbits (single-model mode) or turns the follow
         // camera's view (manifest mode), the wheel zooms, F reframes (single
-        // model) or recenters behind the player (manifest mode), Space
+        // model) or recenters behind the player (manifest mode), T orbits the
+        // entity's chest and back (inert when the manifest has no entity), Space
         // plays/pauses, [ and ] switch clips, R restarts the clip, Escape or
         // the close button quits. In manifest mode W/A/S/D walk (Shift runs)
         // and the camera follows. Input needs no capture: plain mouse-motion
@@ -832,9 +833,11 @@ int run_app(const AppOptions& opts) {
                         } else if (event.key.key == SDLK_SPACE) {
                             playback.playing = !playback.playing;
                         } else if (event.key.key == SDLK_T) {
-                            // Camera-only framing: orbit the entity's chest. The
-                            // movement basis follows the active camera either way.
-                            if (follow_mode) {
+                            // Camera-only framing: orbit the entity's chest. T
+                            // is inert when the manifest has no entity (the S3
+                            // arena) or its chest did not resolve — otherwise
+                            // the camera would park on the zero target.
+                            if (entity_target_key_allowed(follow_mode, haveEntityChest)) {
                                 camera_target_toggle(camera, follow, targetCamera, entityChest);
                             }
                         } else if (event.key.key == SDLK_R) {

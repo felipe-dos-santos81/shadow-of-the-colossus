@@ -35,6 +35,14 @@ struct AppOptions {
     std::string cameraTarget = "player";
 };
 
+// Whether the interactive `T` key may toggle entity target framing. The mode
+// needs a composed scene (follow mode) *and* an entity chest that resolved this
+// run. A manifest with no entity — the S3 arena is one — leaves T inert rather
+// than parking the camera on an unset target.
+inline bool entity_target_key_allowed(bool followMode, bool entityChestResolved) {
+    return followMode && entityChestResolved;
+}
+
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the
 // window close button). With opts.selftest, runs exactly one frame, prints the
 // `s1-status` line to stdout, and returns.

@@ -25,6 +25,13 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
     const float feet = player.position.y;
     const float head = feet + kPlayerCapsuleHeight;
 
+    // The plan pins two passes. Consequence: a player *placed* exactly between
+    // two capsules whose exclusion zones overlap (Valus's feet are ~2.7 m
+    // apart with 2.05 m clearances) can remain inside the union. Walking
+    // cannot reach that point — the zones overlap — so it is a spawn/teleport
+    // edge only; Task 6 must keep the spawn outside the proxy. Do not raise
+    // the iteration count here without revisiting the ruling and the test that
+    // documents this behavior (test_anim.cpp, "between-feet").
     for (int iteration = 0; iteration < kResolveIterations; ++iteration) {
         for (const Capsule& capsule : capsules) {
             if (!is_finite(capsule.a) || !is_finite(capsule.b) || !std::isfinite(capsule.r)) {

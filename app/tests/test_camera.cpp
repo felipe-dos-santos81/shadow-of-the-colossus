@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 
+#include "app.h"
 #include "camera.h"
 #include "heightmap.h"
 #include "math3d.h"
@@ -201,6 +202,36 @@ Heightmap flat_ground() {
 }
 
 }  // namespace
+
+TEST_CASE("the T toggle is inert without an entity chest") {
+    // The app's guard (app.h): target framing needs a composed scene and a
+    // resolved entity chest. The S3 arena manifest has no entity, so T must do
+    // nothing rather than park the camera 26 m from the unset zero target.
+    Camera camera{};
+    camera.yaw = 30.0f;
+    camera.distance = 4.5f;
+    camera.target = Vec3{1.0f, 2.0f, 3.0f};
+    CameraFollow follow;
+    CameraTarget target;
+
+    if (entity_target_key_allowed(/*followMode=*/true, /*entityChestResolved=*/false)) {
+        camera_target_toggle(camera, follow, target, Vec3{0.0f, 0.0f, 0.0f});
+    }
+    CHECK_FALSE(target.active);
+    CHECK(camera.distance == doctest::Approx(4.5f));
+    CHECK(camera.target.x == doctest::Approx(1.0f));
+    CHECK(camera.target.y == doctest::Approx(2.0f));
+    CHECK(camera.target.z == doctest::Approx(3.0f));
+
+    // A single-model run (no follow mode) is inert too.
+    CHECK_FALSE(entity_target_key_allowed(/*followMode=*/false, /*chest=*/true));
+    // With both preconditions the key enters the mode.
+    CHECK(entity_target_key_allowed(/*followMode=*/true, /*chest=*/true));
+    if (entity_target_key_allowed(true, true)) {
+        camera_target_toggle(camera, follow, target, Vec3{0.0f, 0.0f, 0.0f});
+    }
+    CHECK(target.active);
+}
 
 TEST_CASE("the target camera's look yaw is the active camera's movement basis") {
     // The orbit stores the eye-offset direction; the movement basis is its

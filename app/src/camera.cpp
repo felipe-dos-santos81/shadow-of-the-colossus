@@ -186,7 +186,7 @@ void camera_target_enter(Camera& camera, const CameraFollow& follow, CameraTarge
     // The yaw is kept: the view swings to the entity rather than resetting.
 }
 
-void camera_target_exit(Camera& camera, CameraFollow& follow, CameraTarget& state) {
+void camera_target_exit(CameraFollow& follow, CameraTarget& state) {
     if (!state.active) {
         return;
     }
@@ -202,7 +202,6 @@ void camera_target_exit(Camera& camera, CameraFollow& follow, CameraTarget& stat
     // would make.
     state.returning = true;
     state.returnSeconds = 0.0f;
-    (void)camera;
 }
 
 bool camera_target_return(Camera& camera, CameraFollow& follow, CameraTarget& state,
@@ -239,7 +238,7 @@ bool camera_target_return(Camera& camera, CameraFollow& follow, CameraTarget& st
 void camera_target_toggle(Camera& camera, CameraFollow& follow, CameraTarget& state,
                           Vec3 target) {
     if (state.active) {
-        camera_target_exit(camera, follow, state);
+        camera_target_exit(follow, state);
     } else {
         camera_target_enter(camera, follow, state, target);
     }

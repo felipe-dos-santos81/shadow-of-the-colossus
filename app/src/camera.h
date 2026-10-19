@@ -114,7 +114,7 @@ void camera_target_enter(Camera&, const CameraFollow&, CameraTarget&, Vec3 targe
 // into `follow`. The camera is left exactly where the orbit had it; the app
 // then calls camera_target_return once per frame until it reports the follow
 // framing has been reached (no target jump, no orientation snap).
-void camera_target_exit(Camera&, CameraFollow&, CameraTarget&);
+void camera_target_exit(CameraFollow&, CameraTarget&);
 
 // One frame of the T-off return. While `state.returning`, this runs a normal
 // camera_follow step (the saved offsets, drag/wheel and offset decay all apply)

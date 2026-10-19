@@ -1135,4 +1135,31 @@ TEST_CASE("Valus' posed palette drives the capsule proxy and each leg pushes the
               capsule.r + kPlayerCapsuleRadius - 1e-3f);
         CHECK(player.position.y == doctest::Approx(28.369f));
     }
+
+    // Known limitation accepted by the controller: with the plan's two
+    // iterations, a player *placed* exactly between the two feet remains
+    // inside the union of their overlapping exclusion zones (each clearance is
+    // 2.05 m, the feet are ~2.7 m apart). Walking cannot reach this point —
+    // the zones overlap — so it is a spawn/teleport edge; Task 6 must keep the
+    // spawn outside the proxy. A future resolver change that clears this point
+    // must fail this test visibly and update it (the resolver algorithm is not
+    // to be changed to "fix" it under the current ruling).
+    const Capsule& left_foot = capsules[2];
+    const Capsule& right_foot = capsules[5];
+    const Vec3 left_mid{(left_foot.a.x + left_foot.b.x) * 0.5f, 0.0f,
+                        (left_foot.a.z + left_foot.b.z) * 0.5f};
+    const Vec3 right_mid{(right_foot.a.x + right_foot.b.x) * 0.5f, 0.0f,
+                         (right_foot.a.z + right_foot.b.z) * 0.5f};
+    PlayerState between_player{
+        Vec3{(left_mid.x + right_mid.x) * 0.5f, 28.369f,
+             (left_mid.z + right_mid.z) * 0.5f},
+        0.0f};
+
+    resolve_player_collision(between_player, capsules, arena_ground);
+
+    const float distance_to_left = capsule_xz_distance(left_foot, between_player.position);
+    const float distance_to_right = capsule_xz_distance(right_foot, between_player.position);
+    CHECK(std::min(distance_to_left, distance_to_right) <
+          kPlayerCapsuleRadius + left_foot.r - 1e-3f);
+    CHECK(between_player.position.y == doctest::Approx(28.369f));
 }
