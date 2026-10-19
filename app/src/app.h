@@ -28,6 +28,11 @@ struct AppOptions {
     // centre), simulate 240 fixed 1/60 s frames of forward+run, render one
     // frame, print `s3-status ...`, and exit 0. Requires --manifest and --model.
     bool s3Selftest = false;
+    // --camera-target player|entity: the initial framing for captures. `player`
+    // is the normal follow camera; `entity` starts in the chest-framing target
+    // mode (requires a manifest whose scene has an entity). Interactive runs
+    // can still toggle the mode with T.
+    std::string cameraTarget = "player";
 };
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the

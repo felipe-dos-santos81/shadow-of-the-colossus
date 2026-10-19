@@ -103,6 +103,11 @@ void camera_frame(Camera& camera, Vec3 boundsMin, Vec3 boundsMax) {
     camera.pitch = kFramePitchDeg;
 }
 
+float camera_look_yaw(const Camera& camera) {
+    const float yaw = std::isfinite(camera.yaw) ? camera.yaw : 0.0f;
+    return wrap_deg(yaw - 180.0f);
+}
+
 void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float playerYawDeg,
                    float dragDxPixels, float dragDyPixels, float wheelDelta, bool moving,
                    float dtSeconds) {
@@ -158,4 +163,111 @@ void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float p
 
     const float current_distance = std::isfinite(camera.distance) ? camera.distance : follow.distance;
     camera.distance = current_distance + (follow.distance - current_distance) * blend;
+}
+
+void camera_target_enter(Camera& camera, const CameraFollow& follow, CameraTarget& state,
+                         Vec3 target) {
+    state.savedYawOffsetDeg = follow.yawOffsetDeg;
+    state.savedPitchOffsetDeg = follow.pitchOffsetDeg;
+    state.savedDistance = follow.distance;
+    state.saved = true;
+    state.returning = false;
+    state.returnSeconds = 0.0f;
+
+    state.active = true;
+    state.distance = std::clamp(state.distance, kTargetDistanceMin, kTargetDistanceMax);
+    const bool finite_target =
+        std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z);
+    state.target = finite_target ? target : camera.target;
+
+    camera.target = state.target;
+    camera.distance = state.distance;
+    camera.pitch = kTargetDefaultPitchDeg;
+    // The yaw is kept: the view swings to the entity rather than resetting.
+}
+
+void camera_target_exit(Camera& camera, CameraFollow& follow, CameraTarget& state) {
+    if (!state.active) {
+        return;
+    }
+    state.active = false;
+    if (state.saved) {
+        follow.yawOffsetDeg = state.savedYawOffsetDeg;
+        follow.pitchOffsetDeg = state.savedPitchOffsetDeg;
+        follow.distance = state.savedDistance;
+        state.saved = false;
+    }
+    // The camera is left where the orbit had it; camera_target_return blends the
+    // target back to the player without the 40 m jump a bare camera_follow
+    // would make.
+    state.returning = true;
+    state.returnSeconds = 0.0f;
+    (void)camera;
+}
+
+bool camera_target_return(Camera& camera, CameraFollow& follow, CameraTarget& state,
+                          Vec3 playerPos, float playerYawDeg, float dragDxPixels,
+                          float dragDyPixels, float wheelDelta, bool moving, float dtSeconds) {
+    if (!state.returning) {
+        return false;
+    }
+    const float dt = std::max(std::isfinite(dtSeconds) ? dtSeconds : 0.0f, 0.0f);
+
+    const Vec3 from = camera.target;
+    camera_follow(camera, follow, playerPos, playerYawDeg, dragDxPixels, dragDyPixels,
+                  wheelDelta, moving, dt);
+    const Vec3 to = camera.target;
+
+    const float blend = 1.0f - std::exp(-kFollowRate * dt);
+    camera.target = Vec3{from.x + (to.x - from.x) * blend, from.y + (to.y - from.y) * blend,
+                         from.z + (to.z - from.z) * blend};
+    state.returnSeconds += dt;
+
+    const float dx = to.x - camera.target.x;
+    const float dy = to.y - camera.target.y;
+    const float dz = to.z - camera.target.z;
+    const float remaining = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (state.returnSeconds >= 1.0f || remaining < 0.01f) {
+        camera.target = to;  // land exactly on the follow target
+        camera.distance = follow.distance;
+        state.returning = false;
+        state.returnSeconds = 0.0f;
+    }
+    return state.returning;
+}
+
+void camera_target_toggle(Camera& camera, CameraFollow& follow, CameraTarget& state,
+                          Vec3 target) {
+    if (state.active) {
+        camera_target_exit(camera, follow, state);
+    } else {
+        camera_target_enter(camera, follow, state, target);
+    }
+}
+
+void camera_target_update(Camera& camera, CameraTarget& state, Vec3 target, float dragDxPixels,
+                          float dragDyPixels, float wheelDelta) {
+    if (!state.active) {
+        return;
+    }
+    if (std::isfinite(dragDxPixels)) {
+        camera.yaw += dragDxPixels * kOrbitDegreesPerPixel;
+    }
+    if (std::isfinite(dragDyPixels)) {
+        camera.pitch += dragDyPixels * kOrbitDegreesPerPixel;
+    }
+    camera.pitch = std::clamp(camera.pitch, -kTargetPitchLimitDeg, kTargetPitchLimitDeg);
+
+    if (std::isfinite(wheelDelta) && wheelDelta != 0.0f) {
+        state.distance = std::clamp(
+            state.distance * std::exp(-kZoomPerWheelStep * wheelDelta), kTargetDistanceMin,
+            kTargetDistanceMax);
+    }
+    state.distance = std::clamp(state.distance, kTargetDistanceMin, kTargetDistanceMax);
+    camera.distance = state.distance;
+
+    if (std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z)) {
+        state.target = target;
+        camera.target = target;
+    }
 }

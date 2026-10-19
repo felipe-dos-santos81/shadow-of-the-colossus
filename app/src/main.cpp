@@ -29,6 +29,8 @@ void print_usage(FILE* out) {
                  "                    also pins the clip in arena mode)\n"
                  "  --entity-time SEC pin every manifest entity's clip to SEC seconds\n"
                  "                    (clamped into the clip; deterministic captures)\n"
+                 "  --camera-target player|entity  initial framing for captures (entity\n"
+                 "                    frames the entity's chest; requires --manifest)\n"
                  "  --screenshot PNG  write a PNG after --frames frames, then exit\n"
                  "  --frames N        frames the --screenshot path renders first (default 3)\n"
                  "  --width N         window width in points (default 1280)\n"
@@ -81,7 +83,7 @@ int main(int argc, char** argv) {
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
                                  arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
-                                 arg == "--entity-time";
+                                 arg == "--entity-time" || arg == "--camera-target";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -119,6 +121,15 @@ int main(int argc, char** argv) {
                 opts.entityTime = seconds;
                 opts.entityTimeSet = true;
             }
+        } else if (arg == "--camera-target") {
+            if (std::strcmp(value, "player") != 0 && std::strcmp(value, "entity") != 0) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --camera-target expects player or entity, got: %s\n",
+                             value);
+                print_usage(stderr);
+                return 2;
+            }
+            opts.cameraTarget = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -161,6 +172,12 @@ int main(int argc, char** argv) {
     }
     if (opts.entityTimeSet && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --entity-time needs --manifest (there is no entity)\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.cameraTarget == "entity" && opts.manifestPath.empty()) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --camera-target entity needs --manifest (there is no entity)\n");
         print_usage(stderr);
         return 2;
     }

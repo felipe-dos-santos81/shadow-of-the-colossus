@@ -10,6 +10,7 @@
 // which is why camera_follow targets `playerYawDeg + yawOffsetDeg + 180`.
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,7 @@
 
 #include "asset_io.h"
 #include "camera.h"
+#include "collision.h"
 #include "heightmap.h"
 #include "manifest.h"
 #include "math3d.h"
@@ -583,4 +585,131 @@ TEST_CASE("the heightmap holds the static ground, not the player's body") {
         load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     CHECK(rig_ground_offset(scene, rig) == doctest::Approx(-wander.boundsMin.y));
     CHECK(rig_ground_offset(scene, rig) > 0.5f);
+}
+
+// --- Entity collision (S4 Task 5) ------------------------------------------
+//
+// The player capsule is pinned: radius 0.35 m, height 1.7 m, feet at
+// position.y. Resolution is horizontal only (2 iterations), then the ground
+// sample is reapplied. The entity capsules come from a posed skeleton (see
+// test_anim.cpp for the real-Valus integration).
+
+namespace {
+
+// A flat heightmap at height `y` over [0, size]^2.
+Heightmap flat_heightmap_at(float y, float size = 10.0f) {
+    Heightmap heightmap = flat_heightmap(size);
+    for (float& height : heightmap.heights) {
+        height = y;
+    }
+    heightmap.boundsMin.y = y;
+    heightmap.boundsMax.y = y;
+    return heightmap;
+}
+
+// The distance from `p` to the capsule's XZ axis segment (its horizontal
+// silhouette's spine) — the quantity the resolver pushes to r + 0.35.
+float capsule_xz_distance(const Capsule& capsule, Vec3 p) {
+    const float dx = capsule.b.x - capsule.a.x;
+    const float dz = capsule.b.z - capsule.a.z;
+    const float length_squared = dx * dx + dz * dz;
+    float t = 0.0f;
+    if (length_squared > 0.0f) {
+        t = ((p.x - capsule.a.x) * dx + (p.z - capsule.a.z) * dz) / length_squared;
+        t = std::clamp(t, 0.0f, 1.0f);
+    }
+    const float axis_x = capsule.a.x + dx * t;
+    const float axis_z = capsule.a.z + dz * t;
+    return std::sqrt((p.x - axis_x) * (p.x - axis_x) + (p.z - axis_z) * (p.z - axis_z));
+}
+
+}  // namespace
+
+TEST_CASE("a player overlapping a capsule is pushed out along the shortest horizontal axis") {
+    const Capsule capsule{{0.0f, 0.0f, 0.0f}, {0.0f, 2.0f, 0.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{0.2f, 0.0f, 0.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule});
+
+    // The shortest exit from a vertical capsule is its own radius plus the
+    // player's: 1.0 + 0.35, along the player's side (+X).
+    CHECK(player.position.x == doctest::Approx(1.35f));
+    CHECK(player.position.z == doctest::Approx(0.0f));
+    CHECK(player.position.y == doctest::Approx(0.0f));  // no vertical change
+}
+
+TEST_CASE("a player inside a tilted capsule exits perpendicular to its axis") {
+    // The capsule runs along +Z; the player sits exactly on the axis. The
+    // shortest exit is the horizontal perpendicular (+X by the pinned choice),
+    // not an arbitrary corner.
+    const Capsule capsule{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 4.0f}, /*r=*/0.8f};
+    PlayerState player{Vec3{0.0f, 0.0f, 2.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule});
+
+    CHECK(capsule_xz_distance(capsule, player.position) == doctest::Approx(0.8f + 0.35f));
+    CHECK(player.position.x > 0.0f);
+    CHECK(player.position.z == doctest::Approx(2.0f));
+}
+
+TEST_CASE("two overlapping capsules are both resolved") {
+    // Two overlapping vertical proxies (their silhouettes overlap): the player
+    // starts inside both. Iterating twice must leave it outside each one.
+    const Capsule left{{0.0f, 0.0f, 0.0f}, {0.0f, 2.0f, 0.0f}, /*r=*/1.0f};
+    const Capsule right{{0.8f, 0.0f, 0.0f}, {0.8f, 2.0f, 0.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{0.4f, 0.0f, 0.0f}, 0.0f};
+
+    resolve_player_collision(player, {left, right});
+
+    CHECK(capsule_xz_distance(left, player.position) >= 1.0f + 0.35f - 1e-4f);
+    CHECK(capsule_xz_distance(right, player.position) >= 1.0f + 0.35f - 1e-4f);
+}
+
+TEST_CASE("a player far from every capsule is untouched") {
+    const Capsule capsule{{5.0f, 0.0f, 5.0f}, {5.0f, 2.0f, 5.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{0.0f, 0.0f, 0.0f}, 12.0f};
+
+    resolve_player_collision(player, {capsule});
+
+    CHECK(player.position.x == doctest::Approx(0.0f));
+    CHECK(player.position.y == doctest::Approx(0.0f));
+    CHECK(player.position.z == doctest::Approx(0.0f));
+    CHECK(player.yawDeg == doctest::Approx(12.0f));
+}
+
+TEST_CASE("a capsule above the player's head does not push") {
+    // The player capsule reaches y = 1.7; a capsule whose lowest point is far
+    // above cannot be entered by walking under it.
+    const Capsule high{{0.0f, 10.0f, 0.0f}, {0.0f, 12.0f, 0.0f}, /*r=*/0.5f};
+    PlayerState player{Vec3{0.0f, 0.0f, 0.0f}, 0.0f};
+
+    resolve_player_collision(player, {high});
+
+    CHECK(player.position.x == doctest::Approx(0.0f));
+    CHECK(player.position.z == doctest::Approx(0.0f));
+}
+
+TEST_CASE("the resolved position stays on the heightmap") {
+    // The ramp's height equals z, so pushing the player in X must leave y on
+    // the ramp's surface at the resolved z.
+    const Heightmap ramp = ramp_heightmap();  // height == z
+    const Capsule capsule{{5.0f, 0.0f, 4.0f}, {5.0f, 2.0f, 4.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{5.1f, 0.0f, 4.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule}, ramp);
+
+    CHECK(player.position.x == doctest::Approx(6.35f));
+    CHECK(player.position.z == doctest::Approx(4.0f));
+    CHECK(player.position.y == doctest::Approx(4.0f));  // reapplied ground sample
+}
+
+TEST_CASE("collision keeps the feet on a flat heightmap at any elevation") {
+    const Heightmap ground = flat_heightmap_at(/*y=*/3.0f);
+    const Capsule capsule{{5.0f, 0.0f, 5.0f}, {5.0f, 2.0f, 5.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{5.0f, 3.0f, 5.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule}, ground);
+
+    CHECK(player.position.y == doctest::Approx(3.0f));
+    CHECK(capsule_xz_distance(capsule, player.position) == doctest::Approx(1.35f));
 }

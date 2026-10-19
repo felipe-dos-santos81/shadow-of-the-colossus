@@ -4,11 +4,14 @@
 // Approx unless the value is structurally exact.
 #include <doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
 #include "camera.h"
+#include "heightmap.h"
 #include "math3d.h"
+#include "player.h"
 
 namespace {
 
@@ -175,4 +178,179 @@ TEST_CASE("camera_orbit clamps pitch and turns yaw") {
     camera_orbit(camera, 0.0f, -1000000.0f);
     CHECK(camera.pitch >= -89.0f);
     CHECK(camera.pitch < 0.0f);
+}
+
+// --- Entity target framing (S4 Task 5) --------------------------------------
+//
+// T is a camera-only mode: the orbit intersects the entity's chest instead of
+// trailing the player. The distance clamp is widened to [22, 30] m (the builder
+// value for the 17.7 m body), pitch to ±80°, and T-off restores the follow
+// offsets while leaving the camera in place so camera_follow eases back.
+
+namespace {
+
+Heightmap flat_ground() {
+    Heightmap heightmap;
+    heightmap.cellSize = 1.0f;
+    heightmap.width = 11;
+    heightmap.height = 11;
+    heightmap.heights.assign(11 * 11, 0.0f);
+    heightmap.boundsMin = Vec3{0.0f, 0.0f, 0.0f};
+    heightmap.boundsMax = Vec3{10.0f, 0.0f, 10.0f};
+    return heightmap;
+}
+
+}  // namespace
+
+TEST_CASE("the target camera's look yaw is the active camera's movement basis") {
+    // The orbit stores the eye-offset direction; the movement basis is its
+    // opposite. This is the same rule in follow and target mode.
+    Camera camera{};
+    camera.yaw = 30.0f;
+    CHECK(camera_look_yaw(camera) == doctest::Approx(-150.0f));
+
+    CameraFollow follow;
+    CameraTarget target;
+    camera_target_toggle(camera, follow, target, Vec3{0.0f, 5.0f, 0.0f});
+    camera_target_update(camera, target, Vec3{0.0f, 5.0f, 0.0f}, /*dx=*/100.0f, 0.0f, 0.0f);
+
+    // 30 + 40 = 70: the active camera looks along 70 - 180 = -110.
+    CHECK(camera.yaw == doctest::Approx(70.0f));
+    CHECK(camera_look_yaw(camera) == doctest::Approx(-110.0f));
+
+    // The controller moves along that camera's look direction: forward at
+    // yaw -110 is (sin(-110), 0, cos(-110)).
+    PlayerState player{Vec3{5.0f, 0.0f, 5.0f}, 0.0f};
+    PlayerInput forward;
+    forward.forward = true;
+    player_update(player, forward, 0.05f, flat_ground(), camera_look_yaw(camera));
+    const float expected_x = 5.0f + std::sin(-110.0f * kDegToRad) * 2.2f * 0.05f;
+    const float expected_z = 5.0f + std::cos(-110.0f * kDegToRad) * 2.2f * 0.05f;
+    CHECK(player.position.x == doctest::Approx(expected_x));
+    CHECK(player.position.z == doctest::Approx(expected_z));
+}
+
+TEST_CASE("camera_target_toggle enters target framing and restores the follow state") {
+    const Vec3 chest{382.4f, 39.3f, 370.5f};
+    Camera camera{};
+    camera.yaw = 30.0f;
+    camera.pitch = 5.0f;
+    camera.distance = 4.5f;
+    CameraFollow follow;
+    follow.yawOffsetDeg = 18.0f;
+    follow.pitchOffsetDeg = -6.0f;
+    follow.distance = 7.0f;
+    CameraTarget target;
+
+    CHECK_FALSE(target.active);
+    camera_target_toggle(camera, follow, target, chest);
+    CHECK(target.active);
+    CHECK(camera.target.x == doctest::Approx(chest.x));
+    CHECK(camera.target.y == doctest::Approx(chest.y));
+    CHECK(camera.target.z == doctest::Approx(chest.z));
+    CHECK(camera.distance == doctest::Approx(26.0f));  // the builder value, in [22, 30]
+    CHECK(camera.pitch == doctest::Approx(10.0f));     // within the widened clamp
+    CHECK(camera.yaw == doctest::Approx(30.0f));       // the view swings, not spins
+
+    // Drag orbits the chest; pitch is clamped wider than the follow camera's 60.
+    camera_target_update(camera, target, chest, /*dx=*/100.0f, /*dy=*/0.0f, 0.0f);
+    CHECK(camera.yaw == doctest::Approx(70.0f));
+    camera_target_update(camera, target, chest, 0.0f, 10000.0f, 0.0f);
+    CHECK(camera.pitch == doctest::Approx(kTargetPitchLimitDeg));
+    camera_target_update(camera, target, chest, 0.0f, -10000.0f, 0.0f);
+    CHECK(camera.pitch == doctest::Approx(-kTargetPitchLimitDeg));
+
+    // The wheel stays inside the widened [22, 30] range.
+    camera_target_update(camera, target, chest, 0.0f, 0.0f, 1000.0f);
+    CHECK(camera.distance == doctest::Approx(kTargetDistanceMin));
+    camera_target_update(camera, target, chest, 0.0f, 0.0f, -1000.0f);
+    CHECK(camera.distance == doctest::Approx(kTargetDistanceMax));
+
+    const float yaw_before = camera.yaw;
+    const float pitch_before = camera.pitch;
+    const float distance_before = camera.distance;
+    camera_target_toggle(camera, follow, target, chest);
+    CHECK_FALSE(target.active);
+    CHECK(follow.yawOffsetDeg == doctest::Approx(18.0f));
+    CHECK(follow.pitchOffsetDeg == doctest::Approx(-6.0f));
+    CHECK(follow.distance == doctest::Approx(7.0f));
+    // No snap: the camera is left where the target orbit had it; the next
+    // camera_follow call eases toward the restored follow state.
+    CHECK(camera.yaw == doctest::Approx(yaw_before));
+    CHECK(camera.pitch == doctest::Approx(pitch_before));
+    CHECK(camera.distance == doctest::Approx(distance_before));
+}
+
+TEST_CASE("T-off eases the target back to the player instead of snapping") {
+    const Vec3 chest{382.4f, 39.3f, 370.5f};
+    const Vec3 player{10.0f, 0.0f, 10.0f};
+    const Vec3 head{player.x, player.y + 1.4f, player.z};
+    const auto distance = [](Vec3 a, Vec3 b) {
+        const float dx = a.x - b.x;
+        const float dy = a.y - b.y;
+        const float dz = a.z - b.z;
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+
+    Camera camera{};
+    camera.yaw = 30.0f;
+    camera.pitch = 5.0f;
+    camera.distance = 4.5f;
+    CameraFollow follow;
+    CameraTarget target;
+    camera_target_toggle(camera, follow, target, chest);
+    camera_target_toggle(camera, follow, target, chest);
+    CHECK_FALSE(target.active);
+    CHECK(target.returning);
+
+    const float start = distance(camera.target, head);
+    CHECK(start > 20.0f);  // the entity's chest is far from the player
+    bool returning =
+        camera_target_return(camera, follow, target, player, 0.0f, 0.0f, 0.0f, 0.0f,
+                             /*moving=*/false, 1.0f / 60.0f);
+    CHECK(returning);
+    const float after_one_frame = distance(camera.target, head);
+    CHECK(after_one_frame < start);
+    CHECK(after_one_frame > 0.5f * start);  // no one-frame jump
+
+    for (int frame = 0; frame < 180 && returning; ++frame) {
+        returning = camera_target_return(camera, follow, target, player, 0.0f, 0.0f, 0.0f, 0.0f,
+                                         /*moving=*/false, 1.0f / 60.0f);
+    }
+    CHECK_FALSE(returning);
+    CHECK(camera.target.x == doctest::Approx(head.x));
+    CHECK(camera.target.y == doctest::Approx(head.y));
+    CHECK(camera.target.z == doctest::Approx(head.z));
+    CHECK(camera.distance == doctest::Approx(follow.distance));
+}
+
+TEST_CASE("target framing fits a 17.7 m subject") {
+    const Vec3 chest{382.4f, 39.3f, 370.5f};
+    Camera camera{};
+    camera.yaw = 0.0f;
+    CameraFollow follow;
+    CameraTarget target;
+    camera_target_toggle(camera, follow, target, chest);
+
+    // The vertical half-FOV at 26 m reaches 26 * tan(30°) = 15.0 m. The real
+    // Valus body at t=0 spans y 28.297..45.09 world with its chest at 39.294:
+    // -11.00 / +5.80 m around the orbit point, inside that 15 m half-height.
+    const float body_bottom = -11.0f;
+    const float body_top = 5.8f;
+    CHECK(camera.distance * std::tan(0.5f * camera.fovYDeg * kDegToRad) >
+          std::max(-body_bottom, body_top));
+
+    // The real check: the body's bottom and top (chest-relative offsets taken
+    // from the posed Valus bounds) project inside the frustum — in front,
+    // within NDC x/y, and inside [0, 1] depth.
+    const Mat4 view_proj = mat4_mul(camera_proj(camera, 16.0f / 9.0f), camera_view(camera));
+    for (const float dy : {body_bottom, body_top}) {
+        const std::array<float, 4> clip =
+            clip_space(view_proj, Vec3{chest.x, chest.y + dy, chest.z});
+        CHECK(clip[3] > 0.0f);
+        CHECK(std::abs(clip[0]) <= clip[3] * 1.001f);
+        CHECK(std::abs(clip[1]) <= clip[3] * 1.001f);
+        CHECK(clip[2] >= 0.0f);
+        CHECK(clip[2] <= clip[3] * 1.001f);
+    }
 }

@@ -15,6 +15,9 @@
 
 #include "anim.h"
 #include "asset_io.h"
+#include "collision.h"
+#include "heightmap.h"
+#include "manifest.h"
 #include "math3d.h"
 #include "player.h"
 
@@ -992,4 +995,144 @@ TEST_CASE("build_playback reads the rig it is asked for") {
     CHECK(silent.clips.empty());
     CHECK(silent.index == -1);
     CHECK_FALSE(silent.playing);
+}
+
+// --- The real Valus pose drives the collision proxy (S4 Task 5) ---------------
+
+namespace {
+
+// A flat heightmap of `y` over [minX, maxX] x [minZ, maxZ], one node per metre.
+Heightmap flat_ground_over(float min_x, float min_z, float max_x, float max_z, float y) {
+    Heightmap heightmap;
+    heightmap.cellSize = 1.0f;
+    heightmap.width = static_cast<int>(max_x - min_x) + 1;
+    heightmap.height = static_cast<int>(max_z - min_z) + 1;
+    heightmap.heights.assign(static_cast<std::size_t>(heightmap.width) *
+                                 static_cast<std::size_t>(heightmap.height),
+                             y);
+    heightmap.boundsMin = Vec3{min_x, y, min_z};
+    heightmap.boundsMax = Vec3{max_x, y, max_z};
+    return heightmap;
+}
+
+// Distance from `p` to the capsule's XZ axis segment (its horizontal spine).
+float capsule_xz_distance(const Capsule& capsule, Vec3 p) {
+    const float dx = capsule.b.x - capsule.a.x;
+    const float dz = capsule.b.z - capsule.a.z;
+    const float length_squared = dx * dx + dz * dz;
+    float t = 0.0f;
+    if (length_squared > 0.0f) {
+        t = std::clamp(((p.x - capsule.a.x) * dx + (p.z - capsule.a.z) * dz) / length_squared,
+                       0.0f, 1.0f);
+    }
+    const float axis_x = capsule.a.x + dx * t;
+    const float axis_z = capsule.a.z + dz * t;
+    return std::sqrt((p.x - axis_x) * (p.x - axis_x) + (p.z - axis_z) * (p.z - axis_z));
+}
+
+}  // namespace
+
+TEST_CASE("Valus' posed palette drives the capsule proxy and each leg pushes the player out") {
+    // The RE-4 builder pick, exactly as the manifest places it (docs/notes/
+    // re4-placement.md §8): ground 28.369, yaw -130.76°.
+    SceneManifest manifest{};
+    ManifestEntity entity;
+    entity.placement.glbRelPath =
+        "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb";
+    entity.placement.position = Vec3{382.0f, 28.369f, 370.0f};
+    entity.placement.rotation = Quat{0.0f, -0.909104f, 0.0f, 0.416570f};
+    entity.placement.scale = Vec3{1.0f, 1.0f, 1.0f};
+    entity.clip = "minotaur_a_stand";
+    manifest.entities.push_back(entity);
+
+    Scene scene = compose_scene(test_library(), manifest,
+                                "models/shadow/characters/wander/_cmn/wander.glb");
+    REQUIRE(scene.rigs.size() == 2);
+    REQUIRE(scene.rigs[1].skin.joints.size() == 238);
+
+    Playback playback;
+    build_playback(scene, 1, playback);
+    const int index = clip_index_named(playback, "minotaur_a_stand");
+    REQUIRE(index >= 0);
+    const AnimationCpu& clip = playback.clips[static_cast<std::size_t>(index)];
+
+    // The stand clip carries the root series, so the origin-to-feet lift is 0:
+    // the palette alone already stands Valus on the manifest's ground point.
+    CHECK(clip_has_root_translation(scene, 1, clip));
+    const float lift = effective_rig_lift(scene, 1, clip);
+    CHECK(lift == 0.0f);
+    apply_rig_lift(scene, 1, lift);
+
+    const std::vector<Mat4> palette = animation_pose(scene, 1, clip, 0.0f);
+    REQUIRE(palette.size() == 238);
+
+    const std::vector<Capsule> capsules = entity_collision_capsules(scene, 1, palette);
+    REQUIRE(capsules.size() == 8);  // three per leg + two torso segments
+
+    // The collision input *is* the palette's bone world positions: the first
+    // capsule is the left thigh, MOMO_L -> SUNE_L, at the placed world point.
+    Vec3 momo{};
+    Vec3 sune{};
+    Vec3 chest{};
+    REQUIRE(posed_joint_world_position(scene, 1, palette, "Bone_MOMO_L", momo));
+    REQUIRE(posed_joint_world_position(scene, 1, palette, "Bone_SUNE_L", sune));
+    REQUIRE(posed_joint_world_position(scene, 1, palette, "Bone_MUNE", chest));
+    CHECK(capsules[0].a.x == doctest::Approx(momo.x));
+    CHECK(capsules[0].a.y == doctest::Approx(momo.y));
+    CHECK(capsules[0].a.z == doctest::Approx(momo.z));
+    CHECK(capsules[0].b.x == doctest::Approx(sune.x));
+    CHECK(capsules[0].b.y == doctest::Approx(sune.y));
+    CHECK(capsules[0].b.z == doctest::Approx(sune.z));
+    CHECK(momo.y == doctest::Approx(35.771f).epsilon(0.01));
+    CHECK(chest.y == doctest::Approx(39.294f).epsilon(0.01));
+    CHECK(chest.x == doctest::Approx(382.409f).epsilon(0.01));
+    CHECK(chest.z == doctest::Approx(370.465f).epsilon(0.01));
+
+    // Each leg capsule, resolved alone, pushes a player placed on its axis to
+    // the capsule's radius + the player's 0.35 m. The ground height puts the
+    // player's 1.7 m body across the capsule's mid-height, so the vertical
+    // overlap is real for every segment (thigh, shin, foot).
+    for (std::size_t i = 0; i < 6; ++i) {
+        const Capsule& capsule = capsules[i];
+        const Vec3 mid{(capsule.a.x + capsule.b.x) * 0.5f,
+                       (capsule.a.y + capsule.b.y) * 0.5f,
+                       (capsule.a.z + capsule.b.z) * 0.5f};
+        const float ground_y = mid.y - 0.5f * kPlayerCapsuleHeight;
+        const Heightmap ground = flat_ground_over(360.0f, 350.0f, 400.0f, 390.0f, ground_y);
+        PlayerState player{mid, 0.0f};
+        const std::vector<Capsule> one{capsule};
+
+        resolve_player_collision(player, one, ground);
+
+        CHECK(capsule_xz_distance(capsule, player.position) ==
+              doctest::Approx(capsule.r + kPlayerCapsuleRadius).epsilon(1e-3));
+        CHECK(player.position.y == doctest::Approx(ground_y));
+    }
+
+    // On the arena's real ground, with the full proxy (both legs), a player
+    // approaching from the outside and starting just inside a foot's
+    // silhouette is pushed clear of that foot and stays on the ground. (A
+    // player starting exactly between the two feet can remain between their
+    // overlapping exclusion zones: the ruling caps the resolver at two
+    // iterations, and no tunneling guarantee is made past the frame step.)
+    const Heightmap arena_ground = flat_ground_over(360.0f, 350.0f, 400.0f, 390.0f, 28.369f);
+    for (const std::size_t foot : {std::size_t{2}, std::size_t{5}}) {
+        const Capsule& capsule = capsules[foot];
+        const Vec3 mid{(capsule.a.x + capsule.b.x) * 0.5f, 0.0f,
+                       (capsule.a.z + capsule.b.z) * 0.5f};
+        // Outward from the body's centre (382, 370): the side a walking player
+        // reaches first. 0.5 m is still inside the 1.7 m foot radius.
+        const float outward_x = mid.x - 382.0f;
+        const float outward_z = mid.z - 370.0f;
+        const float outward_length = std::sqrt(outward_x * outward_x + outward_z * outward_z);
+        const Vec3 start{mid.x + outward_x / outward_length * 0.5f, 28.369f,
+                         mid.z + outward_z / outward_length * 0.5f};
+        PlayerState player{start, 0.0f};
+
+        resolve_player_collision(player, capsules, arena_ground);
+
+        CHECK(capsule_xz_distance(capsule, player.position) >=
+              capsule.r + kPlayerCapsuleRadius - 1e-3f);
+        CHECK(player.position.y == doctest::Approx(28.369f));
+    }
 }

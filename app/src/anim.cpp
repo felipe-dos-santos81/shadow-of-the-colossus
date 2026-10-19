@@ -259,6 +259,76 @@ void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& ou
     }
 }
 
+namespace {
+
+// The joint's bind-pose origin in mesh space: solve inverseBind * p = 0 with
+// the affine 3x3 upper-left block. glTF inverse bind matrices are affine
+// (last row 0, 0, 0, 1); a singular block is refused rather than inverted.
+bool inverse_bind_origin(const Mat4& inverse_bind, Vec3& out) {
+    const float a = inverse_bind.m[0], b = inverse_bind.m[4], c = inverse_bind.m[8];
+    const float d = inverse_bind.m[1], e = inverse_bind.m[5], f = inverse_bind.m[9];
+    const float g = inverse_bind.m[2], h = inverse_bind.m[6], i = inverse_bind.m[10];
+    const float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12f) {
+        return false;
+    }
+    const float inv_det = 1.0f / determinant;
+    const float inv00 = (e * i - f * h) * inv_det;
+    const float inv01 = (c * h - b * i) * inv_det;
+    const float inv02 = (b * f - c * e) * inv_det;
+    const float inv10 = (f * g - d * i) * inv_det;
+    const float inv11 = (a * i - c * g) * inv_det;
+    const float inv12 = (c * d - a * f) * inv_det;
+    const float inv20 = (d * h - e * g) * inv_det;
+    const float inv21 = (b * g - a * h) * inv_det;
+    const float inv22 = (a * e - b * d) * inv_det;
+    const float tx = inverse_bind.m[12];
+    const float ty = inverse_bind.m[13];
+    const float tz = inverse_bind.m[14];
+    out = Vec3{-(inv00 * tx + inv01 * ty + inv02 * tz),
+               -(inv10 * tx + inv11 * ty + inv12 * tz),
+               -(inv20 * tx + inv21 * ty + inv22 * tz)};
+    return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+}
+
+// A matrix * (point, 1), returning the xyz part.
+Vec3 transform_point(const Mat4& m, Vec3 p) {
+    return Vec3{m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12],
+                m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13],
+                m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]};
+}
+
+}  // namespace
+
+bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
+                                const std::vector<Mat4>& palette,
+                                const std::string& jointName, Vec3& out) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    for (std::size_t joint = 0; joint < rig.skin.joints.size(); ++joint) {
+        if (rig.skin.joints[joint].name != jointName) {
+            continue;
+        }
+        if (joint >= palette.size()) {
+            return false;
+        }
+        Vec3 bind_origin{};
+        if (!inverse_bind_origin(rig.skin.joints[joint].inverseBind, bind_origin)) {
+            return false;
+        }
+        // Mesh space -> world: every mesh of the rig shares the rig's placement
+        // (compose_scene bakes it; apply_rig_lift post-multiplies the ground
+        // lift), so the first mesh's model is the rig's model.
+        Mat4 model = mat4_identity();
+        if (rig.meshBegin < scene.meshes.size()) {
+            model = scene.meshes[rig.meshBegin].model;
+        }
+        const Vec3 posed = transform_point(palette[joint], bind_origin);
+        out = transform_point(model, posed);
+        return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+    }
+    return false;
+}
+
 AnimationCpu make_procedural_wave(const Scene& scene, std::size_t rigIndex) {
     AnimationCpu clip;
     clip.name = "procedural-wave";

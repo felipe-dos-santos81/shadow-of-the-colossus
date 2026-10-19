@@ -3,6 +3,7 @@
 #include "anim.h"
 #include "asset_io.h"
 #include "camera.h"
+#include "collision.h"
 #include "heightmap.h"
 #include "manifest.h"
 #include "player.h"
@@ -198,12 +199,17 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
 }
 
 // Every rig's pose for this frame: the player's (locomotion) and each entity's
-// (its own loop, on its own clock), each into its own palette buffer.
-void update_all_poses(Renderer& renderer, const Scene& scene, std::vector<Playback>& playbacks,
-                      float dt) {
+// (its own loop, on its own clock), each into its own palette buffer. The
+// palettes are returned so this frame's consumers (the entity collision proxy,
+// the target camera's chest point) read exactly the matrices the renderer was
+// given, not a second evaluation of the clip.
+std::vector<std::vector<Mat4>> update_all_poses(Renderer& renderer, const Scene& scene,
+                                                std::vector<Playback>& playbacks, float dt) {
+    std::vector<std::vector<Mat4>> palettes(playbacks.size());
     for (std::size_t rigIndex = 0; rigIndex < playbacks.size(); ++rigIndex) {
-        update_pose(renderer, scene, rigIndex, playbacks[rigIndex], dt);
+        palettes[rigIndex] = update_pose(renderer, scene, rigIndex, playbacks[rigIndex], dt);
     }
+    return palettes;
 }
 
 // Frames the single-model camera on the pose that is actually drawn. With a
@@ -246,11 +252,6 @@ void frame_single_model(Camera& camera, const Scene& scene, const Playback& play
 constexpr float kHeightmapCellSize = 1.0f;        // metres between ground samples
 constexpr float kFixedFrameSeconds = 1.0f / 60.0f;  // the s3-selftest's fixed step
 constexpr int kSelftestFrames = 240;                // 4 simulated seconds
-
-// The camera's look-direction yaw in degrees — the convention player_update
-// takes. The orbit Camera stores the opposite direction (the eye sits at
-// `yaw`, so the look direction is yaw - 180).
-float camera_view_yaw(const Camera& camera) { return camera.yaw - 180.0f; }
 
 // Moves the composed scene's player meshes with the player: the player rig's
 // half-open mesh range (compose_scene appends the entities after it, and they
@@ -298,6 +299,30 @@ void apply_entity_lifts(Scene& scene, const std::vector<Playback>& playbacks) {
         }
         apply_rig_lift(scene, rigIndex, lift);
     }
+}
+
+// The entity's chest joint in world space for this frame's palette — the
+// target-framing camera's orbit point. False when the rig has no Bone_MUNE.
+bool entity_chest_position(const Scene& scene, std::size_t rigIndex,
+                           const std::vector<Mat4>& palette, Vec3& out) {
+    return posed_joint_world_position(scene, rigIndex, palette, "Bone_MUNE", out);
+}
+
+// Every entity rig's collision proxy for this frame (S4.0 has one entity; the
+// loop keeps the composed order general). The player's rig is skipped: its
+// capsule is the controller's own, pinned by collision.h.
+std::vector<Capsule> entity_capsules(const Scene& scene,
+                                     const std::vector<std::vector<Mat4>>& palettes) {
+    std::vector<Capsule> all;
+    for (std::size_t rigIndex = scene.playerRig + 1; rigIndex < scene.rigs.size(); ++rigIndex) {
+        if (rigIndex >= palettes.size()) {
+            break;
+        }
+        std::vector<Capsule> capsules =
+            entity_collision_capsules(scene, rigIndex, palettes[rigIndex]);
+        all.insert(all.end(), capsules.begin(), capsules.end());
+    }
+    return all;
 }
 
 // Applies the controller's locomotion choice unless a clip was pinned on the
@@ -407,6 +432,17 @@ int run_app(const AppOptions& opts) {
                      "sotc-viewer: --entity-time needs --manifest (there is no entity to pin)\n");
         return 2;
     }
+    // --camera-target entity needs a composed scene with an entity to frame.
+    if (opts.cameraTarget != "player" && opts.cameraTarget != "entity") {
+        std::fprintf(stderr, "sotc-viewer: --camera-target expects player or entity, got: %s\n",
+                     opts.cameraTarget.c_str());
+        return 2;
+    }
+    if (opts.cameraTarget == "entity" && opts.manifestPath.empty()) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --camera-target entity needs --manifest (there is no entity)\n");
+        return 2;
+    }
 
     // Cursor policy, part 1: SDL must never auto-capture the mouse when the
     // window gains focus. Set the hint before SDL_Init so the video subsystem
@@ -486,6 +522,11 @@ int run_app(const AppOptions& opts) {
                 std::fprintf(stderr, "sotc-viewer: --entity-time: the manifest has no entity\n");
                 return 2;
             }
+            if (opts.cameraTarget == "entity" && manifest.entities.empty()) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --camera-target entity: the manifest has no entity\n");
+                return 2;
+            }
             scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath);
             renderer.upload(scene);
             print_scene_line(scene);
@@ -526,6 +567,11 @@ int run_app(const AppOptions& opts) {
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
                           /*moving=*/false, /*dtSeconds=*/10.0f);
         }
+        // Entity target framing (T): the orbit point is refreshed from the
+        // entity's posed chest every frame. The state is inert until entered.
+        CameraTarget targetCamera;
+        Vec3 entityChest{};
+        bool haveEntityChest = false;
 
         // Playback: one per rig (S4). The player's slot keeps the S2 meaning —
         // the model's real clips first, the procedural wave only as the
@@ -537,6 +583,7 @@ int run_app(const AppOptions& opts) {
         // clip. A scene with no rig at all (a model-less run) keeps one slot for
         // the player path, which stays silent.
         const std::size_t playerRig = scene.rigs.empty() ? 0 : scene.playerRig;
+        const std::size_t entityRig = scene.playerRig + 1;  // S4.0: one entity
         std::vector<Playback> playbacks(std::max<std::size_t>(scene.rigs.size(), 1));
         Playback& playback = playbacks[playerRig];
         build_playback(scene, playerRig, playback);
@@ -606,6 +653,27 @@ int run_app(const AppOptions& opts) {
         // A single-model load has no entity rig, so nothing moves here.
         apply_entity_lifts(scene, playbacks);
 
+        // The target-framing capture starts here: sample the entity's chest at
+        // the initial playback time (before the first frame advances it) so the
+        // very first camera update already frames the subject.
+        if (follow_mode && entityRig < scene.rigs.size() && entityRig < playbacks.size() &&
+            playbacks[entityRig].index >= 0) {
+            const Playback& entity_playback = playbacks[entityRig];
+            const AnimationCpu& clip =
+                entity_playback.clips[static_cast<std::size_t>(entity_playback.index)];
+            const std::vector<Mat4> palette = animation_pose(
+                scene, entityRig, clip, playback_time(entity_playback, clip.duration));
+            haveEntityChest = entity_chest_position(scene, entityRig, palette, entityChest);
+        }
+        if (opts.cameraTarget == "entity") {
+            if (!haveEntityChest) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --camera-target entity: no Bone_MUNE in the entity\n");
+                return 2;
+            }
+            camera_target_enter(camera, follow, targetCamera, entityChest);
+        }
+
         // The initial player transform (also the one --selftest renders with):
         // the first clip already is the active one.
         if (follow_mode) {
@@ -623,12 +691,32 @@ int run_app(const AppOptions& opts) {
             input.forward = true;
             input.run = true;
             for (int frame = 0; frame < kSelftestFrames; ++frame) {
-                camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
-                              /*moving=*/true, kFixedFrameSeconds);
+                if (targetCamera.active) {
+                    if (haveEntityChest) {
+                        camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+                    }
+                } else {
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                                  /*moving=*/true, kFixedFrameSeconds);
+                }
                 player_update(player, input, kFixedFrameSeconds, heightmap,
-                              camera_view_yaw(camera));
+                              camera_look_yaw(camera));
                 update_locomotion(playback, scene, input, manual_clip);
-                update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
+                // The collision hook: after this frame's pose/playback update,
+                // before the player transform that is drawn below the loop.
+                resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
+                if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
+                    haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
+                                                           entityChest);
+                    if (targetCamera.active && haveEntityChest) {
+                        camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+                    }
+                }
+            }
+            if (targetCamera.active && haveEntityChest) {
+                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
             }
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
@@ -662,16 +750,37 @@ int run_app(const AppOptions& opts) {
                 const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
                 last_ticks = now;
                 if (follow_mode) {
-                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
-                                  /*moving=*/false, dt);
                     const PlayerInput still;
-                    player_update(player, still, dt, heightmap, camera_view_yaw(camera));
                     update_locomotion(playback, scene, still, manual_clip);
+                    const std::vector<std::vector<Mat4>> palettes =
+                        update_all_poses(renderer, scene, playbacks, dt);
+                    if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
+                        haveEntityChest = entity_chest_position(scene, entityRig,
+                                                               palettes[entityRig], entityChest);
+                    }
+                    if (targetCamera.active) {
+                        if (haveEntityChest) {
+                            camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f,
+                                                 0.0f);
+                        }
+                    } else if (targetCamera.returning) {
+                        camera_target_return(camera, follow, targetCamera, player.position,
+                                             player.yawDeg, 0.0f, 0.0f, 0.0f,
+                                             /*moving=*/false, dt);
+                    } else {
+                        camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                      0.0f, /*moving=*/false, dt);
+                    }
+                    player_update(player, still, dt, heightmap, camera_look_yaw(camera));
+                    // The collision hook: after player_update, before the
+                    // player transform the frame is drawn with.
+                    resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
                     apply_player_transform(scene, player_rig_record, player,
                                            active_player_lift(scene, playback,
                                                               player_rig_record));
+                } else {
+                    update_all_poses(renderer, scene, playbacks, dt);
                 }
-                update_all_poses(renderer, scene, playbacks, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                       /*acquire_swapchain=*/true);
             }
@@ -722,6 +831,12 @@ int run_app(const AppOptions& opts) {
                             }
                         } else if (event.key.key == SDLK_SPACE) {
                             playback.playing = !playback.playing;
+                        } else if (event.key.key == SDLK_T) {
+                            // Camera-only framing: orbit the entity's chest. The
+                            // movement basis follows the active camera either way.
+                            if (follow_mode) {
+                                camera_target_toggle(camera, follow, targetCamera, entityChest);
+                            }
                         } else if (event.key.key == SDLK_R) {
                             playback.time = 0.0f;
                         } else if (!playback.clips.empty() &&
@@ -776,17 +891,39 @@ int run_app(const AppOptions& opts) {
                 input.run = keys[SDL_SCANCODE_LSHIFT];
                 const bool moving = input.forward || input.back || input.left || input.right;
 
-                // The camera first: player_update's movement basis is the
-                // camera's current look direction.
-                camera_follow(camera, follow, player.position, player.yawDeg, drag_dx, drag_dy,
-                              wheel_delta, moving, dt);
-                player_update(player, input, dt, heightmap, camera_view_yaw(camera));
+                // The clip choice, then this frame's poses: the target camera
+                // and the collision proxy both read the palettes drawn today.
                 update_locomotion(playback, scene, input, manual_clip);
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, dt);
+                if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
+                    haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
+                                                           entityChest);
+                }
+
+                // The camera before player_update: its yaw is the movement
+                // basis, and in target mode that is the orbit around the chest.
+                if (targetCamera.active) {
+                    if (haveEntityChest) {
+                        camera_target_update(camera, targetCamera, entityChest, drag_dx, drag_dy,
+                                             wheel_delta);
+                    }
+                } else if (targetCamera.returning) {
+                    camera_target_return(camera, follow, targetCamera, player.position,
+                                         player.yawDeg, drag_dx, drag_dy, wheel_delta, moving, dt);
+                } else {
+                    camera_follow(camera, follow, player.position, player.yawDeg, drag_dx, drag_dy,
+                                  wheel_delta, moving, dt);
+                }
+                player_update(player, input, dt, heightmap, camera_look_yaw(camera));
+                // The collision hook: after player_update, before the player
+                // transform this frame is drawn with.
+                resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
+            } else {
+                update_all_poses(renderer, scene, playbacks, dt);
             }
-
-            update_all_poses(renderer, scene, playbacks, dt);
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);

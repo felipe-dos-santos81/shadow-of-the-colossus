@@ -49,6 +49,17 @@ std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
 void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette,
                   Vec3& outMin, Vec3& outMax);
 
+// The world-space position of the joint named exactly `jointName` in rig
+// `rigIndex`, under `palette` and that rig's mesh model transform (so an
+// entity's placement and grounding lift are included). The joint's bind origin
+// is recovered from its inverse bind matrix and carried through the palette:
+// palette[j] * bindOrigin is the posed joint position in mesh space. Returns
+// false — leaving `out` untouched — when the joint is absent, the palette is
+// shorter than the skin, or the inverse bind is singular (no NaN is written).
+bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
+                                const std::vector<Mat4>& palette,
+                                const std::string& jointName, Vec3& out);
+
 // A deterministic 2-second "wave" clip: rotation channels for the first
 // min(12, joints) joints of rig `rigIndex` with keys at t = 0/1/2 s holding
 // restR, restR tilted 15 degrees about X, and restR again — a smooth wobble
