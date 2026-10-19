@@ -22,7 +22,8 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
    animation tracks baked by the converter (D-S7).
 2. **The app plays the right clip for the state.** Still → stand loop; moving → walk loop; moving +
    Shift → run loop (the S3 controller: walk 2.2 m/s, run 5.0 m/s, `app/src/player.h`). The horse
-   plays its clip. Clips play in place; the controller keeps driving world position.
+   plays its clip standalone (the single-model viewer; §3). Clips play in place — the decoded
+   root's horizontal travel is stripped (§6.2); the controller keeps driving world position.
 3. **Acceptance.** The pinned idle trio + horse stills compared against the S2 capture set,
    phase-free (the `re2-xval.md` §3 framing); plus the user's live walk — moving switches the clip,
    Shift runs it. Evidence lands in `docs/notes/s2-results.md`.
@@ -42,6 +43,11 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
   milestone).
 - Clip streaming, gameplay state machines beyond speed, and clip→model association beyond the demo
   set.
+- Multi-rig animation inside the composed arena: the horse's clip is checked standalone (the
+  single-model viewer); animating Agro in the scene (multi-rig clip support + scene work) is a later
+  milestone (user, 2026-10-19).
+- Root-motion-driven locomotion: the clips' horizontal root travel is not played — the controller
+  owns position; a root-motion mode is a later feature.
 
 ## 4 · Anti-goals (a failure even if it runs)
 
@@ -52,6 +58,8 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
   recon G11).
 - Regressing what works: the app's existing tests/pins, the arena walk, the stage.
 - Docs that disagree: the design, plan, and results must state the same scope.
+- Wander floating or sinking when a clip is active: the root channel and the S3 ground lift must
+  compose so the feet stay on the heightmap in the composed arena.
 
 ## 5 · Constraints (user-decided, fixed)
 
@@ -77,7 +85,7 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
   translation keys).
 - Clip scope is a converter input (a CLI list or a manifest — builder's choice). The demo set:
   `player_a_stand`, `player_a_walk`, `player_a_run` for `wander.glb`; `horse_a_add_horse_kick` for
-  the horse glb.
+  `agro.glb` (the converted Agro the capture set shows).
 - The catalog is source-keyed; adding clips changes a glb's output, so the demo models need an
   explicit re-convert (the plan pins how: `--force` or a scope-aware key).
 
@@ -89,7 +97,12 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
 - Times: `i / (rate × 30)` seconds, `duration = (frames − 1) / fps`, `fps = rate × 30`
   (`re2-sampler.md` §3.1). `player_a_stand` = 76 keys at rate 0.5 → 15 fps → 5.0 s.
 - The **bridge** `q_glb = (x, −y, −z, w)` applied to decoded quaternions (`re2-xval.md` §2); the
-  root series is already glb-frame and applies raw.
+  root series is already in the glb frame.
+- **Root translation, in place.** The decoded series carries horizontal travel (walk ≈1.0 m over
+  21 frames; run ≈2.5 m over 18 — not loop-closed). This milestone emits **vertical only**: the
+  horizontal component is stripped (the controller owns position, §2), and the vertical is baked
+  relative to the bind root so the bind placement is preserved and the clip's bob plays. Root-motion
+  playback is a later feature.
 - **Animated joint nodes switch `matrix` → TRS** (the mechanical substitution the adapter notes
   already describe, `docs/notes/aqua-core-api.md` §11.2); unanimated nodes keep `matrix`.
 - Expected size: tens of KB per clip (INFERRED arithmetic, recon G8).
@@ -105,12 +118,17 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
   status line reports the real clip and `procedural=0`.
 - Tests: flip the `scene.animations.empty()` pin (`app/tests/test_asset_io.cpp:393`) to assert the
   clips; add a selection test (state → clip name).
+- The S3 ground lift (`player_ground_offset`, ≈0.7596 m for Wander) stays unchanged — with a clip
+  active the app adds nothing to grounding; the converter's root rebasing (§6.2) owns the placement.
 
 ### 6.4 Acceptance
 
 - Re-convert the demo models; run the app; capture stills at pinned times (idle trio + horse) with
   the S3 capture tooling; compare phase-free against the C2 reference set
-  (`docs/notes/re-capture.md` §3).
+  (`docs/notes/re-capture.md` §3). The horse's **frame 0** (its standing pose) is compared against
+  the captures' standing Agro stills — a rig check (bridge, mapping, statics); the **kick** is the
+  user's live check in the single-model viewer (no kick reference exists — the captures are
+  standing/approach frames).
 - The user's walk: move, Shift-run — the clip switches live.
 - `docs/notes/s2-results.md`: the evidence, the measured numbers, the walk checklist.
 
@@ -128,6 +146,8 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
 - 2026-10-19 — SDL stays the runtime; Godot stays dropped.
 - 2026-10-19 — locomotion selection is in this milestone: moving drives walk/run.
 - 2026-10-19 — the demo scope = the pinned S2 demo (idle + horse) extended with walk/run.
+- 2026-10-19 — the horse's clip is checked standalone (the single-model viewer); in-arena
+  multi-rig animation is deferred.
 
 ## 9 · References
 
