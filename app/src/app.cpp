@@ -629,9 +629,14 @@ int run_app(const AppOptions& opts) {
                         } else if (!playback.clips.empty() &&
                                    (event.key.key == SDLK_LEFTBRACKET ||
                                     event.key.key == SDLK_RIGHTBRACKET)) {
-                            const int count = static_cast<int>(playback.clips.size());
-                            const int step = (event.key.key == SDLK_LEFTBRACKET) ? count - 1 : 1;
-                            select_clip(playback, scene, (playback.index + step) % count);
+                            // Arena mode selects by controller state every frame, so a manual
+                            // clip change would be reverted on the next frame: keep the keys
+                            // for single-model browsing only.
+                            if (!follow_mode) {
+                                const int count = static_cast<int>(playback.clips.size());
+                                const int step = (event.key.key == SDLK_LEFTBRACKET) ? count - 1 : 1;
+                                select_clip(playback, scene, (playback.index + step) % count);
+                            }
                         }
                         break;
                     case SDL_EVENT_MOUSE_MOTION:
