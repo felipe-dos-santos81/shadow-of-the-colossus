@@ -15,7 +15,7 @@ view. The walk table in §6 is still the user's to run.
 |---|---|
 | Date | 2026-10-19 (local −03) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64 |
-| Repo / branch | `sotc-native`, `s2-motion` (`a69d139` + this note) |
+| Repo / branch | `sotc-native`, `s2-motion` (`44610f0`, `a69d139`, `30de098` + this note) |
 | Library (gitignored) | `SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library` |
 | Manifest (gitignored) | `out/re/stage/valus.manifest` (S3's 30-instance composition) |
 | Captures (gitignored) | `out/re/capture/s2/` (+ `diag/`, `thumbs/`) |
@@ -26,7 +26,7 @@ view. The walk table in §6 is still the user's to run.
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 dotnet test tests/BpConvert.Tests -v q
-# Approved! - failed 0, passed 82, skipped 0, total 82 - 49 s
+# Approved! - failed 0, passed 82, skipped 0, total 82 - 1 m 37 s
 
 export SOTC_LIB=$PWD/out/library
 ctest --test-dir app/build --output-on-failure
