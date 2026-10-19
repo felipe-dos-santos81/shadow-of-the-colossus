@@ -99,10 +99,9 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
 - The **bridge** `q_glb = (x, −y, −z, w)` applied to decoded quaternions (`re2-xval.md` §2); the
   root series is already in the glb frame.
 - **Root translation, in place.** The decoded series carries horizontal travel (walk ≈1.0 m over
-  21 frames; run ≈2.5 m over 18 — not loop-closed). This milestone emits **vertical only**: the
-  horizontal component is stripped (the controller owns position, §2), and the vertical is baked
-  relative to the bind root so the bind placement is preserved and the clip's bob plays. Root-motion
-  playback is a later feature.
+  21 frames; run ≈2.5 m over 18 — not loop-closed). This milestone emits the series **raw in Y**
+  (the pose-validated reading: it carries the character's ground height and the bob) with **x/z
+  zeroed** (the controller owns horizontal position, §2). Root-motion playback is a later feature.
 - **Animated joint nodes switch `matrix` → TRS** (the mechanical substitution the adapter notes
   already describe, `docs/notes/aqua-core-api.md` §11.2); unanimated nodes keep `matrix`.
 - Expected size: tens of KB per clip (INFERRED arithmetic, recon G8).
@@ -118,8 +117,12 @@ It closes the SDL design's pinned **S2 done-line** — "Wander (and ≥1 other r
   status line reports the real clip and `procedural=0`.
 - Tests: flip the `scene.animations.empty()` pin (`app/tests/test_asset_io.cpp:393`) to assert the
   clips; add a selection test (state → clip name).
-- The S3 ground lift (`player_ground_offset`, ≈0.7596 m for Wander) stays unchanged — with a clip
-  active the app adds nothing to grounding; the converter's root rebasing (§6.2) owns the placement.
+- **Grounding:** the S3 ground lift (`player_ground_offset`, ≈0.7596 m for Wander) applies only
+  when the active model has no root-carrying clip — a clip's root series already carries the ground
+  height (the pose-validated reading), so the lift on top would float the character by ≈0.76 m. The
+  single-model path is unchanged; the composed-arena stills verify the feet on the heightmap.
+  (Builder-check refinement, made during planning: app-side, not converter-side — a converter-side
+  rebase would sink the single-model render by the same ≈0.76 m.)
 
 ### 6.4 Acceptance
 
