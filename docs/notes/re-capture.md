@@ -319,3 +319,103 @@ per-run driver logs (pad writes, shot collection, anchor) and the port’s stdou
   left back on the default cvars (`cmdline.bin` without `+nointro`) after the runs.
 - **Machine state** — as in C1: clamshell, display asleep, `caffeinate -i` holding the CPU
   awake; the runs above are from that state, and the wall times in the logs reflect it.
+
+## 4 · The gate decision and the comparison (C4)
+
+### 4.1 The gate decision — verbatim
+
+**NOT MET** — the decode is **not confirmed**: RE-1's gate stands, and C3's sampler read-out
+did not crack it. The decision, in the plan's words:
+
+> **NOT MET** (the decode stays open; the reference stills stand as the §5 artifact; S2's
+> sign-off stays open; the stand-in rule applies).
+
+The evidence walk, one line per input:
+
+- **C1 §1–§2 — BOOT.** The port boots our own APP_VER 01.00 dump: main loop reached, frames
+  presented, the frame-dump hook writes PNGs. The capture rig works; the capture-derived path
+  is armed.
+- **C2 §3 — the reference stills exist.** 81 manifest entries across 7 runs; the idle trio at
+  gameplay +5/+10/+15 s (anchored at the game's `st_gameflow() starting game`); the horse
+  state reachable (whistle frames), the mounted ride not taken — recorded honestly. Saves
+  untouched (baseline byte-identical).
+- **RE-1 §5 / §3.6 — the decode gate is unchanged.** `check-curves` exits 1: 13/16 gating
+  assertions pass, 3 curve assertions fail (`quaternion norms within 1e-3`, `adjacent-key dot
+  > 0.9`, `keys with |v| > 1`). The container is decoded to the byte; the key encoding is open
+  (§3.5–§3.7), and the B2 candidate data stays `UNVERIFIED`. RE-1's decision verbatim:
+  "**NOT MET** — the decode did not reach verified extraction → the capture-derived path
+  activates (its plan is written against the port rig); decoding continues as background work."
+- **C3 §6 — the sampler read out, the gap moved.** The keyframe sampler is located and read out
+  at the runtime level: `FUN_005fd900` and the per-type samplers, the 12-byte record and
+  key-blob layouts, the full key-format vocabulary with exact scales (`FUN_0060bba0`, cases
+  0…0xe), and the frame-based time model (integer key index, linear blend, wrap by `count−1`).
+  But the **file-level decode is still open**: §6.6–§6.7 settle that the re-based structure is
+  runtime-built, so the gap is now the **loader's parse chain** (the file→structure parse),
+  not the sampler. §6.7 verbatim: "the `.anb` file-level decode is still open — the gap is now
+  the loader's parse, not the sampler; §5's gate decision (NOT MET) does not change". The
+  stride-6 int16 series (§6.5.3) are the lead to test against that parse.
+- **§5 cross-reference (re-anb.md).** The sampler changed no part of the decision, so §5's text
+  is not updated; §6.7 records the standing explicitly (this is the cross-reference's home).
+
+So: the decode stays open; the reference stills (§3) stand as the S2 reference-capture artifact
+(first-playable design §5); S2's sign-off ("plays a converted `.anb` clip correctly vs a
+dev-only reference capture") stays open; the labeled stand-in rule applies (s3-arena design §4).
+A parse-chain continuation is in flight as background work; it is **not consumed** by this plan
+— a cracked decode hands off to the converter plan (Plan C), which is written when this gate
+says MET.
+
+### 4.2 The comparison artifact — `out/re/capture/compare/` (gitignored)
+
+A labeled side-by-side set: **the real game** (C2's captures, byte-verified copies) beside
+**our app's render** of the converted library with S2's labeled `procedural-wave` stand-in.
+It is the visual-validation artifact of the capture path — with the gate NOT MET there is no
+candidate pose to compare, so it serves **no sign-off** and claims **no pose correspondence**.
+
+| file | what it is |
+|---|---|
+| `ref-idle-anchored-…_234236_562_game_000000.png` | reference, idle trio +5 s (the real game) |
+| `ref-idle-anchored-…_234241_605_game_000001.png` | reference, idle trio +10 s (Agro arriving) |
+| `ref-idle-anchored-…_234246_560_game_000002.png` | reference, idle trio +15 s |
+| `ref-horse-…_233513_972_game_000001.png` | reference, whistle frame (mount prompt up) |
+| `ref-horse3-…_000035_372_game_000001.png` | reference, text-free frame (gameplay +42 s) |
+| `app-t0.png` | app: converted **Wander** + stand-in, t = 0.000 s |
+| `app-wave-t050.png` | app: converted **Wander** + stand-in, t = 0.500 s |
+| `app-agro-t0.png` | app: converted **Agro** + stand-in, t = 0.000 s |
+| `app-agro-wave-t050.png` | app: converted **Agro** + stand-in, t = 0.500 s |
+| `README.md` | the pairing legend + the claims (its text is the authority) |
+
+The app renders (all 1920×1080 RGBA PNGs — the same size as the reference; `--width 960
+--height 540` points on the Retina display):
+
+```bash
+SOTC_LIB=…/out/library app/build/sotc-viewer --library …/out/library \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --anim-time 0 --width 960 --height 540 \
+  --screenshot out/re/capture/compare/app-t0.png --frames 3
+# printed: s2-anim clip=procedural-wave joints=348 procedural=1 t=0.000
+#          s1-screenshot path=…/app-t0.png width=1920 height=1080
+```
+
+(the other three: the same command with `--anim procedural-wave --anim-time 0.5` for
+`app-wave-t050.png`, and `--model models/shadow/characters/agro/_cmn/agro.glb` for
+`app-agro-t0.png` / `app-agro-wave-t050.png`; Agro prints `joints=132`.)
+
+**`compare/README.md` states exactly what is and is not claimed** (its text is the authority;
+summarized here):
+
+- **Reference = the real game** — C2's captures of *Shadow of the Colossus* (2018, APP_VER
+  01.00) on the dev-only port rig; the copies are byte-identical to `out/re/capture/` and their
+  sha256s equal `manifest.json`'s entries.
+- **Our side = the converted `wander.glb` / `agro.glb`** (the M0 converter's output) rendered by
+  the built viewer, playing S2's built-in **labeled stand-in** `procedural-wave` at pinned
+  times. **Never product data**; never a decoded clip — no real clip exists while the gate is
+  NOT MET.
+- **Not claimed:** no pose/frame correspondence (the stand-in is not Wander's or Agro's idle);
+  no sign-off (S2's done-line stays open); no product path (gitignored `out/`, personal use);
+  no context match (the game's world vs the bare model — cameras, framing, and lighting differ
+  by construction).
+
+Verification (2026-10-19): every `ref-*.png` sha256 equals its
+`manifest.json` entry; each copy is `cmp`-identical to its original in `../`; every file in
+`compare/` is a 1920×1080 PNG; the app runs printed their `s2-anim` / `s1-screenshot` lines
+above.
