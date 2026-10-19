@@ -4,8 +4,8 @@ Spec milestone S2 (`2026-10-19-s2-motion-design.md` §1–§2): **"Wander (and �
 plays a converted `.anb` clip correctly vs a dev-only reference capture"**, extended with
 controller-driven locomotion (still → stand, move → walk, +Shift → run).
 
-**Status: the converter/app checks are ACCEPTED; the user's walk (§6) is PENDING.** The
-first acceptance pass found two blocking product-path defects — the converted glbs played
+**Status: the converter/app checks are ACCEPTED; the user's walk and horse check (§6) are
+PENDING.** The first acceptance pass found two blocking product-path defects — the converted glbs played
 a **folded pose** and the single-model camera framed the **bind pose** — both are fixed and
 re-measured here: the glbs now play the decoded pose (the animation bridge emits the
 conjugate), and the single-model captures frame the animated subject with the whole body in
@@ -38,6 +38,12 @@ ctest --test-dir app/build --output-on-failure
 # 100% tests passed out of 2
 ```
 
+`./scripts/s3-acceptance.sh` (2026-10-19, after the S2 fixes): the wave guard still holds with
+real clips — `s3-wave-pixels differing=5487 total=3686400 margin=0 bbox=1218,766,1342,964`
+(0.149 %, player-localized; well under the 2 % limit). The default clip is now
+`player_a_stand`, and the two pinned times (0 / 1 s) still move the player without moving the
+arena, so no re-pin to `player_a_walk` was needed.
+
 `cmake --build app/build -j` rebuilt the viewer cleanly. The new pose pins:
 `Stand_world_pose_puts_the_head_and_hands_at_the_decoded_heights` composes the **written**
 glb with column-vector node semantics and asserts the decoded frame-0 heights
@@ -48,9 +54,22 @@ bridge (it read 156.0° on `HARA`, 176.7° on `HAND_A_L`); a component-order tes
 `AnimBridge.ToGlb` itself. The app side pins `posed_bounds()` (a one-joint fixture lifted
 by a y = 0.5 root channel, with the no-skin bind fallback).
 
-The demo models were re-converted with the current writer (`convert --force --clips
-player_a_stand,player_a_walk,player_a_run` / `--clips horse_a_add_horse_kick`) and are
-**byte-identical** to the shipped library:
+The demo models were re-converted with the current writer and are **byte-identical** to the
+shipped library:
+
+```bash
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models/shadow/characters/wander/_cmn/wander.cmsh \
+  --clips player_a_stand,player_a_walk,player_a_run --force
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models/shadow/characters/agro/_cmn/agro.cmsh \
+  --clips horse_a_add_horse_kick --force
+```
+
+`--clips` bakes every named clip into every source in scope: every baked track must map into
+that model's skeleton, so the contract is a single-model scope (`--under <file>`); a
+directory-scope run fails on non-matching sources (the CLI warns). A source recorded `ok` is
+only rebaked with `--force`.
 
 - `wander.glb` `54fe97d7215c0d1053875d5085d2265d2a425bbd1a55a4c2e0504de8eaaefd64`
 - `agro.glb` `f17165435d20fbcac1629e6fcaed30467e42d863835572b6acd105a73590bc8f`
@@ -214,7 +233,7 @@ Post-fix framing (whole subject; margins are edge distances, `W−1−x1` / `H�
   **30 fps** / 0.567 s; horse kick 16 keys / 15 fps / 1.0 s. (The run's source rate field
   is 1.0 → 30 fps; the others 0.5 → 15 fps.)
 
-## 6 · The user's walk — PENDING
+## 6 · The user's walk and horse check — PENDING
 
 Run the arena and walk the bowl floor:
 
@@ -232,9 +251,23 @@ export SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library
 | 4 | feet grounded | walk onto the bowl floor | feet track the heightmap; no float/sink | ☐ |
 | 5 | hard cuts | switch still/walk/run | immediate switch; no blend (accepted) | ☐ |
 | 6 | controls | `F`; Escape | reframe; clean quit | ☐ |
+| 7 | horse (standalone) | open `agro.glb` standalone and play `horse_a_add_horse_kick` (below) | the standing frame is a four-legged horse (head, saddle, all four hooves); the kick swings a hind leg | ☐ |
 
-**The user's verdict: PENDING — the walk has not been performed.** The two blockers are
-fixed, so the walk can now be run against a build that shows the decoded, upright pose.
+Standalone horse check (no manifest, so the arena's controller selection is not involved):
+
+```bash
+./app/build/sotc-viewer --library "$SOTC_LIB" \
+    --model models/shadow/characters/agro/_cmn/agro.glb \
+    --anim horse_a_add_horse_kick --anim-time 0
+```
+
+- [ ] **Finger snap:** accept the authored finger snap at the walk/run loop (§5's
+  independent re-measurement: walk 22.87°/22.86°, run 6.66°/6.68°/21.20°; the first pass's
+  11.4°/6.7° readings were superseded).
+
+**The user's verdict: PENDING — the walk and the horse's standing frame/kick have not been
+performed.** The two blockers are fixed, so both can now be run against a build that shows the
+decoded, upright pose.
 
 ## 7 · Evidence files (all gitignored)
 

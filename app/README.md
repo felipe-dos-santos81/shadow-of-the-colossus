@@ -112,6 +112,22 @@ ctest --test-dir app/build --output-on-failure
   `app/build/sotc-viewer --library "$SOTC_LIB" --model models/shadow/characters/wander/_cmn/wander.glb --selftest`
   — it prints the `s2-anim` line and renders one skinned frame.
 
+The `wander`/`agro` animation pins load those glbs from `$SOTC_LIB` and require a library
+rebuilt with the S2 clips (a pre-S2 library fails them). Rebuild it once with:
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models/shadow/characters/wander/_cmn/wander.cmsh \
+  --clips player_a_stand,player_a_walk,player_a_run --force
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models/shadow/characters/agro/_cmn/agro.cmsh \
+  --clips horse_a_add_horse_kick --force
+```
+
+`--clips` bakes every named clip into every source in scope, so it is a single-model
+invocation (`--under <file>`): every track must map into that model's skeleton.
+
 ## Guarantees
 
 - **Windowed, always.** Never fullscreen; `SDL_WINDOW_RESIZABLE` from the start.
