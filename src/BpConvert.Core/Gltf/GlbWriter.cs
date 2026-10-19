@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json;
+using BpConvert.Core.Anim;
 using BpConvert.Core.Model;
 
 namespace BpConvert.Core.Gltf;
@@ -11,10 +12,18 @@ namespace BpConvert.Core.Gltf;
 /// accepted by any conformant loader; the tests prove it by reloading it with SharpGLTF.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A <see cref="ModelData.Skeleton"/> additionally gives the joint nodes their bind-pose local
 /// transforms (derived from the inverse bind matrices — see <c>BindPoseLocalMatrices</c>), so the
 /// skinned mesh renders undeformed at bind pose. Models without a skeleton are written exactly as
 /// they were before that support existed (no node <c>matrix</c> properties at all).
+/// </para>
+/// <para>
+/// <see cref="ModelData.Animations"/> adds one glTF animation per clip (rotation per track, root
+/// translation, LINEAR, times <c>i / fps</c>). Only the joint nodes targeted by a channel switch
+/// from bind-pose <c>matrix</c> to decomposed TRS; every other node keeps its <c>matrix</c>, and a
+/// model with no animations is written exactly as before (no <c>animations</c> array).
+/// </para>
 /// </remarks>
 public static class GlbWriter
 {
@@ -76,6 +85,13 @@ public static class GlbWriter
         private List<MaterialData> _materials = new();
         private List<MaterialTextures> _materialTextures = new();
 
+        // Animations: one per clip, and the joint nodes whose bind-pose `matrix` is replaced by
+        // decomposed TRS so their channels can drive it (docs/notes/aqua-core-api.md §11.2).
+        private List<AnimationInfo> _animations = new();
+        private bool[] _animatedJoints = Array.Empty<bool>();
+        private (Vector3 Translation, Quaternion Rotation, Vector3 Scale)[] _jointBindTrs =
+            Array.Empty<(Vector3, Quaternion, Vector3)>();
+
         public Builder(IReadOnlyDictionary<string, string> textureUriMap) => _textureUriMap = textureUriMap;
 
         public byte[] Build(ModelData model)
@@ -92,6 +108,8 @@ public static class GlbWriter
                 if (textures.Specular >= 0) _usesSpecularExtension = true;
                 _materialTextures.Add(textures);
             }
+
+            BuildAnimations(model.Animations);
 
             var json = WriteJson();
             return Pack(json, _bin.ToArray());
@@ -127,6 +145,128 @@ public static class GlbWriter
         }
 
         /// <summary>
+        /// Adds one glTF animation per clip: a rotation channel per track, a translation channel
+        /// for the root series, LINEAR samplers with times <c>i / fps</c>. Every targeted joint
+        /// node switches from bind-pose <c>matrix</c> to decomposed TRS (animation channels cannot
+        /// drive a <c>matrix</c> node); all others keep their <c>matrix</c>.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// A clip has an unmapped/out-of-range track, a malformed root series, a root series but
+        /// no joint named exactly <c>Bone_root</c>, or the model has no skeleton to target.
+        /// </exception>
+        private void BuildAnimations(List<AnimClip> clips)
+        {
+            if (clips.Count == 0) return;
+            if (_joints.Count == 0)
+                throw new InvalidDataException($"Clip '{clips[0].Name}': the model has no skeleton to target.");
+
+            var jointByName = new Dictionary<string, int>(_joints.Count, StringComparer.Ordinal);
+            for (var joint = 0; joint < _joints.Count; joint++)
+                jointByName.TryAdd(_joints[joint].Name, joint);
+
+            _animatedJoints = new bool[_joints.Count];
+            _jointBindTrs = new (Vector3, Quaternion, Vector3)[_joints.Count];
+
+            foreach (var clip in clips)
+            {
+                if (clip.Frames < 1)
+                    throw new InvalidDataException($"Clip '{clip.Name}': frame count {clip.Frames} must be positive.");
+                if (!(clip.Fps > 0))
+                    throw new InvalidDataException($"Clip '{clip.Name}': fps {clip.Fps} must be positive.");
+                if (clip.Root.Count > 0 && clip.Root.Count != clip.Frames)
+                    throw new InvalidDataException(
+                        $"Clip '{clip.Name}': root series has {clip.Root.Count} entries, expected {clip.Frames} (one per frame).");
+
+                var rootJoint = -1;
+                if (clip.Root.Count > 0 && !jointByName.TryGetValue("Bone_root", out rootJoint))
+                    throw new InvalidDataException(
+                        $"Clip '{clip.Name}': carries a root series but the skeleton has no joint named 'Bone_root'.");
+
+                var channels = new List<ChannelInfo>();
+                var samplers = new List<SamplerInfo>();
+
+                foreach (var track in clip.Tracks)
+                {
+                    if (track.JointIndex < 0)
+                        throw new InvalidDataException(
+                            $"Clip '{clip.Name}' track {track.Index}: JointIndex is -1 (unmapped); refusing to drop the channel.");
+                    if (track.JointIndex >= _joints.Count)
+                        throw new InvalidDataException(
+                            $"Clip '{clip.Name}' track {track.Index}: JointIndex {track.JointIndex} is out of range (joints: {_joints.Count}).");
+                    if (track.Keys.Count == 0)
+                        throw new InvalidDataException($"Clip '{clip.Name}' track {track.Index}: no keys.");
+
+                    _animatedJoints[track.JointIndex] = true;
+
+                    // Statics are a single key at t = 0. Keyed tracks emit one key per engine
+                    // frame: type 0xD may carry frames+1 keys (its trailing loop-closure key), and
+                    // the engine's duration is (frames-1)/fps, so the surplus key is not emitted.
+                    var count = track.IsStatic ? 1 : Math.Min(track.Keys.Count, clip.Frames);
+                    var times = new float[count];
+                    var values = new float[count * 4];
+                    for (var key = 0; key < count; key++)
+                    {
+                        times[key] = (float)(key / clip.Fps);
+                        var raw = track.Keys[key];
+                        var bridged = AnimBridge.ToGlb(new Vector3(raw.X, raw.Y, raw.Z), raw.W);
+                        var rotation = Quaternion.Normalize(bridged);
+                        values[key * 4] = rotation.X;
+                        values[key * 4 + 1] = rotation.Y;
+                        values[key * 4 + 2] = rotation.Z;
+                        values[key * 4 + 3] = rotation.W;
+                    }
+
+                    samplers.Add(AddSampler(times, values, "VEC4"));
+                    channels.Add(new ChannelInfo(track.JointIndex, "rotation", samplers.Count - 1));
+                }
+
+                if (clip.Root.Count > 0)
+                {
+                    _animatedJoints[rootJoint] = true;
+
+                    // Root translation, in place: x/z are zeroed (the controller owns horizontal
+                    // movement); y is the raw series value (ground height + bob).
+                    var times = new float[clip.Frames];
+                    var values = new float[clip.Frames * 3];
+                    for (var key = 0; key < clip.Frames; key++)
+                    {
+                        times[key] = (float)(key / clip.Fps);
+                        values[key * 3] = 0f;
+                        values[key * 3 + 1] = clip.Root[key].Y;
+                        values[key * 3 + 2] = 0f;
+                    }
+
+                    samplers.Add(AddSampler(times, values, "VEC3"));
+                    channels.Add(new ChannelInfo(rootJoint, "translation", samplers.Count - 1));
+                }
+
+                _animations.Add(new AnimationInfo(clip.Name, channels, samplers));
+            }
+
+            // Animated nodes need TRS: decompose their bind-pose local transform once. This is the
+            // mechanical `matrix` → translation/rotation/scale substitution of notes §11.2.
+            for (var joint = 0; joint < _joints.Count; joint++)
+            {
+                if (!_animatedJoints[joint]) continue;
+
+                var local = ToMatrix(_jointLocalMatrices, joint * 16);
+                if (!Matrix4x4.Decompose(local, out var scale, out var rotation, out var translation))
+                    throw new InvalidOperationException(
+                        $"Joint '{_joints[joint].Name}': bind-pose local matrix cannot be decomposed into TRS.");
+                _jointBindTrs[joint] = (translation, Quaternion.Normalize(rotation), scale);
+            }
+        }
+
+        /// <summary>Adds an animation input/output accessor pair and returns its sampler entry.</summary>
+        private SamplerInfo AddSampler(float[] times, float[] values, string outputType)
+        {
+            var input = AddAccessor(FloatBytes(times), null, ComponentFloat, "SCALAR", times.Length,
+                new[] { times[0] }, new[] { times[^1] });
+            var output = AddAccessor(FloatBytes(values), null, ComponentFloat, outputType, times.Length, null, null);
+            return new SamplerInfo(input, output);
+        }
+
+        /// <summary>
         /// The bind-pose local transform of every joint, for its node's <c>matrix</c>: glTF feeds a
         /// skinned vertex through <c>globalTransform(joint) × inverseBindMatrix</c>, so a joint
         /// renders undeformed at bind pose when its world transform is <c>inverse(IBM)</c>; its
@@ -155,11 +295,11 @@ public static class GlbWriter
         }
 
         /// <summary>The DTO's 16 floats read as a row-vector matrix (their own element order).</summary>
-        private static Matrix4x4 ToMatrix(float[] values) => new(
-            values[0], values[1], values[2], values[3],
-            values[4], values[5], values[6], values[7],
-            values[8], values[9], values[10], values[11],
-            values[12], values[13], values[14], values[15]);
+        private static Matrix4x4 ToMatrix(float[] values, int offset = 0) => new(
+            values[offset], values[offset + 1], values[offset + 2], values[offset + 3],
+            values[offset + 4], values[offset + 5], values[offset + 6], values[offset + 7],
+            values[offset + 8], values[offset + 9], values[offset + 10], values[offset + 11],
+            values[offset + 12], values[offset + 13], values[offset + 14], values[offset + 15]);
 
         /// <summary>Writes a matrix back in the DTO's element order (glTF's column-major listing).</summary>
         private static void WriteMatrix(Matrix4x4 matrix, float[] destination, int offset)
@@ -298,12 +438,23 @@ public static class GlbWriter
                         w.WriteStartObject();
                         if (!string.IsNullOrEmpty(_joints[i].Name)) w.WriteString("name", _joints[i].Name);
 
-                        // Bind-pose local transform (glTF column-major); TRS replaces it when
-                        // animation lands (M3). See BindPoseLocalMatrices.
-                        w.WritePropertyName("matrix");
-                        w.WriteStartArray();
-                        for (int k = 0; k < 16; k++) w.WriteNumberValue(_jointLocalMatrices[i * 16 + k]);
-                        w.WriteEndArray();
+                        if (_animatedJoints.Length > 0 && _animatedJoints[i])
+                        {
+                            // Animated: the bind-pose local transform as TRS, so the animation's
+                            // channels can drive it (glTF forbids animating a `matrix` node).
+                            var (translation, rotation, scale) = _jointBindTrs[i];
+                            WriteFloats(w, "translation", new[] { translation.X, translation.Y, translation.Z });
+                            WriteFloats(w, "rotation", new[] { rotation.X, rotation.Y, rotation.Z, rotation.W });
+                            WriteFloats(w, "scale", new[] { scale.X, scale.Y, scale.Z });
+                        }
+                        else
+                        {
+                            // Bind-pose local transform (glTF column-major). See BindPoseLocalMatrices.
+                            w.WritePropertyName("matrix");
+                            w.WriteStartArray();
+                            for (int k = 0; k < 16; k++) w.WriteNumberValue(_jointLocalMatrices[i * 16 + k]);
+                            w.WriteEndArray();
+                        }
 
                         if (_jointChildren[i].Count > 0)
                         {
@@ -371,6 +522,47 @@ public static class GlbWriter
                     w.WriteEndArray();
                     w.WriteNumber("inverseBindMatrices", _ibmAccessor);
                     w.WriteEndObject();
+                    w.WriteEndArray();
+                }
+
+                if (_animations.Count > 0)
+                {
+                    w.WritePropertyName("animations");
+                    w.WriteStartArray();
+                    foreach (var animation in _animations)
+                    {
+                        w.WriteStartObject();
+                        if (!string.IsNullOrEmpty(animation.Name)) w.WriteString("name", animation.Name);
+
+                        w.WritePropertyName("channels");
+                        w.WriteStartArray();
+                        foreach (var channel in animation.Channels)
+                        {
+                            w.WriteStartObject();
+                            w.WriteNumber("sampler", channel.Sampler);
+                            w.WritePropertyName("target");
+                            w.WriteStartObject();
+                            w.WriteNumber("node", channel.Node);
+                            w.WriteString("path", channel.Path);
+                            w.WriteEndObject();
+                            w.WriteEndObject();
+                        }
+                        w.WriteEndArray();
+
+                        w.WritePropertyName("samplers");
+                        w.WriteStartArray();
+                        foreach (var sampler in animation.Samplers)
+                        {
+                            w.WriteStartObject();
+                            w.WriteNumber("input", sampler.Input);
+                            w.WriteNumber("output", sampler.Output);
+                            w.WriteString("interpolation", "LINEAR");
+                            w.WriteEndObject();
+                        }
+                        w.WriteEndArray();
+
+                        w.WriteEndObject();
+                    }
                     w.WriteEndArray();
                 }
 
@@ -582,6 +774,9 @@ public static class GlbWriter
         private sealed record PrimitiveInfo(string Name, List<(string Semantic, int Accessor)> Attributes, int IndicesAccessor,
             int MaterialIndex, bool Skinned);
         private readonly record struct MaterialTextures(int BaseColor, int Normal, int Specular);
+        private sealed record AnimationInfo(string Name, List<ChannelInfo> Channels, List<SamplerInfo> Samplers);
+        private readonly record struct ChannelInfo(int Node, string Path, int Sampler);
+        private readonly record struct SamplerInfo(int Input, int Output);
     }
 }
 
