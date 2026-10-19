@@ -29,7 +29,7 @@ the user's to run.
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 dotnet test tests/BpConvert.Tests -v q
-# Approved! - failed 0, passed 82, skipped 0, total 82 - 1 m 37 s
+# Approved! - failed 0, passed 86, skipped 0, total 86 - 48 s
 
 export SOTC_LIB=$PWD/out/library
 ctest --test-dir app/build --output-on-failure
