@@ -667,14 +667,23 @@ symbol names).
 
 **Gate decision — RE-1's S2 gate (`player_a_stand`'s per-joint curves, extracted and verified):**
 
+> **MET** (flipped 2026-10-19, RE-2 T4 — the re-run is §7) — the decode reached verified
+> extraction: `check-curves` now runs the RE-2 decoded model and passes all 16 gating
+> assertions (exit 0).
+
+*RE-1's original decision, kept for the record and superseded above:*
+
 > **NOT MET** — the decode did not reach verified extraction → the capture-derived path activates (its plan is written against the port rig); decoding continues as background work.
 
-The evidence is §3: the container is decoded to the byte (§3.1–§3.2), the payload is classified
-(§3.3), but the key encoding is open (§3.5–§3.7) — `check-curves` exits 1 with the negative pinned
-(§3.6), and the joint-count cross-check is pinned to what the data shows. The capture-derived path
-(first-playable design §5) is therefore the armed path for S2, and decoding `.anb` clips continues
-as background work (§3.8: semantic ground truth for one record — the keyframe sampler or a
-capture-derived reference pose). The skeleton-bank front (`check-skb`, §2) is green and does not
+The RE-1 evidence was §3: the container was decoded to the byte (§3.1–§3.2), the payload was
+classified (§3.3), but the key encoding was open (§3.5–§3.7) — `check-curves` exited 1 with the
+negative pinned (§3.6), and the joint-count cross-check was pinned to what the data shows. RE-2
+decoded the key encoding (T1/T2: `docs/notes/re2-keys.md`, `docs/notes/re2-flagset.md`) and T4
+re-ran the gate on that decode: the strict curve assertions (norms ≤ 1e-3, adjacent dots > 0.9,
+no `|v|` > 1) all pass on `player_a_stand`'s decoded extraction, so the gate is **MET** and the
+decode is the verified path for the S2 converter plan (the capture-derived path is no longer
+required for S2, though it remains available). The re-run, the assertion mapping and the broader
+verification are recorded in §7. The skeleton-bank front (`check-skb`, §2) is green and does not
 change this verdict.
 
 ## 6 · Sampler findings — the keyframe sampler in eboot.elf (C3)
@@ -896,3 +905,125 @@ stride-6 series recorded in §6.5.3 are the lead to test against the parse.
   builder, to map the file's bytes onto the 12-byte records; (2) `FUN_005fc6b0`'s callers for the
   seconds→frames conversion; (3) then re-run `check-curves` against whatever layout the parse
   yields.
+
+## 7 · The gate re-run — RE-2 T4 (2026-10-19)
+
+RE-2's T4: rewire `check-curves` to the decoded model and re-run it. This section records the
+re-run, the assertion mapping, and the broader verification; §5's verdict flips to **MET** on the
+strength of the gate run below. Everything here is measured with the committed probe and the two
+RE-2 readers; inputs stay read-only, derived artifacts under the gitignored `out/re/anb/`.
+
+| | |
+|---|---|
+| Date | 2026-10-19 (run stamps UTC) |
+| Machine | Apple M3 Max, macOS 27.0.1, arm64; `python3` 3.12 (stdlib only) |
+| Repo / branch | `sotc-native`, `re2-gate` (base `0282086` = the merged RE-2 first wave) |
+| Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
+| Tool | **`tools/re/anb/probe.py`** — `check-curves` now builds its extraction from the RE-2 readers (`parse2.py` T1 / `records.py` T2, imported from the same directory — reused, not duplicated) |
+| Artifacts (gitignored) | `out/re/anb/check-curves.{txt,json}`, `check-curves-<sample>.{txt,json}`, `parse2-verify-full.txt`, `records-verify.txt` |
+
+### 7.1 The rewire
+
+The candidate extraction (raw int16 triplets from each t1 record, `w = sqrt(1−|v|²)`) is gone.
+`check-curves` (and `anb --curves`) now decode **per track**:
+
+- **flag-clear** (version word bit 16 clear) → `parse2` (T1): the per-type key formats, the
+  descriptor application, and the static type-0 quaternions; keys = the decoded quaternion arrays
+  (`docs/notes/re2-keys.md` §1).
+- **flag-set** → `records` (T2): the sampler's caseD_9 family through the `FUN_00600ef0` path,
+  taking the B (quaternion) channel (`docs/notes/re2-flagset.md` §4–5); record types outside that
+  family are kept as explicit *undecoded* track entries (counted, never silently dropped).
+
+The three curve assertions are the RE-1 assertions — same names, same thresholds — measured on
+the decoded keys: norms ≤ 1e-3; 0 adjacent pairs below 0.9; 0 keys with `|v|` > 1 (the decoded
+quaternion's vector part, so `w` is real; the `|v|² > 1` comparison carries a 1e-6
+float-precision epsilon, well below the format's quantization). Two container readings the
+decoded model superseded are corrected in the output:
+
+- the clip's **track count** is the motion structure's `+0x14` (29 for `player_a_stand`), not the
+  t1 table's entry count (58 — the loader's relocation list, `re2-keys.md` §0); the joint-count
+  assertions now use it (`29 ≤ 348` sibling joints);
+- the flag-clear **stored-part sqrt guard** is reported as a non-gating finding against T1's
+  measured quantization bound (`≤ 1 + 4e-3`); the two timing checks stay **skipped** — the time
+  base is now decoded at the frame level (keys are frame-indexed; `re2-flagset.md` §5), and the
+  seconds→frames conversion is upstream of the sampler (being pinned in the parallel sampler
+  pass, RE-2 T3).
+
+### 7.2 The gate run (verbatim)
+
+`python3 tools/re/anb/probe.py check-curves` (exit 0):
+
+```
+check-curves: .../cp3shadow/anim/player_a_stand.anb
+  sibling .skb: player_a.skb (52 names)
+  sibling .cani: player_a_add_grip_stand_crouch.cani (348 joints) [same character, different clip]
+  decode: flag-clear (parse2: per-type key formats, RE-2 T1) — 29 track(s) (19 keyed, 10 static), 76 frames, 1454 quaternion(s)
+PASS  structure   magic is 78 66 66 00                                 expected 78666600, measured 78666600
+PASS  structure   size field @0x14 == file size                        expected 8424, measured 8424
+PASS  structure   data size @0xA0 == table1 start - data offset        expected 7224, measured 7224
+PASS  structure   table count @0xC4 matches both tables                expected 58, measured [58, 58]
+PASS  finding     table location method                                expected header-pointers, measured header-pointers
+PASS  structure   tables are contiguous and end at EOF                 expected True, measured (True, True)
+PASS  structure   table1 tags are all 0x102                            expected 0x102, measured ['102']
+PASS  structure   table2 tags are all 0x000                            expected 0x000, measured ['000']
+PASS  structure   records are in range and sized                       expected >0, measured 58
+PASS  structure   t2[i] == t1[i-1] + 4 (leading run)                   expected first 4 entries, measured 16/57 entries
+PASS  joint-count clip track count == declared count (structure +0x14) expected 29, measured 29
+PASS  joint-count tracks <= full skeleton joints (sibling .cani)       expected <=348, measured 29
+DELTA finding     tracks vs part-bank bone names (sibling .skb)        expected 52, measured 29
+PASS  curves      curve extraction produces keys                       expected >0, measured 1454
+PASS  curves      no NaN quaternions                                   expected 0, measured 0
+PASS  curves      quaternion norms within 1e-3 of 1                    expected <=1e-3, measured 2.036e-04
+PASS  curves      adjacent-key quaternion dot > 0.9                    expected 0 pairs below, measured 0/1425
+PASS  curves      keys with |v| > 1 (w undefined)                      expected 0, measured 0 (max |v| = 0.993666)
+PASS  finding     stored-part sqrt guard (quantization, RE-2 T1)       expected <=4e-3, measured 3.127e-04
+SKIP  curves      times strictly increasing (frame-index model)        (keys are frame-indexed (RE-2 decode); no per-key time fields)
+SKIP  curves      timing consistent with family fps (29.999998)        (seconds->frames is upstream of the sampler (RE-2 T3))
+summary: 16/16 gating assertions pass (2 skipped, 1 finding delta(s))
+gate: MET — the RE-2 decoded extraction passes the gate's assertions
+      (docs/notes/re-anb.md §7 records the re-run).
+```
+
+The three assertions RE-1 failed now measure, on the decoded extraction: max norm error
+**2.036e-04** (was 0.732), **0/1425** adjacent pairs below 0.9 (was 693/1111), **0** keys with
+`|v|` > 1 (was 428). The sibling-joint cross-check holds for the decoded track count
+(29 ≤ 348); the part-bank delta remains a finding (29 vs the 52-name `player_a.skb`, expected —
+the clip animates a subset).
+
+### 7.3 Broader verification
+
+**Population (the readers' own gates, both variants):** `parse2.py verify --full` **30/30** — all
+4,455 `.anb` scanned, 2,994 flag-clear parsed; the measured scoping holds (player 0/1425 pairs
+below 0.9; horse ≥ 95%; long-track per-type ≥ 95%; stored overshoot ≤ 2.67e-03 ≤ 4e-3;
+14,082 looped tracks decode equal; 0 exceptions). `records.py verify` **20/20** — 4,455 parsed
+(1,461 flag-set / 2,994 flag-clear, 0 parse errors); 198 type-13 tracks decode end-to-end,
+0 failures.
+
+**Spot-checks (the same `check-curves`, several files across both variants; artifacts under
+`out/re/anb/`):**
+
+| file | variant | result | notes |
+|---|---|---|---|
+| `player_a_stand` (gate) | flag-clear | **16/16, exit 0** | the run above |
+| `horse_a_add_horse_kick` | flag-clear | 14/16 | 7/420 dots < 0.9 and 3 keys `\|v\|` ≤ 1.000225 — both on the strike tracks 28/29: the fast-strike segment and near-180° quantization (T1 §4's measured classes; the horse's corpus gates are the scoped ones — ≥ 95% dots, stored overshoot ≤ 4e-3) |
+| `player_a_jump_run` | flag-clear | 14/16 | 33/299 dots < 0.9, 6 keys `\|v\|` ≤ 1.000196 — a 14-frame fast clip, same measured classes (norms 5.5e-04 ≤ 1e-3) |
+| `yamori_b_add_tail_left_loop` | flag-clear | 15/16 | only the RE-1 *pattern* check `t2[i] == t1[i-1]+4 (leading run)` fails (1/84); RE-1 §3.2 already measured the run length spans 0…112 corpus-wide — the check is sample-calibrated and untouched by this rewire; every curve assertion passes (0xE family: 0/30 dots below 0.9) |
+| `objanim_leo_a_jump_fall` | flag-set | **16/16, exit 0** | 15 type-13 tracks, unit (2.3e-08), static |
+| `objanim_cerberus_a_atk_near_l` | flag-set | 15/16 | the same leading-run pattern check (2/15); every curve assertion passes (0/48 dots below 0.9) |
+| `objanim_ath_damage` | flag-set | **16/16, exit 0** | 6 decoded type-13-family tracks + 3 undecoded type-1 tracks reported; the track-count check verifies 9 = 9 |
+
+The strict per-file curve assertions are the gate's own (pinned to the gate samples); fast clips
+and near-180° quantization corners exceed them *by measurement* (the two classes above), which is
+why the corpus-level verification is the readers' verify modes, not `check-curves`. The gate file
+passes all of them strictly — that is the flip's basis.
+
+### 7.4 Reproduction
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+python3 tools/re/anb/probe.py check-curves                      # 16/16 gating, exit 0 (gate: MET)
+python3 tools/re/anb/probe.py anb cp3shadow/anim/player_a_stand.anb --curves out/re/anb/player_a_stand.curves.json
+python3 tools/re/anb/probe.py check-curves --file cp3shadow/anim/objanim_leo_a_jump_fall.anb
+python3 tools/re/anb/parse2.py verify --full                    # 30/30
+python3 tools/re/anb/records.py verify                          # 20/20
+```
