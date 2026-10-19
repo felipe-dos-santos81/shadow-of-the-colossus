@@ -33,7 +33,8 @@ the hands' height and lateral position, uprightness, and the planted-foot behavi
    is not recoverable from the stills.  The comparison is therefore **phase-free**:
    the loop's invariants are compared with the stills' features, and frame 0 is
    shown as a representative for the visual pairing.  This is the honest core
-   limit of the whole exercise.
+   limit of the whole exercise — and the compare artifacts carry it in their
+   image footer (`render` writes the caveat into the PNG).
 2. **The clip identity is inferred.** `player_a_stand` is taken to be the live
    clip (the game's own opening state, no input); the `player_a_stand_*` fidgets
    exist and cannot be excluded from the stills alone.
@@ -86,7 +87,11 @@ uniform map: **`q_glb_local = conj_i(q_anb) = (x, -y, -z, w)`** (conjugation by 
 With the bridge, the frame-0 residuals vs the glb bind local are idle-plausible
 everywhere: the core chain (legs/spine/head) ≤ **34.99°** (MOMO_R), the arm chain
 ≤ **57.39°** (JOWA_R, the upper arm on its way down from the T-pose bind).  The
-eight **finger statics** sit **39.5–99.2°** off the straight-fingered T-pose bind
+bridge covers the bone **rotations only**: the root position series is a
+*position* series already in the glb's world frame (its y ≈ the pelvis height
+above the ground, matching the glb's foot offsets) and is applied raw, never
+conjugated.  The eight **finger statics** sit **39.5–99.2°** off the
+straight-fingered T-pose bind
 along the bones' own bend axes — the rig's **relaxed-hand default**, not a
 convention error; they are applied as-is (pinned by `verify`).
 
@@ -104,7 +109,8 @@ stance — the bridge is what makes the decode a *pose*.
 | foot stagger (toe-tip z) | **0.2113** (the left foot back, the right forward) |
 | planted foot (left) z range over the loop | **0.0007** (planted); the free right foot 0.1246 |
 | feet at ground level (y) | 0.025 / 0.029 |
-| hands (x, y, z) | (+0.222, 0.627, −0.017) / (−0.197, 0.624, −0.017) → height **0.551 · height**, lateral **0.203 · height** |
+| hands — wrist joint (HAND_A) | right height **0.549 · H**, lateral **0.181 · H**; left 0.551 / 0.203 |
+| hands — fist (the finger-joint centroid) | right height **0.519 · H**, lateral **0.167 · H**; left 0.531 / 0.193 |
 | uprightness | head (0.014, 1.117, 0.050) vs hip (0.016, 0.743, 0.003): dx −0.0017 |
 | root series y | 0.7427 … 0.7473 (the pelvis above the ground) |
 
@@ -115,8 +121,15 @@ saturation < 25, largest 4-connected component, feet = the bottom 12 %; window
 | still | height (px) | feet sep / height | outer foot span / height | lower foot |
 |---|---|---|---|---|
 | idle +5 s | 386 | 52.6 px → **0.136** | 90 px → **0.233** | **image-left** (8 px) |
-| idle +15 s | 385 | 42.4 px → **0.110** | 77 px → **0.200** | tie |
-| horse3 +42 s | 407 | 46.5 px → **0.114** | 95 px → **0.233** | tie |
+| idle +15 s | 385 | 42.4 px → **0.110** | 77 px → **0.200** | tie (479/479) |
+| horse3 +42 s | 407 | 46.5 px → **0.114** | 95 px → **0.233** | tie (505/505) |
+
+Hands in the +5 s still (the same tool measurement): **image-right = his right**
+— the cuff (the sleeve's end) at height **0.529 · H**, lateral **+0.146 · H**;
+the fist blob (94 px) at height **0.510 · H**, lateral **+0.147 · H**.
+**Image-left = his left** — the cuff at 0.469 · H, lateral −0.127 · H; the fist
+is **not measurable** (the dark run below the cuff merges with the poncho drape
+and the scabbard's shadow, so the detector refuses it).
 
 (The +10 s still is polluted by Agro entering the window — height reads 486 px —
 and is excluded.  The back-view convention is pinned in the tool: a viewer behind
@@ -135,11 +148,15 @@ image-left one is *his left foot back*.)
   reference's silhouette-center readings 0.110–0.136 — the silhouette band biases
   inward (it includes the lower shins) and the reference's own spread across the
   trio is ±12 %.
-- **Hands — MATCH.** Height 0.551 · height in the model; in the +5 s still the
-  right fist (a clear dark blob at the sleeve's end; the image-left side is
-  confounded by the poncho's drape) reads at ≈ 0.55 · height above the ground,
-  at ≈ 0.23 · height laterally (the model: ±0.203).  The arms hang down at the
-  sides in both, elbows slightly bent.
+- **Hands — MATCH (measured on his right; the left is occluded in the still).**
+  The model's fist (the finger-joint centroid) sits at 0.519 · H with lateral
+  0.167 · H; the still's fist blob reads 0.510 · H / 0.147 · H — within
+  0.01 · H (4 px) in height and 0.02 · H (8 px) laterally.  The model's wrist
+  joint (0.549 · H) pairs with the still's cuff (the sleeve's end, 0.529 · H).
+  The arms hang down at the sides in both, elbows slightly bent.  (An earlier
+  draft of this note read "≈0.55 · H / ±0.23 · H" for the hands — that was the
+  wrist/cuff and the sleeve's outer edge; the numbers here are the tool's
+  measurements, with the fist as the anchored blob.)
 - **Uprightness / height — MATCH.** Head above the hips, near the hip axis, in
   both; no crouch, no lean.
 - **Plantedness — MATCH in kind.** The idle keeps one foot planted (left, z range
@@ -148,8 +165,9 @@ image-left one is *his left foot back*.)
   stagger cue varies between frames (the phase-free caveat, made visible).
 
 **So: the decoded pose matches the capture semantically** — same upright idle,
-arms hanging at the sides at hip height, the same staggered stance (left foot
-back), the same stance scale within the image measurement's resolution.  What the
+arms hanging at the sides at hip height (the fist heights agree within 0.01 · H),
+the same staggered stance (left foot back), the same stance scale within the
+image measurement's resolution.  What the
 comparison *cannot* do is pin the phase (no frame-to-frame correspondence) or
 validate the fine hand/finger shape at this camera distance.
 
