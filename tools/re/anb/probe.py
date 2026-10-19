@@ -12,14 +12,17 @@ Modes
   classify <pat>...           one line per file: magic, size field, 0x0C, comp, bank
   anb [<file>] [--json <out>] [--curves <out.json>]
                               .anb structure dump (header, tagged pointers, the two
-                              tail tables, the record map) and an optional candidate
-                              per-joint curve extraction (UNVERIFIED, see below)
+                              tail tables, the record map) and an optional decoded
+                              per-track curve extraction (RE-2, see below)
   check-skb [options]         pinned assertions for cp3shadow/skel/player_a.skb
   check-curves [options]      the .anb gate's pinned assertions (exit 0/1)
 
-The .anb curve extraction is a *candidate*, not a decode: the container is mapped
-(docs/notes/re-anb.md §3) but the key encoding is not, so `--curves` marks its
-output UNVERIFIED and `check-curves` fails (NOT MET) with the exact numbers.
+The .anb curve extraction is decoded (RE-2): flag-clear files go through the
+per-type key formats of docs/notes/re2-keys.md (parse2.py); flag-set files go
+through the sampler's caseD_9 family of docs/notes/re2-flagset.md (records.py).
+Both readers live next to this file and are reused, not duplicated.  `check-curves`
+re-runs the RE-1 gate's assertions (norms, continuity, |v|) on that extraction;
+the re-run and its verdict are recorded in docs/notes/re-anb.md §7.
 
 Inputs are read-only.  Files are resolved against the game tree
 ($SOTC_GAME_ROOT, default below); patterns (shell-quoted, e.g. 'anim/*.anb')
@@ -34,6 +37,33 @@ import os
 import re
 import struct
 import sys
+
+
+def _load_readers():
+    """The RE-2 readers, imported from this file's directory (reused, not copied).
+
+    parse2.py = the flag-clear per-type key formats (RE-2 T1); records.py = the
+    flag-set records + the sampler's per-type dispatch (RE-2 T2).  Bytecode
+    caching is disabled for the import so running the probe leaves no
+    __pycache__ in the tree (the readers are imported, never run from here).
+    """
+    sys.dont_write_bytecode = True
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import parse2 as _parse2
+        import records as _records
+    except ImportError as exc:
+        sys.stderr.write(
+            "probe: cannot import the RE-2 readers (parse2.py, records.py) next to "
+            "probe.py: %s\n" % exc
+        )
+        sys.exit(2)
+    return _parse2, _records
+
+
+parse2, records_reader = _load_readers()
 
 DEFAULT_GAME_ROOT = "/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game"
 
@@ -595,7 +625,8 @@ CANI_SIBLING_DEFAULT = (
 )
 # The .cani-family frame rate: the float at .cani 0x08 is bits 0x41EFFFFF in every
 # plaintext file (measured, §1.2) = 29.999998.  The .anb stores no time fields
-# (measured, §3.4), so the candidate extraction derives uniform key times from it.
+# (measured, §3.4): its keys are frame-indexed (RE-2), so the extraction's times
+# are the per-frame convention k / fps.
 FAMILY_FPS_BITS = 0x41EFFFFF
 
 
@@ -801,65 +832,144 @@ def anb_records(data, tables):
     return records
 
 
-def candidate_curves(data, records, fps):
-    """The candidate decode: int16 (x, y, z) Q15 triplets from each record start.
+def anb_variant(data):
+    """'flag-clear' / 'flag-set' / None — the version word's bit 16 (RE-2 §2.1)."""
+    struct_off = u32le(data, 0x10) if len(data) >= 0x14 else 0
+    at = BLOB_BASE + struct_off
+    if not (0 < struct_off and at + 4 <= len(data)):
+        return None
+    return "flag-set" if u32le(data, at) & (1 << 16) else "flag-clear"
 
-    This is the only reading found that yields *continuous* rotations in some
-    records, but it is NOT verified (§3.5): it fails the gate's own sanity checks
-    on player_a_stand, and continuity alone cannot verify it (any smooth triplet
-    stream yields continuous derived-w quaternions).  Keys whose vector part has
-    |v| > 1 keep w = 0 and are counted — never silently normalized.
+
+def decoded_extraction(path, data, fps):
+    """The RE-2 decoded per-track quaternion curves for one .anb.
+
+    flag-clear (version word bit 16 clear): parse2.py (RE-2 T1) decodes every
+    track's key array per its type (docs/notes/re2-keys.md §1); a type-0 track
+    is a static quaternion (one constant key).  flag-set: records.py (RE-2 T2)
+    decodes the sampler's caseD_9 family (types 10/13/14/17/22/23/32/39-42/46)
+    through the FUN_00600ef0 path and takes the B (quaternion) channel
+    (docs/notes/re2-flagset.md §4-5); record types outside that family are kept
+    as explicit "undecoded" track entries (counted, never silently dropped).
+
+    Returns {"model", "frames", "tracks_total", "tracks", "undecoded"} with one
+    entry per track: {"index", "type", "keys": [(x,y,z,w), ...], "times"} — plus
+    "static": True for the flag-clear type-0 tracks, "formats" for the flag-set
+    caseD_9 family, or "error".
     """
-    joints = []
-    for rec in records:
-        off, size = rec["offset"], rec["size"]
-        nkeys = max(0, size // 6)
-        times, rotations, over = [], [], 0
-        for k in range(nkeys):
-            x, y, z = struct.unpack_from("<3h", data, off + 6 * k)
-            v = (x / 32768.0, y / 32768.0, z / 32768.0)
-            n2 = sum(c * c for c in v)
-            if n2 <= 1.0:
-                w = math.sqrt(1.0 - n2)
+    variant = anb_variant(data)
+    if variant is None:
+        die("%s: cannot locate the motion structure (u32 @0x10)" % path)
+    if variant == "flag-clear":
+        try:
+            info = parse2.parse_anb(data, path)
+        except ValueError as exc:
+            die(str(exc))
+        tracks = []
+        for row in info["track_rows"]:
+            entry = {"index": row["index"], "type": row["type"], "blob": row["blob"]}
+            if row.get("error"):
+                entry["error"] = row["error"]
+                tracks.append(entry)
+                continue
+            keys, meta = parse2.decode_track(data, row)
+            if keys is None:  # type 0: one static quaternion, no keys
+                entry["keys"] = [tuple(meta["static_quaternion"])]
+                entry["static"] = True
+            elif meta.get("error"):
+                entry["error"] = meta["error"]
             else:
-                w = 0.0
-                over += 1
-            times.append(k / fps)
-            rotations.append([v[0], v[1], v[2], w])
-        joints.append(
-            {
-                "index": rec["index"],
-                "record_offset": off,
-                "record_size": size,
-                "keys": nkeys,
-                "times": times,
-                "rotations": rotations,
-                "translations": [],
-                "over_unity_keys": over,
-            }
-        )
-    return joints
+                entry["keys"] = keys
+                entry["keyptr"] = row["keyptr"]
+                entry["count"] = row["keys"]
+                entry["max_stored_over"] = meta.get("max_stored_norm2_minus1") or 0.0
+            entry["times"] = [k / fps for k in range(len(entry.get("keys") or []))]
+            tracks.append(entry)
+        return {"model": "flag-clear (parse2: per-type key formats, RE-2 T1)",
+                "frames": info["frames"], "tracks_total": info["tracks"],
+                "tracks": tracks, "undecoded": {}}
+    # flag-set
+    try:
+        motion, data_base = records_reader.parse_motion(data)
+    except records_reader.ParseError as exc:
+        die("%s: %s" % (path, exc))
+    recs = records_reader.read_records(data, motion, data_base)
+    tracks = []
+    undecoded = {}
+    for rec in recs:
+        if rec.type not in records_reader.TYPE13_FAMILY:
+            # Counted, and kept as an explicit track entry — never silently
+            # dropped (the record array still has motion.tracks entries).
+            undecoded[rec.type] = undecoded.get(rec.type, 0) + 1
+            tracks.append({"index": rec.track, "type": rec.type, "undecoded": True,
+                           "times": []})
+            continue
+        entry = {"index": rec.track, "type": rec.type, "blob": rec.p2_off}
+        try:
+            _, blob, rows = records_reader.decode_type13_track(
+                data, motion, data_base, rec.track)
+            entry["keys"] = [tuple(row["b"]) for row in rows]
+            entry["formats"] = [blob.fmt_a, blob.fmt_b, blob.fmt_c]
+        except (records_reader.ParseError, struct.error, IndexError, ValueError) as exc:
+            entry["error"] = str(exc)
+        entry["times"] = [k / fps for k in range(len(entry.get("keys") or []))]
+        tracks.append(entry)
+    return {"model": "flag-set (records: the sampler's caseD_9 family, RE-2 T2)",
+            "frames": motion.frames, "tracks_total": motion.tracks,
+            "tracks": tracks, "undecoded": undecoded}
 
 
-def curve_sanity(joints):
-    """The gate's sanity numbers over a candidate extraction."""
+def curve_sanity(tracks):
+    """The gate's sanity numbers over a decoded extraction (RE-2 model).
+
+    keys: decoded quaternions (keyed keys + the static tracks' single keys).
+    nan_quats: non-finite components.  max_norm_error: |‖q‖ − 1| over every
+    decoded quaternion.  min_adjacent_dot / pairs_below_0_9: over adjacent keys
+    *within* a track (a static track contributes none).  over_unity_keys: keys
+    whose quaternion vector part |v| > 1 (no real w for a unit quaternion; a
+    1e-6 float-precision epsilon on |v|^2 — see below); max_v: the largest |v|.
+    max_stored_over: the largest |v_stored|² − 1 over the flag-clear tracks
+    (the derived term's sqrt-guard engagements — quantization, RE-2 T1 §4;
+    reported, not gated here).
+    """
     norms, dots, nan = [], [], 0
-    for j in joints:
-        for r in j["rotations"]:
-            if any(x != x for x in r):
+    keys = 0
+    over = 0
+    max_v = None
+    max_stored_over = None
+    for track in tracks:
+        ks = track.get("keys")
+        if not ks:
+            continue
+        keys += len(ks)
+        for q in ks:
+            if any(x != x for x in q):
                 nan += 1
                 continue
-            norms.append(abs(math.sqrt(sum(x * x for x in r)) - 1.0))
-        for a, b in zip(j["rotations"], j["rotations"][1:]):
-            dots.append(abs(sum(x * y for x, y in zip(a, b))))
+            norms.append(abs(math.sqrt(sum(x * x for x in q)) - 1.0))
+            v2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2]
+            v = math.sqrt(v2)
+            max_v = v if max_v is None else max(max_v, v)
+            # float32 data cannot represent |v| = 1 exactly for general axes, so
+            # the |v| > 1 comparison carries a float-precision epsilon (1e-6 on
+            # |v|^2) — well below the format's quantization (~1e-3), not a gate
+            # tolerance.  The decoded quaternion's vector part is |v|; a unit
+            # quaternion has |v| <= 1 (else w is imaginary).
+            if v2 > 1.0 + 1e-6:
+                over += 1
+        dots.extend(parse2.adjacent_dots(ks))
+        if "max_stored_over" in track:
+            max_stored_over = max(max_stored_over or 0.0, track["max_stored_over"])
     return {
-        "keys": sum(j["keys"] for j in joints),
+        "keys": keys,
         "nan_quats": nan,
         "max_norm_error": max(norms) if norms else None,
         "min_adjacent_dot": min(dots) if dots else None,
         "adjacent_pairs": len(dots),
         "pairs_below_0_9": sum(1 for d in dots if d < 0.9),
-        "over_unity_keys": sum(j["over_unity_keys"] for j in joints),
+        "over_unity_keys": over,
+        "max_v": max_v,
+        "max_stored_over": max_stored_over,
     }
 
 
@@ -890,16 +1000,33 @@ def cmd_anb(args):
 
     curves_path = None
     if args.curves:
-        joints = candidate_curves(data, records, info["fps"])
-        sanity = curve_sanity(joints)
+        extraction = decoded_extraction(info["file"], data, info["fps"])
+        sanity = curve_sanity(extraction["tracks"])
         payload = {
             "clip": os.path.splitext(os.path.basename(info["file"]))[0],
             "fps": info["fps"],
-            "joints": joints,
+            "frames": extraction["frames"],
+            "tracks_total": extraction["tracks_total"],
+            "model": extraction["model"],
+            "tracks": [
+                {
+                    "index": t["index"],
+                    "type": t["type"],
+                    "static": bool(t.get("static")),
+                    "undecoded": bool(t.get("undecoded")),
+                    "times": t.get("times", []),
+                    "rotations": [list(q) for q in t.get("keys", [])],
+                    "formats": t.get("formats"),
+                    "error": t.get("error"),
+                }
+                for t in extraction["tracks"]
+            ],
+            "undecoded": {"0x%02X" % t: n
+                          for t, n in sorted(extraction["undecoded"].items())},
             "source": info["file"],
             "decode": (
-                "candidate: int16 (x, y, z) Q15 triplets at each record start, "
-                "w = sqrt(1 - |v|^2), uniform key times — UNVERIFIED (§3.5)"
+                "RE-2 decoded: %s — per-track quaternion keys, frame-indexed "
+                "(docs/notes/re2-keys.md, docs/notes/re2-flagset.md)" % extraction["model"]
             ),
             "sanity": sanity,
         }
@@ -910,12 +1037,12 @@ def cmd_anb(args):
             fh.write("\n")
         sys.stderr.write("probe: wrote %s\n" % curves_path)
         sys.stderr.write(
-            "probe: UNVERIFIED candidate decode — %d keys, max norm error %s, "
+            "probe: decoded %d quaternion key(s) — max norm error %s, "
             "min adjacent dot %s, %d/%d adjacent pairs below 0.9\n"
             % (
                 sanity["keys"],
-                "%.3g" % sanity["max_norm_error"],
-                "%.3g" % sanity["min_adjacent_dot"],
+                "%.3g" % sanity["max_norm_error"] if sanity["max_norm_error"] is not None else "-",
+                "%.3g" % sanity["min_adjacent_dot"] if sanity["min_adjacent_dot"] is not None else "-",
                 sanity["pairs_below_0_9"],
                 sanity["adjacent_pairs"],
             )
@@ -1025,7 +1152,7 @@ def cmd_anb(args):
         )
     )
     if curves_path:
-        out.write("curves (candidate, UNVERIFIED)\n  wrote %s\n" % curves_path)
+        out.write("curves (decoded, RE-2)\n  wrote %s\n" % curves_path)
     return 0
 
 
@@ -1158,50 +1285,78 @@ def cmd_check_curves(args):
         tables["t2_shift_matches"] >= min(4, tables["count"] - 1))
 
     # --- joint-count cross-check (pinned to what the data shows) --------------
-    record_count = len(records)
-    add("clip track count == declared count @0xC4", "joint-count",
-        tables["count"], record_count, record_count == tables["count"])
+    # RE-2: the clip's track count is the motion structure's +0x14 (29 for
+    # player_a_stand); the t1 table's 58 entries are the loader's relocation list
+    # (docs/notes/re2-keys.md §0), not tracks — RE-1's "@0xC4" reading of the
+    # track count is superseded.  The sibling .cani's joint count is the full
+    # skeleton's (348), which the clip's tracks are a subset of.
+    extraction = decoded_extraction(path, data, info["fps"])
+    tracks = extraction["tracks"]
+    decoded_tracks = [t for t in tracks if t.get("keys")]
+    keyed_tracks = [t for t in decoded_tracks if not t.get("static")]
+    static_tracks = [t for t in decoded_tracks if t.get("static")]
+    undecoded_tracks = [t for t in tracks if t.get("undecoded")]
+    track_count = extraction["tracks_total"]
+    undecoded = extraction["undecoded"]
+
+    add("clip track count == declared count (structure +0x14)", "joint-count",
+        track_count, len(tracks), len(tracks) == track_count)
     if cani_joints is not None:
         add("tracks <= full skeleton joints (sibling .cani)", "joint-count",
-            "<=%d" % cani_joints, record_count, record_count <= cani_joints)
+            "<=%d" % cani_joints, track_count, track_count <= cani_joints)
     else:
         add("tracks <= full skeleton joints (sibling .cani)", "joint-count",
-            "<=348 (sibling unreadable)", record_count, False, skip=True,
+            "<=348 (sibling unreadable)", track_count, False, skip=True,
             reason=cani_note or "no readable sibling .cani")
     if skb_names is not None:
         # Reported, not gating: B1 measured the .skb to be a *part bank* (52 names
-        # for player_a), while the clip declares more tracks (58) — the pin is the
+        # for player_a), while the clip declares more tracks — the pin is the
         # measured relationship, per the plan's "pin whatever the data shows".
         add("tracks vs part-bank bone names (sibling .skb)", "finding",
-            skb_names, record_count, record_count == skb_names)
+            skb_names, track_count, track_count == skb_names)
 
-    # --- the gate's curve assertions (run on the candidate extraction) --------
-    joints = candidate_curves(data, records, info["fps"])
-    sanity = curve_sanity(joints)
+    # --- the gate's curve assertions (the RE-2 decoded extraction) ------------
+    sanity = curve_sanity(tracks)
     add("curve extraction produces keys", "curves", ">0", sanity["keys"],
         sanity["keys"] > 0)
     add("no NaN quaternions", "curves", 0, sanity["nan_quats"],
         sanity["nan_quats"] == 0)
     add("quaternion norms within 1e-3 of 1", "curves", "<=1e-3",
-        sanity["max_norm_error"], (sanity["max_norm_error"] or 1) <= 1e-3)
+        "%.3e" % sanity["max_norm_error"] if sanity["max_norm_error"] is not None else "-",
+        sanity["max_norm_error"] is not None and sanity["max_norm_error"] <= 1e-3)
     add("adjacent-key quaternion dot > 0.9", "curves", "0 pairs below",
         "%d/%d" % (sanity["pairs_below_0_9"], sanity["adjacent_pairs"]),
         sanity["pairs_below_0_9"] == 0)
-    add("keys with |v| > 1 (w undefined)", "curves", 0, sanity["over_unity_keys"],
+    add("keys with |v| > 1 (w undefined)", "curves", 0,
+        "%d (max |v| = %.6f)" % (sanity["over_unity_keys"],
+                                 sanity["max_v"] if sanity["max_v"] is not None else 0.0),
         sanity["over_unity_keys"] == 0)
-    # No time fields were found in the payload (§3.4): the candidate model derives
-    # uniform times from the family fps, so these two checks are reported as
-    # unverified rather than passing vacuously.
+    # Reported, not gating: the flag-clear derived term's sqrt guard engages when
+    # the three stored components' |v|^2 exceeds 1 — a quantization effect the
+    # engine itself handles (the sqrt term is skipped past 1; RE-2 T1 §4 measured
+    # the corpus bound at 4e-3).  This is the quantity RE-1's candidate reading
+    # mis-measured as 428 keys of |v| > 1 (the candidate read raw int16 triplets).
+    if sanity["max_stored_over"] is not None:
+        add("stored-part sqrt guard (quantization, RE-2 T1)", "finding",
+            "<=4e-3", "%.3e" % sanity["max_stored_over"],
+            sanity["max_stored_over"] <= 4e-3)
+    # The time base is decoded at the frame level (RE-2: the sampler reads integer
+    # frames and blends; docs/notes/re2-flagset.md §5), so the two RE-1 timing
+    # assertions stay unverified-by-design: the emitted times are the per-frame
+    # convention k/fps, and the seconds->frames conversion sits upstream of the
+    # sampler (RE-2 T3).
     times_ok = all(
-        all(b > a for a, b in zip(j["times"], j["times"][1:])) for j in joints
+        all(b > a for a, b in zip(t["times"], t["times"][1:]))
+        for t in decoded_tracks if len(t.get("times", [])) > 1
     )
-    add("times strictly increasing (derived uniform model)", "curves",
-        "increasing", "uniform @ %.6f fps" % info["fps"], times_ok, skip=True,
-        reason="no time fields in the payload")
+    add("times strictly increasing (frame-index model)", "curves",
+        "increasing", "key k = frame k; %s" % ("ordered" if times_ok else "OUT OF ORDER"),
+        times_ok, skip=True,
+        reason="keys are frame-indexed (RE-2 decode); no per-key time fields")
     add("timing consistent with family fps (29.999998)", "curves",
         "0x41EFFFFF", hexs(FAMILY_FPS_BITS, 8),
         struct.unpack("<I", struct.pack("<f", info["fps"]))[0] == FAMILY_FPS_BITS,
-        skip=True, reason="no time fields in the payload")
+        skip=True, reason="seconds->frames is upstream of the sampler (RE-2 T3)")
 
     print("check-curves: %s" % path)
     print("  sibling .skb: %s (%s names)" % (
@@ -1210,6 +1365,13 @@ def cmd_check_curves(args):
     print("  sibling .cani: %s (%s joints)%s" % (
         os.path.basename(cani_path), cani_joints if cani_joints is not None else "unreadable",
         " [%s]" % cani_note if cani_note else ""))
+    print("  decode: %s — %d track(s) (%d keyed, %d static%s), %d frames, %d quaternion(s)%s"
+          % (extraction["model"], track_count, len(keyed_tracks), len(static_tracks),
+             ", %d undecoded" % len(undecoded_tracks) if undecoded_tracks else "",
+             extraction["frames"], sanity["keys"],
+             ("; undecoded record types: %s" % ", ".join(
+                 "%d x 0x%02X" % (n, t) for t, n in sorted(undecoded.items())))
+             if undecoded else ""))
     for check in checks:
         if check.skipped:
             print("SKIP  %-11s %-52s (%s)" % (
@@ -1225,11 +1387,12 @@ def cmd_check_curves(args):
         len(gating) - len(failed), len(gating), sum(1 for c in checks if c.skipped),
         len(deltas)))
     if failed:
-        print("gate: NOT MET — %d curve assertion(s) fail; the container decode is"
+        print("gate: NOT MET — %d gating assertion(s) fail (the decoded extraction"
               % len(failed))
-        print("      verified but the curve encoding is not (docs/notes/re-anb.md §3).")
+        print("      does not pass; docs/notes/re-anb.md §7 records the re-run).")
     else:
-        print("gate: MET")
+        print("gate: MET — the RE-2 decoded extraction passes the gate's assertions")
+        print("      (docs/notes/re-anb.md §7 records the re-run).")
     if args.json:
         out = os.path.abspath(args.json)
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -1237,6 +1400,15 @@ def cmd_check_curves(args):
             json.dump(
                 {
                     "file": path,
+                    "model": extraction["model"],
+                    "frames": extraction["frames"],
+                    "tracks_total": extraction["tracks_total"],
+                    "tracks_decoded": len(decoded_tracks),
+                    "keyed_tracks": len(keyed_tracks),
+                    "static_tracks": len(static_tracks),
+                    "undecoded_tracks": len(undecoded_tracks),
+                    "undecoded": {"0x%02X" % t: n
+                                  for t, n in sorted(undecoded.items())},
                     "checks": [vars(c) for c in checks],
                     "sanity": sanity,
                     "gate": "MET" if not failed else "NOT MET",
@@ -1537,7 +1709,7 @@ def main(argv=None):
                        help="default: %s" % ANB_DEFAULT)
     p_anb.add_argument("--json", metavar="OUT", help="also write the structure dump as JSON")
     p_anb.add_argument("--curves", metavar="OUT",
-                       help="also write the candidate per-joint curves as JSON (unverified)")
+                       help="also write the decoded per-track curves as JSON (RE-2)")
     p_anb.set_defaults(func=cmd_anb)
 
     p_cc = sub.add_parser("check-curves", help="the gate's pinned assertions for player_a_stand")
