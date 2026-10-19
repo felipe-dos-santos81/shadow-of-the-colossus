@@ -127,30 +127,6 @@ void print_status_line(const AppOptions& opts, SDL_Window* win) {
                 windowed ? 1 : 0, relative_mouse ? 1 : 0, auto_capture_off ? 0 : 1, opts.frames);
 }
 
-// The clip list and the playback state. clips[0] is the built-in procedural
-// wave when the model has a skin, followed by the model's own glTF clips;
-// `time` is unwrapped seconds (every pose wraps it into the clip's duration).
-struct Playback {
-    std::vector<AnimationCpu> clips;
-    int index = -1;  // -1 = nothing to play (no skin and no clips)
-    float time = 0.0f;
-    bool playing = false;
-    bool has_procedural = false;
-};
-
-// Fills `playback` from the scene and starts on the first clip.
-void init_playback(Playback& playback, const Scene& scene) {
-    if (!scene.skin.joints.empty()) {
-        playback.clips.push_back(make_procedural_wave(scene));
-        playback.has_procedural = true;
-    }
-    playback.clips.insert(playback.clips.end(), scene.animations.begin(), scene.animations.end());
-    if (!playback.clips.empty()) {
-        playback.index = 0;
-        playback.playing = true;
-    }
-}
-
 // Resolves an `--anim` value: an exact clip name, or a 0-based index. -1 when
 // nothing matches.
 int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want) {
@@ -171,7 +147,8 @@ int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want
 // The `s2-anim` line reports the selected clip: its name, the palette's joint
 // count, whether it is the built-in procedural clip, and the current (wrapped)
 // time. Printed at startup and on every clip change; a model with no clip at
-// all prints nothing.
+// all prints nothing. Real clips print procedural=0; the stand-in is only ever
+// the single clip of a model the converter could not animate.
 void print_anim_status(const Playback& playback, const Scene& scene) {
     if (playback.index < 0) {
         return;
@@ -429,11 +406,12 @@ int run_app(const AppOptions& opts) {
             apply_player_transform(scene, player_mesh_begin, player, player_ground);
         }
 
-        // Playback: the clip list starts with the built-in procedural wave when
-        // the model has a skin; --anim picks a clip by name or index, and
-        // --anim-time pins the time and starts paused (deterministic captures).
+        // Playback: the model's real clips first; the procedural wave is only
+        // the fallback for a skinned model that carries none. --anim picks a
+        // clip by name or index, and --anim-time pins the time and starts
+        // paused (deterministic captures).
         Playback playback;
-        init_playback(playback, scene);
+        build_playback(scene, playback);
         if (!opts.animClip.empty()) {
             const int index = resolve_clip(playback.clips, opts.animClip);
             if (index < 0) {

@@ -196,3 +196,22 @@ AnimationCpu make_procedural_wave(const Scene& scene) {
     }
     return clip;
 }
+
+void build_playback(const Scene& scene, Playback& playback) {
+    playback.clips = scene.animations;
+    playback.index = -1;
+    playback.time = 0.0f;
+    playback.playing = false;
+    playback.has_procedural = false;
+
+    // The stand-in is the fallback, never a peer of the model's own clips: it
+    // is appended only for a skinned model whose scene carries none.
+    if (playback.clips.empty() && !scene.skin.joints.empty()) {
+        playback.clips.push_back(make_procedural_wave(scene));
+        playback.has_procedural = true;
+    }
+    if (!playback.clips.empty()) {
+        playback.index = 0;
+        playback.playing = true;
+    }
+}

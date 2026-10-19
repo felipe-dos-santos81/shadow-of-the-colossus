@@ -350,3 +350,55 @@ TEST_CASE("the procedural wave animates every joint of a rig smaller than the ca
         CHECK(channel.values[3] == 1.0f);
     }
 }
+
+// --- Clip-list assembly ------------------------------------------------------
+
+TEST_CASE("build_playback prefers real clips and falls back to the procedural wave") {
+    // A scene with one animation: the model's own clip is the only clip played
+    // — the stand-in exists only for models the converter cannot animate.
+    Scene with_clip = turn_fixture_scene();
+    with_clip.animations.push_back(turn_clip(0));
+    Playback real;
+    build_playback(with_clip, real);
+    REQUIRE(real.clips.size() == 1);
+    CHECK(real.clips[0].name == "turn");
+    CHECK(!real.has_procedural);
+    CHECK(real.index == 0);
+    CHECK(real.playing);
+    CHECK(real.time == 0.0f);
+
+    // An empty-animation scene keeps the procedural wave as its single clip.
+    const Scene without_clips = turn_fixture_scene();
+    Playback fallback;
+    build_playback(without_clips, fallback);
+    REQUIRE(fallback.clips.size() == 1);
+    CHECK(fallback.clips[0].name == "procedural-wave");
+    CHECK(fallback.has_procedural);
+    CHECK(fallback.index == 0);
+    CHECK(fallback.playing);
+}
+
+TEST_CASE("build_playback keeps every real clip in scene order") {
+    Scene scene = turn_fixture_scene();
+    scene.animations.push_back(turn_clip(0));
+    AnimationCpu second = turn_clip(0);
+    second.name = "second";
+    scene.animations.push_back(std::move(second));
+
+    Playback playback;
+    build_playback(scene, playback);
+    REQUIRE(playback.clips.size() == 2);
+    CHECK(playback.clips[0].name == "turn");
+    CHECK(playback.clips[1].name == "second");
+    CHECK(!playback.has_procedural);
+}
+
+TEST_CASE("build_playback leaves a model with no skin and no clips silent") {
+    Scene scene;  // no joints, no clips
+    Playback playback;
+    build_playback(scene, playback);
+    CHECK(playback.clips.empty());
+    CHECK(!playback.has_procedural);
+    CHECK(playback.index == -1);
+    CHECK(!playback.playing);
+}

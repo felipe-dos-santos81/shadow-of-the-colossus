@@ -30,3 +30,20 @@ std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, f
 // min(12, joints) joints with keys at t = 0/1/2 s holding restR, restR tilted
 // 15 degrees about X, and restR again — a smooth wobble through LINEAR slerp.
 AnimationCpu make_procedural_wave(const Scene& scene);
+
+// The clip list and the playback state. The scene's own clips come first; the
+// procedural wave is the only clip of a skinned model that carries none.
+// `time` is unwrapped seconds (every pose wraps it into the clip's duration).
+struct Playback {
+    std::vector<AnimationCpu> clips;
+    int index = -1;  // -1 = nothing to play (no skin and no clips)
+    float time = 0.0f;
+    bool playing = false;
+    bool has_procedural = false;
+};
+
+// Fills `playback` from the scene and starts on the first clip: the model's
+// real clips in scene order, or — only when it has no clips at all and has a
+// skin — the built-in procedural wave (`has_procedural` marks that fallback).
+// A model with neither a skin nor clips gets an empty list (`index == -1`).
+void build_playback(const Scene& scene, Playback& playback);
