@@ -62,7 +62,8 @@ Mat4 camera_view_proj(const Camera& camera, SDL_Window* win) {
     int height = 0;
     if (!SDL_GetWindowSizeInPixels(win, &width, &height)) {
         const char* error = SDL_GetError();
-        throw std::runtime_error(std::string("sotc-viewer: SDL_GetWindowSizeInPixels: ") +
+        // No "sotc-viewer: " prefix here: run_app's catch adds it once.
+        throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") +
                                  (error != nullptr ? error : "unknown error"));
     }
     const float aspect = static_cast<float>(width) / static_cast<float>(std::max(height, 1));
@@ -264,17 +265,18 @@ void print_s3_status(const SceneManifest& manifest, Vec3 spawn, Vec3 position, b
 // Reads back the last rendered frame and writes it as a PNG, printing the
 // s1-pixels stats (the acceptance script's non-uniformity proof). Throws
 // std::runtime_error when the readback size is unexpected or the write fails.
+// The messages carry no "sotc-viewer: " prefix — run_app's catch adds it once.
 void write_screenshot(Renderer& renderer, SDL_Window* win, const std::string& path) {
     const std::vector<uint8_t> pixels = renderer.read_pixels();
     int pixel_width = 0;
     int pixel_height = 0;
     if (!SDL_GetWindowSizeInPixels(win, &pixel_width, &pixel_height)) {
-        throw std::runtime_error(std::string("sotc-viewer: SDL_GetWindowSizeInPixels: ") +
+        throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") +
                                  SDL_GetError());
     }
     const size_t expected = static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height) * 4;
     if (pixels.size() != expected) {
-        throw std::runtime_error("sotc-viewer: read " + std::to_string(pixels.size()) +
+        throw std::runtime_error("read " + std::to_string(pixels.size()) +
                                  " pixels, expected " + std::to_string(expected));
     }
 
@@ -285,7 +287,7 @@ void write_screenshot(Renderer& renderer, SDL_Window* win, const std::string& pa
 
     if (stbi_write_png(path.c_str(), pixel_width, pixel_height, 4, pixels.data(),
                        pixel_width * 4) == 0) {
-        throw std::runtime_error("sotc-viewer: cannot write " + path);
+        throw std::runtime_error("cannot write " + path);
     }
     std::printf("s1-screenshot path=%s width=%d height=%d\n", path.c_str(), pixel_width,
                 pixel_height);
