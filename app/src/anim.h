@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
+#include "player.h"
 #include "scene.h"
 
 // CPU pose evaluation for the skeletal path: sampling the animation channels
@@ -47,3 +49,26 @@ struct Playback {
 // skin — the built-in procedural wave (`has_procedural` marks that fallback).
 // A model with neither a skin nor clips gets an empty list (`index == -1`).
 void build_playback(const Scene& scene, Playback& playback);
+
+// The clip the locomotion controller asks for: still -> "player_a_stand",
+// moving -> "player_a_walk", moving with `input.run` -> "player_a_run"
+// (movement is any of forward/back/left/right). A missing requested clip falls
+// back through walk (while moving), then stand, then the first real clip. A
+// playback whose only clip is the procedural stand-in returns 0, and an empty
+// clip list returns -1 (nothing to play).
+int select_clip_index(const Playback& playback, const PlayerInput& input);
+
+// Whether `clip` carries the root translation series: any translation channel
+// (path 0) on the skin joint named "Bone_root" — the joint the converter's
+// writer targets for the root series. The joint is found by name, never by
+// index. Channels targeting a joint outside this skin are ignored.
+bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip);
+
+// The lift to draw the composed scene's player meshes with while `clip` plays:
+// 0 when the clip carries the root translation series (that series already
+// holds the ground height), else the S3 origin-to-feet lift
+// (player_ground_offset), lifted from the player's meshes
+// [playerMeshBegin, end). Lifting on top of a root-carrying clip floats the
+// character by the offset (~0.76 m for Wander).
+float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
+                            std::size_t playerMeshBegin);

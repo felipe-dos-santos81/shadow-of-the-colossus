@@ -13,10 +13,15 @@ vertex storage buffer, blended per vertex by four joint weights. A model whose
 glb carries baked animation clips plays its first clip by default; the built-in
 `procedural-wave` is only the fallback for a skinned model with no clips.
 `--anim` selects a clip and `--anim-time` pins a time for deterministic
-captures. Drag to orbit, scroll to zoom, press `F` to reframe; `Space`
-plays/pauses, `[`/`]` switch clips, `R` restarts. The window title shows the fps
-readout. Escape or the window's close button quits. `--screenshot` writes the
-same frame to a PNG.
+captures. In a composed arena (`--manifest`) the player's state drives the loop
+instead — still stands, movement walks, Shift runs — with hard clip switches;
+`--anim` / `--anim-time` pin a clip manually. The arena's ground lift is skipped
+while the active clip carries the root translation series (the series already
+holds the ground height), so the feet stay on the heightmap instead of floating
+by the model's origin-to-feet offset. Drag to orbit, scroll to zoom, press `F`
+to reframe; `Space` plays/pauses, `[`/`]` switch clips, `R` restarts. The window
+title shows the fps readout. Escape or the window's close button quits.
+`--screenshot` writes the same frame to a PNG.
 
 ## Build
 
@@ -48,8 +53,8 @@ is required. Escape or the close button quits.
 | --- | --- |
 | `--library DIR` | converted asset library (default: `$SOTC_LIB`) |
 | `--model REL` | model to load, relative to the library |
-| `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: the model's first clip; `procedural-wave` only when a skinned model carries no clips); an unknown name or index exits 2 |
-| `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag |
+| `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: the model's first clip; `procedural-wave` only when a skinned model carries no clips); in arena mode it is the manual override of stand/walk/run selection; an unknown name or index exits 2 |
+| `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag; it also pins the clip, so arena selection leaves it alone |
 | `--screenshot PNG` | render `--frames` frames into the offscreen target, write the PNG, exit |
 | `--frames N` | frames the `--screenshot` path renders first (default 3) |
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
@@ -63,7 +68,7 @@ Controls (no mouse capture: the cursor stays visible and free):
 | Scroll | Zoom: distance clamped to [0.5, 500] |
 | `F` | Reframe the scene bounds (keeps the viewing direction) |
 | `Space` | Play/pause the current clip |
-| `[` / `]` | Previous / next clip (restarts the clip at t = 0) |
+| `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
 | `R` | Restart the current clip |
 | Escape / close button | Quit |
 

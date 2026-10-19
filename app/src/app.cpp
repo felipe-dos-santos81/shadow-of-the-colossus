@@ -195,14 +195,42 @@ float camera_view_yaw(const Camera& camera) { return camera.yaw - 180.0f; }
 
 // Moves the composed scene's player meshes with the player: meshes
 // [playerMeshBegin, end) are the player's (compose_scene appends them last).
-// `groundOffsetY` is the player model's origin-to-feet lift (see
-// player_ground_offset), so the character stands on the ground point instead
-// of sinking into it.
+// `groundOffsetY` is the lift to apply (see active_player_lift), so the
+// character stands on the ground point instead of sinking into it.
 void apply_player_transform(Scene& scene, size_t playerMeshBegin, const PlayerState& player,
                             float groundOffsetY) {
     const Mat4 model = player_model_matrix(player, groundOffsetY);
     for (size_t i = playerMeshBegin; i < scene.meshes.size(); ++i) {
         scene.meshes[i].model = model;
+    }
+}
+
+// The lift to draw the composed scene's player meshes with while the active
+// clip plays: the S3 origin-to-feet lift, except when the clip carries the
+// root translation series — that series already holds the character's ground
+// height, so lifting on top of it would float the model by the offset
+// (~0.76 m for Wander). A model with no clip at all keeps the plain lift.
+float active_player_lift(const Scene& scene, const Playback& playback,
+                         size_t playerMeshBegin) {
+    if (playback.index < 0) {
+        return player_ground_offset(scene, playerMeshBegin);
+    }
+    return effective_player_lift(scene, playback.clips[static_cast<size_t>(playback.index)],
+                                 playerMeshBegin);
+}
+
+// Applies the controller's locomotion choice unless a clip was pinned on the
+// command line (--anim or --anim-time): a hard switch — the chosen clip
+// restarts at t = 0 — only when the state asks for a different clip. No
+// blending, by design.
+void update_locomotion(Playback& playback, const Scene& scene, const PlayerInput& input,
+                       bool manualClip) {
+    if (manualClip) {
+        return;
+    }
+    const int wanted = select_clip_index(playback, input);
+    if (wanted >= 0 && wanted != playback.index) {
+        select_clip(playback, scene, wanted);
     }
 }
 
@@ -398,12 +426,9 @@ int run_app(const AppOptions& opts) {
         PlayerState player{spawn_position(manifest, scene),
                            manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f};
         CameraFollow follow;
-        float player_ground = 0.0f;  // the model's origin-to-feet lift
         if (follow_mode) {
-            player_ground = player_ground_offset(scene, player_mesh_begin);
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
                           /*moving=*/false, /*dtSeconds=*/10.0f);
-            apply_player_transform(scene, player_mesh_begin, player, player_ground);
         }
 
         // Playback: the model's real clips first; the procedural wave is only
@@ -435,6 +460,19 @@ int run_app(const AppOptions& opts) {
         }
         print_anim_status(playback, scene);
 
+        // A clip pinned on the command line keeps manual control; otherwise the
+        // player's controller state selects the loop (stand/walk/run) each
+        // frame. --anim-time pins a deterministic capture, so it counts as
+        // manual too: a selection must not reset its time.
+        const bool manual_clip = !opts.animClip.empty() || opts.animTimeSet;
+
+        // The initial player transform (also the one --selftest renders with):
+        // the first clip already is the active one.
+        if (follow_mode) {
+            apply_player_transform(scene, player_mesh_begin, player,
+                                   active_player_lift(scene, playback, player_mesh_begin));
+        }
+
         if (opts.s3Selftest) {
             // The pinned W1.4 self-test: 240 fixed 1/60 s frames of
             // forward+run (camera-relative movement, the follow camera
@@ -449,9 +487,11 @@ int run_app(const AppOptions& opts) {
                               /*moving=*/true, kFixedFrameSeconds);
                 player_update(player, input, kFixedFrameSeconds, heightmap,
                               camera_view_yaw(camera));
+                update_locomotion(playback, scene, input, manual_clip);
                 update_pose(renderer, scene, playback, kFixedFrameSeconds);
             }
-            apply_player_transform(scene, player_mesh_begin, player, player_ground);
+            apply_player_transform(scene, player_mesh_begin, player,
+                                   active_player_lift(scene, playback, player_mesh_begin));
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
@@ -484,8 +524,11 @@ int run_app(const AppOptions& opts) {
                 if (follow_mode) {
                     camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
                                   /*moving=*/false, dt);
-                    player_update(player, PlayerInput{}, dt, heightmap, camera_view_yaw(camera));
-                    apply_player_transform(scene, player_mesh_begin, player, player_ground);
+                    const PlayerInput still;
+                    player_update(player, still, dt, heightmap, camera_view_yaw(camera));
+                    update_locomotion(playback, scene, still, manual_clip);
+                    apply_player_transform(scene, player_mesh_begin, player,
+                                           active_player_lift(scene, playback, player_mesh_begin));
                 }
                 update_pose(renderer, scene, playback, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
@@ -589,7 +632,9 @@ int run_app(const AppOptions& opts) {
                 camera_follow(camera, follow, player.position, player.yawDeg, drag_dx, drag_dy,
                               wheel_delta, moving, dt);
                 player_update(player, input, dt, heightmap, camera_view_yaw(camera));
-                apply_player_transform(scene, player_mesh_begin, player, player_ground);
+                update_locomotion(playback, scene, input, manual_clip);
+                apply_player_transform(scene, player_mesh_begin, player,
+                                       active_player_lift(scene, playback, player_mesh_begin));
             }
 
             update_pose(renderer, scene, playback, dt);

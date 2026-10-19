@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -15,6 +16,7 @@
 #include "anim.h"
 #include "asset_io.h"
 #include "math3d.h"
+#include "player.h"
 
 TEST_CASE("quat_to_mat4 rotates a point 90 degrees about Z") {
     const Quat q = {0.0f, 0.0f, std::sin(kPi / 4.0f), std::cos(kPi / 4.0f)};
@@ -163,6 +165,42 @@ bool is_identity(const Mat4& m, float epsilon) {
         }
     }
     return true;
+}
+
+// A one-channel clip on `joint`; `path` is 0 (translation) or 1 (rotation).
+// The keys are valid either way, so the channel is sampleable — the root
+// query must answer from the channel's joint and path alone.
+AnimationCpu one_channel_clip(std::string name, int joint_index, int path) {
+    AnimationCpu clip;
+    clip.name = std::move(name);
+    clip.duration = 1.0f;
+
+    AnimationChannelCpu channel;
+    channel.joint = joint_index;
+    channel.path = path;
+    channel.interpolation = 0;  // LINEAR
+    channel.times = {0.0f, 1.0f};
+    channel.values = (path == 1) ? std::vector<float>{0.0f, 0.0f, 0.0f, 1.0f,
+                                                      0.0f, 0.0f, 0.0f, 1.0f}
+                                 : std::vector<float>{0.0f, 0.0f, 0.0f,
+                                                      0.0f, 0.0f, 0.0f};
+    clip.channels.push_back(std::move(channel));
+    return clip;
+}
+
+// A playback whose clip list is exactly `names`, in that order: selection is
+// by clip name, so the order here must not leak into the answers.
+Playback playback_of(std::initializer_list<const char*> names, bool procedural = false) {
+    Playback playback;
+    for (const char* name : names) {
+        AnimationCpu clip;
+        clip.name = name;
+        clip.duration = 1.0f;
+        playback.clips.push_back(std::move(clip));
+    }
+    playback.index = playback.clips.empty() ? -1 : 0;
+    playback.has_procedural = procedural;
+    return playback;
 }
 
 }  // namespace
@@ -401,4 +439,135 @@ TEST_CASE("build_playback leaves a model with no skin and no clips silent") {
     CHECK(!playback.has_procedural);
     CHECK(playback.index == -1);
     CHECK(!playback.playing);
+}
+
+// --- Locomotion selection and grounding (task 6) -----------------------------
+
+TEST_CASE("select_clip_index maps the controller state to the demo clips") {
+    // Deliberately not scene order (run, stand, walk): the mapping is by clip
+    // name, never by index. The expected indices are stand 1, walk 2, run 0.
+    const Playback demo = playback_of({"player_a_run", "player_a_stand", "player_a_walk"});
+    REQUIRE(demo.clips.size() == 3);
+
+    // No input: standing still plays the stand loop, whether or not Shift is
+    // held (run alone does not move the character).
+    CHECK(select_clip_index(demo, PlayerInput{}) == 1);
+    PlayerInput run_only;
+    run_only.run = true;
+    CHECK(select_clip_index(demo, run_only) == 1);
+
+    // Each single direction walks; Shift turns any of them into the run loop.
+    PlayerInput directions[4];
+    directions[0].forward = true;
+    directions[1].back = true;
+    directions[2].left = true;
+    directions[3].right = true;
+    for (PlayerInput& input : directions) {
+        CHECK(select_clip_index(demo, input) == 2);
+        input.run = true;
+        CHECK(select_clip_index(demo, input) == 0);
+    }
+}
+
+TEST_CASE("select_clip_index falls back when the demo clips are missing") {
+    PlayerInput still;
+    PlayerInput walk;
+    walk.forward = true;
+    PlayerInput run;
+    run.forward = true;
+    run.run = true;
+
+    // A run request with no run clip falls back to walk while moving.
+    CHECK(select_clip_index(playback_of({"player_a_stand", "player_a_walk"}), run) == 1);
+
+    // A walk request with no walk clip falls through to stand.
+    CHECK(select_clip_index(playback_of({"player_a_run", "player_a_stand"}), walk) == 1);
+
+    // With neither walk nor stand, the first real clip answers — scene order,
+    // not a name (run is first here, and still is not a run request).
+    CHECK(select_clip_index(playback_of({"player_a_run", "player_a_walk"}), still) == 0);
+
+    // A clip list with no locomotion names at all (the horse's kick) keeps its
+    // only real clip for every controller state.
+    const Playback horse = playback_of({"horse_a_add_horse_kick"});
+    CHECK(select_clip_index(horse, still) == 0);
+    CHECK(select_clip_index(horse, walk) == 0);
+    CHECK(select_clip_index(horse, run) == 0);
+
+    // Nothing to play: -1, so the caller keeps its "no clip" state.
+    CHECK(select_clip_index(playback_of({}), still) == -1);
+}
+
+TEST_CASE("select_clip_index keeps the procedural stand-in") {
+    // A skinned model with no baked clips has exactly one clip, the built-in
+    // wave; locomotion has nothing real to select, so every state keeps it.
+    const Playback procedural = playback_of({"procedural-wave"}, /*procedural=*/true);
+    CHECK(select_clip_index(procedural, PlayerInput{}) == 0);
+
+    PlayerInput run;
+    run.forward = true;
+    run.run = true;
+    CHECK(select_clip_index(procedural, run) == 0);
+}
+
+TEST_CASE("the ground lift is skipped when the clip carries the root series") {
+    // Bone_root is joint 1, not joint 0: the query must be name-based. The
+    // instance mesh at index 0 sits far below the player's meshes, so only the
+    // [1, end) range may contribute to the lift.
+    Scene scene;
+    scene.skin.joints = {
+        joint("Bone_KAO", -1, {0.0f, 0.0f, 0.0f}, mat4_identity()),
+        joint("Bone_root", 0, {0.0f, 0.0f, 0.0f}, mat4_identity()),
+    };
+    MeshCpu instance;
+    Vertex deep{};
+    deep.py = -5.0f;
+    instance.vertices = {deep};
+    MeshCpu player;
+    Vertex feet{};
+    feet.py = -0.7596f;
+    Vertex hip{};
+    hip.py = 0.2f;
+    player.vertices = {feet, hip};
+    scene.meshes = {instance, player};
+
+    // The clip the converter writes for a root series: translation on Bone_root.
+    const AnimationCpu root_translation = one_channel_clip("root-motion", /*joint=*/1, /*path=*/0);
+    CHECK(clip_has_root_translation(scene, root_translation));
+    CHECK(effective_player_lift(scene, root_translation, /*playerMeshBegin=*/1) == 0.0f);
+
+    // A rotation on Bone_root is not the root series; the S3 lift stands the
+    // model on the ground: the player meshes' lowest vertex is 0.7596 below.
+    const AnimationCpu root_rotation = one_channel_clip("wave", /*joint=*/1, /*path=*/1);
+    CHECK_FALSE(clip_has_root_translation(scene, root_rotation));
+    CHECK(player_ground_offset(scene, 1) == doctest::Approx(0.7596f));
+    CHECK(effective_player_lift(scene, root_rotation, 1) == doctest::Approx(0.7596f));
+
+    // A translation on another joint, an empty clip, and a channel whose joint
+    // is outside the skin carry no root series either.
+    CHECK_FALSE(clip_has_root_translation(scene, one_channel_clip("other", /*joint=*/0, /*path=*/0)));
+    CHECK_FALSE(clip_has_root_translation(scene, AnimationCpu{}));
+    CHECK_FALSE(clip_has_root_translation(scene, one_channel_clip("stray", /*joint=*/99, /*path=*/0)));
+}
+
+TEST_CASE("wander's baked clips carry the root series and skip the S3 lift") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    REQUIRE(scene.animations.size() == 3);
+
+    // The lift the S3 arena applies to a root-less model: Wander's origin sits
+    // 0.7596 m above his feet.
+    const float offset = player_ground_offset(scene, 0);
+    CHECK(offset == doctest::Approx(0.7596f).epsilon(1e-4));
+
+    for (const AnimationCpu& clip : scene.animations) {
+        CAPTURE(clip.name);
+        CHECK(clip_has_root_translation(scene, clip));
+        CHECK(effective_player_lift(scene, clip, 0) == 0.0f);
+    }
+
+    // A channel-less clip (the rest pose) carries no root series: the lift
+    // applies as before.
+    const AnimationCpu rest{};
+    CHECK_FALSE(clip_has_root_translation(scene, rest));
+    CHECK(effective_player_lift(scene, rest, 0) == doctest::Approx(offset));
 }

@@ -215,3 +215,73 @@ void build_playback(const Scene& scene, Playback& playback) {
         playback.playing = true;
     }
 }
+
+namespace {
+
+// The index of the clip named `name` in `playback`, or -1 when it is absent.
+int find_clip_named(const Playback& playback, const char* name) {
+    for (std::size_t i = 0; i < playback.clips.size(); ++i) {
+        if (playback.clips[i].name == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+}  // namespace
+
+int select_clip_index(const Playback& playback, const PlayerInput& input) {
+    if (playback.clips.empty()) {
+        return -1;  // nothing to play
+    }
+    if (playback.has_procedural) {
+        return 0;  // the stand-in is the only clip: locomotion has no real target
+    }
+
+    const bool moving = input.forward || input.back || input.left || input.right;
+    const char* requested = "player_a_stand";
+    if (moving) {
+        requested = input.run ? "player_a_run" : "player_a_walk";
+    }
+
+    // The requested clip, then the fallback chain: walk while moving, stand,
+    // and finally the first real clip in scene order.
+    if (const int index = find_clip_named(playback, requested); index >= 0) {
+        return index;
+    }
+    if (moving) {
+        if (const int index = find_clip_named(playback, "player_a_walk"); index >= 0) {
+            return index;
+        }
+    }
+    if (const int index = find_clip_named(playback, "player_a_stand"); index >= 0) {
+        return index;
+    }
+    return 0;
+}
+
+bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
+    // The writer targets the joint named exactly "Bone_root" for the root
+    // series, so this query is name-based too: a joint index would tie the
+    // answer to one model's skin order.
+    for (const AnimationChannelCpu& channel : clip.channels) {
+        if (channel.path != 0 || channel.joint < 0 ||
+            static_cast<std::size_t>(channel.joint) >= scene.skin.joints.size()) {
+            continue;  // not a translation channel, or not this skin's joint
+        }
+        if (scene.skin.joints[static_cast<std::size_t>(channel.joint)].name == "Bone_root") {
+            return true;
+        }
+    }
+    return false;
+}
+
+float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
+                            std::size_t playerMeshBegin) {
+    // A root-carrying clip already holds the character's ground height: the S3
+    // origin-to-feet lift on top would float the model by that offset.
+    if (clip_has_root_translation(scene, clip)) {
+        return 0.0f;
+    }
+    return player_ground_offset(scene, playerMeshBegin);
+}
