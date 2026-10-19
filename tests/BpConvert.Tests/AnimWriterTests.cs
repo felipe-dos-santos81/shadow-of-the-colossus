@@ -21,6 +21,9 @@ public class AnimWriterTests : IDisposable
     private const string WanderRel = "models/shadow/characters/wander/_cmn/wander.cmsh";
     private const string StandAnbRel = "cp3shadow/anim/player_a_stand.anb";
     private const string PlayerBankRel = "cp3shadow/skel/player_a.skb";
+    private const string ValusRel = "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.cmsh";
+    private const string MinotaurStandAnbRel = "cp3shadow/anim/minotaur_a_stand.anb";
+    private const string MinotaurBankRel = "cp3shadow/skel/minotaur_a.skb";
 
     [Fact]
     public void Stand_animation_reloads_with_pinned_shape()
@@ -252,6 +255,165 @@ public class AnimWriterTests : IDisposable
     }
 
     [Fact]
+    public void Minotaur_stand_animation_reloads_with_pinned_shape()
+    {
+        // S4's bake pin: the real decode chain (AnbReader + SkbReader + TrackMap) against the
+        // converted 238-joint colossus skeleton, written and reloaded with SharpGLTF. Measured
+        // on the CLI-produced glb: 1 animation, 59 channels (58 rotation + 1 root translation),
+        // 26 keys on the 37 keyed rotations, 15 fps -> duration 25/15 s.
+        var gltf = LoadMinotaurStandGltf(out var clip);
+        var animation = Assert.Single(gltf.LogicalAnimations);
+        Assert.Equal("minotaur_a_stand", animation.Name);
+
+        // 58 rotation channels = all 58 tracks: 21 static (single key at t = 0) and 37 keyed
+        // (one key per engine frame, last at 25/15 s). Measured split, never adjusted to fit.
+        var rotations = animation.Channels
+            .Where(channel => channel.TargetNodePath == PropertyPath.rotation).ToList();
+        Assert.Equal(58, rotations.Count);
+        var rotationKeys = rotations
+            .Select(channel => channel.GetRotationSampler().GetLinearKeys().ToList()).ToList();
+        Assert.Equal(21, rotationKeys.Count(keys => keys.Count == 1));
+        Assert.Equal(37, rotationKeys.Count(keys => keys.Count == 26));
+        foreach (var keys in rotationKeys.Where(keys => keys.Count > 1))
+        {
+            Assert.Equal(clip.Frames, keys.Count);
+            Assert.InRange(Math.Abs(keys[^1].Key - (clip.Frames - 1) / clip.Fps), 0f, 1e-6f);
+        }
+        foreach (var keys in rotationKeys.Where(keys => keys.Count == 1))
+            Assert.Equal(0f, keys[0].Key);
+
+        // The root series is one translation channel on "Bone_root": x/z zeroed (the
+        // controller owns horizontal position), y the raw game value.
+        var translation = Assert.Single(animation.Channels,
+            channel => channel.TargetNodePath == PropertyPath.translation);
+        Assert.Equal("Bone_root", translation.TargetNode.Name);
+        var translations = translation.GetTranslationSampler().GetLinearKeys().ToList();
+        Assert.Equal(clip.Frames, translations.Count);
+        for (var key = 0; key < translations.Count; key++)
+        {
+            Assert.Equal(0f, translations[key].Value.X);
+            Assert.Equal(0f, translations[key].Value.Z);
+            Assert.InRange(Math.Abs(translations[key].Value.Y - clip.Root[key].Y), 0f, 1e-5f);
+        }
+        Assert.Equal(59, animation.Channels.Count);
+
+        // Engine time model: i / 15 fps; 26 frames -> 25/15 = 1.6667 s.
+        Assert.InRange(Math.Abs(animation.Duration - (clip.Frames - 1) / (float)clip.Fps), 0f, 1e-6f);
+
+        // LINEAR everywhere; every emitted rotation is unit length.
+        foreach (var channel in animation.Channels)
+        {
+            if (channel.TargetNodePath == PropertyPath.rotation)
+            {
+                var sampler = channel.GetRotationSampler();
+                Assert.Equal(AnimationInterpolationMode.LINEAR, sampler.InterpolationMode);
+                foreach (var (_, value) in sampler.GetLinearKeys())
+                    Assert.InRange(Math.Abs(value.Length() - 1f), 0f, 1e-5f);
+            }
+            else
+            {
+                Assert.Equal(AnimationInterpolationMode.LINEAR,
+                    channel.GetTranslationSampler().InterpolationMode);
+            }
+        }
+
+        // TRS scope: the 58 rotation targets + Bone_root leave matrix form; the other 179
+        // joints keep their bind-pose matrix.
+        var jointNodes = gltf.LogicalNodes.Where(node => node.IsSkinJoint).ToList();
+        Assert.Equal(238, jointNodes.Count);
+        var rootIndex = jointNodes.Single(node => node.Name == "Bone_root").LogicalIndex;
+        var animated = clip.Tracks.Select(track => track.JointIndex).Append(rootIndex).ToHashSet();
+        foreach (var node in jointNodes)
+        {
+            var isAnimated = animated.Contains(node.LogicalIndex);
+            Assert.Equal(isAnimated, node.LocalTransform.IsSRT);
+            Assert.Equal(!isAnimated, node.LocalTransform.IsMatrix);
+        }
+        Assert.Equal(59, jointNodes.Count(node => node.LocalTransform.IsSRT));
+        Assert.Equal(238 - 59, jointNodes.Count(node => node.LocalTransform.IsMatrix));
+    }
+
+    [Fact]
+    public void Minotaur_stand_world_pose_puts_the_head_above_the_pelvis_at_the_decoded_heights()
+    {
+        // The S4 world-pose pin, the S2 Stand_world_pose pattern with column-vector
+        // composition (System.Numerics row-vector matrices: world = local x parent world).
+        // Expected frame-0 heights are the decoder's, from
+        // `python3 tools/re/anb/pose_dump.py pose cp3shadow/anim/minotaur_a_stand.anb
+        //  --frame 0 --glb out/library/.../c01_minotaur_a.glb` (docs/notes/s4-pose.md):
+        // Bone_KOSI 7.9896, Bone_MUNE 10.9251, Bone_KUBI 14.6764, Bone_KAO 15.1153,
+        // Bone_TUMASAKI_L 0.0565, Bone_TUMASAKI_R -0.0031. A vertical fold puts the head
+        // below the pelvis; the wrong track map scatters the limbs.
+        var gltf = LoadMinotaurStandGltf(out _);
+        var animation = Assert.Single(gltf.LogicalAnimations);
+
+        var local = gltf.LogicalNodes
+            .Where(node => node.IsSkinJoint)
+            .ToDictionary(node => node, BindLocal);
+        foreach (var channel in animation.Channels)
+        {
+            if (!local.TryGetValue(channel.TargetNode, out var current)) continue;
+            if (channel.TargetNodePath == PropertyPath.rotation)
+                current.Rotation = channel.GetRotationSampler().GetLinearKeys().First().Value;
+            else if (channel.TargetNodePath == PropertyPath.translation)
+                current.Translation = channel.GetTranslationSampler().GetLinearKeys().First().Value;
+            local[channel.TargetNode] = current;
+        }
+
+        var world = new Dictionary<Node, Matrix4x4>();
+        Matrix4x4 WorldOf(Node node)
+        {
+            if (world.TryGetValue(node, out var cached)) return cached;
+            var (translation, rotation, scale) = local[node];
+            var matrix = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) *
+                         Matrix4x4.CreateTranslation(translation);
+            if (node.VisualParent != null) matrix *= WorldOf(node.VisualParent);
+            world[node] = matrix;
+            return matrix;
+        }
+
+        var byName = gltf.LogicalNodes.Where(node => node.IsSkinJoint).ToDictionary(node => node.Name);
+
+        var expected = new (string Bone, float Y)[]
+        {
+            ("Bone_KOSI", 7.9896f), ("Bone_MUNE", 10.9251f),
+            ("Bone_KUBI", 14.6764f), ("Bone_KAO", 15.1153f),
+            ("Bone_TUMASAKI_L", 0.0565f), ("Bone_TUMASAKI_R", -0.0031f),
+        };
+        foreach (var (bone, y) in expected)
+            Assert.InRange(WorldOf(byName[bone]).Translation.Y, y - 0.02f, y + 0.02f);
+
+        // Head above the pelvis by the measured 7.13 m (the fold's signature is the reverse).
+        var head = WorldOf(byName["Bone_KAO"]);
+        var pelvis = WorldOf(byName["Bone_KOSI"]);
+        Assert.True(head.Translation.Y > pelvis.Translation.Y + 7.0f);
+
+        // Feet lowest: among the body bones (the OptBone_* helpers are not body joints), the
+        // lowest frame-0 joint is the right toe tip.
+        var lowest = gltf.LogicalNodes
+            .Where(node => node.IsSkinJoint && node.Name.StartsWith("Bone_", StringComparison.Ordinal))
+            .OrderBy(node => WorldOf(node).Translation.Y)
+            .First();
+        Assert.Equal("Bone_TUMASAKI_R", lowest.Name);
+
+        // No NaN/Inf in the composed world translations.
+        foreach (var node in gltf.LogicalNodes.Where(node => node.IsSkinJoint))
+        {
+            var t = WorldOf(node).Translation;
+            Assert.True(float.IsFinite(t.X) && float.IsFinite(t.Y) && float.IsFinite(t.Z),
+                $"Node '{node.Name}' has a non-finite world translation.");
+        }
+
+        // The standard glTF evaluator must agree with the manual composition.
+        foreach (var bone in new[] { "Bone_KOSI", "Bone_KAO", "Bone_TUMASAKI_R" })
+        {
+            var evaluated = byName[bone].GetWorldMatrix(animation, 0f);
+            Assert.InRange(Math.Abs(evaluated.Translation.Y - WorldOf(byName[bone]).Translation.Y),
+                0f, 1e-3f);
+        }
+    }
+
+    [Fact]
     public void No_animations_keeps_todays_output()
     {
         // M0/M1 pin: an empty Animations list changes nothing — no `animations` array and every
@@ -383,6 +545,30 @@ public class AnimWriterTests : IDisposable
         for (var track = 0; track < map.Length; track++) clip.Tracks[track].JointIndex = map[track];
         model.Animations.Add(clip);
         return ModelRoot.Load(GlbWriter.Write(model, _dir, "stand-pose", new Dictionary<string, string>()).GlbPath);
+    }
+
+    /// <summary>Valus's real skeleton as the adapter builds it, without meshes/materials.</summary>
+    private static ModelData LoadMinotaurSkeleton()
+    {
+        var model = new AquaModelAdapter(new AssetResolver(TestAssets.Root)).Load(TestAssets.Sample(ValusRel));
+        Assert.NotNull(model.Skeleton);
+        Assert.Equal(238, model.Skeleton!.Joints.Count);
+        return model with { Meshes = new(), Materials = new(), ReferencedTexturePaths = new() };
+    }
+
+    /// <summary>The minotaur stand clip through the real decode chain, written and reloaded.</summary>
+    private ModelRoot LoadMinotaurStandGltf(out AnimClip clip)
+    {
+        var model = LoadMinotaurSkeleton();
+        clip = AnbReader.Read(TestAssets.Sample(MinotaurStandAnbRel));
+        var bank = SkbReader.Read(TestAssets.Sample(MinotaurBankRel));
+        var joints = model.Skeleton!.Joints.Select(joint => joint.Name).ToList();
+        var map = TrackMap.Map(clip, bank, joints, out var unresolved);
+        Assert.Equal(0, unresolved);
+        for (var track = 0; track < map.Length; track++) clip.Tracks[track].JointIndex = map[track];
+        model.Animations.Add(clip);
+        return ModelRoot.Load(GlbWriter.Write(model, _dir, "minotaur-stand",
+            new Dictionary<string, string>()).GlbPath);
     }
 
     /// <summary>A node's bind local TRS, from its SRT transform or its bind-pose matrix.</summary>

@@ -70,8 +70,12 @@ Modes
           the stick-figure strip and/or the reference side-by-side (needs PIL).
   measure <anb> [--ref PNG] [--ref-window ...] [--json OUT]
           the pose features across the loop, and the reference still's features.
-  verify  [--json OUT]
+  verify  [--profile player|generic] [--json OUT]
           the pinned assertions (exit non-zero on failure).  Stdlib only.
+          `player` (the default) keeps the S2 bands; `generic` evaluates a
+          non-player rig on model-neutral checks only (decode, bind, bridge,
+          uprightness, feet-lowest, no NaN) and reports the residual bands
+          without gating them on the player's absolute-metre bands.
 
 Stdlib only for decode/pose/verify; render/measure need Pillow (dev-only
 artifact helpers; the capture tooling in this repo already uses it).
@@ -404,15 +408,20 @@ def _hand_features(f0, height):
     fractions — the quantities the reference stills' cuff/fist measures pair with.
     """
     out = {}
+    base = min((f0[b][1] for b in ("Bone_TUMASAKI_L", "Bone_TUMASAKI_R") if b in f0),
+               default=None)
+    if base is None or not height:
+        return out
     for side, wrist in (("R", "Bone_HAND_A_R"), ("L", "Bone_HAND_A_L")):
+        if wrist not in f0:
+            continue
         bones = ["Bone_YUBI_A_%s" % side, "Bone_YUBI_B_%s" % side,
                  "Bone_OYAYUBI_A_%s" % side, "Bone_OYAYUBI_B_%s" % side]
         pts = [f0[b] for b in bones if b in f0]
-        if not pts or not height:
+        if not pts:
             continue
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
-        base = min(f0["Bone_TUMASAKI_L"][1], f0["Bone_TUMASAKI_R"][1])
         out[side] = {
             "wrist_height_over_height": round((f0[wrist][1] - base) / height, 4),
             "wrist_lateral_over_height": round(abs(f0[wrist][0]) / height, 4),
@@ -423,14 +432,20 @@ def _hand_features(f0, height):
 
 
 def pose_features(clip):
-    """The pose features across the whole loop (the phase-free comparison inputs)."""
+    """The pose features across the whole loop (the phase-free comparison inputs).
+
+    Only bones present in this rig are measured: the player's finger joints do not
+    exist on every rig (Valus's part bank has no fingers), and a missing bone is a
+    "not measured" feature, never a crash.
+    """
     frames = clip.info["frames"]
-    watch = ("Bone_KOSI", "Bone_KAO", "Bone_TUMASAKI_L", "Bone_TUMASAKI_R",
-             "Bone_TOE_L", "Bone_TOE_R",
-             "Bone_HAND_A_L", "Bone_HAND_A_R", "Bone_JOWA_L", "Bone_JOWA_R",
-             "Bone_SUNE_L", "Bone_SUNE_R",
-             "Bone_YUBI_A_L", "Bone_YUBI_B_L", "Bone_OYAYUBI_A_L", "Bone_OYAYUBI_B_L",
-             "Bone_YUBI_A_R", "Bone_YUBI_B_R", "Bone_OYAYUBI_A_R", "Bone_OYAYUBI_B_R")
+    watch = tuple(b for b in ("Bone_KOSI", "Bone_KAO", "Bone_TUMASAKI_L", "Bone_TUMASAKI_R",
+                              "Bone_TOE_L", "Bone_TOE_R",
+                              "Bone_HAND_A_L", "Bone_HAND_A_R", "Bone_JOWA_L", "Bone_JOWA_R",
+                              "Bone_SUNE_L", "Bone_SUNE_R",
+                              "Bone_YUBI_A_L", "Bone_YUBI_B_L", "Bone_OYAYUBI_A_L", "Bone_OYAYUBI_B_L",
+                              "Bone_YUBI_A_R", "Bone_YUBI_B_R", "Bone_OYAYUBI_A_R", "Bone_OYAYUBI_B_R")
+                     if b in clip.name_to_joint)
     pos = {b: [] for b in watch}
     for f in range(frames):
         world = clip.world_pose(f)
@@ -446,40 +461,44 @@ def pose_features(clip):
         return [sum(v[c] for v in pos[b]) / n for c in range(3)]
 
     f0 = {b: pos[b][0] for b in watch}
+    feet = [b for b in ("Bone_TUMASAKI_L", "Bone_TUMASAKI_R") if b in f0]
     stance = [math.sqrt(sum((f0["Bone_TUMASAKI_L"][c] - f0["Bone_TUMASAKI_R"][c]) ** 2
-                            for c in range(3)))]
+                            for c in range(3)))] if len(feet) == 2 else []
     stance_toe = abs(f0["Bone_TOE_L"][0] - f0["Bone_TOE_R"][0]) \
-        if "Bone_TOE_L" in f0 else None
+        if "Bone_TOE_L" in f0 and "Bone_TOE_R" in f0 else None
     stance_toe_loop = None
-    if "Bone_TOE_L" in f0:
+    if "Bone_TOE_L" in f0 and "Bone_TOE_R" in f0:
         seps = [abs(pos["Bone_TOE_L"][f][0] - pos["Bone_TOE_R"][f][0])
                 for f in range(frames)]
         stance_toe_loop = [round(min(seps), 4), round(max(seps), 4)]
-    height = f0["Bone_KAO"][1] - min(f0["Bone_TUMASAKI_L"][1], f0["Bone_TUMASAKI_R"][1])
+    height = (f0["Bone_KAO"][1] - min(f0[b][1] for b in feet)
+              if "Bone_KAO" in f0 and len(feet) == 2 else None)
     return {
         "frames": frames,
         "f0": {b: [round(v, 4) for v in f0[b]] for b in watch},
         "loop_range": {b: [round(v, 4) for v in rng(b)] for b in watch},
         "loop_mean": {b: [round(v, 4) for v in mean(b)] for b in watch},
-        "stance_3d_f0": round(stance[0], 4),
-        "stance_x_f0": round(abs(f0["Bone_TUMASAKI_L"][0] - f0["Bone_TUMASAKI_R"][0]), 4),
-        "stagger_z_f0": round(abs(f0["Bone_TUMASAKI_L"][2] - f0["Bone_TUMASAKI_R"][2]), 4),
-        "stagger_sign": ("L_back" if f0["Bone_TUMASAKI_L"][2] < f0["Bone_TUMASAKI_R"][2]
-                         else "R_back"),
-        "height_f0": round(height, 4),
-        "stance_over_height": round(stance[0] / height, 4) if height else None,
+        "stance_3d_f0": round(stance[0], 4) if stance else None,
+        "stance_x_f0": (round(abs(f0["Bone_TUMASAKI_L"][0] - f0["Bone_TUMASAKI_R"][0]), 4)
+                        if len(feet) == 2 else None),
+        "stagger_z_f0": (round(abs(f0["Bone_TUMASAKI_L"][2] - f0["Bone_TUMASAKI_R"][2]), 4)
+                         if len(feet) == 2 else None),
+        "stagger_sign": (("L_back" if f0["Bone_TUMASAKI_L"][2] < f0["Bone_TUMASAKI_R"][2]
+                          else "R_back") if len(feet) == 2 else None),
+        "height_f0": round(height, 4) if height is not None else None,
+        "stance_over_height": (round(stance[0] / height, 4)
+                               if stance and height else None),
         "toe_stance_x_f0": round(stance_toe, 4) if stance_toe is not None else None,
         "toe_stance_over_height": (round(stance_toe / height, 4)
                                    if stance_toe is not None and height else None),
         "toe_stance_x_loop": stance_toe_loop,
         "toe_stance_over_height_loop": (
-            [round(v / height, 4) for v in stance_toe_loop] if stance_toe_loop else None),
+            [round(v / height, 4) for v in stance_toe_loop] if stance_toe_loop and height else None),
         "hand_height_over_height": (round(
-            (f0["Bone_HAND_A_L"][1] - min(f0["Bone_TUMASAKI_L"][1],
-                                          f0["Bone_TUMASAKI_R"][1])) / height, 4)
-            if height else None),
+            (f0["Bone_HAND_A_L"][1] - min(f0[b][1] for b in feet)) / height, 4)
+            if height and "Bone_HAND_A_L" in f0 else None),
         "hand_x_over_height": (round(abs(f0["Bone_HAND_A_L"][0]) / height, 4)
-                               if height else None),
+                               if height and "Bone_HAND_A_L" in f0 else None),
         "wrist_and_fist_f0": _hand_features(f0, height),
     }
 
@@ -898,14 +917,21 @@ def cmd_measure(args):
             json.dump(payload, fh, indent=2, sort_keys=True)
             fh.write("\n")
         sys.stderr.write("pose_dump: wrote %s\n" % out)
+
+    def f4(v):
+        return "n/a" if v is None else "%.4f" % v
+
     print("pose_dump measure %s" % clip.path)
-    print("  frames %d; f0 stance %.4f (x %.4f) stagger %.4f (%s) height %.4f "
-          "stance/height %.3f" % (
-              feats["frames"], feats["stance_3d_f0"], feats["stance_x_f0"],
-              feats["stagger_z_f0"], feats["stagger_sign"], feats["height_f0"],
-              feats["stance_over_height"]))
+    print("  frames %d; f0 stance %s (x %s) stagger %s (%s) height %s "
+          "stance/height %s" % (
+              feats["frames"], f4(feats["stance_3d_f0"]), f4(feats["stance_x_f0"]),
+              f4(feats["stagger_z_f0"]), feats["stagger_sign"], f4(feats["height_f0"]),
+              "n/a" if feats["stance_over_height"] is None
+              else "%.3f" % feats["stance_over_height"]))
     for bone in ("Bone_TUMASAKI_L", "Bone_TUMASAKI_R", "Bone_HAND_A_L", "Bone_HAND_A_R",
                  "Bone_KAO", "Bone_KOSI"):
+        if bone not in feats["f0"]:
+            continue
         print("  %-16s f0 %s  loop range %s" % (
             bone, ["%+.4f" % v for v in feats["f0"][bone]],
             ["%.4f" % v for v in feats["loop_range"][bone]]))
@@ -946,6 +972,7 @@ class Check(object):
 
 def cmd_verify(args):
     checks = []
+    generic = args.profile == "generic"
 
     def add(name, expected, measured, ok, detail=""):
         checks.append(Check(name, expected, measured, ok, detail))
@@ -964,6 +991,8 @@ def cmd_verify(args):
         extents_ok)
     looped = 0
     loop_ok = True
+    loop_worst = 0.0
+    loop_worst_bone = None
     for t in keyed:
         kp = parse2.BLOB_BASE + t["row"]["keyptr"]
         stride = t["row"]["stride"]
@@ -973,8 +1002,15 @@ def cmd_verify(args):
             looped += 1
         else:
             loop_ok = False
-    add("every keyed track loops (first == last key bytes)", "all",
-        "%d/%d looped" % (looped, len(keyed)), loop_ok)
+            angle = quat_angle_deg(t["keys"][0], t["keys"][-1])
+            if angle > loop_worst:
+                loop_worst, loop_worst_bone = angle, t["bone"]
+    loop_closure = {"looped": looped, "keyed": len(keyed),
+                    "worst_first_last_deg": round(loop_worst, 4),
+                    "worst_bone": loop_worst_bone}
+    if not generic:
+        add("every keyed track loops (first == last key bytes)", "all",
+            "%d/%d looped" % (looped, len(keyed)), loop_ok)
     dots = []
     for t in keyed:
         if t["keys"]:
@@ -1015,61 +1051,100 @@ def cmd_verify(args):
     core = [r for b, r in res.items() if b in CORE_BONES]
     arm = [r for b, r in res.items() if b in ARM_BONES]
     fingers = [r for b, r in res.items() if b.startswith(FINGER_PREFIX)]
-    core_worst = max(r["residual_deg"] for r in core)
-    add("core chain (legs/spine/head) residual <= %.0f deg" % CORE_MAX_DEG,
-        "<= %.0f" % CORE_MAX_DEG, "max %.2f (%s)" % (
-            core_worst, max(core, key=lambda r: r["residual_deg"])["bone"]),
-        core_worst <= CORE_MAX_DEG)
-    arm_worst = max(r["residual_deg"] for r in arm)
-    add("arm chain residual <= %.0f deg" % ARM_MAX_DEG, "<= %.0f" % ARM_MAX_DEG,
-        "max %.2f (%s)" % (arm_worst, max(arm, key=lambda r: r["residual_deg"])["bone"]),
-        arm_worst <= ARM_MAX_DEG)
-    fing_ok = all(FINGER_MIN_DEG <= r["residual_deg"] <= FINGER_MAX_DEG for r in fingers)
-    add("finger statics in the relaxed-hand band [%d, %d] deg" % (
-        FINGER_MIN_DEG, FINGER_MAX_DEG), "all in band",
-        "min %.2f max %.2f (%d tracks)" % (
-            min(r["residual_deg"] for r in fingers),
-            max(r["residual_deg"] for r in fingers), len(fingers)), fing_ok,
-        "static finger quats sit off the straight-fingered T-pose bind — the rig's "
-        "relaxed-hand default; applied as-is (not an error)")
+
+    def band(rows):
+        if not rows:
+            return None
+        lo = min(rows, key=lambda r: r["residual_deg"])
+        hi = max(rows, key=lambda r: r["residual_deg"])
+        return {"min": lo["residual_deg"], "max": hi["residual_deg"],
+                "min_bone": lo["bone"], "max_bone": hi["bone"], "count": len(rows)}
+
+    residual_bands = {"core": band(core), "arm": band(arm), "finger": band(fingers),
+                      "all": band(list(res.values()))}
+
+    if not generic:
+        if core:
+            core_worst = max(r["residual_deg"] for r in core)
+            add("core chain (legs/spine/head) residual <= %.0f deg" % CORE_MAX_DEG,
+                "<= %.0f" % CORE_MAX_DEG, "max %.2f (%s)" % (
+                    core_worst, max(core, key=lambda r: r["residual_deg"])["bone"]),
+                core_worst <= CORE_MAX_DEG)
+        if arm:
+            arm_worst = max(r["residual_deg"] for r in arm)
+            add("arm chain residual <= %.0f deg" % ARM_MAX_DEG, "<= %.0f" % ARM_MAX_DEG,
+                "max %.2f (%s)" % (arm_worst, max(arm, key=lambda r: r["residual_deg"])["bone"]),
+                arm_worst <= ARM_MAX_DEG)
+        if fingers:
+            fing_ok = all(FINGER_MIN_DEG <= r["residual_deg"] <= FINGER_MAX_DEG for r in fingers)
+            add("finger statics in the relaxed-hand band [%d, %d] deg" % (
+                FINGER_MIN_DEG, FINGER_MAX_DEG), "all in band",
+                "min %.2f max %.2f (%d tracks)" % (
+                    min(r["residual_deg"] for r in fingers),
+                    max(r["residual_deg"] for r in fingers), len(fingers)), fing_ok,
+                "static finger quats sit off the straight-fingered T-pose bind — the rig's "
+                "relaxed-hand default; applied as-is (not an error)")
 
     # --- the pose semantics across the loop -----------------------------------
-    feats = pose_features(clip)
-    lf = feats["loop_range"]["Bone_TUMASAKI_L"]
-    rf = feats["loop_range"]["Bone_TUMASAKI_R"]
-    add("planted foot (L) stays put in z", "<= %.3f" % FOOT_Z_RANGE,
-        "%.4f" % lf[2], lf[2] <= FOOT_Z_RANGE)
-    add("free foot (R) z range bounded", "<= %.2f" % FREE_FOOT_Z_RANGE,
-        "%.4f" % rf[2], rf[2] <= FREE_FOOT_Z_RANGE)
-    ys = [feats["loop_mean"]["Bone_TUMASAKI_L"][1], feats["loop_mean"]["Bone_TUMASAKI_R"][1]]
-    ys += [feats["f0"]["Bone_TUMASAKI_L"][1], feats["f0"]["Bone_TUMASAKI_R"][1]]
-    add("both feet at ground level (y in [%.2f, %.2f])" % GROUND_Y,
-        "all in band", "y %s" % ["%.3f" % v for v in ys],
-        all(GROUND_Y[0] <= v <= GROUND_Y[1] for v in ys))
-    stagger = feats["stagger_z_f0"]
-    add("the stance is staggered (|toe z_L - z_R| >= %.2f)" % STAGGER_MIN,
-        ">= %.2f" % STAGGER_MIN, "%.4f (%s)" % (stagger, feats["stagger_sign"]),
-        stagger >= STAGGER_MIN)
-    hand_ok = True
-    hand_detail = []
-    for bone in ("Bone_HAND_A_L", "Bone_HAND_A_R"):
-        x, y, z = feats["f0"][bone]
-        ok = HAND_X[0] <= abs(x) <= HAND_X[1] and HAND_Y[0] <= y <= HAND_Y[1] and abs(z) <= HAND_Z
-        hand_ok = hand_ok and ok
-        hand_detail.append("%s (%+.3f, %+.3f, %+.3f)" % (bone.replace("Bone_", ""), x, y, z))
-    add("hands hang at the sides (|x| in %s, y in %s, |z| <= %.2f)" % (
-        HAND_X, HAND_Y, HAND_Z), "both", "; ".join(hand_detail), hand_ok)
-    head = feats["f0"]["Bone_KAO"]
-    hip = feats["f0"]["Bone_KOSI"]
-    add("upright: head above hips, near the hip axis", "head.y > hip.y, |dx| <= 0.05",
-        "head (%+.3f, %+.3f, %+.3f), hip (%+.3f, %+.3f, %+.3f), dx %.4f" % (
-            tuple(head) + tuple(hip) + (head[0] - hip[0],)),
-        head[1] > hip[1] and abs(head[0] - hip[0]) <= 0.05)
-    root_y = [v[1] for v in [clip.root["values"][f] for f in range(clip.root["keys"])]] \
-        if clip.root else []
-    add("root series y in [%.2f, %.2f] (pelvis above ground)" % ROOT_Y,
-        "all in band", "y [%.4f, %.4f]" % (min(root_y), max(root_y)),
-        bool(root_y) and all(ROOT_Y[0] <= v <= ROOT_Y[1] for v in root_y))
+    if generic:
+        # Model-neutral pose gates: the bridge's failure mode (a vertical fold)
+        # puts the head below the pelvis; a wrong track map or root would put a
+        # non-foot joint at the bottom.  The absolute-metre bands are the player's.
+        world = clip.world_pose(0)
+        head = clip.joint_world(world, "Bone_KAO")
+        hip = clip.joint_world(world, "Bone_KOSI")
+        add("upright: head above the pelvis", "head.y > hip.y",
+            "head %s, hip %s" % (
+                "n/a" if head is None else "y %.4f" % head[1],
+                "n/a" if hip is None else "y %.4f" % hip[1]),
+            head is not None and hip is not None and head[1] > hip[1])
+        body = [(world[j][3][1], name) for j, name in
+                zip(clip.glb["joints"], clip.glb["names"]) if name.startswith("Bone_")]
+        low_y, low_name = min(body) if body else (None, None)
+        foot = low_name is not None and any(
+            tag in low_name for tag in ("TOE", "TUMASAKI", "Foot", "FOOT"))
+        add("feet lowest: the lowest body joint is a foot bone", "TOE/TUMASAKI/Foot",
+            "%s y %s" % (low_name, "n/a" if low_y is None else "%.4f" % low_y), foot)
+        finite = all(math.isfinite(v) for j in clip.glb["joints"] for v in world[j][3][:3])
+        add("world pose is finite (no NaN/Inf)", "all finite",
+            "%d joints" % len(clip.glb["joints"]) if finite else "non-finite values", finite)
+    else:
+        feats = pose_features(clip)
+        lf = feats["loop_range"]["Bone_TUMASAKI_L"]
+        rf = feats["loop_range"]["Bone_TUMASAKI_R"]
+        add("planted foot (L) stays put in z", "<= %.3f" % FOOT_Z_RANGE,
+            "%.4f" % lf[2], lf[2] <= FOOT_Z_RANGE)
+        add("free foot (R) z range bounded", "<= %.2f" % FREE_FOOT_Z_RANGE,
+            "%.4f" % rf[2], rf[2] <= FREE_FOOT_Z_RANGE)
+        ys = [feats["loop_mean"]["Bone_TUMASAKI_L"][1], feats["loop_mean"]["Bone_TUMASAKI_R"][1]]
+        ys += [feats["f0"]["Bone_TUMASAKI_L"][1], feats["f0"]["Bone_TUMASAKI_R"][1]]
+        add("both feet at ground level (y in [%.2f, %.2f])" % GROUND_Y,
+            "all in band", "y %s" % ["%.3f" % v for v in ys],
+            all(GROUND_Y[0] <= v <= GROUND_Y[1] for v in ys))
+        stagger = feats["stagger_z_f0"]
+        add("the stance is staggered (|toe z_L - z_R| >= %.2f)" % STAGGER_MIN,
+            ">= %.2f" % STAGGER_MIN, "%.4f (%s)" % (stagger, feats["stagger_sign"]),
+            stagger >= STAGGER_MIN)
+        hand_ok = True
+        hand_detail = []
+        for bone in ("Bone_HAND_A_L", "Bone_HAND_A_R"):
+            x, y, z = feats["f0"][bone]
+            ok = HAND_X[0] <= abs(x) <= HAND_X[1] and HAND_Y[0] <= y <= HAND_Y[1] and abs(z) <= HAND_Z
+            hand_ok = hand_ok and ok
+            hand_detail.append("%s (%+.3f, %+.3f, %+.3f)" % (bone.replace("Bone_", ""), x, y, z))
+        add("hands hang at the sides (|x| in %s, y in %s, |z| <= %.2f)" % (
+            HAND_X, HAND_Y, HAND_Z), "both", "; ".join(hand_detail), hand_ok)
+        head = feats["f0"]["Bone_KAO"]
+        hip = feats["f0"]["Bone_KOSI"]
+        add("upright: head above hips, near the hip axis", "head.y > hip.y, |dx| <= 0.05",
+            "head (%+.3f, %+.3f, %+.3f), hip (%+.3f, %+.3f, %+.3f), dx %.4f" % (
+                tuple(head) + tuple(hip) + (head[0] - hip[0],)),
+            head[1] > hip[1] and abs(head[0] - hip[0]) <= 0.05)
+        root_y = [v[1] for v in [clip.root["values"][f] for f in range(clip.root["keys"])]] \
+            if clip.root else []
+        add("root series y in [%.2f, %.2f] (pelvis above ground)" % ROOT_Y,
+            "all in band", "y [%.4f, %.4f]" % (min(root_y), max(root_y)),
+            bool(root_y) and all(ROOT_Y[0] <= v <= ROOT_Y[1] for v in root_y))
 
     # --- determinism ----------------------------------------------------------
     clip2 = Clip(args.file, glb_path=args.glb, skb_path=args.skb)
@@ -1081,6 +1156,22 @@ def cmd_verify(args):
     print("pose_dump verify: %s" % clip.path)
     print("  clip: %d frames, %d tracks (%d keyed), sibling %s" % (
         frames, clip.info["tracks"], len(keyed), os.path.basename(clip.skb_path)))
+    print("  profile: %s" % args.profile)
+    if generic:
+        def fmt_band(name):
+            b = residual_bands[name]
+            return "n/a" if b is None else "%.2f..%.2f (%s..%s, %d)" % (
+                b["min"], b["max"], b["min_bone"], b["max_bone"], b["count"])
+
+        print("  residual bands vs the bind local (deg, reported not gated):")
+        print("    core   %s" % fmt_band("core"))
+        print("    arm    %s" % fmt_band("arm"))
+        print("    finger %s" % fmt_band("finger"))
+        print("    all    %s" % fmt_band("all"))
+        print("  loop closure (reported not gated): %d/%d tracks byte-identical; "
+              "worst first-last %.4f deg (%s)" % (
+                  loop_closure["looped"], loop_closure["keyed"],
+                  loop_closure["worst_first_last_deg"], loop_closure["worst_bone"]))
     for c in checks:
         print("%-5s %-64s expected %s, measured %s%s" % (
             "PASS" if c.ok else "FAIL", c.name, c.expected, c.measured,
@@ -1090,10 +1181,14 @@ def cmd_verify(args):
     if args.json:
         out = os.path.abspath(args.json)
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        payload = {"file": clip.path, "profile": args.profile,
+                   "checks": [vars(c) for c in checks],
+                   "gate": "MET" if not failed else "NOT MET"}
+        if generic:
+            payload["residual_bands"] = residual_bands
+            payload["loop_closure"] = loop_closure
         with open(out, "w") as fh:
-            json.dump({"file": clip.path, "checks": [vars(c) for c in checks],
-                       "gate": "MET" if not failed else "NOT MET"}, fh, indent=2,
-                      sort_keys=True)
+            json.dump(payload, fh, indent=2, sort_keys=True)
             fh.write("\n")
         sys.stderr.write("pose_dump: wrote %s\n" % out)
     return 1 if failed else 0
@@ -1145,6 +1240,8 @@ def main(argv=None):
     p = sub.add_parser("verify", help="the pinned assertions (exit non-zero on failure)")
     common(p, with_file=False)
     p.add_argument("--file", default="cp3shadow/anim/player_a_stand.anb")
+    p.add_argument("--profile", choices=("player", "generic"), default="player",
+                   help="player bands (default) or the model-neutral generic gates")
     p.set_defaults(func=cmd_verify)
 
     args = parser.parse_args(argv)

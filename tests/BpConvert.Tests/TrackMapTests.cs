@@ -17,6 +17,7 @@ public class TrackMapTests : IDisposable
 
     private const string WanderRel = "models/shadow/characters/wander/_cmn/wander.cmsh";
     private const string AgroRel = "models/shadow/characters/agro/_cmn/agro.cmsh";
+    private const string ValusRel = "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.cmsh";
 
     [Fact]
     public void Stand_tracks_all_resolve_into_wander_glb()
@@ -55,6 +56,39 @@ public class TrackMapTests : IDisposable
         Assert.All(map, index => Assert.InRange(index, 0, joints.Count - 1));
         Assert.Equal(Array.IndexOf(joints.ToArray(), "Bone_KOSI"), map[0]);
         Assert.Equal(Array.IndexOf(joints.ToArray(), "Bone_MIMI_R"), map[29]);
+    }
+
+    [Fact]
+    public void Minotaur_stand_tracks_all_resolve_into_valus_glb()
+    {
+        // S4's central mapping risk: Valus's 58-track idle against the converted 238-joint
+        // colossus glb. The read-only recon emulated 58/58; this pin runs the real readers,
+        // the real converter and a SharpGLTF reload of the result.
+        var clip = AnbReader.Read(TestAssets.Sample("cp3shadow/anim/minotaur_a_stand.anb"));
+        var bank = SkbReader.Read(TestAssets.Sample("cp3shadow/skel/minotaur_a.skb"));
+        var joints = JointNames(ConvertAndLoad(ValusRel));
+
+        var map = TrackMap.Map(clip, bank, joints, out var unresolved);
+
+        Assert.Equal(238, joints.Count);
+        Assert.Equal(58, clip.Tracks.Count);
+        Assert.Equal(clip.Tracks.Count, map.Length);
+        Assert.Equal(0, unresolved);
+        Assert.Equal(58, map.Count(index => index >= 0));
+        Assert.Equal(58, map.Distinct().Count()); // 58 tracks -> 58 distinct joints, no collision
+        Assert.All(map, index => Assert.InRange(index, 0, joints.Count - 1));
+
+        // Track i is the bank's record i, in file order (pose_dump's rule).
+        Assert.Equal(Array.IndexOf(joints.ToArray(), "Bone_KOSI"), map[0]);
+        Assert.Equal(Array.IndexOf(joints.ToArray(), "Bone_KAO"), map[12]);
+        Assert.Equal(Array.IndexOf(joints.ToArray(), "Bone_OYA_C_R"), map[57]);
+
+        // The clip's 13 type-0xD tracks (angle+axis records; indices measured by the RE
+        // decode) must be part of the mapped set, not dropped as an unhandled variant.
+        var type0D = new[] { 2, 6, 15, 21, 29, 30, 32, 33, 35, 36, 38, 39, 42 };
+        Assert.Equal(13, type0D.Length);
+        foreach (var track in type0D)
+            Assert.Equal(Array.IndexOf(joints.ToArray(), bank.Records[track].Name), map[track]);
     }
 
     [Fact]

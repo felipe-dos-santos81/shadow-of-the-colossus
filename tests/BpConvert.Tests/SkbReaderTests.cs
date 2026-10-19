@@ -50,6 +50,42 @@ public class SkbReaderTests
     }
 
     [Fact]
+    public void Minotaur_bank_decodes()
+    {
+        // Valus's part bank (S4): 73 names = 58 record-bearing core bones + 15 OptBone_*
+        // joints, the same name-blob shape as the player/horse banks at a larger count.
+        // Measured against probe.parse_skb (docs/notes/s4-recon.md §2).
+        var bank = SkbReader.Read(TestAssets.Sample("cp3shadow/skel/minotaur_a.skb"));
+
+        Assert.Equal("minotaur_a", bank.Name);
+        Assert.Equal(73, bank.Records.Count);
+        Assert.Equal(58, bank.Records.Count(record =>
+            !record.Name.StartsWith("OptBone_", StringComparison.Ordinal)));
+        Assert.Equal(15, bank.Records.Count(record =>
+            record.Name.StartsWith("OptBone_", StringComparison.Ordinal)));
+
+        // The record-bearing run: Bone_KOSI .. Bone_OYA_C_R (record 57); the optional
+        // joints follow from OptBone_IKFootR to OptBone_IKHandL.
+        Assert.Equal("Bone_KOSI", bank.Records[0].Name);
+        Assert.Equal("Bone_OYA_C_R", bank.Records[57].Name);
+        Assert.Equal("OptBone_IKFootR", bank.Records[58].Name);
+        Assert.Equal("OptBone_IKHandL", bank.Records[^1].Name);
+
+        // Parents: two roots (Bone_KOSI, Bone_HARA), the spine chain under them, the head
+        // under Bone_KUBI. File order is topological — every parent precedes its record.
+        Assert.Equal(-1, bank.Records[0].Parent);
+        Assert.Equal(0, bank.Records[1].Parent);  // Bone_MOMO_L under Bone_KOSI
+        Assert.Equal(1, bank.Records[2].Parent);  // Bone_SUNE_L under Bone_MOMO_L
+        Assert.Equal("Bone_HARA", bank.Records[9].Name);
+        Assert.Equal(-1, bank.Records[9].Parent);
+        Assert.Equal(9, bank.Records[10].Parent);   // Bone_MUNE under Bone_HARA
+        Assert.Equal(11, bank.Records[12].Parent);  // Bone_KAO under Bone_KUBI
+        for (var record = 0; record < 58; record++)
+            Assert.InRange(bank.Records[record].Parent, -1, record - 1);
+        Assert.All(bank.Records.Skip(58), record => Assert.Equal(-1, record.Parent));
+    }
+
+    [Fact]
     public void Wrong_magic_throws()
     {
         var path = Path.Combine(Path.GetTempPath(), $"bpconvert-skb-{Guid.NewGuid():N}.skb");
