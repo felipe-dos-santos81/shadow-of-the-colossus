@@ -462,13 +462,16 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
                     vertex.v = uv[1];
                 }
 
-                // Absent JOINTS_0/WEIGHTS_0: joint 0 at full weight, so an
-                // unskinned primitive of a skinned model renders in bind pose
-                // instead of collapsing to the origin. JOINTS_0 arrives as
+                // Absent JOINTS_0/WEIGHTS_0: zero weights, which the shader's
+                // skinning path reads as "unskinned" and passes through
+                // untransformed. (Full weight on joint 0 would instead select
+                // the palette's first joint — in a composed scene that is the
+                // player's animated root bone, which would warp every unskinned
+                // prop with the player's animation.) JOINTS_0 arrives as
                 // unsigned byte or short; both become the u16 the pipeline uses.
                 for (int i = 0; i < 4; ++i) {
                     vertex.j[i] = 0;
-                    vertex.w[i] = i == 0 ? 1.0f : 0.0f;
+                    vertex.w[i] = 0.0f;
                 }
                 if (joints != nullptr && v < joints->count) {
                     cgltf_uint indices[4] = {0, 0, 0, 0};

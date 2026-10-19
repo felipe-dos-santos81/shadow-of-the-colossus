@@ -503,21 +503,23 @@ TEST_CASE("a joint node carrying a matrix decomposes into its rest TRS") {
     CHECK(joint.restR.w == doctest::Approx(std::cos(kPi / 4.0f)).epsilon(1e-4));
 }
 
-TEST_CASE("a primitive without JOINTS_0 defaults to joint 0, weight 1") {
+TEST_CASE("a primitive without JOINTS_0 defaults to zero weights (unskinned)") {
     TempFixtureDir dir;
     write_text(dir.path() / "unskinned.gltf", skin_fixture_gltf_json({.skinned = false}));
 
     auto scene = load_scene(dir.path(), "unskinned.gltf");
 
-    // The model still has its skin — only the primitive lacks the attributes,
-    // which must default to joint 0 at full weight (bind pose, no collapse).
+    // The model still has its skin — only the primitive lacks the attributes.
+    // Zero weights are the "unskinned" signal the shader passes through
+    // untransformed: full weight on joint 0 would instead select palette[0],
+    // the player's animated root bone in a composed scene (F3).
     REQUIRE(scene.skin.joints.size() == 2);
     REQUIRE(scene.meshes.size() == 1);
     REQUIRE(scene.meshes[0].vertices.size() == 3);
     for (const Vertex& vertex : scene.meshes[0].vertices) {
         for (int i = 0; i < 4; ++i) {
             CHECK(vertex.j[i] == 0);
-            CHECK(vertex.w[i] == doctest::Approx(i == 0 ? 1.0f : 0.0f));
+            CHECK(vertex.w[i] == doctest::Approx(0.0f));
         }
     }
 }
