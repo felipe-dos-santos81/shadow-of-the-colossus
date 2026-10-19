@@ -704,13 +704,15 @@ proj_link_dir=$(mktemp -d); ln -s "$PWD/out/re/ghidra" "$proj_link_dir/ghidra"
 ```
 
 The dot-free `proj_link_dir` is the same RE-0 R-E6 workaround §4 uses. Re-run determinism: the
-**`FindSampler:` lines are byte-identical** across two full runs (6,033 lines; the complete logs
-differ only in headless's own timings and the temp-dir name).
+**script-output lines (`INFO  FindSampler.java>`)** are byte-identical across two full runs
+(6,031 lines; `grep FindSampler` counts 6,033 because it also matches the two headless invocation
+lines; the complete logs differ only in headless's own timings and the temp-dir name).
 
 ### 6.1 The sampler — `FUN_005fd900` ("GetObjectAnimationFloatFrame")
 
-The walk's decisive edge: `FUN_005fd900` is called by nine functions — the animation-update chain
-that drives it is `FUN_005fc6b0` → `FUN_0060b720` → `FUN_005fd900` — and its own debug strings
+The walk's decisive edge: `FUN_005fd900` is called by nine functions; the measured caller chain is
+`FUN_005fc6b0` → `FUN_0060b720` → `FUN_005fd900` (`FUN_005fc6b0`'s role — animation update vs
+flag-gated debug readout — is **not settled** by this pass), and its own debug strings
 name it — the format strings at its call sites read `OBJANIMTYPE_OBJECT`,
 `OBJANIMTYPE_OBJECT_WITH_DISSOLVE`, `OBJANIMTYPE_CAMERA`, `OBJANIMTYPE_CAMERA_TARGET` …
 `- GetObjectAnimationFloatFrame()\n`.
@@ -762,10 +764,13 @@ index. Quoted arithmetic (all constants read from `out/re/eboot.elf` at the give
 
 | case | stored key | arithmetic | scale constant |
 |---|---|---|---|
-| 0 | 4 × float32 (16 B stride) | copied verbatim | — |
+| 0 | 4 × float32 | read from the descriptor's base with **no** key-index scaling (the 16 B stride is the caller's, not read here) | — |
 | 1 | 4 × float32 | x,y,z copied; 4th = `±sqrt(clamped remainder)`, sign from the key's byte 1 | — |
 | 2 | 4 × float32 | copied, then scaled by `FUN_00586060(u32 key)` | — |
-| 3–6 | u32 packed, 9-bit fields | `x = bits 26..18`, `y = 17..9`, `z = 8..0` (shift expressions `<<5>>0x17`, `<<0xe>>0x17`, `<<0x17>>0x17`), the missing 4th = `±sqrt(\|1−\|v\|²\|)` + a 4-bit residual (bits 30..27) × `1/7` | `1/255` (`0x0126b2c0`), `1/7` (`0x0126b2c4`) |
+| 3 | u32 packed | `x = bits 26..18`, `y = 17..9`, `z = 8..0`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 27..30 × `1/7`; sign = bit 31 | `1/255` (`0x0126b2c0`), `1/7` (`0x0126b2c4`) |
+| 4 | u32 packed | `x = bits 31..23`, `y = 17..9`, `z = 8..0`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 18..21 × `1/7`; sign = bit 22 | `1/255`, `1/7` |
+| 5 | u32 packed | `x = bits 31..23`, `y = 22..14`, `z = 8..0`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 9..12 × `1/7`; sign = bit 13 | `1/255`, `1/7` |
+| 6 | u32 packed | `x = bits 31..23`, `y = 22..14`, `z = 13..5`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 0..3 × `1/7`; sign = bit 4 | `1/255`, `1/7` |
 | 10 | 3 × float32 (12 B stride) | copied; 4th = `±sqrt(\|1−\|v\|²\|)`, sign from bit 0 of x | — |
 | **0xb** | **3 × int16 (6 B stride)** | `x = int16₀ × 1/32767`, `y = int16₁ × 1/32767`, `z = int16₂ × 1/32767`; **4th = `±sqrt(\|1−\|v\|²\|)`**, sign = **bit 0 of int16₀** (`(u16₀ & 1) * 2 ^ 2` → ×(±1)) | **`1/32767`** (`0x0126b2ac` = `0x38000100`) |
 | 0xc | 3 × int16 (6 B stride) | per-component `int16 × (1/32767) × scale + offset` (scales `param_3[1]/[3]/[5]`, offsets `[0]/[2]/[4]`); 4th = `±sqrt(\|1−\|v\|²\|)`, sign = bit 0 of int16₀ | per-track floats |
@@ -784,7 +789,8 @@ at 12-byte stride).
 
 The only references to the two scaling constants (from `refs`): `0x0126b2ac` ← `0x0060c1cb`,
 `0x0060c262`, `0x0060c369` — all inside `FUN_0060bba0`; `0x0126b184` (30.0) ← `0x005fc858`,
-`0x005fcb34` — both inside the *debug* function `FUN_005fc6b0` only.
+`0x005fcb34` — both inside `FUN_005fc6b0`, in its flag-gated readout (its role is unresolved,
+§6.1).
 
 ### 6.4 The time model — frames, wrap, blend (answers §3.4's missing time fields)
 
@@ -805,11 +811,12 @@ So: keys are indexed by **integer frame**, the time between two keys is blended 
 wrap is modulo `count−1` (the last key duplicates the first — a loop convention), and there is
 **no time field anywhere in the payload because none is needed**: `t_key = frame / fps` is
 implicit. The rate: the family fps is `29.999998` in the `.cani` header (§1.2) and the engine's
-own constant is `30.0` (`0x0126b184`, used by the debug print only); the callers hand the sampler
-**integer frames** — `FUN_0060b720` passes `(float)param_4`, and its only caller `FUN_005fc6b0`
-divides `(count−1)` by `FUN_0060b610() × 30.0` in its debug readout (the `%.2fFPS` print). The
-seconds→frames conversion itself sits above `FUN_005fc6b0` and was **not** walked in this pass
-(documented stopping point; the constant 30.0 has no other reference in the image).
+own constant is `30.0` (`0x0126b184`, referenced only from `FUN_005fc6b0`'s flag-gated readout);
+the callers hand the sampler **integer frames** — `FUN_0060b720` passes `(float)param_4`, and its
+only caller `FUN_005fc6b0` divides `(count−1)` by `FUN_0060b610() × 30.0` in that same readout (the
+`%.2fFPS` print). The seconds→frames conversion itself was **not** walked in this pass — it is
+*assumed* to sit above `FUN_005fc6b0` (its callers were not walked; documented stopping point, and
+the constant 30.0 has no other reference in the image).
 
 ### 6.5 Correlation with §3 and the B2 candidate
 
@@ -824,37 +831,53 @@ seconds→frames conversion itself sits above `FUN_005fc6b0` and was **not** wal
 2. **Does an implicit time base explain the missing time fields?** **Yes — confirmed** (§6.4):
    per-frame keys at the family fps, integer key index + linear blend, wrap by `count−1`. The
    `.anb` payload needs no per-key times because the runtime never reads one.
-3. **Is the candidate's quaternion reading confirmed or contradicted?** **Both, and the split
-   matters** (documented, no overclaim):
+3. **Is the candidate's quaternion reading confirmed or contradicted?** **Split verdict** (documented,
+   no overclaim): the encoding *shape* is confirmed at the runtime level; the file-level reading is
+   **not verified** — neither confirmed nor contradicted.
    - *Confirmed in shape*: the engine really has the int16-triplet + derived-`w` encoding —
      format `0xb` of `FUN_0060bba0`: `x,y,z = 3 × int16 × 1/32767`, `w = ±sqrt(|1−|v|²|)` with the
      **sign from bit 0 of the first int16**. The B2 candidate's `1/32768` and always-positive `w`
      are the two deltas (both small; the exact constants are quoted above).
-   - *Contradicted as a file-level reading*: the `.anb`'s records do **not** start with key
-     arrays, and the file contains no long stride-6 int16-triplet runs — measured on
-     `player_a_stand.anb`: the longest run of consecutive 6-byte windows whose triplets all have
-     `|v| ≤ 1` (scale ≈ `1/32767`) is **54 B = 9 keys** (`0x1CDC`), i.e. no key series anywhere.
-     The runtime reaches keys through the loader-built structure (§6.6), not from raw record
-     bytes, and the engine *never enforces unit norms* (`sqrt(|1−|v|²|)`) — so the offline gate's
-     "norms within 1e-3" assertion is not a property the engine guarantees and cannot validate a
-     candidate. **B2's `UNVERIFIED` mark therefore stands**, now with the reason pinned: the
-     missing step is the loader's file→structure parse, not the sampler.
+   - *Not verified — and not verifiable from the file alone*: the `.anb` **does** contain long
+     stride-6 int16-triplet series. Re-derived on `player_a_stand.anb` (rule: for each alignment
+     r ∈ 0…5, non-overlapping consecutive 6-byte windows from r; a window passes when
+     `x²+y²+z² ≤ 32767²`): the longest run is **178 windows = 1,068 B at `0x1CB8`** (alignment
+     r=2, EOF-clipped — it crosses into tail table 1 at `0x1D48`, whose small `{offset, tag}`
+     words pass the norm test trivially); **record 57** (`0x1C1C..0x1D48`) holds two 24-window
+     runs (`0x1C1C`: dots 0.9734–0.9995, smooth; and `0x1CB8`, which breaks); under the B2
+     reading from the record starts, **record 0** (`0x1E0`) starts with a **41-key valid series**
+     (all `|v| ≤ 1`; adjacent-key dots 0.9727–0.9996; first break at the 41st transition, dot
+     −0.0642) and **record 48** has a 63-key valid run at `0x1A3A`. The earlier claim "no key
+     series anywhere" was wrong and is withdrawn; what the verified evidence supports is that
+     these series are **not validated keys**: the engine reads keys through the loader-built
+     structure (§6.6), and B2's candidate still fails the gate's global assertions (§3.6:
+     428 keys with `|v| > 1`, 693/1111 dots < 0.9). **B2's `UNVERIFIED` mark stands; the honest
+     file-level statement is *not verified*, not *contradicted*.** These series are recorded as
+     the **new lead** for the parse-chain pass — they may be the key data the decode was missing.
+     (The reviewer's independent re-derivation reproduced the run/record-57/record-0 findings and
+     the break at −0.0642 exactly; its dot-range minimum read 0.9885 and its rule-variant scan
+     counts 24/90 differ from mine — rule-sensitive numbers, recorded as such.)
 
 ### 6.6 What the re-base pass actually operates on (resolves §4.4's open note)
 
 §4.4 left it open whether `FUN_0066fe60`'s structure is "a runtime sub-structure, or a repurposed
-header". This pass settles it toward **runtime sub-structure**: a signature scan over
-`player_a_stand.anb` and `horse_a_add_horse_kick.anb` (rule: first byte 1…9, u16 count 1…4096 at
-`+4`, ≥3 of the nine 31-bit offset fields nonzero and all < `0x10000`) and a looser variant of
-the same scan over three plaintext `.cani` files find **no match** — and the raw file starts are
-excluded anyway (`xff` family: magic `78 66 66 00`; `.cani`: `38 30 41 45`). The structure is
-allocated and linked by the loader chain (`FUN_00589310` → `FUN_00588900`; the node's `+0x48`
-holds the pointer the re-base pass receives), and its 31-bit fields are **offsets relative to the
-load base `DAT_02f3b8c0`**, which `FUN_0066fe60` converts to absolute pointers in place.
-Consequence for the decode: §4.4's field list must **not** be read as raw-file offsets (the class
-of mistake the B2 candidate's record-start reading made), and the file→structure parse
-(`FUN_00588900`'s chain) is the concrete next step to decode the `.anb` payload — the sampler
-itself is downstream of it.
+header". This pass settles it toward **runtime sub-structure**, on the decompile legs (below) —
+the file-side scan is *rule-sensitive and does not carry the conclusion by itself*: the raw file
+starts are excluded by magic (`xff` family: `78 66 66 00`; `.cani`: `38 30 41 45`), and a
+signature scan for the structure (first byte 1…9, u16 count 1…4096 at `+4`, ≥3 of the nine
+31-bit offset fields nonzero and all < `0x10000`) matches **only table-like data, never a
+header**: 13 hits in `player_a_stand` — all inside tail table 1 (≥ `0x1D48`) — 72 in the horse
+(all at/after `0xC30`, its table region and immediate lead-in), and 0–1 per file in an 8-file
+plaintext-`.cani` sample. The reviewer's rule variant counted 24/90 on the same two files; the
+counts are rule-sensitive, the "no file header" reading is what reproduces. The conclusion
+rests on the decompile legs: the structure is allocated and linked by the loader chain
+(`FUN_00589310` → `FUN_00588900`; the node's `+0x48` holds the pointer the re-base pass
+receives), and its 31-bit fields are **offsets relative to the load base `DAT_02f3b8c0`**, which
+`FUN_0066fe60` converts to absolute pointers in place.
+Consequence for the decode: §4.4's field list must **not** be read as raw-file offsets (the
+structure is runtime-built), and the file→structure parse (`FUN_00588900`'s chain) is the
+concrete next step to decode the `.anb` payload — the sampler itself is downstream of it, and the
+stride-6 series recorded in §6.5.3 are the lead to test against the parse.
 
 ### 6.7 What this changes
 
@@ -863,7 +886,9 @@ itself is downstream of it.
   time model. This is the semantic ground truth §3.8 asked for, at the *runtime* level.
 - The **`.anb` file-level decode is still open** — the gap is now the loader's parse, not the
   sampler; §5's gate decision (NOT MET) does not change, and B2's candidate data stays
-  `UNVERIFIED` (never consume it as animation data).
+  `UNVERIFIED` (never consume it as animation data). The stride-6 series recorded in §6.5.3
+  (178-window run at `0x1CB8`, record 57's two 24-window runs, record 0's 41-key smooth series,
+  record 48's 63-key run at `0x1A3A`) are the lead to check against the parse.
 - Next pass, in order: (1) `FUN_00588900`/`FUN_00588e80` (the loader callbacks) and the structure
   builder, to map the file's bytes onto the 12-byte records; (2) `FUN_005fc6b0`'s callers for the
   seconds→frames conversion; (3) then re-run `check-curves` against whatever layout the parse
