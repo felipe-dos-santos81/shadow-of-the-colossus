@@ -194,9 +194,11 @@ public class AnimWriterTests : IDisposable
         // The world-pose pin: substitute key 0 of every channel (rotation keys, root
         // translation) into the reloaded node locals and compose down the tree, in glTF's
         // column-vector semantics (System.Numerics' row-vector matrices: world = local ×
-        // parent world). The decoder's frame-0 world heights are Bone_KAO y 1.1165 and
-        // Bone_HAND_A_L y 0.6269 (tools/re/anb/pose_dump.py pose). With the old bridge the
-        // head reads y 0.3758 — below the pelvis at 0.7429 — which is Task 7 §5.1.
+        // parent world). The expected frame-0 world heights are the decoder's, from
+        // `python3 tools/re/anb/pose_dump.py pose cp3shadow/anim/player_a_stand.anb
+        // --frame 0`: Bone_KOSI 0.7429, Bone_MUNE 0.8343, Bone_KUBI 1.0462, Bone_KAO
+        // 1.1165, Bone_HAND_A_L 0.6269. With the old bridge the head reads y 0.3758 —
+        // below the pelvis — which is Task 7 §5.1.
         var gltf = LoadStandGltf();
         var animation = Assert.Single(gltf.LogicalAnimations);
 
@@ -226,14 +228,24 @@ public class AnimWriterTests : IDisposable
         }
 
         var byName = gltf.LogicalNodes.Where(node => node.IsSkinJoint).ToDictionary(node => node.Name);
+
+        // The four decoded heights that separate an upright stand from the fold (the head
+        // chain mirrors about the pelvis when the rotation convention is wrong).
+        var expected = new (string Bone, float Y)[]
+        {
+            ("Bone_KOSI", 0.7429f), ("Bone_MUNE", 0.8343f),
+            ("Bone_KUBI", 1.0462f), ("Bone_KAO", 1.1165f),
+        };
+        foreach (var (bone, y) in expected)
+            Assert.InRange(WorldOf(byName[bone]).Translation.Y, y - 0.02f, y + 0.02f);
+
         var head = WorldOf(byName["Bone_KAO"]);
+        var pelvis = WorldOf(byName["Bone_KOSI"]);
         var leftHand = WorldOf(byName["Bone_HAND_A_L"]);
-        Assert.InRange(head.Translation.Y, 1.1065f, 1.1265f);
         Assert.InRange(leftHand.Translation.Y, 0.6169f, 0.6369f);
 
         // The head must sit above the pelvis (the fold's signature is the reverse), and
         // the standard glTF evaluator must agree with the manual composition.
-        var pelvis = WorldOf(byName["Bone_KOSI"]);
         Assert.True(head.Translation.Y > pelvis.Translation.Y + 0.3f);
         var evaluated = byName["Bone_KAO"].GetWorldMatrix(animation, 0f);
         Assert.InRange(Math.Abs(evaluated.Translation.Y - head.Translation.Y), 0f, 1e-3f);
