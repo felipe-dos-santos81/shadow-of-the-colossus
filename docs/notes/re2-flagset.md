@@ -23,7 +23,7 @@ one premise that touches T2 is corrected further below (§2.2).
 
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
-python3 tools/re/anb/records.py verify                                    # 19/19 PASS, exit 0
+python3 tools/re/anb/records.py verify                                    # 20/20 PASS, exit 0
 python3 tools/re/anb/records.py scan 'cp3shadow/anim/*.anb' --json out/re/flagset-scan.json
 python3 tools/re/anb/records.py dump cp3shadow/anim/objanim_leo_a_jump_fall.anb
 python3 tools/re/anb/records.py decode cp3shadow/anim/objanim_cerberus_a_atk_near_l.anb --track 0
@@ -268,7 +268,7 @@ the engine never normalizes — C3 §6.3, re-observed.)
 
 ## 6 · Verification (pinned assertions — `records.py verify`, exit 0/1)
 
-19 assertions, **19/19 PASS, exit 0**, full run ≈ 1.1 s including the 4,455-file corpus scan
+20 assertions, **20/20 PASS, exit 0**, full run ≈ 1.1 s including the 4,455-file corpus scan
 (`out/re/flagset-verify.json`):
 
 1. **leo structure/roles**: flag-set bit, 15 tracks / 21 frames, all records type 13; every `p1`
