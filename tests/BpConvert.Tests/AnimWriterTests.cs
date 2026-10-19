@@ -311,6 +311,58 @@ public class AnimWriterTests : IDisposable
         Assert.Contains("Bone_root", error.Message);
     }
 
+    [Fact]
+    public void Duplicate_rotation_channels_on_one_joint_throw()
+    {
+        // Two tracks mapping to the same joint would emit two rotation channels for one node —
+        // ambiguous for the evaluator, so the writer refuses it (naming the clip and the joint).
+        var model = WithClip(IdentitySkeleton("Bone_root", "Bone_A"), Clip("duplicate", 2,
+            new AnimTrack { Index = 0, IsStatic = true, Keys = new List<Quaternion> { Quaternion.Identity }, JointIndex = 1 },
+            new AnimTrack { Index = 1, IsStatic = true, Keys = new List<Quaternion> { Quaternion.Identity }, JointIndex = 1 }));
+
+        var error = Assert.Throws<InvalidDataException>(() => Write(model, "duplicate"));
+        Assert.Contains("duplicate", error.Message);
+        Assert.Contains("Bone_A", error.Message);
+        Assert.Contains("rotation", error.Message);
+    }
+
+    [Fact]
+    public void Clip_with_no_channels_throws()
+    {
+        // An empty animations[] entry (no channels, no samplers) is not a valid glTF animation.
+        var model = WithClip(IdentitySkeleton("Bone_root"), Clip("empty", 2));
+
+        var error = Assert.Throws<InvalidDataException>(() => Write(model, "empty"));
+        Assert.Contains("empty", error.Message);
+        Assert.Contains("no animation channels", error.Message);
+    }
+
+    [Fact]
+    public void Type_0xD_surplus_key_is_not_emitted()
+    {
+        // Type 0xD may carry frames+1 keys: the extra raw-zero sentinel sits at index `frames`,
+        // outside the engine's sampled range [0, frames-1]. Only `frames` keys are written and
+        // the last one is at (frames-1)/fps — the key cap the engine's duration implies.
+        const int frames = 4;
+        var clip = Clip("capped", frames,
+            new AnimTrack
+            {
+                Index = 0,
+                IsStatic = false,
+                Keys = Enumerable.Range(0, frames + 1)
+                    .Select(_ => Quaternion.Identity)
+                    .ToList(),
+                JointIndex = 1,
+            });
+
+        var gltf = ModelRoot.Load(Write(WithClip(IdentitySkeleton("Bone_root", "Bone_A"), clip), "capped"));
+        var animation = Assert.Single(gltf.LogicalAnimations);
+        var channel = Assert.Single(animation.Channels);
+        var keys = channel.GetRotationSampler().GetLinearKeys().ToList();
+        Assert.Equal(frames, keys.Count);
+        Assert.InRange(Math.Abs(keys[^1].Key - (frames - 1) / clip.Fps), 0f, 1e-6f);
+    }
+
     /// <summary>Wander's real skeleton as the adapter builds it, without meshes/materials.</summary>
     private static ModelData LoadWanderSkeleton()
     {

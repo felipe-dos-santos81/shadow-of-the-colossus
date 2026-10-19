@@ -152,7 +152,8 @@ public static class GlbWriter
         /// </summary>
         /// <exception cref="InvalidDataException">
         /// A clip has an unmapped/out-of-range track, a malformed root series, a root series but
-        /// no joint named exactly <c>Bone_root</c>, or the model has no skeleton to target.
+        /// no joint named exactly <c>Bone_root</c>, duplicate channels on one joint/path, zero
+        /// channels, or the model has no skeleton to target.
         /// </exception>
         private void BuildAnimations(List<AnimClip> clips)
         {
@@ -183,7 +184,16 @@ public static class GlbWriter
                         $"Clip '{clip.Name}': carries a root series but the skeleton has no joint named 'Bone_root'.");
 
                 var channels = new List<ChannelInfo>();
+                var channelTargets = new HashSet<(int Node, string Path)>();
                 var samplers = new List<SamplerInfo>();
+
+                void AddChannel(int node, string path, int sampler)
+                {
+                    if (!channelTargets.Add((node, path)))
+                        throw new InvalidDataException(
+                            $"Clip '{clip.Name}': duplicate {path} channel for joint '{_joints[node].Name}' (index {node}).");
+                    channels.Add(new ChannelInfo(node, path, sampler));
+                }
 
                 foreach (var track in clip.Tracks)
                 {
@@ -199,8 +209,10 @@ public static class GlbWriter
                     _animatedJoints[track.JointIndex] = true;
 
                     // Statics are a single key at t = 0. Keyed tracks emit one key per engine
-                    // frame: type 0xD may carry frames+1 keys (its trailing loop-closure key), and
-                    // the engine's duration is (frames-1)/fps, so the surplus key is not emitted.
+                    // frame: type 0xD may carry frames+1 keys, but the surplus key at index
+                    // `frames` is a raw-zero sentinel outside the engine's sampled range
+                    // [0, frames-1] — not a loop-closure key — and the engine's duration is
+                    // (frames-1)/fps, so it is not emitted.
                     var count = track.IsStatic ? 1 : Math.Min(track.Keys.Count, clip.Frames);
                     var times = new float[count];
                     var values = new float[count * 4];
@@ -217,7 +229,7 @@ public static class GlbWriter
                     }
 
                     samplers.Add(AddSampler(times, values, "VEC4"));
-                    channels.Add(new ChannelInfo(track.JointIndex, "rotation", samplers.Count - 1));
+                    AddChannel(track.JointIndex, "rotation", samplers.Count - 1);
                 }
 
                 if (clip.Root.Count > 0)
@@ -237,8 +249,12 @@ public static class GlbWriter
                     }
 
                     samplers.Add(AddSampler(times, values, "VEC3"));
-                    channels.Add(new ChannelInfo(rootJoint, "translation", samplers.Count - 1));
+                    AddChannel(rootJoint, "translation", samplers.Count - 1);
                 }
+
+                if (channels.Count == 0)
+                    throw new InvalidDataException(
+                        $"Clip '{clip.Name}': produced no animation channels (an empty glTF animation is non-conformant).");
 
                 _animations.Add(new AnimationInfo(clip.Name, channels, samplers));
             }
