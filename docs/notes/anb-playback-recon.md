@@ -13,12 +13,12 @@ INFERRED where it is an estimate or a reading.
 | Date | 2026-10-19 |
 | Repo / branch | `sotc-native`, `anb-recon` (base `036160b` = main) |
 | Read (decode) | `docs/notes/re2-keys.md`, `re2-flagset.md`, `re2-sampler.md`, `re-anb.md` §6–§7, `re2-recon.md`; `tools/re/anb/parse2.py`, `records.py`, `probe.py` |
-| Read (pending merge, read-only) | `re2-xval` worktree @ `644952f`: `docs/notes/re2-xval.md`, `tools/re/anb/pose_dump.py` |
+| Read (read-only; since merged) | `re2-xval` worktree @ `644952f` — merged at `c7dc447` (the `pose_dump.py` line citations below use the merged revision): `docs/notes/re2-xval.md`, `tools/re/anb/pose_dump.py` |
 | Read (converter) | `src/BpConvert.Core/` (`Model/`, `Gltf/`, `Textures/`, `Pipeline/`, `Aqua/`), `src/BpConvert.Cli/Program.cs`, `docs/notes/aqua-core-api.md` §11 |
 | Read (app) | `app/src/` (asset_io, anim, app, player, scene), `app/tests/`, `app/README.md` |
 | Read (design/plans) | `docs/superpowers/specs/` (2026-10-15 rebuild, 2026-10-16 SDL, 2026-10-18 first-playable, s3-arena), `docs/superpowers/plans/2026-10-18-s2-skinning-animation.md`, `2026-10-18-s3-arena-app.md`; workspace `AGENTS.md` |
 | Read (context) | `out/re/stage/valus.manifest` (main checkout), `docs/notes/re-capture.md` §3, `docs/notes/s3-results.md` |
-| Re-run (read-only) | `python3 tools/re/anb/pose_dump.py verify` → **17/17 PASS** (the one executable check re-run here) |
+| Re-run (read-only) | `pose_dump.py verify` → **17/17 PASS**; `records.py scan` family-variant checks (player/horse/camera/guard/yamori/minotaur/objanim); `probe.py skb` record dump + a glb joint-name cross-check (all read-only, no writes) |
 | Grounding fetched | Context7 `/jkuhlmann/cgltf` (load buffers, accessor reads) and `/donmccurdy/gltf-transform` (animation channels/samplers: targetNode/targetPath, input times in seconds, LINEAR); the glTF 2.0 spec (Khronos registry, websearch) for the TRS-vs-`matrix` animation rule. **Godot docs were not fetched: the design's Godot path is not in play** (§5-C) |
 
 **Status note on the two design generations.** The 2026-10-15 rebuild design (the task's design
@@ -42,7 +42,7 @@ repo (SDL) and records the divergence as an open question (§7 Q1).
 | `tools/re/anb/parse2.py` | **flag-clear** (2,994 files) | per-track **quaternion key arrays, frame-indexed** (`decode_track`, `:310`); the **root position series** (`decode_root`, `:389`); `verify` 30/30 on the full 4,455-file corpus | on main (RE-2 T1) |
 | `tools/re/anb/records.py` | **flag-set** (1,461 files) | the 12-byte `{type, p1, p2}` records; `p1` = a NUL-terminated name string, `p2` = the key blob; the sampler's full per-type `DISPATCH` table (`:97`); `decode_type13_track` (`:548`) → per-frame `{a, b, c}` — **b = the quaternion channel**; `verify` 20/20 | on main (RE-2 T2) |
 | `tools/re/anb/probe.py` | both | the `.skb` skeleton-bank reader (`parse_skb`, `:326`: 0x40-byte bone records with name, parent, two quats); sibling finders (`find_sibling_skb`, `:1214` — `<bank>_<state>.anb` → `../skel/<bank>.skb`); `check-curves` decodes via parse2/records | on main; **gate MET** (`re-anb.md` §7: 16/16) |
-| `tools/re/anb/pose_dump.py` | flag-clear only | the **pose layer**: clip decode + track→bone mapping + the bridge + composition on the converted glb + capture comparison; `verify` 17/17 | **PENDING MERGE** (`re2-xval` @ `644952f`) |
+| `tools/re/anb/pose_dump.py` | flag-clear only | the **pose layer**: clip decode + track→bone mapping + the bridge + composition on the converted glb + capture comparison; `verify` 17/17 | merged (`c7dc447`) |
 
 ### 1.2 Exact shapes
 
@@ -65,11 +65,11 @@ repo (SDL) and records the divergence as an open question (§7 Q1).
   — one uniform map, validated cross-file through the `.skb`'s second quat (14.6° worst, 26/29
   within 1°) and semantically (arms at the sides, staggered stance). The decoded quats are in the
   `.skb`/game convention, **not** the glb's.
-- **The track→bone mapping** (`re2-xval.md` §1; `pose_dump.py:277-288`): **`.anb` track i ↔
+- **The track→bone mapping** (`re2-xval.md` §1; `pose_dump.py:280-291`): **`.anb` track i ↔
   `.skb` record i (file order — the same part bank)**, and the record's **name** resolves into the
   converted glb's joint list by name (re-verified read-only: all **29/29** `player_a.skb` record
   names — e.g. `Bone_KOSI`, `Bone_MOMO_L` — are present in `wander.glb`'s 348-joint list).
-- **The pose composition** (`pose_dump.py:341-380`): bind locals from the glb's inverse bind
+- **The pose composition** (`pose_dump.py:344-383`): bind locals from the glb's inverse bind
   matrices; the bridged animated quaternion **replaces** the bind local rotation; the bind local
   translation is kept; the **root series replaces the root joint's (`Bone_root`) local
   translation**. The bind reconstruction through the same machinery matches the glb world matrices
@@ -145,7 +145,7 @@ has no `.skb` reader and no notion of a clip's track order. The `.skb` record pa
 as `probe.py:326` (RE tool).
 
 **G3 — The bridge `conj_i` is not in any converter/app code.** Pinned by `re2-xval.md` §2 and
-applied only by `pose_dump.py:96` (the `BRIDGE` lambda). Any future consumer must apply it when
+applied only by `pose_dump.py:99` (the `BRIDGE` lambda). Any future consumer must apply it when
 animating converted glbs from `.anb` data (`re2-xval.md` §5, verbatim).
 
 **G4 — Frame-indexed keys → glTF time.** glTF samplers carry **times in seconds** (Context7
@@ -160,8 +160,8 @@ would show straight-fingered T-pose hands.
 
 **G6 — The root series' consumption is open at the engine level.** Decoded as the root
 **position** series, but "the engine's sample base for the root is open" (`re2-keys.md` §3;
-`re2-recon.md` §6 item 4). The pose layer applies it as the root joint's local translation and
-the pose validates (`pose_dump.py:366-377`), but that is the RE-side consumer, not the engine's.
+`re2-recon.md` §4 item 4). The pose layer applies it as the root joint's local translation and
+the pose validates (`pose_dump.py:369-380`), but that is the RE-side consumer, not the engine's.
 
 **G7 — Clip selection/state.** The game's state machine is decoded only at the mechanism level
 (`FUN_00636650` writes the frame fields — `re2-sampler.md` §3.4); no state→clip mapping exists.
@@ -180,10 +180,12 @@ stand-in (`app.cpp:142-152`), its `animations.empty()` pin assumes no clips
 (`test_asset_io.cpp:393`), and its status line marks `procedural=1`. Once real clips land these
 flip; the stand-in's fate (fallback vs removed) is a choice.
 
-**G10 — Flag-set/object and camera clips are not playable end-to-end.** Only the `caseD_9`
-family's B (quaternion) channel is decoded by `records.py`; the A/C channels are decoded per
-frame but not integrated anywhere; camera types 36/37 are not decoded at all
-(`re2-flagset.md` §6). For the S2 demo (player/horse) none of this is needed.
+**G10 — Flag-set/object and camera clips are not playable end-to-end.** `records.py` decodes the
+`caseD_9` family's full per-frame A/B/C channels (`decode_type13_track`), but its only consumer
+(`probe.py check-curves`) takes the **B (quaternion) channel**; the A/C channels have no playback
+consumer, the other record types have dispatch entries mapped but no decode implementation, and
+camera types 36/37 are not decoded at all (`re2-flagset.md` §4–§6). For the S2 demo (player/horse)
+none of this is needed.
 
 **G11 — glTF conformance for animated joint nodes.** The writer emits joint nodes as `matrix`
 (`GlbWriter.cs:303-306`); the glTF 2.0 spec: "When a node is targeted for animation … only TRS
@@ -273,15 +275,16 @@ names a verifiable output; the exact split is the user's call.
 
 ## 8 · Non-claims (what this recon did not verify)
 
-- **No code, tools, or game runs.** The only executable check re-run was
-  `pose_dump.py verify` (read-only, 17/17). The app was **not** built or run; converter behavior
+- **No code, tools, or game runs.** Every executable check re-run was read-only: `pose_dump.py
+  verify` (17/17), the `records.py scan` family-variant checks, a `probe.py skb` dump, and a
+  stdlib glb joint-name cross-check. The app was **not** built or run; converter behavior
   is read from code and tests, not exercised.
 - **The pose validation is one clip.** The semantic ground truth (`re2-xval.md`) covers
   `player_a_stand` only; the horse and every other family are decode-validated (norms/dots) but
   not pose-validated against captures. The capture's phase and clip identity remain open
   (`re2-xval.md` §5).
-- **The `re2-xval` files are pending merge** (`644952f`, branch `re2-xval`); this memo treats
-  them as the intended tip and cites them as such.
+- **The `re2-xval` files were read pre-merge** (`644952f`); they are now merged at `c7dc447`,
+  and this memo's `pose_dump.py` line citations use that merged revision.
 - **The engine-side root-series consumer and the flag-set A/C semantics are open** (G6/G10);
   nothing here claims they are settled.
 - **The glb-size figures are arithmetic estimates** from measured key counts, not a conversion
@@ -296,8 +299,8 @@ names a verifiable output; the exact split is the user's call.
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 export PYTHONDONTWRITEBYTECODE=1
-# the one re-run check (from the read-only re2-xval worktree):
-python3 <re2-xval>/tools/re/anb/pose_dump.py verify          # 17/17 PASS
+# the T5 verify (the file is on main since c7dc447):
+python3 tools/re/anb/pose_dump.py verify                     # 17/17 PASS
 # the family scans quoted in §1 (read-only):
 python3 tools/re/anb/records.py scan 'cp3shadow/anim/player_*.anb'
 python3 tools/re/anb/records.py scan 'cp3shadow/anim/horse_*.anb'
