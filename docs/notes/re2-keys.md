@@ -50,9 +50,11 @@ Measured layout facts (full corpus, `parse2.py`-derived; 2,994 flag-clear files)
 - **The blob's keyptr word is the next block's first word** (the same 4 bytes serve as blob *i*'s
   keyptr and as the following block's "back pointer"): measured on both samples and re-confirmed by
   the corpus adjacency rules below.
-- **Block adjacency (corpus-wide, 0 exceptions)**:
-  - keyed → keyed: `blob_i + blob_size(type_i) == keyptr_{i+1}` — 68,113/68,113;
-  - keyed → stub: `blob_{i+1} == align16(blob_i + blob_size(type_i))` — 42,982/42,982;
+- **Block adjacency (corpus-wide, 0 exceptions; classified by the following block)**:
+  - → keyed (any predecessor): `blob_i + blob_size(type_i) == keyptr_{i+1}` — 68,113/68,113
+    (62,960 keyed→keyed + 5,153 stub→keyed);
+  - → stub (any predecessor): `blob_{i+1} == align16(blob_i + blob_size(type_i))` — 42,982/42,982
+    (5,880 keyed→stub + 37,102 stub→stub);
   - stub (type 0) blobs are **16-byte aligned, 43,812/43,812** (zero pad words inserted as needed;
     e.g. `player_a_stand` file `0x11AC` = one pad word, `0x1518..0x1520` = two);
   - keyed blobs are *not* aligned (only 14,590/70,277 are 16-aligned) — no alignment rule.
@@ -104,35 +106,47 @@ the case's derived index** (3→x, 4→y, 5→z, 6→w), packed from the top of 
 - The derived term is `f6 + f7*residual/7 +/- sqrt(|1-|v_stored|^2|)`; the sqrt term is **skipped**
   when `|v_stored|^2 > 1` (the engine's guard — the absolute-value root is computed but not used);
   the sign bit set → negative (the sign table at `0x0126b8e0` = `{+1.0, -1.0}`).
-- The residual refines the derived component: e.g. `player` track 0 (`0x033A4127`: residual 0) →
-  w = `+0.9999...`; the residual/7 term is bounded by `f7` (typically ~1e-3).
+- The residual refines the derived component: e.g. `player` track 0 key 0 (`0x033A4127`: residual 0,
+  sign 0) decodes to x = +0.2260 (`f6` 3.4e-6 + `sqrt(1-|v|^2)` 0.225947) — the full key is
+  (0.225950, -0.643605, -0.717296, 0.142150); the residual/7 term is bounded by `f7` (typically
+  ~1e-3).
 
 **Type `0x0C` (MEASURED).** `v = (i16_x/32767*f1 + f0, i16_y/32767*f3 + f2, i16_z/32767*f5 + f4)`,
 `w = ±sqrt(|1-|v|^2|)` with the sign = the **LSB of the first int16** (set → negative; the LSB is
-part of the sign encoding, not of x — the values are otherwise byte-identical). The writer fits the
-descriptor so `|v|` ≈ 1 and the derived w ≈ 0 (the "omit the smallest component" convention).
+part of the sign encoding, not of x — the values are otherwise byte-identical). The stored `|v|`
+spans the full range (median 0.519, p90 0.992; only 22.1 % of sampled keys have `|v| > 0.9`) and the
+derived `|w|` median is 0.855 — the derived component is typically the *largest* (measured; there is
+no fixed "omit the smallest component" convention).
 
 **Type `0x0D` (MEASURED).** `s = i16/32767*f1 + f0`; `theta = s * 0.5`; quaternion =
 `(f2,f3,f4)*sin(theta)` with `w = cos(theta)`. The axis is a **unit vector in 13,886/13,887
-corpus tracks** (one degenerate zero-axis track); `s`'s range is small (`f1` ≈ 0.03–0.5) → small
-rotations. The sin/cos assignment is **INFERRED** (see §3): the disassembly shows two calls of the
-same helper with flag 1 (→ w) and 0 (→ vector), and the small-rotation range makes vector = sin the
-only plausible reading.
+corpus tracks** (one degenerate zero-axis track). `s` spans the full angle circle (`|f0|` median
+4.77, max 6.27; per-track `max|s|` median 5.02 rad, only 23.4 % of the 13,887 tracks ≤ π/2), and
+continuity does not discriminate sin from cos (both readings give identical dots — verified on
+`player_a_stand` t2), so the assignment is **INFERRED** (see §3): the disassembly pins the helper
+structure (`f(x,1)` → w, `f(x,0)` → vector) but not its name, and the reading rests on the
+standard sincos-quaternion form — the alternative is the nonstandard π − s mapping — plus a
+naturalness check on the rotation magnitude: the samples' `s` sits near 0 or near 2π (e.g. `t2`
+`s` ∈ [0.12, 0.39]; `t6` `f0` = 5.77; `t15` `f0` = 5.89), which under sin is a rotation of `s`
+modulo 2π — small for every sample track (≈0.1–0.8 rad) — while the alternative would put them all
+near π.
 
 **Type `0x0E` (MEASURED, 34 tracks).** One u32: `x = sext(bits 31..21, 11)/1023*scale + offset`,
 `y = sext(bits 20..11, 10)/511*...`, `z = sext(bits 10..1, 10)/511*...`, bit 0 = the w sign.
-All 34 tracks are the `yamori_b_add_tail_{left,right}_{start,loop,end}` family (|v| ≈ 0.07,
-w ≈ 0.9975); every adjacent dot ≥ 0.9992. The sign bit is 0 in all 374 keys of the corpus, so the
-sign convention is INFERRED from the decompile (set → negative).
+All 34 tracks are the `yamori_b_add_tail_{left,right}_{start,loop,end}` family; `|v|` ∈
+[0.0145, 0.3787] (w down to ≈0.925) and every adjacent dot ≥ 0.9992. The sign bit is 0 in all 374
+keys of the corpus, so the sign convention is INFERRED from the decompile (set → negative).
 
 **Type `0x00` (MEASURED).** 4 x float32 = a **static unit quaternion** (x,y,z,w); norm within
 4.1e-08 of 1 across all 43,812 tracks. No keys, no pointer field (the engine's `FUN_0066dec0` has
 no case for it).
 
-**Type `0x02` (INFERRED — zero instances in all 4,455 files).** From `FUN_0060bba0` case 2 and
-`FUN_0066dec0` case 2 only: blob = 3 x float32 (axis) + keyptr@`+0x0C`; keys = float32 angle at
-4-byte stride; quaternion = `axis*sin(angle)`, `w = cos(angle)` (the same helper as 0xD). The
-per-type key count is expected to be `frames` (unverifiable — no data).
+**Type `0x02` (INFERRED — no flag-clear track-type instance in all 2,994 flag-clear files).** From
+`FUN_0060bba0` case 2 and `FUN_0066dec0` case 2 only: blob = 3 x float32 (axis) + keyptr@`+0x0C`;
+keys = float32 angle at 4-byte stride; quaternion = `axis*sin(angle)`, `w = cos(angle)` (the same
+helper as 0xD). The per-type key count is expected to be `frames` (unverifiable — no data). Flag-set
+files *do* carry record types 0x02/0x0B (e.g. `objanim_arena_env.anb`,
+`objanim_arrow_eff_hit_water.anb`) — they have no track-type array (T2 scope).
 
 **The root series (MEASURED values + INFERRED consumer).** When structure`+0x0C` ≠ 0, the
 pre-region `[frames x 6 B int16 triplets][6 float32]` decodes as a **vector (position) series**,
@@ -283,23 +297,29 @@ series' samples base `param_4[6]` is the open item above.)
 - the per-type blob layouts, keyptr offsets (decompile §2.3 + corpus adjacency), strides, and key
   counts (§1) — 0 exceptions over the corpus;
 - the arithmetic for types 3–6 (field windows, field-order descriptor pairs, residual, sqrt guard),
-  0xC, 0xD, 0xE, 0xB-shape — the decompile + the smoothness/continuity checks below;
+  0xC, 0xD, 0xE — the decompile + the smoothness/continuity checks below;
 - the type-0 static quaternion (unit norm, 43,812 tracks);
 - the count rules: `count = frames` for 3–6/0xC/0xE (100 %); `0xD ∈ {frames, frames+1}` with the
   frames+1 last key **= 0** (7,398/7,398); `0xC` extent pad ∈ {0,2}.
 
 **INFERRED (recorded, not data-testable on this corpus):**
 
-- **type 0x02** — zero instances in 4,455 files; layout/format from the decompile only;
+- **type 0x02** — no flag-clear track-type instance (all 2,994 flag-clear files); layout/format
+  from the decompile only (flag-set files do carry record type 0x02 — T2 scope);
 - the **0xD / 0x2 sin-vs-cos assignment** — the disassembly pins the *structure* (`f(x,1)` → w,
-  `f(x,0)` → vector) but not the helper's name (an import thunk); the *vector = sin* reading is
-  supported by the rotation magnitudes (the descriptors fit `s` to small angles → small rotations,
-  while vector = cos would give ≈180° rotations for every 0xD track);
+  `f(x,0)` → vector, θ = s/2) but not the helper's name (an import thunk); `s` spans the full
+  circle (per-track max&#124;s&#124; median 5.02 rad; only 23.4 % ≤ π/2) and both readings give
+  identical dots, so continuity does not discriminate. The *vector = sin* reading rests on the
+  standard sincos-quaternion form (the alternative is the nonstandard π − s mapping) and the
+  naturalness check: the samples' `s` sits near 0 or near 2π, which under sin is a small rotation
+  (≈0.1–0.8 rad), while the alternative puts every sample track near π;
 - the **sign conventions** (`set → negative` for 3–6/0xC/0xE) — decompile + the sign table
-  constant; **not discriminable from continuity alone**: the sign bit flips coincide with the
-  derived component's zeros (measured on `player_a_jump_run` tracks 1/5: the bit flips exactly
-  where `sqrt(1-|v|^2)` ≈ 0), so the two conventions differ only by mirroring the derived component
-  across those zeros (both give continuous tracks);
+  constant; **not discriminable from continuity alone**: the sign bit flips mark zero *crossings* of
+  the derived component between frames (measured on `player_a_jump_run` tracks 1/5: the flips sit
+  at `sqrt(1-|v|^2)` values 0.000/0.233 and 0.041/0.420/0.206/0.055 — up to 0.42, not ≈ 0), and the
+  two conventions differ only by a global mirror of the derived component about the tiny base term,
+  so convention-sensitive adjacent pairs differ by ≤ 0.004 dot (e.g. t1 8→9: 0.9377 vs 0.9413) and
+  both give continuous tracks;
 - the **root series' consumer** — the vector-accessor shape and arithmetic are pinned; the sample
   base (the `[6]` slot = 0) is open;
 - the **0xE sign bit** — 0 in all 374 corpus keys.
