@@ -73,8 +73,9 @@ lVar24 = resolve(motion+0x18);                        /* the record array */
 (verbatim from the decompile; e.g. `caseD_20` `uVar17 = *(uint *)(lVar24 + 8 + lVar15 * 0xc)`).
 The case bodies are T2's §4 dispatch table — they take `p2` as the record's key blob and **none
 reads `p1`**. The switch is entered twice: a **no-cooked-object pre-dispatch** (when the object
-chain resolves to null) with inline bodies for types 0/4/camera (which read `p2` the same way)
-and `goto`s into the shared bodies, then the main dispatch. The stride-0xC/offset-8 read is the
+chain resolves to null) whose inline bodies for types 0/4 (raw curve reader `FUN_0060ce90`) and
+camera read `p2` the same way, plus `goto`s into the shared bodies; then the main dispatch, whose
+types 0/4 use the cooked-state reader `FUN_00600810`. The stride-0xC/offset-8 read is the
 **flag-set** shape: `FUN_0066fe60` walks the same array at stride `0xC` through `FUN_0066f9a0`
 when bit 16 of the version word is set.
 
@@ -130,8 +131,10 @@ selects between the two shapes at its head; the gate is `motion+0x08 == 0` (disa
 The compare is the compiler's form of "the resolved field is null": it is true exactly when
 `v == 0` (a negative `v` makes the right side a 64-bit `−base`, unreachable by the 31-bit left
 side). **Path A (`v == 0`) = the `FUN_005fd900` dispatch loop; path B (`v != 0`) = the direct
-`FUN_0060bba0` loop of §2.2.** Both paths write the same per-track output block (16-byte
-quaternion + identity `{0,0,0,1}` from `0x0126b5b0`).
+`FUN_0060bba0` loop of §2.2.** Both paths write the same per-track output block; the identity
+constants `{0,0,0,1}` (`0x0126b5b0`) are the **null-node companion only** — when the node pointer
+(`param_2`) is non-null, four words are copied from the node's resolved block into that slot
+instead (`FUN_0060b720`, both branches).
 
 The same flag-clear read also lives **inside** the dispatch as a fallback: `FUN_00600810` (the
 case body for types 1/5) uses the resolved cooked object when available and otherwise takes
@@ -220,7 +223,7 @@ that the two agree is INFERRED — only the raw path is file-verifiable.)
 | `0x0126b184` | **30.0** (`0x41f00000`) | `FUN_005fc6b0` only — refs `0x005fc858`, `0x005fcb34` (C3's constant, cross-checked) |
 | `0x0126b188` | −1.0 | `FUN_005fc6b0` readout (`frames + (−1)`) |
 | `0x0126b18c` / `0x0126b190` | 0.5 / 1.0 | `FUN_005fc6b0` blend swap |
-| `0x0126b1b8` | 1.0 | `FUN_005fd900` blend `(1−frac)` (18 reads) |
+| `0x0126b1b8` | 1.0 | `FUN_005fd900` blend `(1−frac)` (16 reads) |
 | `0x0126b2a0` | **30.0** | `FUN_0060b610` resolved path (`fps/30`) |
 | `0x0126b2a4` | 1/4096 | `FUN_0060b610` raw rate scale |
 | `0x0126b2a8` | 1.0 | `FUN_0060b610` default rate |
@@ -314,8 +317,9 @@ and the *rate* lives in the same word's high u16 (`>>4`, Q12; §3.2).
 
 - **The 872 flag-set files with a `+0x08` array** — §2.5: the mechanism (direct dispatch callers
   bypass `FUN_0060b720`) is measured; the file-level rule that selects them is not (T2 §7 kept open).
-- **`FUN_00636650`'s `local_16c`/`local_168`** — read (phase / frame time) but their write site was
-  not exposed by the decompiler (the function is 11,980 B; the assignments are inside the body).
+- **`FUN_00636650`'s `local_16c`/`local_168`** — read (phase / frame time); the function itself
+  never writes them — they are written through `&local_180` by the callee chain `FUN_00635c20 →
+  FUN_0063a860 → FUN_0063b2a0` (`FUN_0063b2a0`'s `param_3` writes the block's `+0x14`/`+0x18`).
 - **The seconds source** — the entity update's input clock was not traced; every sampler boundary
   measured already carries frames (§3.4).
 - **`FUN_0067bae0`** — `(frames−1)/(x × rate)` with no direct callers found (likely indirect);
