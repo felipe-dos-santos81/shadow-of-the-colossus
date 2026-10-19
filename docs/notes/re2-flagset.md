@@ -69,7 +69,8 @@ flag gate — recorded here as a refinement, not a contradiction):
 **The `+0x08` auxiliary array (position and length MEASURED; meaning OPEN).** For the 872/1,461
 flag-set files with `motion+0x08 != 0` the field points at `records_end` exactly
 (`+0x08 == +0x10 + 12·tracks` in **872/872** measured) and holds `tracks` u32s; the motion structure
-follows immediately after (`+0x08 + 4·tracks`). Observed values: `0xFFFFFFFF` (761 keys),
+follows immediately after (`+0x08 + 4·tracks`). Observed values: `0xFFFFFFFF` (789 keys in 536
+files, of 3,928 aux keys over 872 files),
 `0x00010004`/`0x00010005`/`0x00010007` (camera files), and small values (`0..20`, `25..29`, e.g. the
 leo file's `27, 26, 25, 29, 28, 27, 27, 26, 26, 29, 29, 28, 28, 25, 25`). No runtime reader was
 found that consumes it as u32-per-track (the two readers of `motion+0x08` found — `FUN_0060b720`
@@ -83,7 +84,7 @@ path B and `FUN_00600810`'s fallback — read it as a **byte** per track, which 
 | field | width | role | evidence |
 |---|---|---|---|
 | `+0x00` | u32 | **type** (low byte, `1..0x30`; types `8` and `>0x30` fall to the sampler's no-op default) + flag bits: bits 16..19 / 8..11 / 0..3 are the **per-channel format selectors** of the p2 blob's three accessor calls (read out per case body, §4); bits 24..29 are flags some bodies read back (e.g. types 1/5: `out[0x11] = (word0>>0x18)&1`) | `FUN_005fd900` switch on `*out - 1`; `FUN_0066f9a0` switches on `*record`; `FUN_0066ecd0` reads `(word0 & 0xf0000) == 0x20000` and `word0 & 0xf` |
-| `+0x04` | u32 | **p1 — a 31-bit data-region pointer to a NUL-terminated name string** (for the object types; `p1 = 0` = the string at data offset 0). The **sampler never reads p1** — it is consumed by the object-animation caller side (the name of the effect/object the track drives) | corpus: **198/198 type-13 tracks resolve to a printable NUL-terminated string**; the leo file's 15 strings tile the data region from 0 and end exactly where the key data begins; `FUN_0066f9a0` re-bases it; a full grep of `FUN_005fd900`'s decompile has no `record+4` read |
+| `+0x04` | u32 | **p1 — a 31-bit data-region pointer to a NUL-terminated name string** (for the object types; `p1 = 0` = the string at data offset 0). The **sampler never reads p1** — it is presumably consumed by the object-animation caller side (the name of the effect/object the track drives), but **no reader was located: INFERRED** (the review decompiled all nine `FUN_005fd900` callers; none reads `record+4` in the sampled paths — `FUN_006694c0` iterates records at stride 0xC but reads only the type word) | corpus: **198/198 type-13 tracks resolve to a printable NUL-terminated string**; the leo file's 15 strings tile the data region from 0 and end exactly where the key data begins; `FUN_0066f9a0` re-bases it; a full grep of `FUN_005fd900`'s decompile has no `record+4` read |
 | `+0x08` | u32 | **p2 — a 31-bit data-region pointer to the track's key blob** (`{format word, A, B, C}`, §3). This is the sampler's only per-record input | `FUN_005fd900`: `*out = *(int *)(records + track*0xC)`, then `records + 8 + track*0xC` for every case body; `FUN_0066ecd0` (the type-13 loader walk) re-bases words 1 and 3 and the descriptors' pointers |
 
 ### 2.1 The sampler's read of the record (measured, verbatim from the decompile)
@@ -113,15 +114,21 @@ pattern "fits" a file only when the names happen to be frame-count-sized (the re
 statistic). **Corpus-wide: 198/198 type-13 tracks have a printable NUL-terminated string at p1
 (including `p1 = 0` → the string at data offset 0).**
 
-Caveat, measured: the p1-name role is **type-specific**. The camera types (36/37, 453 files) carry
-`p1 = 0` and their data offset 0 is binary (floats/zeros) — `c_string()` returns nothing there, so
-the tool reports no name. Type 13 (and the other `objanim_*` object types) is where the name
-reading holds corpus-wide. One detail is deliberately left unsettled: `p1 = 0` is the first
-string's offset (the tiling starts at 0), but the loader's re-base condition excludes
-`(v & 0x7fffffff) == 0` (the value stays 0), so a generic `(sign ? base : 0) + v` consumer would
-read it as **null** — whether the name consumer treats 0 as "the first name" or as "none" is not
-settled here (the sampler never reads p1 either way; the tool resolves 0 to the string at offset 0
-because that is what the measured offsets say).
+Caveat, measured: the p1-name role is **type-specific**, with a measured exception set. The camera
+types (36/37, 453 files) carry `p1 = 0` (the 453 type-36 records) / `p1 = 1` (the 8 type-37
+records) and their data offsets 0/1 are binary (floats/zeros) — `c_string()` returns nothing there,
+so the tool reports no name. Beyond the camera types, **types 1/2/11 have 33 non-resolving p1
+records** (type 1: 6/2,960; type 2: 24/1,056; type 11: 3/847), in two classes: names in the game's
+**font encoding** (high-bit bytes, e.g. `objanim_boss_a_boot` t4 p1 = 0x24 → `proto_` + high-bit
+bytes; `objanim_leo_a_jump` t0 → `97 8e 89 ba …`), and the **yamori cluster**
+(`objanim_yamori_b_back_walk1` / `_pre_struggle_1` / `_2`: type-2 p1 = 0, 1, 2, 3 pointing into NUL
+padding while the strings `YAM_FOOT` start at offset 4 — recorded as an open item, §7). Type 13
+(and most `objanim_*` object types) is where the name reading holds corpus-wide (198/198). One
+detail is deliberately left unsettled: `p1 = 0` is the first string's offset (the tiling starts at
+0), but the loader's re-base condition excludes `(v & 0x7fffffff) == 0` (the value stays 0), so a
+generic `(sign ? base : 0) + v` consumer would read it as **null** — whether the name consumer
+treats 0 as "the first name" or as "none" is not settled here (the sampler never reads p1 either
+way; the tool resolves 0 to the string at offset 0 because that is what the measured offsets say).
 
 ## 3 · The key blob and the three accessors (MEASURED)
 
@@ -150,14 +157,15 @@ from the decompiles; scale constants read from the binary at the quoted VAs):
 | accessor | channel | formats (measured vocabulary) |
 |---|---|---|
 | `FUN_0060e0c0` | vector (w := 1) | `0` raw 3 floats at the descriptor; `2` 6 offset/scale floats + int16 triplets at `desc[6]` (6-byte stride, `1/32767` = `0x0126b2ac`/`0x0126b2dc`); else float triplets at `desc + key*12` |
-| `FUN_0060bba0` | quaternion | `0` raw 4 floats; `1` 4 floats at 16-byte stride + derived `w` (sign = byte 1's MSB); `2` axis `desc[0..2]` × (cos,sin) of the float at `desc[3]` + `key*4`; `3..6` packed u32 at `desc[8]` (9-bit fields, 4-bit residual × `1/7` = `0x0126b2c4`, derived slot = `fmt-3`); `0xb` int16 triplets at the descriptor (6-byte stride) + derived `w` (sign = bit 0 of int16₀); `0xc` like `0xb` but at `desc[6]` with offset/scale; `0xd` scalar angle at `desc[5]` (2-byte stride, ×`1/32767`, offset/scale, then ×`0.5` = `0x0126b2b0`) → axis-angle; `0xe` packed u32 at `desc[6]`; `>0xe` zeros |
+| `FUN_0060bba0` | quaternion | `0` raw 4 floats; `1` 4 floats at 16-byte stride + derived `w` (sign = byte 1's MSB); `2` axis `desc[0..2]` × (cos,sin) of the float at `desc[3]` + `key*4`; `3..6` packed u32 at `desc[8]` (9-bit fields, 4-bit residual × `1/7` = `0x0126b2c4`, derived slot = `fmt-3`); `0xb` int16 triplets at the descriptor (6-byte stride) + derived `w` (sign = bit 0 of int16₀); `0xc` like `0xb` but at `desc[6]` with offset/scale; `0xd` scalar angle at `desc[5]` (2-byte stride, ×`1/32767`, offset/scale, then ×`0.5` = `0x0126b2b0`) → axis-angle; `0xe` packed u32 at `desc[6]` (11-bit x × `1/1023` = `0x0126b2b4`, 10-bit y/z × `1/511` = `0x0126b2b8`, **arithmetic shifts**, sign = bit 0); `>0xe` zeros |
 | `FUN_0060e640` | vector | `0` raw 3 floats; `2` packed u32 at `desc[6]` (11/10/10 bits, `1/2047` = `0x0126b2e4`, `1/1023` = `0x0126b2e8`); `3` packed u16 at `desc[6]` (5/6/5 bits, `1/31` = `0x0126b2ec`); else float triplets at `desc + key*12` |
 
 Two measured pins worth recording:
 
 - **`FUN_00586060` returns `(cos, sin)`** — the calls are `f(1,0,x) → out[0]`, `f(0,0,x) → out[1]`
   (both target the same PLT stub; `out[0]` lands in the quaternion's `w` slot). Data evidence: on
-  the near-zero-angle tracks (`objanim_ruins_polec_swing.anb` t12, angles ≈ 0.0000–0.0003 rad) the
+  the near-zero-angle tracks (`objanim_ruins_polec_swing.anb` t12, angle range
+  `[0.0000024, 0.003959]` rad — the first ~6 keys are ≤ 0.0003) the
   `out[0]=cos` reading gives `w ≈ 1.0000` (an identity-ish quaternion) while `out[0]=sin` would give
   `w ≈ 0.0000` (a 180° flip). So the 0xd/2 quaternions are the standard `(axis·sin(θ/2), cos(θ/2))`.
 - **Derived components are `±sqrt(|1−|v|²|)` with the engine's own guard**: when `1−|v|² < 0` the
@@ -212,9 +220,10 @@ callers serves the non-zero flag-set files was not resolved this pass — record
 ## 5 · The type-13 decode, end-to-end (MEASURED)
 
 The type-13 path is `caseD_9 → FUN_00600ef0(t, out, blob, frames)`: wrap the frame time by
-`frames−1`, split into key index + fraction, then **vector (e0c0) + quaternion (bba0, blended
-between key i and i+1) + vector (e640)** into `out+0x10..0x2c`. The tool's `decode` mode implements
-exactly that (integer frames read key i alone; the blend is `frac·k₁ + (1−frac)·k₀` per component).
+`frames−1`, split into key index + fraction, then write the **vector (e0c0) into `out+0x10..0x1c`,
+the quaternion (bba0, blended between key i and i+1) into `out+0x20..0x2c`, and the vector (e640)
+into `out+0x30..0x3c`**. The tool's `decode` mode implements exactly that (integer frames read key
+i alone; the blend is `frac·k₁ + (1−frac)·k₀` per component).
 
 **The recon sample (`objanim_leo_a_jump_fall`, v8, 21 f, 15 tracks, all type 13):** all 15 tracks
 decode; every B key is a unit quaternion (`max |1−|q|| = 2.3e-08`); all three channels are
@@ -233,8 +242,9 @@ its "smoothness" is trivial, which is why the animated decode below is the load-
   (`max ratio 0.269` on the steady segment) while the **key-0 → key-1 transition jumps the full
   range** (`z: −0.201 → −0.487`) — a measured property of this clip (the effect snaps at spawn),
   not a decode artifact (the raw int16 triplets show the same: `(16383, −16383, 16383)` then
-  `(−15660, 15660, −16383)`). The C channel (`fmt 3`, packed u16) decodes to a 3-key step
-  (`0 → 1.0625 → 0.99395` held) — also measured data.
+  `(−15660, 15660, −16383)`). The C channel (`fmt 3`, packed u16) decodes to the full 25-key
+  series `0 → 1.0625 → 0.993952` (held for keys 2–8) `→ 0.479839` (key 9) `→ 0` (keys 10–24) — a
+  measured spawn/flash/hold/clear profile, not a static value.
 
 **Corpus decode (198 type-13 tracks in 82 files):** every track decodes without exceptions; the
 16 format combos observed are `(0,0,0):97, (2,0,3):28, (0,0,3):18, (2,5,3):13, (2,3,3):11,
@@ -270,10 +280,15 @@ the engine never normalizes — C3 §6.3, re-observed.)
 3. **animated decode + smoothness**: `ath_damage` t4 C channel = 60 keys, `max ratio 0.0444 ≤ 0.25`,
    ≥50 changing steps (59); `cerberus_a_atk_near_l` t0 A channel = 25 keys, steady segment
    `max ratio 0.269 ≤ 0.5` (the key-0 jump recorded in the assertion name), B unit, C animated;
-4. **corpus pointer roles**: 198/198 type-13 `p1` resolve to strings; 198/198 `p2`/A/B/C land inside
+4. **`0xe` self-check** (in-memory, no game input — the review's demo vector): for the all-ones
+   packed word with unit descriptors the decode is the unit quaternion
+   `(−0.000978, −0.001957, −0.001957, −0.999996)`, pinning the SAR field extraction and the
+   `1/511` (`0x0126b2b8`) y/z scale (the pre-fix logical-shift form gives `|q| = 3.32`);
+5. **corpus pointer roles**: 198/198 type-13 `p1` resolve to strings; 198/198 `p2`/A/B/C land inside
    the data region `[data_base, t1p)`; every blob format nibble ≤ `0xe` (16 combos);
-5. **corpus robustness**: all 4,455 `.anb` parse (1,461 flag-set / 2,994 flag-clear, 0 parse
-   errors); all 198 type-13 tracks decode end-to-end without exceptions.
+6. **corpus robustness**: all 4,455 `.anb` parse (1,461 flag-set / 2,994 flag-clear, 0 parse
+   errors); all 198 type-13 tracks decode end-to-end with the failures **counted** (0 decode
+   failures; each failure is reported as its own failing assertion).
 
 The camera sample is covered by the same machinery: `scan 'cp3shadow/anim/camera_*.anb'` → 453
 files, all flag-set, type histogram `36:453, 37:8`, 0 parse errors (their p2 blobs are the camera
@@ -282,6 +297,10 @@ descriptors read by the inline `case 0x23/0x24` bodies, §4 — not decoded by t
 ## 7 · Open items (INFERRED / unresolved)
 
 - **The `+0x08` u32 array's meaning** (§1) — position/length measured, no u32-per-track reader found.
+- **The p1 exception set** (§2.2) — 33 non-resolving p1 records on types 1/2/11: the font-encoded
+  names (high-bit byte strings, e.g. `proto_` + font bytes) suggest a second name encoding, and the
+  yamori cluster (`p1 = 0..3` into NUL padding with the strings starting at offset 4) suggests a
+  per-track name offset that can point at padding — neither consumer/encoding is decoded.
 - **The `FUN_0060b720` path split** (§4) — the `motion+0x08 == 0` gate is measured; which caller
   serves the 872 non-zero flag-set files is not.
 - **The version>7 `+0x2C` pass on flag-set files** (§1) — measured to read tail-table words; its

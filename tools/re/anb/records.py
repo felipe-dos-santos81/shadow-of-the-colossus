@@ -82,7 +82,8 @@ C_INV_32767 = 3.05185094e-05  # 0x0126b2ac / 0x0126b2dc — int16 → [-1,1]
 C_INV_255 = 0.00392156886  # 0x0126b2c0 — packed 9-bit → [-1,1]
 C_INV_7 = 0.142857149  # 0x0126b2c4 — 4-bit residual → [-4/7, 4/7]
 C_INV_2047 = 0.000488519785  # 0x0126b2e4 — packed 11-bit
-C_INV_1023 = 0.000977517106  # 0x0126b2e8 / 0x0126b2b4 — packed 10-bit
+C_INV_1023 = 0.000977517106  # 0x0126b2e8 / 0x0126b2b4 — packed 10/11-bit
+C_INV_511 = 0.001956947147846222  # 0x0126b2b8 — the 0xe y/z scale (10-bit fields)
 C_INV_31 = 0.0322580636  # 0x0126b2ec — packed 5/6-bit
 C_HALF = 0.5  # 0x0126b2b0 — the 0xd angle pre-scale
 M32 = 0xFFFFFFFF
@@ -503,13 +504,13 @@ def sample_bba0(data, data_base, fmt, desc, key):
         return (f32le(data, desc + 8) * s, f32le(data, desc + 12) * s,
                 f32le(data, desc + 16) * s, c)
     if fmt == 0xE:
+        # 0xe: arithmetic shifts (SAR); x is an 11-bit field (scale 1/1023), y/z are
+        # 10-bit fields (scale 1/511 = 0x0126b2b8); sign bit = bit 0 of the word.
         ptr = _desc_ptr(data, data_base, u32le(data, desc + 24))
         word = u32le(data, ptr + key * 4)
-        x = (word >> 0x15) * f32le(data, desc + 4) * C_INV_1023 + f32le(data, desc)
-        y = ((word << 0xB) & M32) >> 0x16
-        y = y * f32le(data, desc + 12) * C_INV_1023 + f32le(data, desc + 8)
-        z = ((word << 0x15) & M32) >> 0x16
-        z = z * f32le(data, desc + 20) * C_INV_1023 + f32le(data, desc + 16)
+        x = ash(word, 21) * f32le(data, desc + 4) * C_INV_1023 + f32le(data, desc)
+        y = ash(word << 11, 22) * f32le(data, desc + 12) * C_INV_511 + f32le(data, desc + 8)
+        z = ash(word << 21, 22) * f32le(data, desc + 20) * C_INV_511 + f32le(data, desc + 16)
         w = math.sqrt(abs(1.0 - (x * x + y * y + z * z)))
         if not (~((i32(word) * 2) & M32) & 2):
             w = -w
@@ -836,6 +837,21 @@ def verify(verbose=True):
           all(abs(norm4(row["b"]) - 1.0) <= 1e-4 for row in rows3)
           and len({tuple(row["c"]) for row in rows3}) > 1)
 
+    # -- 3b. the 0xe packed-format self-check (in-memory; no game input) --------
+    # No corpus track uses B fmt 0xe, so this pins the SAR field extraction and the
+    # 1/511 (0x0126b2b8) y/z scale against the engine's arithmetic directly: for the
+    # all-ones word the engine decodes a unit quaternion (the review's demo vector).
+    buf = bytearray(64)
+    struct.pack_into("<8f", buf, 0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0)
+    struct.pack_into("<I", buf, 24, 32)  # desc[6] → the packed word at offset 32
+    struct.pack_into("<I", buf, 32, 0xFFFFFFFF)
+    q = sample_bba0(bytes(buf), 0, 0xE, 0, 0)
+    expected = (-1.0 / 1023.0, -1.0 / 511.0, -1.0 / 511.0, -0.9999956926)
+    check("0xe self-check: SAR shifts + 1/511 y/z scale (engine's demo vector)",
+          max(abs(a - b) for a, b in zip(q, expected)) <= 1e-5
+          and abs(norm4(q) - 1.0) <= 1e-5,
+          "q=(%.6f, %.6f, %.6f, %.6f) |q|=%.6f" % (q + (norm4(q),)))
+
     # -- 4. p2/A/B/C plausibility across every type-13 track in the corpus -----
     files = expand(["cp3shadow/anim/*.anb"])
     bad = []
@@ -875,6 +891,7 @@ def verify(verbose=True):
 
     # -- 5. the corpus scan: no crashes ----------------------------------------
     n_flag = n_files = n_parse_err = 0
+    t13_decode_fail = []
     for path in files:
         d = read_bytes(path)
         if d[:4] != XFF_MAGIC:
@@ -889,12 +906,19 @@ def verify(verbose=True):
             n_flag += 1
             for r in recsx:
                 if r.type == 13:
-                    decode_type13_track(d, m, base, r.track)
+                    try:
+                        decode_type13_track(d, m, base, r.track)
+                    except (ParseError, struct.error, IndexError, ValueError) as exc:
+                        t13_decode_fail.append((path, r.track, str(exc)))
     check("corpus: all .anb parse as flag-set/flag-clear without errors",
           n_parse_err == 0, "%d files, %d flag-set, %d parse errors"
           % (n_files, n_flag, n_parse_err))
     check("corpus: every type-13 track decodes end-to-end without exceptions",
-          t13 > 0, "%d type-13 tracks decoded" % t13)
+          not t13_decode_fail,
+          "%d type-13 tracks, %d decode failures" % (t13, len(t13_decode_fail)))
+    for path, track, msg in t13_decode_fail[:5]:
+        check("corpus decode failure: %s track %d" % (os.path.basename(path), track),
+              False, msg)
 
     if verbose:
         for line in lines:
