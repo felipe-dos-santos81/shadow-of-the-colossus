@@ -32,10 +32,13 @@ The clip's quats are not in the glb's local frames: measured, the glb bind local
 the whole skeleton onto the glb bind within idle-plausible residuals (see
 `verify`), makes the arms hang at the sides instead of crossing the body, and is
 the map that makes the L/R pairs mirror-symmetric.  The map is applied uniformly
-(animated and static tracks alike); the eight finger statics (`YUBI_*`,
-`OYAYUBI_*`) sit 39-99 deg off the bind along the bones' bend axes — the rig's
-relaxed-hand default against a straight-fingered T-pose bind — and are applied
-as-is (pinned by `verify`).
+(animated and static tracks alike).  **The bridge covers the bone rotations
+only** — the root position series is a *position* series already in the glb's
+world frame (its y ≈ the pelvis height above the ground, matching the glb's foot
+offsets) and is applied raw, never conjugated.  The eight finger statics
+(`YUBI_*`, `OYAYUBI_*`) sit 39-99 deg off the bind along the bones' bend axes —
+the rig's relaxed-hand default against a straight-fingered T-pose bind — and are
+applied as-is (pinned by `verify`).
 
 Assumptions of the capture comparison (stated, not hidden)
 ---------------------------------------------------------
@@ -395,13 +398,39 @@ ARM_BONES = ("Bone_KATA_L", "Bone_JOWA_L", "Bone_UDE_L", "Bone_HAND_A_L",
              "Bone_KATA_R", "Bone_JOWA_R", "Bone_UDE_R", "Bone_HAND_A_R")
 
 
+def _hand_features(f0, height):
+    """The model side of the hand comparison: the wrist joint (HAND_A) and the
+    fist (the centroid of the finger joints), per side, as height/lateral
+    fractions — the quantities the reference stills' cuff/fist measures pair with.
+    """
+    out = {}
+    for side, wrist in (("R", "Bone_HAND_A_R"), ("L", "Bone_HAND_A_L")):
+        bones = ["Bone_YUBI_A_%s" % side, "Bone_YUBI_B_%s" % side,
+                 "Bone_OYAYUBI_A_%s" % side, "Bone_OYAYUBI_B_%s" % side]
+        pts = [f0[b] for b in bones if b in f0]
+        if not pts or not height:
+            continue
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        base = min(f0["Bone_TUMASAKI_L"][1], f0["Bone_TUMASAKI_R"][1])
+        out[side] = {
+            "wrist_height_over_height": round((f0[wrist][1] - base) / height, 4),
+            "wrist_lateral_over_height": round(abs(f0[wrist][0]) / height, 4),
+            "fist_height_over_height": round((cy - base) / height, 4),
+            "fist_lateral_over_height": round(abs(cx) / height, 4),
+        }
+    return out
+
+
 def pose_features(clip):
     """The pose features across the whole loop (the phase-free comparison inputs)."""
     frames = clip.info["frames"]
     watch = ("Bone_KOSI", "Bone_KAO", "Bone_TUMASAKI_L", "Bone_TUMASAKI_R",
              "Bone_TOE_L", "Bone_TOE_R",
              "Bone_HAND_A_L", "Bone_HAND_A_R", "Bone_JOWA_L", "Bone_JOWA_R",
-             "Bone_SUNE_L", "Bone_SUNE_R")
+             "Bone_SUNE_L", "Bone_SUNE_R",
+             "Bone_YUBI_A_L", "Bone_YUBI_B_L", "Bone_OYAYUBI_A_L", "Bone_OYAYUBI_B_L",
+             "Bone_YUBI_A_R", "Bone_YUBI_B_R", "Bone_OYAYUBI_A_R", "Bone_OYAYUBI_B_R")
     pos = {b: [] for b in watch}
     for f in range(frames):
         world = clip.world_pose(f)
@@ -451,6 +480,7 @@ def pose_features(clip):
             if height else None),
         "hand_x_over_height": (round(abs(f0["Bone_HAND_A_L"][0]) / height, 4)
                                if height else None),
+        "wrist_and_fist_f0": _hand_features(f0, height),
     }
 
 
@@ -629,7 +659,7 @@ def crop_reference(path, window):
 
 
 def cmd_render(args):
-    Image, _ = _pil()
+    Image, ImageDraw = _pil()
     clip = Clip(args.file, glb_path=args.glb, skb_path=args.skb)
     frames = [int(v) for v in args.frames.split(",")] if args.frames else [0]
     out = os.path.abspath(args.out)
@@ -666,7 +696,21 @@ def cmd_render(args):
         for img, _ in tiles:
             strip.paste(img, (x, 0))
             x += img.width
-    strip.save(out)
+    # the phase-free caveat travels with the artifact
+    footer = [
+        "phase-free comparison: the capture's animation frame is unknown "
+        "(the reference still is representative).",
+        "the pose shown is frame %s of %d; the loop's invariants are the "
+        "comparison, not a frame pairing." % (
+            ",".join(str(f) for f in frames), clip.info["frames"] - 1),
+    ]
+    out_img = Image.new("RGB", (strip.width, strip.height + 14 + 14 * len(footer)),
+                        (14, 18, 22))
+    out_img.paste(strip, (0, 0))
+    d = ImageDraw.Draw(out_img)
+    for i, line in enumerate(footer):
+        d.text((8, strip.height + 8 + 14 * i), line, fill=(200, 180, 120))
+    out_img.save(out)
     print("pose_dump render: %s (%d frames%s)" % (
         out, len(frames), ", ref %s" % args.ref if args.ref else ""))
 
@@ -675,7 +719,7 @@ def cmd_render(args):
 
 
 def measure_reference(path, window):
-    """Silhouette features of a reference still: height, feet separation, stagger.
+    """Silhouette features of a reference still: height, feet, stagger, hands.
 
     The character is separated from the dark world by brightness + low saturation
     (measured on the idle trio: the lit character is 60-120 bright, desaturated;
@@ -684,7 +728,14 @@ def measure_reference(path, window):
     bottom 12% of the silhouette; its pixels split into two x clusters at the
     median, giving the two feet's centers and their lowest rows — the foot nearer
     the camera (the third-person camera sits behind the character) projects lower
-    in the image, which is how the stagger's sign is read.
+    in the image, which is how the stagger's sign is read (a <= 1 px difference
+    is reported as a tie).  The hands: each arm's columns are the shoulder band's
+    pixels outside +-0.09*height of the body axis; the cuff is the end of the
+    contiguous silhouette run walking down from the shoulder band (stopping above
+    the boots), and the fist is the dark run below the cuff, reported only when
+    it is bounded (a run cut by the cap has merged with the shadow/scabbard); a
+    cuff below 0.35*height is the arm's run merging with the body and is
+    reported as not measured.
     """
     Image, _ = _pil()
     img = Image.open(path).convert("RGB")
@@ -741,6 +792,72 @@ def measure_reference(path, window):
     outer = None
     if feet:
         outer = max(x for x, _ in feet) - min(x for x, _ in feet)
+    # the hands: each arm's columns are the shoulder band's pixels outside
+    # +-0.09*height of the body axis; the cuff is the end of the contiguous
+    # silhouette run that starts at the shoulder band and walks down (stopping at
+    # bottom - 0.25*height, above the boots); the fist is the dark run below the
+    # cuff (brightness < 45), capped at 0.10*height and reported only when every
+    # column is stopped by a bright pixel (a run cut by the cap has merged with
+    # the shadow/scabbard and is not a fist).
+    hands = {}
+    if lc and rc:
+        axis = (lc[0] + rc[0]) / 2.0
+        sh_y0 = top + int(0.12 * height)
+        sh_y1 = top + int(0.30 * height)
+        walk_hi = bottom - int(0.25 * height)
+        for side, sel in (("image-left", lambda x: x < axis - 0.09 * height),
+                          ("image-right", lambda x: x > axis + 0.09 * height)):
+            cols = sorted({x for x, y in best if sh_y0 <= y <= sh_y1 and sel(x)})
+            cuffs = []
+            for x in cols:
+                in_band = [y for y in range(sh_y0, sh_y1 + 1) if mask[y][x]]
+                if not in_band:
+                    continue
+                y = max(in_band)
+                while y + 1 <= walk_hi and mask[y + 1][x]:
+                    y += 1
+                cuffs.append((x, y))
+            if not cuffs:
+                hands[side] = None
+                continue
+            cuff_y = max(y for _, y in cuffs)
+            cuff_h = (bottom - cuff_y) / height
+            if cuff_h < 0.35:
+                # a hanging hand's cuff is always above the knee; a lower "run
+                # end" is the arm's run merging with the body/hip at this phase
+                hands[side] = {
+                    "cuff_note": ("no arm run ends above 0.35*height (the arm "
+                                  "merges with the body at this phase) — not measured"),
+                }
+                continue
+            cuff_xs = sorted(x for x, y in cuffs if y >= cuff_y - 2)
+            entry = {
+                "cuff_height_over_height": round(cuff_h, 4),
+                "cuff_lateral_over_height": round((sum(cuff_xs) / len(cuff_xs) - axis)
+                                                  / height, 4),
+            }
+            blob = []
+            bounded = True
+            limit = min(h - 1, cuff_y + int(0.10 * height))
+            for x in range(cuff_xs[0], cuff_xs[-1] + 1):
+                y = cuff_y + 1
+                while y <= limit and not mask[y][x] and max(px[x, y]) < 45:
+                    blob.append((x, y))
+                    y += 1
+                if y > limit:
+                    bounded = False
+            if blob and bounded:
+                cx = sum(x for x, _ in blob) / len(blob)
+                cy = sum(y for _, y in blob) / len(blob)
+                entry.update({
+                    "fist_px": len(blob),
+                    "fist_height_over_height": round((bottom - cy) / height, 4),
+                    "fist_lateral_over_height": round((cx - axis) / height, 4),
+                })
+            else:
+                entry["fist_note"] = ("the dark run below the cuff is not bounded "
+                                      "(shadow/scabbard) — fist not measured")
+            hands[side] = entry
     rows_by_y = {}
     for x, y in best:
         rows_by_y.setdefault(y, []).append(x)
@@ -757,12 +874,14 @@ def measure_reference(path, window):
         "height_px": height,
         "feet_center_sep_px": None if not (lc and rc) else round(rc[0] - lc[0], 1),
         "feet_lowest_px": None if not (lc and rc) else [round(lc[2], 1), round(rc[2], 1)],
-        "feet_lower_side": None if not (lc and rc) else ("image-left" if lc[2] > rc[2]
-                                                         else "image-right"),
+        "feet_lower_side": (None if not (lc and rc) else
+                            ("tie" if abs(lc[2] - rc[2]) <= 1 else
+                             ("image-left" if lc[2] > rc[2] else "image-right"))),
         "sep_over_height": None if not (lc and rc) else round((rc[0] - lc[0]) / height, 4),
         "feet_outer_span_px": outer,
         "outer_over_height": None if outer is None else round(outer / height, 4),
         "width_over_height_at": width_at,
+        "hands": hands,
     }
 
 
@@ -799,6 +918,20 @@ def cmd_measure(args):
             print("    height %d px; feet separation %s px (ratio %s); lower foot %s"
                   % (r["height_px"], r["feet_center_sep_px"], r["sep_over_height"],
                      r["feet_lower_side"]))
+            for side, h in sorted((r.get("hands") or {}).items()):
+                if not h:
+                    continue
+                if "fist_height_over_height" in h:
+                    print("    %s: cuff h %s lat %s; fist h %s lat %s (%s px)"
+                          % (side, h["cuff_height_over_height"],
+                             h["cuff_lateral_over_height"],
+                             h["fist_height_over_height"],
+                             h["fist_lateral_over_height"], h.get("fist_px")))
+                else:
+                    print("    %s: cuff h %s lat %s; %s"
+                          % (side, h["cuff_height_over_height"],
+                             h["cuff_lateral_over_height"], h.get("fist_note", "")))
+    print("  model hand fractions (f0): %s" % json.dumps(feats["wrist_and_fist_f0"]))
     return 0
 
 
