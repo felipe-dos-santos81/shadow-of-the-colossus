@@ -676,3 +676,220 @@ The evidence is §3: the container is decoded to the byte (§3.1–§3.2), the p
 as background work (§3.8: semantic ground truth for one record — the keyframe sampler or a
 capture-derived reference pose). The skeleton-bank front (`check-skb`, §2) is green and does not
 change this verdict.
+
+## 6 · Sampler findings — the keyframe sampler in eboot.elf (C3)
+
+The decode-continuation pass (W3/C3): where the retail runtime turns a motion container into
+sampled values at a time. Everything below is quoted from the committed script and the logs it
+writes under the gitignored `out/re/`; inputs stay read-only, and only counts, addresses,
+constants, and identifiers appear here — no game content.
+
+| | |
+|---|---|
+| Date | 2026-10-18 (run stamps UTC) |
+| Machine | Apple M3 Max, macOS 27.0.1, arm64 |
+| Repo / branch | `sotc-native`, `capture-ghidra` (base `931bc5b`) |
+| Baseline | RE-0 acceptance re-run in this worktree: project `out/re/ghidra`, program `eboot.elf`, `x86:LE:64:default`, image base 0, **38,845 functions** (exit 0, 2,422 s — the slow wall time is machine load from the companion port build, not a different analysis) |
+| Script | **`tools/re/ghidra/FindSampler.java`** — modes `walk` (default; the RE-1 §4.4/§4.7 seed set + callers/callees at depth N), `decompile <addr>…`, `callers <addr>… [depth]`, `callees <addr>… [depth]`, `refs <addr>…` |
+| Logs | `out/re/ghidra-sampler.log` (6,085 lines; walk depth 1: seeds 6, reached 61, edges 69, decompiled 61), `ghidra-sampler-follow.log` (`callees 0x005fd900 1`: 22), `ghidra-sampler-follow2.log` (`callers 0x005fd900 1`: 10), `ghidra-sampler-time.log` (`callers 0x0060b720 1`: 2), `ghidra-sampler-fps.log` (`refs 0x0126b184 0x0126b2ac 0x0126b188 0x0126b18c`) |
+
+```bash
+GHIDRA_HOME=$HOME/code/mine/ghidra-bundle/dist/ghidra_12.1.4_PUBLIC
+proj_link_dir=$(mktemp -d); ln -s "$PWD/out/re/ghidra" "$proj_link_dir/ghidra"
+"$GHIDRA_HOME/support/analyzeHeadless" "$proj_link_dir/ghidra" sotc -process eboot.elf \
+  -noanalysis -scriptPath "$PWD/tools/re/ghidra" -postScript FindSampler.java \
+  > out/re/ghidra-sampler.log 2>&1
+# follow-ups (same invocation, other modes): callees 0x005fd900 1 · callers 0x005fd900 1 ·
+# callers 0x0060b720 1 · refs 0x0126b184 0x0126b2ac 0x0126b188 0x0126b18c
+```
+
+The dot-free `proj_link_dir` is the same RE-0 R-E6 workaround §4 uses. Re-run determinism: the
+**script-output lines (`INFO  FindSampler.java>`)** are byte-identical across two full runs
+(6,031 lines; `grep FindSampler` counts 6,033 because it also matches the two headless invocation
+lines; the complete logs differ only in headless's own timings and the temp-dir name).
+
+### 6.1 The sampler — `FUN_005fd900` ("GetObjectAnimationFloatFrame")
+
+The walk's decisive edge: `FUN_005fd900` is called by nine functions; the measured caller chain is
+`FUN_005fc6b0` → `FUN_0060b720` → `FUN_005fd900` (`FUN_005fc6b0`'s role — animation update vs
+flag-gated debug readout — is **not settled** by this pass), and its own debug strings
+name it — the format strings at its call sites read `OBJANIMTYPE_OBJECT`,
+`OBJANIMTYPE_OBJECT_WITH_DISSOLVE`, `OBJANIMTYPE_CAMERA`, `OBJANIMTYPE_CAMERA_TARGET` …
+`- GetObjectAnimationFloatFrame()\n`.
+
+Signature (decompiled): `ulong FUN_005fd900(float t, float t2, int *out, byte *motion, int track)`
+— a **float frame time**, an output block, the loaded motion structure, and a track index. It:
+
+- resolves the 12-byte track-record array from `motion + 0x18` and reads the track's record:
+  `*out = *(int *)(records + track * 0xc)` — the record's **type** (the `switch (*out - 1)` cases
+  below; types 1…0x30), then `+0x04` and `+0x08` as 31-bit pointers (curve / key blob);
+- resolves the 0x88 runtime object from `motion + 0x10` (the loader stored it there, §4.4) and the
+  clip's **frame count** via `FUN_005fc5d0` → `(int)*(short *)(motion + 4)` (fallback; else the
+  resolved motion data's own count through `FUN_00a26590`);
+- wraps and splits time (§6.4), then dispatches per type to the per-type samplers:
+  `FUN_00600810`/`FUN_0060ce90` (types 1/5 OBJECT paths), `FUN_00602040` (2/7), `FUN_006011f0`
+  (4), `FUN_00600ef0` (10/13/14/17/22/23/32/39/40/41/42/46), `FUN_00601590` (6/27/28),
+  `FUN_0060bba0` + `FUN_0060e640` + `FUN_0060e0c0` + `FUN_0060e370` (the key accessors, §6.3),
+  and `FUN_00670300` (the name-resolve helper of §4.4 — the sampler re-resolves the clip by name
+  when the variant flag `DAT_0300c598` selects the second slot);
+- writes the flags `out[0x11] = (record[0] >> 0x18) & 1` and
+  `out[0x12] = DAT_0126be70[((record[0] >> 0x18) & 6) ^ 4]` — the table at `0x0126be70` holds
+  `{2, 0, 3, 0}` (measured from `out/re/eboot.elf`).
+
+The type numbers line up with §4.4's record world: the 12-byte element stride and the per-element
+type byte that `FUN_0066fe60`/`FUN_0066f9a0` re-base are the *same* records this sampler reads
+(`FUN_0066f9a0`'s switch cases are the record types 1…0x30; e.g. its `0x1d` case branches on
+version > 10).
+
+### 6.2 The record and key-blob layouts (measured in the decompiles)
+
+- **Track record, 12 bytes**: `+0x00` u32 = type (1…0x30) + flag bits (`>>4 & 0xf`, `>>8 & 0xf`,
+  `>>0xc & 0xf` select sub-formats; `>>0x18` holds the 1-bit and 2-bit codes above); `+0x04` u32 =
+  31-bit pointer to the scalar/curve data; `+0x08` u32 = 31-bit pointer to the **key blob**.
+- **Key blob** (what `+0x08` points at): `+0x00` u32 = a format-selector word — the sampler
+  passes byte 0, byte 1, byte 2, and the nibble `>>4` of this word as the `format` argument of
+  the accessors at different call sites, so the byte↔channel assignment differs between the
+  sampler's two switch variants and is **not pinned** here; bits `>>0x18` = flags. `+0x04`,
+  `+0x08`, `+0x0c` u32 = 31-bit pointers into the sample data (the accessors' data arguments).
+- **Sample descriptor** (what the accessors read as `float *param_3`): floats `[0..5]` =
+  per-component offset/scale pairs (x,y,z), `[6]` = a 31-bit pointer (stored in a float slot —
+  read back through `ABS()`) to the sample array, `[7]` = an extra scale used by the packed
+  formats. The sample array's element stride follows the format (4 B packed, 6 B int16 triplets,
+  12 B floats, 16 B float quaternions).
+
+### 6.3 The key formats — `FUN_0060bba0` (switch on the format byte, cases 0…0xe)
+
+The accessor takes `(float *out, int format, float *samples, int key)`; `key` is the integer frame
+index. Quoted arithmetic (all constants read from `out/re/eboot.elf` at the given VAs):
+
+| case | stored key | arithmetic | scale constant |
+|---|---|---|---|
+| 0 | 4 × float32 | read from the descriptor's base with **no** key-index scaling (the 16 B stride is the caller's, not read here) | — |
+| 1 | 4 × float32 | x,y,z copied; 4th = `±sqrt(clamped remainder)`, sign from the key's byte 1 | — |
+| 2 | 4 × float32 | copied, then scaled by `FUN_00586060(u32 key)` | — |
+| 3 | u32 packed | `x = bits 26..18`, `y = 17..9`, `z = 8..0`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 27..30 × `1/7`; sign = bit 31 | `1/255` (`0x0126b2c0`), `1/7` (`0x0126b2c4`) |
+| 4 | u32 packed | `x = bits 31..23`, `y = 17..9`, `z = 8..0`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 18..21 × `1/7`; sign = bit 22 | `1/255`, `1/7` |
+| 5 | u32 packed | `x = bits 31..23`, `y = 22..14`, `z = 8..0`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 9..12 × `1/7`; sign = bit 13 | `1/255`, `1/7` |
+| 6 | u32 packed | `x = bits 31..23`, `y = 22..14`, `z = 13..5`; derived = `±sqrt(\|1−\|v\|²\|)` + residual bits 0..3 × `1/7`; sign = bit 4 | `1/255`, `1/7` |
+| 10 | 3 × float32 (12 B stride) | copied; 4th = `±sqrt(\|1−\|v\|²\|)`, sign from bit 0 of x | — |
+| **0xb** | **3 × int16 (6 B stride)** | `x = int16₀ × 1/32767`, `y = int16₁ × 1/32767`, `z = int16₂ × 1/32767`; **4th = `±sqrt(\|1−\|v\|²\|)`**, sign = **bit 0 of int16₀** (`(u16₀ & 1) * 2 ^ 2` → ×(±1)) | **`1/32767`** (`0x0126b2ac` = `0x38000100`) |
+| 0xc | 3 × int16 (6 B stride) | per-component `int16 × (1/32767) × scale + offset` (scales `param_3[1]/[3]/[5]`, offsets `[0]/[2]/[4]`); 4th = `±sqrt(\|1−\|v\|²\|)`, sign = bit 0 of int16₀ | per-track floats |
+| 0xd | 1 × int16 (2 B stride) | `FUN_00586060(x × 0.5)` → a scalar; the quaternion comes from `param_3[2..4]` scaled by the result | `0.5` (`0x0126b2b0`) |
+| 0xe | u32 packed | `x = (word >> 0x15)`, `y = (word << 0xb) >> 0x16`, `z = (word << 0x15) >> 0x16`; 4th = `±sqrt(\|1−\|v\|²\|)`, sign from `~(word × 2) & 2` | `1/1023` (`0x0126b2b4`) |
+| > 0xe | — | the constant at `0x0126b5d0`/`0x0126b5d8` (all `0.0`) | — |
+
+Two properties of the whole family are worth recording: the derived component is **always
+`±sqrt(\|1 − \|v\|²\|)`** — the engine takes the *absolute value* under the root (a `vcmpss` +
+`vblendvps` pair), so it never produces NaN and **never normalizes**; and the sign is always a
+single packed bit, not a stored component. The companion accessor `FUN_0060e640` covers the
+vector channels with the same vocabulary (`0` = 3 floats, `2` = packed 11/10-bit fields
+`>>0x15`/`>>10 & 0x7ff`/`& 0x3ff` with `1/2047` (`0x0126b2e4`) and `1/1023` (`0x0126b2e8`),
+`3` = 16-bit packed `>>0xb`/`>>5 & 0x3f`/`& 0x1f` with `1/31` (`0x0126b2ec`), default = 3 floats
+at 12-byte stride).
+
+The only references to the two scaling constants (from `refs`): `0x0126b2ac` ← `0x0060c1cb`,
+`0x0060c262`, `0x0060c369` — all inside `FUN_0060bba0`; `0x0126b184` (30.0) ← `0x005fc858`,
+`0x005fcb34` — both inside `FUN_005fc6b0`, in its flag-gated readout (its role is unresolved,
+§6.1).
+
+### 6.4 The time model — frames, wrap, blend (answers §3.4's missing time fields)
+
+`FUN_005fd900`'s time is a **float frame index**, not seconds:
+
+```c
+sVar6 = FUN_005fc5d0(motion);                 /* the clip's frame count (u16 @ motion+4) */
+if ((float)(int)sVar6 < t) {                  /* wrap modulo (count-1) */
+  i = (sVar6 == 1) ? (int)t : (int)(t / (float)(sVar6-1)) * (sVar6-1);
+  t = t - (float)i;
+}
+i = (int)t;  frac = t - (float)i;             /* key index + in-between fraction */
+/* per format: sample key[i] and key[i+1], then */
+out[k] = frac * key_{i+1}[k] + (1.0 - frac) * key_i[k];   /* DAT_0126b1b8 = 1.0 */
+```
+
+So: keys are indexed by **integer frame**, the time between two keys is blended linearly, the
+wrap is modulo `count−1` (the last key duplicates the first — a loop convention), and there is
+**no time field anywhere in the payload because none is needed**: `t_key = frame / fps` is
+implicit. The rate: the family fps is `29.999998` in the `.cani` header (§1.2) and the engine's
+own constant is `30.0` (`0x0126b184`, referenced only from `FUN_005fc6b0`'s flag-gated readout);
+the callers hand the sampler **integer frames** — `FUN_0060b720` passes `(float)param_4`, and its
+only caller `FUN_005fc6b0` divides `(count−1)` by `FUN_0060b610() × 30.0` in that same readout (the
+`%.2fFPS` print). The seconds→frames conversion itself was **not** walked in this pass — it is
+*assumed* to sit above `FUN_005fc6b0` (its callers were not walked; documented stopping point, and
+the constant 30.0 has no other reference in the image).
+
+### 6.5 Correlation with §3 and the B2 candidate
+
+1. **Does a field pair with the key count?** In the runtime: yes — the frame count is the u16 at
+   `motion + 0x04` (`FUN_005fc5d0`, and `iVar3 = (int)*(short *)(param_2 + 4)` in `FUN_005fc6b0`),
+   and the *track* count is the u32 at `+0x10` (the count `FUN_0066fe60` walks for the 12-byte
+   record array at `+0x18`; `+0x14` counts the 16-byte array at `+0x1C`). In the **file**, the
+   structural counterpart is §3.1's `@0xC4` (the count of both tail tables = the record/track
+   count, 58 for `player_a_stand`): the *track* count pairs, but the **frame count has no
+   file-level counterpart** — §3.4's negative stands, and the sampler shows why: the count is
+   materialized by the loader's parse, not stored as a field the offline probe could read.
+2. **Does an implicit time base explain the missing time fields?** **Yes — confirmed** (§6.4):
+   per-frame keys at the family fps, integer key index + linear blend, wrap by `count−1`. The
+   `.anb` payload needs no per-key times because the runtime never reads one.
+3. **Is the candidate's quaternion reading confirmed or contradicted?** **Split verdict** (documented,
+   no overclaim): the encoding *shape* is confirmed at the runtime level; the file-level reading is
+   **not verified** — neither confirmed nor contradicted.
+   - *Confirmed in shape*: the engine really has the int16-triplet + derived-`w` encoding —
+     format `0xb` of `FUN_0060bba0`: `x,y,z = 3 × int16 × 1/32767`, `w = ±sqrt(|1−|v|²|)` with the
+     **sign from bit 0 of the first int16**. The B2 candidate's `1/32768` and always-positive `w`
+     are the two deltas (both small; the exact constants are quoted above).
+   - *Not verified — and not verifiable from the file alone*: the `.anb` **does** contain long
+     stride-6 int16-triplet series. Re-derived on `player_a_stand.anb` (rule: for each alignment
+     r ∈ 0…5, non-overlapping consecutive 6-byte windows from r; a window passes when
+     `x²+y²+z² ≤ 32767²`): the longest run is **178 windows = 1,068 B at `0x1CB8`** (alignment
+     r=2, EOF-clipped — it crosses into tail table 1 at `0x1D48`, whose small `{offset, tag}`
+     words pass the norm test trivially); **record 57** (`0x1C1C..0x1D48`) holds two 24-window
+     runs (`0x1C1C`: dots 0.9734–0.9995, smooth; and `0x1CB8`, which breaks); under the B2
+     reading from the record starts, **record 0** (`0x1E0`) starts with a **41-key valid series**
+     (all `|v| ≤ 1`; adjacent-key dots 0.9727–0.9996; first break at the 41st transition, dot
+     −0.0642) and **record 48** has a 63-key valid run at `0x1A3A`. The earlier claim "no key
+     series anywhere" was wrong and is withdrawn; what the verified evidence supports is that
+     these series are **not validated keys**: the engine reads keys through the loader-built
+     structure (§6.6), and B2's candidate still fails the gate's global assertions (§3.6:
+     428 keys with `|v| > 1`, 693/1111 dots < 0.9). **B2's `UNVERIFIED` mark stands; the honest
+     file-level statement is *not verified*, not *contradicted*.** These series are recorded as
+     the **new lead** for the parse-chain pass — they may be the key data the decode was missing.
+     (The reviewer's independent re-derivation reproduced the run/record-57/record-0 findings and
+     the break at −0.0642 exactly; its dot-range minimum read 0.9885 and its rule-variant scan
+     counts 24/90 differ from mine — rule-sensitive numbers, recorded as such.)
+
+### 6.6 What the re-base pass actually operates on (resolves §4.4's open note)
+
+§4.4 left it open whether `FUN_0066fe60`'s structure is "a runtime sub-structure, or a repurposed
+header". This pass settles it toward **runtime sub-structure**, on the decompile legs (below) —
+the file-side scan is *rule-sensitive and does not carry the conclusion by itself*: the raw file
+starts are excluded by magic (`xff` family: `78 66 66 00`; `.cani`: `38 30 41 45`), and a
+signature scan for the structure (first byte 1…9, u16 count 1…4096 at `+4`, ≥3 of the nine
+31-bit offset fields nonzero and all < `0x10000`) matches **only table-like data, never a
+header**: 13 hits in `player_a_stand` — all inside tail table 1 (≥ `0x1D48`) — 72 in the horse
+(all at/after `0xC30`, its table region and immediate lead-in), and 0–1 per file in an 8-file
+plaintext-`.cani` sample. The reviewer's rule variant counted 24/90 on the same two files; the
+counts are rule-sensitive, the "no file header" reading is what reproduces. The conclusion
+rests on the decompile legs: the structure is allocated and linked by the loader chain
+(`FUN_00589310` → `FUN_00588900`; the node's `+0x48` holds the pointer the re-base pass
+receives), and its 31-bit fields are **offsets relative to the load base `DAT_02f3b8c0`**, which
+`FUN_0066fe60` converts to absolute pointers in place.
+Consequence for the decode: §4.4's field list must **not** be read as raw-file offsets (the
+structure is runtime-built), and the file→structure parse (`FUN_00588900`'s chain) is the
+concrete next step to decode the `.anb` payload — the sampler itself is downstream of it, and the
+stride-6 series recorded in §6.5.3 are the lead to test against the parse.
+
+### 6.7 What this changes
+
+- The **sampler is located and read out** (addresses above): per-type track dispatch, the
+  record/key-blob layouts, the full key-format vocabulary with exact scales, and the frame-based
+  time model. This is the semantic ground truth §3.8 asked for, at the *runtime* level.
+- The **`.anb` file-level decode is still open** — the gap is now the loader's parse, not the
+  sampler; §5's gate decision (NOT MET) does not change, and B2's candidate data stays
+  `UNVERIFIED` (never consume it as animation data). The stride-6 series recorded in §6.5.3
+  (178-window run at `0x1CB8`, record 57's two 24-window runs, record 0's 41-key smooth series,
+  record 48's 63-key run at `0x1A3A`) are the lead to check against the parse.
+- Next pass, in order: (1) `FUN_00588900`/`FUN_00588e80` (the loader callbacks) and the structure
+  builder, to map the file's bytes onto the 12-byte records; (2) `FUN_005fc6b0`'s callers for the
+  seconds→frames conversion; (3) then re-run `check-curves` against whatever layout the parse
+  yields.
