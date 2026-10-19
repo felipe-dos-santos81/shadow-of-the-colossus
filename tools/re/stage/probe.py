@@ -1231,26 +1231,37 @@ def cmd_check_manifest(args):
             len(instances) == ARENA_INSTANCES,
         )
         exact = sorted(set(rels)) == want and len(rels) == len(set(rels))
+        missing = sorted(set(want) - set(rels))
+        extra = sorted(set(rels) - set(want))
+        duplicates = sorted(rel for rel in set(rels) if rels.count(rel) > 1)
+        if exact:
+            set_detail = "exact (%d)" % len(want)
+        else:
+            parts = []
+            if missing:
+                parts.append("missing %d (%s)" % (len(missing), ", ".join(missing[:3])))
+            if extra:
+                parts.append("extra %d (%s)" % (len(extra), ", ".join(extra[:3])))
+            if duplicates:
+                parts.append("duplicates %d (%s)" % (len(duplicates), ", ".join(duplicates[:3])))
+            set_detail = "differs: " + "; ".join(parts)
         add(
             "instance set == the library's non-*_collision* set",
             "structure",
             "exact (%d)" % len(want),
-            "exact (%d)" % len(want)
-            if exact
-            else "differs (missing %d, extra %d, duplicates %d)"
-            % (
-                len(set(want) - set(rels)),
-                len(set(rels) - set(want)),
-                len(rels) - len(set(rels)),
-            ),
+            set_detail,
             exact,
         )
         existing = [rel for rel in rels if os.path.isfile(os.path.join(library, rel))]
+        missing_files = sorted(set(rels) - set(existing))
+        exists_detail = "%d/%d" % (len(existing), len(rels))
+        if missing_files:
+            exists_detail += " missing: %s" % ", ".join(missing_files[:3])
         add(
             "every glbRelPath exists under the library",
             "structure",
             "%d/%d" % (len(rels), len(rels)),
-            "%d/%d" % (len(existing), len(rels)),
+            exists_detail,
             len(existing) == len(rels),
         )
         identity = [

@@ -496,7 +496,7 @@ comment says so, and this section records why and what the candidates were:
   coordinate space stay unresolved (recorded for later targets, §4).
 - **Candidate 2, not usable as measured** — the camdata camera tables: the MINO stages
   `16 / 55 / 63` (re-measured: `stage16` holds `MINO_BOOT_CAMERA1/2` + `MINO_C_*` names,
-  `stage55` `MINO_A_*` incl. `st17a_mino_A_start_camera`, `stage63` `MINO_B_*`) are the
+  `stage55` `MINO_A_*` incl. `st17a_mino_start_camera`, `stage63` `MINO_B_*`) are the
   minotaur-family (MINO A/B/C) candidates for the Valus arena, but the tables hold camera
   *parameters* (`Camera, Frame, Focal Distance, Parallax, FOVAdjust, NearPlaneAdj,
   CharMotionBlur`) — no position or facing column — so no spawn follows from them as
