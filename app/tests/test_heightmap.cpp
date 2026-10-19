@@ -226,3 +226,52 @@ TEST_CASE("a grid with no covered node samples NaN") {
     }
     CHECK(std::isnan(heightmap_sample(hm, {0, 0, 5})));
 }
+
+TEST_CASE("build_heightmap rasterizes only the first meshCount meshes") {
+    // The W1.4 player-less build: mesh 0 is the ground plane at y = 3 (the
+    // lower-left half of [0, 10]^2), mesh 1 is a stand-in "player" plane at
+    // y = 5 covering the origin. A composed scene appends the player last, so
+    // the app passes its mesh index to keep the player out of the ground.
+    Scene scene = scene_from_triangles({{0, 3, 0}, {10, 3, 0}, {0, 3, 10}});
+    MeshCpu player;
+    player.vertices = {vertex_at({0, 5, 0}), vertex_at({2, 5, 0}), vertex_at({0, 5, 2})};
+    player.indices = {0, 1, 2};
+    scene.meshes.push_back(std::move(player));
+
+    const Heightmap all = build_heightmap(scene, 1.0f);
+    const Heightmap ground_only = build_heightmap(scene, 1.0f, /*meshCount=*/1);
+
+    // With every mesh the player's plane wins the max-Y at the origin.
+    CHECK(heightmap_sample(all, {0.5f, 0, 0.5f}) == doctest::Approx(5.0f));
+    // With meshCount = 1 the ground plane is what remains.
+    CHECK(heightmap_sample(ground_only, {0.5f, 0, 0.5f}) == doctest::Approx(3.0f));
+
+    // The bounds stay the scene's own (the walkable area is unchanged), and a
+    // meshCount past the end is simply "all meshes".
+    CHECK(ground_only.boundsMin.x == doctest::Approx(all.boundsMin.x));
+    CHECK(ground_only.boundsMax.x == doctest::Approx(all.boundsMax.x));
+    CHECK(heightmap_sample(build_heightmap(scene, 1.0f, 99), {0.5f, 0, 0.5f}) ==
+          doctest::Approx(5.0f));
+
+    // meshCount 0 leaves nothing to rasterize: the same error as no meshes.
+    CHECK_THROWS_WITH_AS(build_heightmap(scene, 1.0f, 0), "no meshes", std::runtime_error);
+}
+
+TEST_CASE("heightmap_sample refuses an empty grid instead of reading out of bounds") {
+    // A default-constructed Heightmap has no grid at all (the app's "no ground"
+    // state): the sample is NaN, never an index into an empty vector.
+    const Heightmap empty{};
+    CHECK(std::isnan(heightmap_sample(empty, {0, 0, 0})));
+    CHECK(std::isnan(heightmap_sample(empty, {5, 1, -3})));
+
+    // A grid whose heights vector is shorter than width * height is refused the
+    // same way (it could not be indexed safely either).
+    Heightmap short_grid{};
+    short_grid.cellSize = 1.0f;
+    short_grid.width = 4;
+    short_grid.height = 4;
+    short_grid.heights.assign(3, 0.0f);
+    short_grid.boundsMin = Vec3{0, 0, 0};
+    short_grid.boundsMax = Vec3{3, 0, 3};
+    CHECK(std::isnan(heightmap_sample(short_grid, {1, 0, 1})));
+}

@@ -590,7 +590,7 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 }
 
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
-                    const std::string& playerGlbRelPath) {
+                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin) {
     Scene scene;
     bool have_bounds = false;
 
@@ -607,6 +607,12 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             throw std::runtime_error("compose_scene: instance \"" + instance.glbRelPath +
                                      "\": " + error.what());
         }
+    }
+
+    // The player's meshes start here: everything before is the manifest's
+    // instances (the app's player-less heightmap build splits on this index).
+    if (playerMeshBegin != nullptr) {
+        *playerMeshBegin = scene.meshes.size();
     }
 
     // The player: identity model, and the only rig the scene keeps. Its

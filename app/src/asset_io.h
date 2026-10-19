@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 
@@ -32,5 +33,10 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 // the player's: a rig on an instance glb is skipped with a warning (the app
 // animates the player). Throws std::runtime_error like load_scene, naming the
 // instance's manifest glb path when one cannot be loaded.
+//
+// `playerMeshBegin` (optional) receives the index of the player's first mesh:
+// meshes [0, playerMeshBegin) are the manifest's instances and meshes
+// [playerMeshBegin, end) are the player's. The app uses it to build the ground
+// heightmap from the player-less part of the scene.
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
-                    const std::string& playerGlbRelPath);
+                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr);

@@ -79,11 +79,12 @@ int node_index_end(float coordinate, float bound_min, float cellSize, int nodes)
 
 }  // namespace
 
-Heightmap build_heightmap(const Scene& scene, float cellSize) {
+Heightmap build_heightmap(const Scene& scene, float cellSize, std::size_t meshCount) {
     if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
         throw std::runtime_error("heightmap cell size must be positive and finite");
     }
-    if (scene.meshes.empty()) {
+    const std::size_t rasterized = std::min(meshCount, scene.meshes.size());
+    if (rasterized == 0) {
         throw std::runtime_error("no meshes");
     }
 
@@ -97,7 +98,8 @@ Heightmap build_heightmap(const Scene& scene, float cellSize) {
         static_cast<std::size_t>(heightmap.width) * static_cast<std::size_t>(heightmap.height),
         std::numeric_limits<float>::quiet_NaN());
 
-    for (const MeshCpu& mesh : scene.meshes) {
+    for (std::size_t mesh_index = 0; mesh_index < rasterized; ++mesh_index) {
+        const MeshCpu& mesh = scene.meshes[mesh_index];
         for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
             const std::size_t i0 = mesh.indices[t];
             const std::size_t i1 = mesh.indices[t + 1];
@@ -168,6 +170,14 @@ Heightmap build_heightmap(const Scene& scene, float cellSize) {
 }
 
 float heightmap_sample(const Heightmap& heightmap, Vec3 p) {
+    // An empty heightmap (no grid at all — e.g. a scene with no ground) has no
+    // ground to report; never index into an empty grid.
+    if (heightmap.width <= 0 || heightmap.height <= 0 ||
+        heightmap.heights.size() <
+            static_cast<std::size_t>(heightmap.width) * static_cast<std::size_t>(heightmap.height)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+
     const float x = clamp_coordinate(p.x, heightmap.boundsMin.x, heightmap.boundsMax.x);
     const float z = clamp_coordinate(p.z, heightmap.boundsMin.z, heightmap.boundsMax.z);
 

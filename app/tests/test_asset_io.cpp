@@ -565,11 +565,18 @@ TEST_CASE("compose_scene places two plank instances and the player") {
     manifest.instances.push_back(placed_at("models/objects/props/_cmn/obj_plank_01.glb",
                                            Vec3{0.0f, 0.0f, 2.0f}));
 
+    const std::size_t instance_meshes = 2;
+    std::size_t player_mesh_begin = 999;
     const Scene scene = compose_scene(test_library(), manifest,
-                                      "models/shadow/characters/wander/_cmn/wander.glb");
+                                      "models/shadow/characters/wander/_cmn/wander.glb",
+                                      &player_mesh_begin);
 
     // 2 x plank (1 mesh each) + wander (12).
     REQUIRE(scene.meshes.size() == 14);
+
+    // The player's meshes start after the instances' (W1.4's player-less
+    // heightmap build splits on this index).
+    CHECK(player_mesh_begin == instance_meshes);
 
     // Each instance mesh carries its instance's translation in column 3.
     CHECK(scene.meshes[0].model.m[12] == doctest::Approx(1.0f));
@@ -681,10 +688,15 @@ TEST_CASE("compose_scene names the instance glb it cannot load") {
 
 TEST_CASE("compose_scene with no instances composes the player alone") {
     SceneManifest manifest{};  // no instances: an empty loop, but a real path
+    std::size_t player_mesh_begin = 999;
     const Scene scene = compose_scene(test_library(), manifest,
-                                      "models/shadow/characters/wander/_cmn/wander.glb");
+                                      "models/shadow/characters/wander/_cmn/wander.glb",
+                                      &player_mesh_begin);
     const Scene wander =
         load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+
+    // With no instances the player's meshes start at 0.
+    CHECK(player_mesh_begin == 0);
 
     REQUIRE(scene.meshes.size() == wander.meshes.size());
     CHECK(scene.materials.size() == wander.materials.size());
