@@ -127,30 +127,6 @@ void print_status_line(const AppOptions& opts, SDL_Window* win) {
                 windowed ? 1 : 0, relative_mouse ? 1 : 0, auto_capture_off ? 0 : 1, opts.frames);
 }
 
-// The clip list and the playback state. clips[0] is the built-in procedural
-// wave when the model has a skin, followed by the model's own glTF clips;
-// `time` is unwrapped seconds (every pose wraps it into the clip's duration).
-struct Playback {
-    std::vector<AnimationCpu> clips;
-    int index = -1;  // -1 = nothing to play (no skin and no clips)
-    float time = 0.0f;
-    bool playing = false;
-    bool has_procedural = false;
-};
-
-// Fills `playback` from the scene and starts on the first clip.
-void init_playback(Playback& playback, const Scene& scene) {
-    if (!scene.skin.joints.empty()) {
-        playback.clips.push_back(make_procedural_wave(scene));
-        playback.has_procedural = true;
-    }
-    playback.clips.insert(playback.clips.end(), scene.animations.begin(), scene.animations.end());
-    if (!playback.clips.empty()) {
-        playback.index = 0;
-        playback.playing = true;
-    }
-}
-
 // Resolves an `--anim` value: an exact clip name, or a 0-based index. -1 when
 // nothing matches.
 int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want) {
@@ -171,7 +147,8 @@ int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want
 // The `s2-anim` line reports the selected clip: its name, the palette's joint
 // count, whether it is the built-in procedural clip, and the current (wrapped)
 // time. Printed at startup and on every clip change; a model with no clip at
-// all prints nothing.
+// all prints nothing. Real clips print procedural=0; the stand-in is only ever
+// the single clip of a model the converter could not animate.
 void print_anim_status(const Playback& playback, const Scene& scene) {
     if (playback.index < 0) {
         return;
@@ -205,6 +182,41 @@ void update_pose(Renderer& renderer, const Scene& scene, Playback& playback, flo
     renderer.upload_pose(animation_pose(scene, clip, wrapped));
 }
 
+// Frames the single-model camera on the pose that is actually drawn. With a
+// clip active the palette carries the clip's root translation series, which
+// holds the ground height and lifts the subject above the bind-pose bounds the
+// camera was framed on at load; framing on the bind bounds cuts the posed
+// subject at the top (Task 7 §5.2). A scene with no clip keeps the bind bounds.
+// Manifest mode never uses this: its follow camera tracks the player instead.
+void frame_single_model(Camera& camera, const Scene& scene, const Playback& playback) {
+    if (playback.index < 0) {
+        camera_frame(camera, scene.boundsMin, scene.boundsMax);
+        return;
+    }
+    const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
+    const float time = animation_loop_time(playback.time, clip.duration);
+    Vec3 bounds_min{};
+    Vec3 bounds_max{};
+    posed_bounds(scene, animation_pose(scene, clip, time), bounds_min, bounds_max);
+
+    // camera_frame fits the bounds' half-diagonal with distance = r / tan(fov/2),
+    // which leaves the bounding sphere tangent to the frustum only at
+    // r / sin(fov/2). Pad the posed box by 1 / cos(fov/2) about its centre so the
+    // subject actually fits — a tall, narrow figure (Wander is 1.25 m tall,
+    // 0.45 wide) otherwise puts the top of the head on the top edge.
+    const Vec3 centre{(bounds_min.x + bounds_max.x) * 0.5f,
+                      (bounds_min.y + bounds_max.y) * 0.5f,
+                      (bounds_min.z + bounds_max.z) * 0.5f};
+    const float pad = 1.0f / std::cos(0.5f * camera.fovYDeg * kDegToRad);
+    bounds_min = Vec3{centre.x + (bounds_min.x - centre.x) * pad,
+                      centre.y + (bounds_min.y - centre.y) * pad,
+                      centre.z + (bounds_min.z - centre.z) * pad};
+    bounds_max = Vec3{centre.x + (bounds_max.x - centre.x) * pad,
+                      centre.y + (bounds_max.y - centre.y) * pad,
+                      centre.z + (bounds_max.z - centre.z) * pad};
+    camera_frame(camera, bounds_min, bounds_max);
+}
+
 // --- Manifest mode (S3 W1.4) ------------------------------------------------
 
 constexpr float kHeightmapCellSize = 1.0f;        // metres between ground samples
@@ -218,14 +230,42 @@ float camera_view_yaw(const Camera& camera) { return camera.yaw - 180.0f; }
 
 // Moves the composed scene's player meshes with the player: meshes
 // [playerMeshBegin, end) are the player's (compose_scene appends them last).
-// `groundOffsetY` is the player model's origin-to-feet lift (see
-// player_ground_offset), so the character stands on the ground point instead
-// of sinking into it.
+// `groundOffsetY` is the lift to apply (see active_player_lift), so the
+// character stands on the ground point instead of sinking into it.
 void apply_player_transform(Scene& scene, size_t playerMeshBegin, const PlayerState& player,
                             float groundOffsetY) {
     const Mat4 model = player_model_matrix(player, groundOffsetY);
     for (size_t i = playerMeshBegin; i < scene.meshes.size(); ++i) {
         scene.meshes[i].model = model;
+    }
+}
+
+// The lift to draw the composed scene's player meshes with while the active
+// clip plays: the S3 origin-to-feet lift, except when the clip carries the
+// root translation series — that series already holds the character's ground
+// height, so lifting on top of it would float the model by the offset
+// (~0.76 m for Wander). A model with no clip at all keeps the plain lift.
+float active_player_lift(const Scene& scene, const Playback& playback,
+                         size_t playerMeshBegin) {
+    if (playback.index < 0) {
+        return player_ground_offset(scene, playerMeshBegin);
+    }
+    return effective_player_lift(scene, playback.clips[static_cast<size_t>(playback.index)],
+                                 playerMeshBegin);
+}
+
+// Applies the controller's locomotion choice unless a clip was pinned on the
+// command line (--anim or --anim-time): a hard switch — the chosen clip
+// restarts at t = 0 — only when the state asks for a different clip. No
+// blending, by design.
+void update_locomotion(Playback& playback, const Scene& scene, const PlayerInput& input,
+                       bool manualClip) {
+    if (manualClip) {
+        return;
+    }
+    const int wanted = select_clip_index(playback, input);
+    if (wanted >= 0 && wanted != playback.index) {
+        select_clip(playback, scene, wanted);
     }
 }
 
@@ -421,19 +461,17 @@ int run_app(const AppOptions& opts) {
         PlayerState player{spawn_position(manifest, scene),
                            manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f};
         CameraFollow follow;
-        float player_ground = 0.0f;  // the model's origin-to-feet lift
         if (follow_mode) {
-            player_ground = player_ground_offset(scene, player_mesh_begin);
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
                           /*moving=*/false, /*dtSeconds=*/10.0f);
-            apply_player_transform(scene, player_mesh_begin, player, player_ground);
         }
 
-        // Playback: the clip list starts with the built-in procedural wave when
-        // the model has a skin; --anim picks a clip by name or index, and
-        // --anim-time pins the time and starts paused (deterministic captures).
+        // Playback: the model's real clips first; the procedural wave is only
+        // the fallback for a skinned model that carries none. --anim picks a
+        // clip by name or index, and --anim-time pins the time and starts
+        // paused (deterministic captures).
         Playback playback;
-        init_playback(playback, scene);
+        build_playback(scene, playback);
         if (!opts.animClip.empty()) {
             const int index = resolve_clip(playback.clips, opts.animClip);
             if (index < 0) {
@@ -457,6 +495,27 @@ int run_app(const AppOptions& opts) {
         }
         print_anim_status(playback, scene);
 
+        // Single-model framing is on the pose, after --anim/--anim-time resolved
+        // the start state: the clip's root series carries the ground height, so
+        // the bind-pose bounds framed at load would leave the subject out of
+        // frame. Manifest mode keeps its follow camera and bind-bounds framing.
+        if (!follow_mode) {
+            frame_single_model(camera, scene, playback);
+        }
+
+        // A clip pinned on the command line keeps manual control; otherwise the
+        // player's controller state selects the loop (stand/walk/run) each
+        // frame. --anim-time pins a deterministic capture, so it counts as
+        // manual too: a selection must not reset its time.
+        const bool manual_clip = !opts.animClip.empty() || opts.animTimeSet;
+
+        // The initial player transform (also the one --selftest renders with):
+        // the first clip already is the active one.
+        if (follow_mode) {
+            apply_player_transform(scene, player_mesh_begin, player,
+                                   active_player_lift(scene, playback, player_mesh_begin));
+        }
+
         if (opts.s3Selftest) {
             // The pinned W1.4 self-test: 240 fixed 1/60 s frames of
             // forward+run (camera-relative movement, the follow camera
@@ -471,9 +530,11 @@ int run_app(const AppOptions& opts) {
                               /*moving=*/true, kFixedFrameSeconds);
                 player_update(player, input, kFixedFrameSeconds, heightmap,
                               camera_view_yaw(camera));
+                update_locomotion(playback, scene, input, manual_clip);
                 update_pose(renderer, scene, playback, kFixedFrameSeconds);
             }
-            apply_player_transform(scene, player_mesh_begin, player, player_ground);
+            apply_player_transform(scene, player_mesh_begin, player,
+                                   active_player_lift(scene, playback, player_mesh_begin));
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
@@ -506,8 +567,11 @@ int run_app(const AppOptions& opts) {
                 if (follow_mode) {
                     camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
                                   /*moving=*/false, dt);
-                    player_update(player, PlayerInput{}, dt, heightmap, camera_view_yaw(camera));
-                    apply_player_transform(scene, player_mesh_begin, player, player_ground);
+                    const PlayerInput still;
+                    player_update(player, still, dt, heightmap, camera_view_yaw(camera));
+                    update_locomotion(playback, scene, still, manual_clip);
+                    apply_player_transform(scene, player_mesh_begin, player,
+                                           active_player_lift(scene, playback, player_mesh_begin));
                 }
                 update_pose(renderer, scene, playback, dt);
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
@@ -553,7 +617,10 @@ int run_app(const AppOptions& opts) {
                                 follow.pitchOffsetDeg = 0.0f;
                                 follow.distance = CameraFollow{}.distance;
                             } else {
-                                camera_frame(camera, scene.boundsMin, scene.boundsMax);
+                                // Keep the whole subject in frame when the clip's root series
+                                // carries the ground height: frame the current pose, not the
+                                // bind bounds.
+                                frame_single_model(camera, scene, playback);
                             }
                         } else if (event.key.key == SDLK_SPACE) {
                             playback.playing = !playback.playing;
@@ -562,9 +629,14 @@ int run_app(const AppOptions& opts) {
                         } else if (!playback.clips.empty() &&
                                    (event.key.key == SDLK_LEFTBRACKET ||
                                     event.key.key == SDLK_RIGHTBRACKET)) {
-                            const int count = static_cast<int>(playback.clips.size());
-                            const int step = (event.key.key == SDLK_LEFTBRACKET) ? count - 1 : 1;
-                            select_clip(playback, scene, (playback.index + step) % count);
+                            // Arena mode selects by controller state every frame, so a manual
+                            // clip change would be reverted on the next frame: keep the keys
+                            // for single-model browsing only.
+                            if (!follow_mode) {
+                                const int count = static_cast<int>(playback.clips.size());
+                                const int step = (event.key.key == SDLK_LEFTBRACKET) ? count - 1 : 1;
+                                select_clip(playback, scene, (playback.index + step) % count);
+                            }
                         }
                         break;
                     case SDL_EVENT_MOUSE_MOTION:
@@ -611,7 +683,9 @@ int run_app(const AppOptions& opts) {
                 camera_follow(camera, follow, player.position, player.yawDeg, drag_dx, drag_dy,
                               wheel_delta, moving, dt);
                 player_update(player, input, dt, heightmap, camera_view_yaw(camera));
-                apply_player_transform(scene, player_mesh_begin, player, player_ground);
+                update_locomotion(playback, scene, input, manual_clip);
+                apply_player_transform(scene, player_mesh_begin, player,
+                                       active_player_lift(scene, playback, player_mesh_begin));
             }
 
             update_pose(renderer, scene, playback, dt);

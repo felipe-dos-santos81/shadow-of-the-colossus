@@ -4,16 +4,23 @@ The native macOS viewer for the converted *Shadow of the Colossus* asset library
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb` + `.png`) — never the game tree or original containers.
 
-**Status (milestone S2, task 3): skeletal skinning and animation playback.**
+**Status (milestone S2, task 5): real clips by default.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
 is evaluated on the CPU per frame (`worldJoint × inverseBind`) and uploaded as a
-vertex storage buffer, blended per vertex by four joint weights. The built-in
-`procedural-wave` clip plays by default so a converted rig moves before the
-converter emits real clips; `--anim` selects a clip and `--anim-time` pins a
-time for deterministic captures. Drag to orbit, scroll to zoom, press `F` to
-reframe; `Space` plays/pauses, `[`/`]` switch clips, `R` restarts. The window
+vertex storage buffer, blended per vertex by four joint weights. A model whose
+glb carries baked animation clips plays its first clip by default; the built-in
+`procedural-wave` is only the fallback for a skinned model with no clips.
+`--anim` selects a clip and `--anim-time` pins a time for deterministic
+captures. In a composed arena (`--manifest`) the player's state drives the loop
+instead — still stands, movement walks, Shift runs — with hard clip switches;
+`--anim` / `--anim-time` pin a clip manually. The arena's ground lift is skipped
+while the active clip carries the root translation series (the series already
+holds the ground height), so the feet stay on the heightmap instead of floating
+by the model's origin-to-feet offset. Drag to orbit, scroll to zoom, press `F`
+to reframe; `Space` plays/pauses, `[`/`]` switch clips in single-model mode (in
+arena mode the controller owns the clip), `R` restarts. The window
 title shows the fps readout. Escape or the window's close button quits.
 `--screenshot` writes the same frame to a PNG.
 
@@ -34,10 +41,10 @@ app/build/sotc-viewer --library out/library
 app/build/sotc-viewer --library out/library --model models/objects/props/_cmn/obj_plank_01.glb
 app/build/sotc-viewer --library out/library --model models/objects/props/_cmn/obj_plank_01.glb \
   --screenshot out/s1/smoke.png --frames 2
-# A skinned model plays procedural-wave by default; pin the time for captures:
+# Wander's baked clips play by default; pin a time for captures:
 app/build/sotc-viewer --library out/library \
   --model models/shadow/characters/wander/_cmn/wander.glb \
-  --anim procedural-wave --anim-time 0.5 --screenshot out/s2-wave-t05.png
+  --anim player_a_walk --anim-time 0.5 --screenshot out/s2-walk-t05.png
 ```
 
 The converted library comes from `--library DIR`, else `$SOTC_LIB`; one of the two
@@ -47,8 +54,8 @@ is required. Escape or the close button quits.
 | --- | --- |
 | `--library DIR` | converted asset library (default: `$SOTC_LIB`) |
 | `--model REL` | model to load, relative to the library |
-| `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: `procedural-wave` when the model has a skeleton, else the model's first clip); an unknown name or index exits 2 |
-| `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag |
+| `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: the model's first clip; `procedural-wave` only when a skinned model carries no clips); in arena mode it is the manual override of stand/walk/run selection; an unknown name or index exits 2 |
+| `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag; it also pins the clip, so arena selection leaves it alone |
 | `--screenshot PNG` | render `--frames` frames into the offscreen target, write the PNG, exit |
 | `--frames N` | frames the `--screenshot` path renders first (default 3) |
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
@@ -62,22 +69,25 @@ Controls (no mouse capture: the cursor stays visible and free):
 | Scroll | Zoom: distance clamped to [0.5, 500] |
 | `F` | Reframe the scene bounds (keeps the viewing direction) |
 | `Space` | Play/pause the current clip |
-| `[` / `]` | Previous / next clip (restarts the clip at t = 0) |
+| `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
 | `R` | Restart the current clip |
 | Escape / close button | Quit |
 
-A model whose source has a skeleton starts playing `procedural-wave` (a 2-second
-deterministic wobble of the first joints) so the skinning path is demonstrable
-before the converter emits real clips; without `--anim-time` the captured time
-depends on the frames' wall-clock spacing. The run reports the animation state
-at startup and on every clip change:
+A model whose glb carries baked clips starts playing the model's first clip
+(`player_a_stand` on the converted Wander). The `procedural-wave` stand-in (a
+2-second deterministic wobble of the first joints) is used only when a skinned
+model carries no clips at all — so the skinning path stays demonstrable for
+un-animated rigs. Without `--anim-time` the captured time depends on the
+frames' wall-clock spacing. The run reports the animation state at startup and
+on every clip change:
 
 ```text
-s2-anim clip=procedural-wave joints=348 procedural=1 t=0.500
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.500
 ```
 
-(`joints` is the skin's joint count — the palette size; `procedural=1` marks the
-built-in clip. A model without a skeleton and without clips prints no such line.)
+(`joints` is the skin's joint count — the palette size; `procedural=0` marks a
+real baked clip, `procedural=1` the built-in fallback. A model without a
+skeleton and without clips prints no such line.)
 
 A screenshot run also prints its size and a per-channel pixel summary, e.g.
 
@@ -102,6 +112,22 @@ ctest --test-dir app/build --output-on-failure
   exercise the playback path as well:
   `app/build/sotc-viewer --library "$SOTC_LIB" --model models/shadow/characters/wander/_cmn/wander.glb --selftest`
   — it prints the `s2-anim` line and renders one skinned frame.
+
+The `wander`/`agro` animation pins load those glbs from `$SOTC_LIB` and require a library
+rebuilt with the S2 clips (a pre-S2 library fails them). Rebuild it once with:
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models/shadow/characters/wander/_cmn/wander.cmsh \
+  --clips player_a_stand,player_a_walk,player_a_run --force
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out out/library \
+  --under models/shadow/characters/agro/_cmn/agro.cmsh \
+  --clips horse_a_add_horse_kick --force
+```
+
+`--clips` bakes every named clip into every source in scope, so it is a single-model
+invocation (`--under <file>`): every track must map into that model's skeleton.
 
 ## Guarantees
 

@@ -1,3 +1,4 @@
+using BpConvert.Core.Anim;
 using BpConvert.Core.Pipeline;
 using SharpGLTF.Schema2;
 
@@ -16,6 +17,9 @@ public class ModelConverterTests : IDisposable
 
     private const string PlankRel = "models/objects/props/_cmn/obj_plank_01.cmsh";
     private const string WanderRel = "models/shadow/characters/wander/_cmn/wander.cmsh";
+    private const string AgroRel = "models/shadow/characters/agro/_cmn/agro.cmsh";
+
+    private static readonly string[] WanderClips = ["player_a_stand", "player_a_walk", "player_a_run"];
 
     private static string Mirror(string lib, string rel) =>
         Path.Combine(lib, rel.Replace('/', Path.DirectorySeparatorChar));
@@ -104,6 +108,71 @@ public class ModelConverterTests : IDisposable
 
         // Unmapped map types are still emitted as PNGs (e.g. the block-compressed roughness map).
         Assert.Contains(result.PngPaths, png => png.EndsWith("wander_skin_rgh_436a37c6.png"));
+    }
+
+    [Fact]
+    public void Convert_WanderWithClips_EmitsTheThreeDemoAnimations()
+    {
+        // Task 4's demo pin: the clip scope is resolved under cp3shadow/anim, the sibling bank by
+        // the probe.py rule, and every track maps into wander's real skeleton (unresolved == 0 —
+        // otherwise the conversion throws instead of writing a partial clip).
+        var lib = Path.Combine(_dir, "lib");
+        var clips = ClipSet.Resolve(TestAssets.Root, WanderClips);
+
+        var result = ModelConverter.Convert(TestAssets.Root, WanderRel, lib, clips: clips);
+
+        var gltf = ModelRoot.Load(result.GlbPath);
+        Assert.Equal(WanderClips, gltf.LogicalAnimations.Select(animation => animation.Name));
+
+        // One rotation channel per .anb track, plus the in-place root translation series.
+        for (var index = 0; index < WanderClips.Length; index++)
+        {
+            var animation = gltf.LogicalAnimations[index];
+            var decoded = AnbReader.Read(TestAssets.Sample($"cp3shadow/anim/{WanderClips[index]}.anb"));
+            Assert.Equal(decoded.Tracks.Count,
+                animation.Channels.Count(channel => channel.TargetNodePath == PropertyPath.rotation));
+            Assert.Contains(animation.Channels,
+                channel => channel.TargetNodePath == PropertyPath.translation && channel.TargetNode.Name == "Bone_root");
+        }
+    }
+
+    [Fact]
+    public void Convert_AgroWithKick_EmitsOneFullyMappedAnimation()
+    {
+        var lib = Path.Combine(_dir, "lib");
+        var clips = ClipSet.Resolve(TestAssets.Root, ["horse_a_add_horse_kick"]);
+
+        var result = ModelConverter.Convert(TestAssets.Root, AgroRel, lib, clips: clips);
+
+        var gltf = ModelRoot.Load(result.GlbPath);
+        var animation = Assert.Single(gltf.LogicalAnimations);
+        Assert.Equal("horse_a_add_horse_kick", animation.Name);
+
+        // A rotation channel per track proves 0 unresolved tracks: a partial map would have
+        // failed the conversion (the writer/mapper never drop channels).
+        var decoded = AnbReader.Read(TestAssets.Sample("cp3shadow/anim/horse_a_add_horse_kick.anb"));
+        Assert.Equal(decoded.Tracks.Count,
+            animation.Channels.Count(channel => channel.TargetNodePath == PropertyPath.rotation));
+    }
+
+    [Fact]
+    public void Convert_UnmappableClip_FailsLoudlyAndWritesNothing()
+    {
+        // The plank has no skeleton: every track is unresolved. The conversion must fail with the
+        // clip name, the unresolved count and a sample of the missing joint names — and must not
+        // write a glb with the clip partially attached.
+        var lib = Path.Combine(_dir, "lib");
+        var clips = ClipSet.Resolve(TestAssets.Root, ["player_a_stand"]);
+
+        var error = Assert.Throws<InvalidDataException>(
+            () => ModelConverter.Convert(TestAssets.Root, PlankRel, lib, clips: clips));
+
+        Assert.Contains("Clip 'player_a_stand'", error.Message);
+        Assert.Contains("tracks unresolved", error.Message);
+        Assert.Matches(@"\d+ of \d+ tracks unresolved", error.Message);
+        Assert.Contains("Bone_", error.Message);
+        Assert.Contains("refusing to attach a partially mapped clip", error.Message);
+        Assert.False(File.Exists(Mirror(lib, "models/objects/props/_cmn/obj_plank_01.glb")));
     }
 
     [Fact]

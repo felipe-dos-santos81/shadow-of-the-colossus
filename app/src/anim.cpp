@@ -173,6 +173,79 @@ std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, f
     return palette;
 }
 
+void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& outMin,
+                  Vec3& outMax) {
+    outMin = scene.boundsMin;
+    outMax = scene.boundsMax;
+
+    // Without a usable skin the vertices are drawn as authored: bind positions
+    // (and the mesh's own model transform below) are the whole answer.
+    const bool skinned =
+        !scene.skin.joints.empty() && palette.size() == scene.skin.joints.size();
+
+    bool have_vertex = false;
+    Vec3 bounds_min{0.0f, 0.0f, 0.0f};
+    Vec3 bounds_max{0.0f, 0.0f, 0.0f};
+    for (const MeshCpu& mesh : scene.meshes) {
+        for (const Vertex& vertex : mesh.vertices) {
+            Vec3 point{vertex.px, vertex.py, vertex.pz};
+            if (skinned) {
+                // The shader's skinning sum, verbatim: every influence adds
+                // w_i * palette[j_i] * p. A vertex with no weights (an
+                // unskinned primitive inside a skinned scene) stays at its bind
+                // position, as the shader's zero-weight path does.
+                float total_weight = 0.0f;
+                Vec3 posed{0.0f, 0.0f, 0.0f};
+                for (int i = 0; i < 4; ++i) {
+                    const float weight = vertex.w[i];
+                    const std::size_t joint = vertex.j[i];
+                    if (weight == 0.0f || joint >= palette.size()) {
+                        continue;
+                    }
+                    const Mat4& skin = palette[joint];
+                    posed.x += weight * (skin.m[0] * point.x + skin.m[4] * point.y +
+                                         skin.m[8] * point.z + skin.m[12]);
+                    posed.y += weight * (skin.m[1] * point.x + skin.m[5] * point.y +
+                                         skin.m[9] * point.z + skin.m[13]);
+                    posed.z += weight * (skin.m[2] * point.x + skin.m[6] * point.y +
+                                         skin.m[10] * point.z + skin.m[14]);
+                    total_weight += weight;
+                }
+                if (total_weight > 0.0f) {
+                    point = posed;
+                }
+            }
+
+            // The instance's model transform (identity for a single glb).
+            const Mat4& model = mesh.model;
+            const Vec3 world{model.m[0] * point.x + model.m[4] * point.y +
+                                 model.m[8] * point.z + model.m[12],
+                             model.m[1] * point.x + model.m[5] * point.y +
+                                 model.m[9] * point.z + model.m[13],
+                             model.m[2] * point.x + model.m[6] * point.y +
+                                 model.m[10] * point.z + model.m[14]};
+
+            if (!have_vertex) {
+                bounds_min = world;
+                bounds_max = world;
+                have_vertex = true;
+                continue;
+            }
+            bounds_min.x = std::min(bounds_min.x, world.x);
+            bounds_min.y = std::min(bounds_min.y, world.y);
+            bounds_min.z = std::min(bounds_min.z, world.z);
+            bounds_max.x = std::max(bounds_max.x, world.x);
+            bounds_max.y = std::max(bounds_max.y, world.y);
+            bounds_max.z = std::max(bounds_max.z, world.z);
+        }
+    }
+
+    if (have_vertex) {
+        outMin = bounds_min;
+        outMax = bounds_max;
+    }
+}
+
 AnimationCpu make_procedural_wave(const Scene& scene) {
     AnimationCpu clip;
     clip.name = "procedural-wave";
@@ -195,4 +268,93 @@ AnimationCpu make_procedural_wave(const Scene& scene) {
         clip.channels.push_back(std::move(channel));
     }
     return clip;
+}
+
+void build_playback(const Scene& scene, Playback& playback) {
+    playback.clips = scene.animations;
+    playback.index = -1;
+    playback.time = 0.0f;
+    playback.playing = false;
+    playback.has_procedural = false;
+
+    // The stand-in is the fallback, never a peer of the model's own clips: it
+    // is appended only for a skinned model whose scene carries none.
+    if (playback.clips.empty() && !scene.skin.joints.empty()) {
+        playback.clips.push_back(make_procedural_wave(scene));
+        playback.has_procedural = true;
+    }
+    if (!playback.clips.empty()) {
+        playback.index = 0;
+        playback.playing = true;
+    }
+}
+
+namespace {
+
+// The index of the clip named `name` in `playback`, or -1 when it is absent.
+int find_clip_named(const Playback& playback, const char* name) {
+    for (std::size_t i = 0; i < playback.clips.size(); ++i) {
+        if (playback.clips[i].name == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+}  // namespace
+
+int select_clip_index(const Playback& playback, const PlayerInput& input) {
+    if (playback.clips.empty()) {
+        return -1;  // nothing to play
+    }
+    if (playback.has_procedural) {
+        return 0;  // the stand-in is the only clip: locomotion has no real target
+    }
+
+    const bool moving = input.forward || input.back || input.left || input.right;
+    const char* requested = "player_a_stand";
+    if (moving) {
+        requested = input.run ? "player_a_run" : "player_a_walk";
+    }
+
+    // The requested clip, then the fallback chain: walk while moving, stand,
+    // and finally the first real clip in scene order.
+    if (const int index = find_clip_named(playback, requested); index >= 0) {
+        return index;
+    }
+    if (moving) {
+        if (const int index = find_clip_named(playback, "player_a_walk"); index >= 0) {
+            return index;
+        }
+    }
+    if (const int index = find_clip_named(playback, "player_a_stand"); index >= 0) {
+        return index;
+    }
+    return 0;
+}
+
+bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
+    // The writer targets the joint named exactly "Bone_root" for the root
+    // series, so this query is name-based too: a joint index would tie the
+    // answer to one model's skin order.
+    for (const AnimationChannelCpu& channel : clip.channels) {
+        if (channel.path != 0 || channel.joint < 0 ||
+            static_cast<std::size_t>(channel.joint) >= scene.skin.joints.size()) {
+            continue;  // not a translation channel, or not this skin's joint
+        }
+        if (scene.skin.joints[static_cast<std::size_t>(channel.joint)].name == "Bone_root") {
+            return true;
+        }
+    }
+    return false;
+}
+
+float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
+                            std::size_t playerMeshBegin) {
+    // A root-carrying clip already holds the character's ground height: the S3
+    // origin-to-feet lift on top would float the model by that offset.
+    if (clip_has_root_translation(scene, clip)) {
+        return 0.0f;
+    }
+    return player_ground_offset(scene, playerMeshBegin);
 }

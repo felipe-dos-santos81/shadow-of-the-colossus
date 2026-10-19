@@ -4,7 +4,7 @@ namespace BpConvert.Core.Pipeline;
 
 /// <summary>
 /// Batch knobs for <see cref="BatchRunner.Run"/> (mirrors the pinned CLI surface
-/// <c>convert --root … --out … [--under …]… [--ext …] [--jobs N] [--force]</c>).
+/// <c>convert --root … --out … [--under …]… [--ext …] [--clips …] [--jobs N] [--force]</c>).
 /// </summary>
 public sealed record BatchOptions
 {
@@ -14,11 +14,21 @@ public sealed record BatchOptions
     /// <summary>Output library root (the catalog lives here; outputs mirror the source tree below it).</summary>
     public required string OutLibDir { get; init; }
 
-    /// <summary>Game-root-relative directories to walk; empty = the whole tree.</summary>
+    /// <summary>
+    /// Game-root-relative directories to walk, or individual source files to convert; empty = the
+    /// whole tree. A single source is the way to bake clips into one model without touching its
+    /// directory-mates.
+    /// </summary>
     public IReadOnlyList<string> Under { get; init; } = [];
 
     /// <summary>Source extensions to attempt (no dots, case-insensitive); default = the one v1 converts.</summary>
     public IReadOnlyList<string> Extensions { get; init; } = ["cmsh"];
+
+    /// <summary>
+    /// Clip stems to bake into every converted source (<c>--clips</c>), resolved by
+    /// <see cref="ClipSet.Resolve"/>; empty = no animations (the M0 output shape).
+    /// </summary>
+    public IReadOnlyList<string> Clips { get; init; } = [];
 
     /// <summary>Conversion parallelism; must be ≥ 1.</summary>
     public int Jobs { get; init; } = Environment.ProcessorCount;
@@ -27,13 +37,22 @@ public sealed record BatchOptions
     public bool Force { get; init; }
 }
 
-/// <summary>Outcome of one <see cref="BatchRunner.Run"/>; <c>Skipped + Converted + Failed == InScope</c>.</summary>
+/// <summary>
+/// Outcome of one <see cref="BatchRunner.Run"/>;
+/// <c>Skipped + Pending + Converted + Failed == InScope</c>.
+/// </summary>
 /// <param name="InScope">Sources matched by the <c>--under</c>/<c>--ext</c> filters.</param>
-/// <param name="Skipped">Recorded-ok sources left untouched (no <c>--force</c>).</param>
+/// <param name="Skipped">Recorded-ok sources left untouched (no <c>--force</c>, no clip scope).</param>
 /// <param name="Converted">Sources converted ok in this run.</param>
 /// <param name="Failed">Sources whose attempt failed in this run (recorded, batch continued).</param>
 public sealed record BatchSummary(int InScope, int Skipped, int Converted, int Failed)
 {
+    /// <summary>
+    /// Recorded-ok sources left untouched <b>because</b> a <c>--clips</c> run would change their
+    /// output and <c>--force</c> was not given; reported loudly, never silently skipped.
+    /// </summary>
+    public int Pending { get; init; }
+
     /// <summary>Wall-clock time of the run, final catalog flush included.</summary>
     public TimeSpan Elapsed { get; init; }
 }
@@ -49,6 +68,10 @@ public sealed record BatchSummary(int InScope, int Skipped, int Converted, int F
 /// outputs are assumed complete — unless <c>--force</c>, which reconverts everything in scope.
 /// Entries recorded <c>failed</c> are <b>re-attempted on every run</b>: a failure is cheap to
 /// retry, and a converter improvement must be able to pick failures up without a special flag.</para>
+/// <para><b>Clip scope</b> (S2 Task 4 ruling). A <c>--clips</c> run changes a glb's content, so a
+/// recorded-ok source is <b>pending</b> — reported with a "re-convert with --force" line — rather
+/// than silently skipped or silently reconverted. Clip names resolve once per run, before any
+/// source is touched; an unknown name is an invocation error.</para>
 /// <para><b>Failure containment.</b> Per-file exceptions are caught and recorded as
 /// <c>TypeName: message</c> (single line); they never abort the batch. The batch itself only
 /// throws for unusable invocation (missing root/under, bad jobs/ext) or persistence failures —
@@ -87,19 +110,36 @@ public static class BatchRunner
         }
 
         var extensions = NormalizeExtensions(options.Extensions);
-        var underDirs = ResolveUnderDirs(root, options.Under);
+        var underScopes = ResolveUnderScopes(root, options.Under);
+
+        // Resolve the clip scope before touching any source: a bad name fails the invocation with
+        // the expected .anb path instead of failing every source in the batch.
+        var clips = options.Clips.Count == 0
+            ? Array.Empty<ClipSource>()
+            : ClipSet.Resolve(root, options.Clips);
 
         var watch = Stopwatch.StartNew();
-        var sources = EnumerateSources(root, underDirs, extensions, outLib);
+        var sources = EnumerateSources(root, underScopes, extensions, outLib);
+        EnsureExplicitFilesInScope(root, underScopes.Files, sources, extensions, outLib);
         var data = Catalog.Load(outLib);
 
-        int skipped = 0, converted = 0, failed = 0, completed = 0;
+        int skipped = 0, pending = 0, converted = 0, failed = 0, completed = 0;
         Parallel.ForEach(sources, new ParallelOptions { MaxDegreeOfParallelism = options.Jobs }, source =>
         {
             if (!options.Force && data.TryGet(source, out var prior) && prior.Status == Catalog.StatusOk)
             {
-                Interlocked.Increment(ref skipped);
-                log?.Invoke($"skip  {source}");
+                if (clips.Count > 0)
+                {
+                    // The catalog has no provenance: say what is recorded and how to proceed.
+                    Interlocked.Increment(ref pending);
+                    log?.Invoke($"pending {source}: recorded ok; re-convert with --force to bake the requested clips "
+                        + $"({string.Join(",", clips.Select(clip => clip.Name))})");
+                }
+                else
+                {
+                    Interlocked.Increment(ref skipped);
+                    log?.Invoke($"skip  {source}");
+                }
                 return;
             }
 
@@ -107,7 +147,7 @@ public static class BatchRunner
             CatalogEntry entry;
             try
             {
-                var result = ModelConverter.Convert(root, source, outLib);
+                var result = ModelConverter.Convert(root, source, outLib, clips: clips);
                 entry = CatalogEntry.Ok(RelativeTo(outLib, result.GlbPath),
                     result.PngPaths.Select(png => RelativeTo(outLib, png)).ToList(),
                     result.MeshCount, result.TotalVertices);
@@ -130,73 +170,123 @@ public static class BatchRunner
 
         // Always leave a complete catalog behind — on a fully-skipped rerun too.
         Catalog.Save(outLib, data);
-        return new BatchSummary(sources.Count, skipped, converted, failed) { Elapsed = watch.Elapsed };
+        return new BatchSummary(sources.Count, skipped, converted, failed)
+        {
+            Pending = pending,
+            Elapsed = watch.Elapsed,
+        };
     }
 
+    /// <summary>Validated <c>--under</c> entries: directories to walk plus individual source files.</summary>
+    private sealed record UnderScopes(List<string> Directories, List<string> Files);
+
     /// <summary>
-    /// In-scope sources: every file below the <c>--under</c> directories whose extension is in
-    /// <c>--ext</c> (case-insensitive), deduplicated and ordinally sorted. Files below
-    /// <paramref name="outLib"/> are never sources (the library may live inside the tree).
+    /// In-scope sources: the <c>--under</c> source files plus every file below the <c>--under</c>
+    /// directories, whose extension is in <c>--ext</c> (case-insensitive), deduplicated and
+    /// ordinally sorted. Files below <paramref name="outLib"/> are never sources (the library may
+    /// live inside the tree).
     /// </summary>
-    private static List<string> EnumerateSources(string root, List<string> underDirs, HashSet<string> extensions, string outLib)
+    private static List<string> EnumerateSources(string root, UnderScopes under, HashSet<string> extensions, string outLib)
     {
         var sources = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var dir in underDirs)
+
+        void Add(string file)
+        {
+            var fullPath = Path.GetFullPath(file);
+            if (IsBelow(fullPath, outLib))
+            {
+                return;
+            }
+            var extension = Path.GetExtension(fullPath).TrimStart('.');
+            if (!extensions.Contains(extension))
+            {
+                return;
+            }
+            var relative = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
+            if (seen.Add(relative))
+            {
+                sources.Add(relative);
+            }
+        }
+
+        foreach (var file in under.Files)
+        {
+            Add(file);
+        }
+        foreach (var dir in under.Directories)
         {
             foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             {
-                var fullPath = Path.GetFullPath(file);
-                if (IsBelow(fullPath, outLib))
-                {
-                    continue;
-                }
-                var extension = Path.GetExtension(file).TrimStart('.');
-                if (!extensions.Contains(extension))
-                {
-                    continue;
-                }
-                var relative = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
-                if (seen.Add(relative))
-                {
-                    sources.Add(relative);
-                }
+                Add(file);
             }
         }
+
         sources.Sort(StringComparer.Ordinal);
         return sources;
     }
 
-    /// <summary>Resolves and validates <c>--under</c> entries: each must exist below the root.</summary>
-    private static List<string> ResolveUnderDirs(string root, IReadOnlyList<string> under)
+    /// <summary>
+    /// Rejects an explicit <c>--under &lt;file&gt;</c> that the filters removed: a file scope is a
+    /// deliberate single-source invocation, so "in scope: 0" with exit 0 would hide the mistake.
+    /// </summary>
+    /// <exception cref="ArgumentException">A named file matched no source.</exception>
+    private static void EnsureExplicitFilesInScope(string root, List<string> files, List<string> sources,
+        HashSet<string> extensions, string outLib)
     {
-        var dirs = new List<string>();
+        if (files.Count == 0) return;
+
+        var inScope = sources.ToHashSet(StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (inScope.Contains(relative)) continue;
+
+            var reason = IsBelow(file, outLib)
+                ? "it is below --out"
+                : $"--ext {string.Join(",", extensions.OrderBy(extension => extension, StringComparer.Ordinal))} "
+                    + $"does not match its '{Path.GetExtension(file)}' extension";
+            throw new ArgumentException($"--under source '{relative}' produced no source: {reason}.");
+        }
+    }
+
+    /// <summary>
+    /// Resolves and validates <c>--under</c> entries: each must be a directory or a file below the
+    /// root (a file scopes the run to exactly that source).
+    /// </summary>
+    private static UnderScopes ResolveUnderScopes(string root, IReadOnlyList<string> under)
+    {
+        var directories = new List<string>();
+        var files = new List<string>();
         if (under.Count == 0)
         {
-            dirs.Add(root);
-            return dirs;
+            directories.Add(root);
+            return new UnderScopes(directories, files);
         }
         foreach (var raw in under)
         {
             if (string.IsNullOrWhiteSpace(raw))
             {
-                throw new ArgumentException("--under contains an empty directory");
+                throw new ArgumentException("--under contains an empty path");
             }
             var candidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(root, raw.Replace('\\', '/'))));
-            if (!Directory.Exists(candidate))
+            var isDirectory = Directory.Exists(candidate);
+            if (!isDirectory && !File.Exists(candidate))
             {
-                throw new ArgumentException($"--under directory not found: {raw}");
+                throw new ArgumentException($"--under path not found: {raw}");
             }
             if (candidate != root && !IsBelow(candidate, root))
             {
-                throw new ArgumentException($"--under directory is outside --root: {raw}");
+                throw new ArgumentException($"--under path is outside --root: {raw}");
             }
-            if (!dirs.Contains(candidate, StringComparer.Ordinal))
+
+            var target = isDirectory ? directories : files;
+            if (!target.Contains(candidate, StringComparer.Ordinal))
             {
-                dirs.Add(candidate);
+                target.Add(candidate);
             }
         }
-        return dirs;
+        return new UnderScopes(directories, files);
     }
 
     /// <summary>Normalises <c>--ext</c> to a dotless, case-insensitive set; rejects empty tokens.</summary>

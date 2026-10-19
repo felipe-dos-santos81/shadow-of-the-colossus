@@ -390,11 +390,26 @@ TEST_CASE("wander carries its 348-joint skeleton") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     CHECK(scene.skin.joints.size() == 348);
     CHECK(scene.skin.joints[0].name == "Bone_root");
-    CHECK(scene.animations.empty());
+    // The S2 converter bakes the player's demo clips into the glb, named after
+    // the source clip stem: the app plays these instead of the stand-in.
+    REQUIRE(scene.animations.size() == 3);
+    CHECK(scene.animations[0].name == "player_a_stand");
+    CHECK(scene.animations[1].name == "player_a_walk");
+    CHECK(scene.animations[2].name == "player_a_run");
+    CHECK(!scene.animations[0].channels.empty());
+    CHECK(!scene.animations[1].channels.empty());
+    CHECK(!scene.animations[2].channels.empty());
     const auto& v = scene.meshes[0].vertices[0];
     CHECK(v.j[0] == 102); CHECK(v.j[1] == 73); CHECK(v.j[2] == 0); CHECK(v.j[3] == 0);
     CHECK(v.w[0] == doctest::Approx(0.9094f).epsilon(1e-3));
     CHECK(v.w[1] == doctest::Approx(0.0906f).epsilon(1e-3));
+}
+
+TEST_CASE("agro carries its baked kick clip") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/agro/_cmn/agro.glb");
+    REQUIRE(scene.animations.size() == 1);
+    CHECK(scene.animations[0].name == "horse_a_add_horse_kick");
+    CHECK(!scene.animations[0].channels.empty());
 }
 
 TEST_CASE("wander's joint rest transforms decompose from their node matrices") {

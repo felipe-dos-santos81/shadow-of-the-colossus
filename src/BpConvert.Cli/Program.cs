@@ -26,8 +26,12 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage:");
     Console.Error.WriteLine("  bp-convert inspect <file>    print size, first 32 header bytes and a library parse summary");
-    Console.Error.WriteLine("  bp-convert convert --root <game> --out <lib> [--under <dir>]... [--ext cmsh] [--jobs N] [--force]");
+    Console.Error.WriteLine("  bp-convert convert --root <game> --out <lib> [--under <dir|file>]... [--ext cmsh] [--clips <name,...>] [--jobs N] [--force]");
     Console.Error.WriteLine("                               convert every matching source; outcomes recorded in <lib>/catalog.json");
+    Console.Error.WriteLine("                               --clips bakes <game>/cp3shadow/anim/<name>.anb into each glb;");
+    Console.Error.WriteLine("                               scope it to one model with --under <file>: every baked track must");
+    Console.Error.WriteLine("                               map into that model's skeleton, so a directory-scope run fails on");
+    Console.Error.WriteLine("                               non-matching sources. Recorded-ok sources need --force to rebake.");
     Console.Error.WriteLine("  bp-convert report --out <lib> [--top N]");
     Console.Error.WriteLine("                               print catalog counts and the top-N failure reasons");
 }
@@ -64,13 +68,14 @@ static int InspectCommand(string[] args)
 }
 
 /// <summary>
-/// <c>convert --root &lt;game&gt; --out &lt;lib&gt; [--under &lt;dir&gt;]... [--ext cmsh] [--jobs N] [--force]</c>.
+/// <c>convert --root &lt;game&gt; --out &lt;lib&gt; [--under &lt;dir|file&gt;]... [--ext cmsh]
+/// [--clips &lt;name,...&gt;] [--jobs N] [--force]</c>.
 /// Exit codes: 0 = batch completed (per-file failures are recorded in the catalog, not fatal),
 /// 1 = batch-level failure (unreadable catalog, I/O), 2 = bad invocation.
 /// </summary>
 static int ConvertCommand(string[] args)
 {
-    string? root = null, outLib = null, ext = null, jobsText = null;
+    string? root = null, outLib = null, ext = null, jobsText = null, clipsText = null;
     var under = new List<string>();
     var force = false;
 
@@ -90,6 +95,9 @@ static int ConvertCommand(string[] args)
                 break;
             case "--ext":
                 if (!TryValue(args, ref i, out ext)) return MissingValue("--ext");
+                break;
+            case "--clips":
+                if (!TryValue(args, ref i, out clipsText)) return MissingValue("--clips");
                 break;
             case "--jobs":
                 if (!TryValue(args, ref i, out jobsText)) return MissingValue("--jobs");
@@ -136,17 +144,36 @@ static int ConvertCommand(string[] args)
     {
         options = options with { Extensions = ext.Split(',') };
     }
+    if (clipsText is not null)
+    {
+        var clips = clipsText.Split(',', StringSplitOptions.TrimEntries);
+        if (clips.Any(clip => clip.Length == 0))
+        {
+            Console.Error.WriteLine($"bp-convert convert: --clips contains an empty clip name (got '{clipsText}')");
+            return 2;
+        }
+        options = options with { Clips = clips };
+    }
 
     var underLabel = under.Count == 0 ? "[whole tree]" : string.Join(",", under);
+    var clipsLabel = options.Clips.Count == 0 ? "" : $" clips={string.Join(",", options.Clips)}";
     Console.WriteLine($"convert: root={root} out={outLib} under={underLabel} "
-        + $"ext={string.Join(",", options.Extensions)} jobs={options.Jobs} force={force.ToString().ToLowerInvariant()}");
+        + $"ext={string.Join(",", options.Extensions)}{clipsLabel} jobs={options.Jobs} "
+        + $"force={force.ToString().ToLowerInvariant()}");
+
+    if (options.Clips.Count > 0 && IsDirectoryScope(root, under))
+    {
+        Console.Error.WriteLine("bp-convert convert: warning: --clips is set with a directory scope; every source in "
+            + "scope gets the clips baked in, and sources whose baked tracks do not map into their skeleton will "
+            + "fail to convert. Use --under <file> to bake clips into a single model.");
+    }
 
     try
     {
         var summary = BatchRunner.Run(options, Console.WriteLine);
         Console.WriteLine();
         Console.WriteLine($"in scope: {summary.InScope}  skipped: {summary.Skipped}  converted: {summary.Converted}  "
-            + $"failed: {summary.Failed}  elapsed: {FormatElapsed(summary.Elapsed)}");
+            + $"failed: {summary.Failed}  pending: {summary.Pending}  elapsed: {FormatElapsed(summary.Elapsed)}");
         Console.WriteLine($"catalog: {Catalog.FilePath(outLib)}");
         return 0;
     }
@@ -252,6 +279,11 @@ static int ReportCommand(string[] args)
         return 1;
     }
 }
+
+/// <summary>True when <c>--under</c> names a directory or is empty (the whole tree).</summary>
+static bool IsDirectoryScope(string root, List<string> under) =>
+    under.Count == 0
+    || under.Any(path => Directory.Exists(Path.Combine(root, path.Replace('\\', '/'))));
 
 static bool TryValue(string[] args, ref int i, out string? value)
 {

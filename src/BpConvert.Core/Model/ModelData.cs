@@ -1,3 +1,5 @@
+using BpConvert.Core.Anim;
+
 namespace BpConvert.Core.Model;
 
 /// <summary>
@@ -38,4 +40,12 @@ public sealed record SkeletonData(string Name, List<SkeletonJoint> Joints);
 /// <param name="ReferencedTexturePaths">Source texture paths used by this model (bookkeeping for the caller).</param>
 public sealed record ModelData(
     string SourceRelativePath, List<MeshData> Meshes, List<MaterialData> Materials,
-    SkeletonData? Skeleton, List<string> ReferencedTexturePaths);
+    SkeletonData? Skeleton, List<string> ReferencedTexturePaths)
+{
+    /// <summary>
+    /// Clips emitted as glTF animations (one per clip). Empty means "no animations": the output
+    /// keeps the M0 shape exactly (joint nodes carry <c>matrix</c>, no <c>animations</c> array).
+    /// Each track's <see cref="AnimTrack.JointIndex"/> must be filled before writing.
+    /// </summary>
+    public List<AnimClip> Animations { get; } = new();
+}
