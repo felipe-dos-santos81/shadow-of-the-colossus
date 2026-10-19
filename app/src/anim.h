@@ -28,6 +28,12 @@ void animation_sample(const AnimationChannelCpu& ch, float t, float* out);
 // given — wrap it with animation_loop_time first.
 std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, float time);
 
+// World-space bounds of the scene's vertices under a palette (worldJoint * inverseBind):
+// sum_i w_i * palette[j_i] * p, then the mesh's model transform. Falls back to bind
+// positions when the scene has no skin.
+void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette,
+                  Vec3& outMin, Vec3& outMax);
+
 // A deterministic 2-second "wave" clip: rotation channels for the first
 // min(12, joints) joints with keys at t = 0/1/2 s holding restR, restR tilted
 // 15 degrees about X, and restR again — a smooth wobble through LINEAR slerp.

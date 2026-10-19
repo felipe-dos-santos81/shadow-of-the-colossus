@@ -173,6 +173,79 @@ std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, f
     return palette;
 }
 
+void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& outMin,
+                  Vec3& outMax) {
+    outMin = scene.boundsMin;
+    outMax = scene.boundsMax;
+
+    // Without a usable skin the vertices are drawn as authored: bind positions
+    // (and the mesh's own model transform below) are the whole answer.
+    const bool skinned =
+        !scene.skin.joints.empty() && palette.size() == scene.skin.joints.size();
+
+    bool have_vertex = false;
+    Vec3 bounds_min{0.0f, 0.0f, 0.0f};
+    Vec3 bounds_max{0.0f, 0.0f, 0.0f};
+    for (const MeshCpu& mesh : scene.meshes) {
+        for (const Vertex& vertex : mesh.vertices) {
+            Vec3 point{vertex.px, vertex.py, vertex.pz};
+            if (skinned) {
+                // The shader's skinning sum, verbatim: every influence adds
+                // w_i * palette[j_i] * p. A vertex with no weights (an
+                // unskinned primitive inside a skinned scene) stays at its bind
+                // position, as the shader's zero-weight path does.
+                float total_weight = 0.0f;
+                Vec3 posed{0.0f, 0.0f, 0.0f};
+                for (int i = 0; i < 4; ++i) {
+                    const float weight = vertex.w[i];
+                    const std::size_t joint = vertex.j[i];
+                    if (weight == 0.0f || joint >= palette.size()) {
+                        continue;
+                    }
+                    const Mat4& skin = palette[joint];
+                    posed.x += weight * (skin.m[0] * point.x + skin.m[4] * point.y +
+                                         skin.m[8] * point.z + skin.m[12]);
+                    posed.y += weight * (skin.m[1] * point.x + skin.m[5] * point.y +
+                                         skin.m[9] * point.z + skin.m[13]);
+                    posed.z += weight * (skin.m[2] * point.x + skin.m[6] * point.y +
+                                         skin.m[10] * point.z + skin.m[14]);
+                    total_weight += weight;
+                }
+                if (total_weight > 0.0f) {
+                    point = posed;
+                }
+            }
+
+            // The instance's model transform (identity for a single glb).
+            const Mat4& model = mesh.model;
+            const Vec3 world{model.m[0] * point.x + model.m[4] * point.y +
+                                 model.m[8] * point.z + model.m[12],
+                             model.m[1] * point.x + model.m[5] * point.y +
+                                 model.m[9] * point.z + model.m[13],
+                             model.m[2] * point.x + model.m[6] * point.y +
+                                 model.m[10] * point.z + model.m[14]};
+
+            if (!have_vertex) {
+                bounds_min = world;
+                bounds_max = world;
+                have_vertex = true;
+                continue;
+            }
+            bounds_min.x = std::min(bounds_min.x, world.x);
+            bounds_min.y = std::min(bounds_min.y, world.y);
+            bounds_min.z = std::min(bounds_min.z, world.z);
+            bounds_max.x = std::max(bounds_max.x, world.x);
+            bounds_max.y = std::max(bounds_max.y, world.y);
+            bounds_max.z = std::max(bounds_max.z, world.z);
+        }
+    }
+
+    if (have_vertex) {
+        outMin = bounds_min;
+        outMax = bounds_max;
+    }
+}
+
 AnimationCpu make_procedural_wave(const Scene& scene) {
     AnimationCpu clip;
     clip.name = "procedural-wave";

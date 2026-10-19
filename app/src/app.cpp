@@ -182,6 +182,41 @@ void update_pose(Renderer& renderer, const Scene& scene, Playback& playback, flo
     renderer.upload_pose(animation_pose(scene, clip, wrapped));
 }
 
+// Frames the single-model camera on the pose that is actually drawn. With a
+// clip active the palette carries the clip's root translation series, which
+// holds the ground height and lifts the subject above the bind-pose bounds the
+// camera was framed on at load; framing on the bind bounds cuts the posed
+// subject at the top (Task 7 §5.2). A scene with no clip keeps the bind bounds.
+// Manifest mode never uses this: its follow camera tracks the player instead.
+void frame_single_model(Camera& camera, const Scene& scene, const Playback& playback) {
+    if (playback.index < 0) {
+        camera_frame(camera, scene.boundsMin, scene.boundsMax);
+        return;
+    }
+    const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
+    const float time = animation_loop_time(playback.time, clip.duration);
+    Vec3 bounds_min{};
+    Vec3 bounds_max{};
+    posed_bounds(scene, animation_pose(scene, clip, time), bounds_min, bounds_max);
+
+    // camera_frame fits the bounds' half-diagonal with distance = r / tan(fov/2),
+    // which leaves the bounding sphere tangent to the frustum only at
+    // r / sin(fov/2). Pad the posed box by 1 / cos(fov/2) about its centre so the
+    // subject actually fits — a tall, narrow figure (Wander is 1.25 m tall,
+    // 0.45 wide) otherwise puts the top of the head on the top edge.
+    const Vec3 centre{(bounds_min.x + bounds_max.x) * 0.5f,
+                      (bounds_min.y + bounds_max.y) * 0.5f,
+                      (bounds_min.z + bounds_max.z) * 0.5f};
+    const float pad = 1.0f / std::cos(0.5f * camera.fovYDeg * kDegToRad);
+    bounds_min = Vec3{centre.x + (bounds_min.x - centre.x) * pad,
+                      centre.y + (bounds_min.y - centre.y) * pad,
+                      centre.z + (bounds_min.z - centre.z) * pad};
+    bounds_max = Vec3{centre.x + (bounds_max.x - centre.x) * pad,
+                      centre.y + (bounds_max.y - centre.y) * pad,
+                      centre.z + (bounds_max.z - centre.z) * pad};
+    camera_frame(camera, bounds_min, bounds_max);
+}
+
 // --- Manifest mode (S3 W1.4) ------------------------------------------------
 
 constexpr float kHeightmapCellSize = 1.0f;        // metres between ground samples
@@ -460,6 +495,14 @@ int run_app(const AppOptions& opts) {
         }
         print_anim_status(playback, scene);
 
+        // Single-model framing is on the pose, after --anim/--anim-time resolved
+        // the start state: the clip's root series carries the ground height, so
+        // the bind-pose bounds framed at load would leave the subject out of
+        // frame. Manifest mode keeps its follow camera and bind-bounds framing.
+        if (!follow_mode) {
+            frame_single_model(camera, scene, playback);
+        }
+
         // A clip pinned on the command line keeps manual control; otherwise the
         // player's controller state selects the loop (stand/walk/run) each
         // frame. --anim-time pins a deterministic capture, so it counts as
@@ -574,7 +617,10 @@ int run_app(const AppOptions& opts) {
                                 follow.pitchOffsetDeg = 0.0f;
                                 follow.distance = CameraFollow{}.distance;
                             } else {
-                                camera_frame(camera, scene.boundsMin, scene.boundsMax);
+                                // Keep the whole subject in frame when the clip's root series
+                                // carries the ground height: frame the current pose, not the
+                                // bind bounds.
+                                frame_single_model(camera, scene, playback);
                             }
                         } else if (event.key.key == SDLK_SPACE) {
                             playback.playing = !playback.playing;

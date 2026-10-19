@@ -338,6 +338,66 @@ TEST_CASE("wander's rest palette is identity for all 348 joints") {
             CHECK(m.m[i] == doctest::Approx(i % 5 == 0 ? 1.0f : 0.0f).epsilon(1e-3));
 }
 
+TEST_CASE("posed_bounds applies the skin palette and the root lift") {
+    // One joint at the origin bound to two vertices at y -1 and +1. A root
+    // translation channel lifts the palette by 0.5, so the posed bounds move
+    // with it; a scene with no skin keeps its bind bounds.
+    Scene scene;
+    scene.skin.joints = {joint("Bone_root", -1, {0.0f, 0.0f, 0.0f}, mat4_identity())};
+    MeshCpu mesh;
+    Vertex low{};
+    low.px = -0.5f;
+    low.py = -1.0f;
+    low.pz = -0.25f;
+    low.j[0] = 0;
+    low.w[0] = 1.0f;
+    Vertex high{};
+    high.px = 0.5f;
+    high.py = 1.0f;
+    high.pz = 0.25f;
+    high.j[0] = 0;
+    high.w[0] = 1.0f;
+    mesh.vertices = {low, high};
+    scene.meshes = {mesh};
+    scene.boundsMin = Vec3{-0.5f, -1.0f, -0.25f};
+    scene.boundsMax = Vec3{0.5f, 1.0f, 0.25f};
+
+    AnimationCpu lift;
+    lift.name = "lift";
+    lift.duration = 1.0f;
+    AnimationChannelCpu root;
+    root.joint = 0;
+    root.path = 0;  // translation
+    root.interpolation = 0;
+    root.times = {0.0f};
+    root.values = {0.0f, 0.5f, 0.0f};
+    lift.channels.push_back(root);
+
+    Vec3 lo{};
+    Vec3 hi{};
+    posed_bounds(scene, animation_pose(scene, lift, 0.0f), lo, hi);
+    CHECK(lo.x == doctest::Approx(-0.5f));
+    CHECK(lo.y == doctest::Approx(-0.5f));
+    CHECK(lo.z == doctest::Approx(-0.25f));
+    CHECK(hi.x == doctest::Approx(0.5f));
+    CHECK(hi.y == doctest::Approx(1.5f));
+    CHECK(hi.z == doctest::Approx(0.25f));
+
+    // No skin: the same vertices report the bind bounds (weights ignored).
+    Scene plain;
+    plain.meshes = {mesh};
+    plain.boundsMin = scene.boundsMin;
+    plain.boundsMax = scene.boundsMax;
+    const std::vector<Mat4> no_palette;
+    posed_bounds(plain, no_palette, lo, hi);
+    CHECK(lo.x == doctest::Approx(-0.5f));
+    CHECK(lo.y == doctest::Approx(-1.0f));
+    CHECK(lo.z == doctest::Approx(-0.25f));
+    CHECK(hi.x == doctest::Approx(0.5f));
+    CHECK(hi.y == doctest::Approx(1.0f));
+    CHECK(hi.z == doctest::Approx(0.25f));
+}
+
 TEST_CASE("the procedural wave starts at rest and moves later") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     const AnimationCpu wave = make_procedural_wave(scene);
