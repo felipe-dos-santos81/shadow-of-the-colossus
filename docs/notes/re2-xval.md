@@ -154,9 +154,8 @@ image-left one is *his left foot back*.)
   0.01 · H (4 px) in height and 0.02 · H (8 px) laterally.  The model's wrist
   joint (0.549 · H) pairs with the still's cuff (the sleeve's end, 0.529 · H).
   The arms hang down at the sides in both, elbows slightly bent.  (An earlier
-  draft of this note read "≈0.55 · H / ±0.23 · H" for the hands — that was the
-  wrist/cuff and the sleeve's outer edge; the numbers here are the tool's
-  measurements, with the fist as the anchored blob.)
+  draft of this note read "≈0.55 · H / ±0.23 · H" for the hands; the numbers
+  here are the tool's measurements, with the fist as the anchored blob.)
 - **Uprightness / height — MATCH.** Head above the hips, near the hip axis, in
   both; no crouch, no lean.
 - **Plantedness — MATCH in kind.** The idle keeps one foot planted (left, z range
