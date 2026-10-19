@@ -195,3 +195,127 @@ the pad-file and frame-dump hooks work, and screenshots land as PNGs in `<user>/
 hook *consumes* the trigger file, so the driver re-creates it per shot). The driver must budget for
 the first-run shader compiles and must not depend on the machine being awake continuously. If the
 gate is ever re-run for the record, do it on an unlocked, lid-open session with a warm cache.
+
+## 3 · The captures (C2)
+
+### 3.1 The driver — `tools/re/capture/port_capture.py`
+
+```bash
+python3 tools/re/capture/port_capture.py <schedule-file> --out out/re/capture \
+    [--tag NAME] [--from-marker TEXT] [--env NAME=VALUE ...]
+```
+
+One event per line, `<time-seconds> <action> [hold_ms]` (`#` starts a comment); `action` is pad
+tokens joined by `,` (the `BB_PAD_FILE` names of `src/runtime_pad.c`: cross, circle, square,
+triangle, l1..r3, options, touchpad, touchpad_left/right, up/down/left/right, `lx=`/`ly=`/`rx=`/
+`ry=` 0..255), `shot`, or `log:<text>`. A pad event holds the tokens for `hold_ms` (default
+250 ms) and then releases them; an empty file releases everything (the port re-reads on mtime
+change). Times count from the port log's `Starting main loop` line; `--from-start` moves the zero
+to process start, and `--from-marker TEXT` to a later log line — the anchored runs below use the
+game's own `st_gameflow() starting game`, because the world load between the main loop and
+gameplay varies between runs (measured G = 14.2–33.5 s after the main loop).
+
+The driver launches `python3 sotc.py` with `SOTC_USER_DIR=<out>/user` (never the port's `user/`),
+`BB_PAD_FILE`, `BB_FRAME_DUMP_TRIGGER`, `SOTC_FPS=1`, `BB_HDR=0`, and the macOS env
+(`DYLD_LIBRARY_PATH`, `VK_DRIVER_FILES`, `MVK_CONFIG_LOG_LEVEL` — `sotc.py` sets these for the
+probe it launches as well). Per `shot` it touches the trigger, waits for the port to consume it
+(`std::remove`), waits for the PNG to be *complete* (magic + IEND; a killed run caught 0-byte and
+partial copies while the file was still being written), copies it to `<out>/<tag>-<port name>.png`
+and appends `{time, action, file, sha256}` to `<out>/manifest.json` (one list across all runs;
+`time` is seconds from that run's anchor). After the last event plus `--grace` it SIGTERMs the
+process group, so `sotc.py`'s `bb-probe` child dies with it. `--dry-run` prints the parsed plan.
+
+Saves: `<out>/save-template/CUSA08809` is restored into `<out>/user/savedata/1/CUSA08809` before
+every run — the port's own `sotc_play.py` discipline, so no run depends on the saves its
+predecessor wrote. This checkout has no `out/save-template`, so the template was seeded once,
+read-only, from the port's `user/savedata/1/CUSA08809`; the port's own user dir is never written
+(§3.4). `--keep-save`/`--fresh` opt out.
+
+The run user dir seeds its pipeline cache once from the port's `user/cache/CUSA08809`: a cold
+pipeline cache is C1 §1.3's multi-minute grind. It is not removed entirely — the pipeline warm-up
+still costs ~6.6 min of wall time whenever the Metal compile cache has gone cold: the five
+main-loop-anchored runs measured 398–418 s to the main loop, and the marker-anchored runs measured
+42.5 s and 45.6 s to `st_gameflow` when the previous run had warmed the cache for the same route,
+445.5 s when it had gone cold again.
+
+### 3.2 The route (as measured)
+
+Two dead ends, recorded so they are not retried blindly:
+
+1. **No input** — the port boots (C1), then the game plays its logos (SIE ~6 s, JAPAN Studio
+   ~12 s, Bluepoint ~16–20 s), the “automatically saves your progress” notice (~25 s), and from
+   ~30 s the intro/attract movie: moon+bird 34 s, valley 40 s, waterfall 46 s, dark scenes with
+   the horse 68 s, a colossus silhouette 130 s (R1b stills). Crosses during the logos or the movie
+   do nothing (R1: cross at 5/10 s; R1b: cross at 50 s) — the movie ran past 130 s.
+2. The port’s own scripted runs (`out/session-*.log`, Oct 14–15) pressed cross at ~5 s and ~10 s
+   and reached the save at ~35–40 s. That did not reproduce on our 01.00 dump: the same crosses
+   left the game on its logos and then the movie (R1).
+
+**The working route** — `SOTC_CVARS="nointro doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0"`
+(so `sotc.py` → `sotc_modes.py` writes `+nointro` into `out/cmdline.bin`): `nointro` is the port’s
+own bench cvar (`tools/sotc_bench.sh`: “+nointro starts outside the Shrine of Worship”), the
+01.00 eboot passes the version check, and the boot log carries it (`Engine command line:
++VSyncWindow=10% +nointro …`). With it there are no logos and no movie: the game loads straight
+into gameplay — Wander idle on the grass outside the Shrine of Worship, Agro grazing a few metres
+ahead and then walking over to Wander on his own, or to the whistle (`r1`). The opening is a
+scripted sequence with subtitles (“Now, be on thy way.” → “Press ✕ to jump.” → “In a sunlit place,
+hold up the sword using R2 …”) and the mount hint “Press △ or ✕ when near Agro to mount.” The
+game’s own markers: `st_gameflow() starting game` at game clock 14.8–16.8 s in five of the six
+nointro runs, 34.0 s in the first one (main loop at ~0.57 s).
+
+The idle trio is therefore anchored at `st_gameflow() starting game` and shot at gameplay +5/+10/
++15 s — the world is a fixed opening state (no input before the shots), so the only variance is
+the game’s own opening subtitles, which are part of the state at those times.
+
+### 3.3 The captures
+
+**Idle trio** (deliverable; run tag `idle-anchored`, anchor `st_gameflow()`, 2026-10-18 23:42;
+`manifest.json` `time` 5.0/10.0/15.0; all 1920×1080 RGBA PNGs):
+
+| file (`out/re/capture/`) | gameplay | bytes | max channel span | sha256 |
+|---|---|---:|---:|---|
+| `idle-anchored-CUSA08809_20261018_234236_562_game_000000.png` | +5 s | 921,791 | 255 | `c70285e8…f61efa` |
+| `idle-anchored-CUSA08809_20261018_234241_605_game_000001.png` | +10 s | 1,092,017 | 255 | `2a88022e…b451b0` |
+| `idle-anchored-CUSA08809_20261018_234246_560_game_000002.png` | +15 s | 951,011 | 255 | `ab04f0e3…9af91f` |
+
+On screen: Wander idle in front of the shrine, seen from behind, Agro approaching / beside him —
++5 s with the subtitle “Now, be on thy way.”, +10 s with Agro galloping up to him (dust) and
+“Press ✕ to jump.”, +15 s with “In a sunlit place, hold up the sword using R2 …” (full sha256s in
+`manifest.json`; the two context shots at +20/+25 s are in the same run). This is a **reference**
+state for C4’s comparison, never product data.
+
+**Horse** — recorded honestly: **the horse state is reachable, the mounted ride was not.** The
+whistle (`r1`) reliably brings Agro to Wander (frames: `horse3-…_000035_372` — Agro head to head
+with Wander; `horse-…_233513_972` — Agro beside him with “Press △ or ✕ when near Agro to mount.”
+up), and in the no-input runs Agro walks to Wander on his own (`idle-…_232404_222`). Three
+scripted mount attempts — `△` at 76 s in run `horse`; whistle→`△`→`✕` at gameplay+14…28 s in
+`horse-anchored`; whistle at gameplay+38 s then `✕` every 3 s through the arrival window in
+`horse3` — all left Wander on foot (the frames after each press show him walking/jumping on
+foot). A mounted gallop therefore stands open; the horse reference stills are the trio’s +10 s
+frame and the whistle frames above.
+
+**The set** (all gitignored, `out/re/capture/`): 81 manifest entries from 7 runs —
+`route-r1b` (15) + `route-r2` (14) map the two dead ends and the nointro boot; `idle` (16) is the
+unanchored idle set around gameplay (its 39–85 s frames are G+21…G+70 in that run — the reason the
+anchored rerun exists); `idle-anchored` (5) is the trio; `horse` (10) + `horse-anchored` (10) +
+`horse3` (11) are the mount attempts; `route-r1` (6, from the killed first run) was discarded. The
+per-run driver logs (pad writes, shot collection, anchor) and the port’s stdout are kept in
+`out/re/capture/logs/`.
+
+### 3.4 Verification
+
+- **Manifest complete** — every entry carries exactly `{time, action, file, sha256}`
+  (`action: "shot"`), the `sha256` matches the bytes on disk, and the file exists (checked for
+  all 81; re-run: `python3 out/re/capture/verify_stills.py`).
+- **Non-uniform stills** — the s1-style check (largest channel span ≥ 30) passes for the trio
+  (255 each) and for every frame except one: `route-r1b-…_225410_528_game_000000.png` (t=28 s) is
+  a black transition frame of the route, kept as an honest record (span 0).
+- **Saves untouched** — the port’s `user/savedata` sha256 baseline taken before the captures
+  (`out/re/capture/saves-baseline-port-user.txt`, 8 files) is byte-identical after them, and
+  *no* file under the port’s `user/` was written during the whole capture session (checked with
+  `find … -newermt`). The restore ran before every run — each run’s driver log has its
+  `saves: restored … -> <out>/user/savedata/1/CUSA08809` line. The port’s own `out/` gets only
+  the rewrites any `sotc.py` launch makes (`sotc_modes.py`’s `cmdline.bin`/`patches.bin`); it was
+  left back on the default cvars (`cmdline.bin` without `+nointro`) after the runs.
+- **Machine state** — as in C1: clamshell, display asleep, `caffeinate -i` holding the CPU
+  awake; the runs above are from that state, and the wall times in the logs reflect it.
