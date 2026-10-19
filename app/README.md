@@ -19,7 +19,8 @@ instead — still stands, movement walks, Shift runs — with hard clip switches
 while the active clip carries the root translation series (the series already
 holds the ground height), so the feet stay on the heightmap instead of floating
 by the model's origin-to-feet offset. Drag to orbit, scroll to zoom, press `F`
-to reframe; `Space` plays/pauses, `[`/`]` switch clips, `R` restarts. The window
+to reframe; `Space` plays/pauses, `[`/`]` switch clips in single-model mode (in
+arena mode the controller owns the clip), `R` restarts. The window
 title shows the fps readout. Escape or the window's close button quits.
 `--screenshot` writes the same frame to a PNG.
 

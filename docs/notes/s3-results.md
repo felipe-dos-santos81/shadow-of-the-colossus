@@ -51,6 +51,9 @@ s2-anim clip=procedural-wave joints=348 procedural=1 t=0.000
 s3-status instances=30 spawn=309.312,4.394,285.403 pos=309.312,29.802,305.405 ground=ok frames=240
 ```
 
+*(Historical S3 capture: the procedural-wave stand-in. S2 now plays `player_a_stand` by
+default in the arena — see `docs/notes/s2-results.md`.)*
+
 The walk is exact: 240 × 1/60 s at run speed 5.0 m/s = 20.00 m of +Z travel from the spawn
 (z 285.403 → 305.405, x unchanged), ending on the bowl floor at y = 29.802 — the heightmap's own
 sample there — with `ground=ok`.
@@ -188,7 +191,7 @@ export SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library
 | 4 | edge clamp | run to the arena's outer edge / heightmap border | the player stops ≈0.5 m inside the bounds; no falling off; the camera stays sane | ☐ |
 | 5 | ground-follow | walk the entrance ramp into the bowl (note the rim step, §2) | the feet track the surface — no sinking or floating; judge whether the entry reads game-like | ☐ |
 | 6 | fps class | walk while reading the window title | the rolling fps readout (expect the display rate, ≈120 on this Mac; the claim is ≥60) | ☐ |
-| 7 | playback keys | Space; R; `[` / `]` | pause/resume; restart; switch clips (the procedural wave is the labeled stand-in, spec §1) | ☐ |
+| 7 | playback keys | Space; R; `[` / `]` | pause/resume; restart; in arena mode the controller owns the clip (still/walk/run), so `[`/`]` are ignored — pin a clip with `--anim`/`--anim-time`. The default is now the real `player_a_stand` (S2); `procedural-wave` is only the no-clip fallback | ☐ |
 | 8 | F / Escape | press F; press Escape | F recenters the camera behind the player; Escape quits cleanly | ☐ |
 
 ## 7 · Known limitations
