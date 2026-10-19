@@ -296,7 +296,7 @@ frame and the whistle frames above.
 
 **The set** (all gitignored, `out/re/capture/`): 81 manifest entries from 7 runs —
 `route-r1b` (15) + `route-r2` (14) map the two dead ends and the nointro boot; `idle` (16) is the
-unanchored idle set around gameplay (its 39–85 s frames are G+21…G+70 in that run — the reason the
+unanchored idle set around gameplay (its 37–85 s frames are G+21…G+70 in that run — the reason the
 anchored rerun exists); `idle-anchored` (5) is the trio; `horse` (10) + `horse-anchored` (10) +
 `horse3` (11) are the mount attempts; `route-r1` (6, from the killed first run) was discarded. The
 per-run driver logs (pad writes, shot collection, anchor) and the port’s stdout are kept in
