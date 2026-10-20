@@ -121,6 +121,20 @@ PlayerFrame waist_chest_frame(const Heightmap& ground) {
                                        {"Bone_MUNE", Vec3{0.0f, 2.0f, 0.0f}}}));
 }
 
+// The designed route's upper torso: waist (y 0 -> 1) and chest (y 1 -> 2) up
+// the left side, the right shoulder running out along +X at y = 2, and the
+// right arm (weakpoint 1) rising from the shoulder to y = 4. The neck and head
+// joints exist so the no-lateral chest top can be shown to follow `up`.
+PlayerFrame torso_arm_frame(const Heightmap& ground) {
+    return frame_of(ground, lookup_of({{"Bone_KOSI", Vec3{0.0f, 0.0f, 0.0f}},
+                                       {"Bone_HARA", Vec3{0.0f, 1.0f, 0.0f}},
+                                       {"Bone_MUNE", Vec3{0.0f, 2.0f, 0.0f}},
+                                       {"Bone_KUBI", Vec3{0.0f, 3.0f, 0.0f}},
+                                       {"Bone_KAO", Vec3{0.0f, 4.0f, 0.0f}},
+                                       {"Bone_KATA_R", Vec3{1.0f, 2.0f, 0.0f}},
+                                       {"Bone_UDE_R", Vec3{1.0f, 4.0f, 0.0f}}}));
+}
+
 }  // namespace
 
 TEST_CASE("holding grab attaches to the nearest band") {
@@ -689,6 +703,106 @@ TEST_CASE("a frame-time spike cannot skip a band") {
     e = player_step(player, combat, input, frame, tuning, /*dtSeconds=*/0.25f);
     CHECK(combat.band == ClimbBandId::Waist);
     CHECK(combat.bandT == doctest::Approx(1.0f));
+}
+
+TEST_CASE("forward plus lateral at the chest top takes the shoulder branch") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = torso_arm_frame(ground);
+    PlayerState player{};
+    player.position = Vec3{2.35f, 1.99f, 0.0f};  // the chest surface at t = 0.99
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Grabbing;
+    combat.band = ClimbBandId::Chest;
+    combat.bandT = 0.99f;
+    combat.weakpoint = -1;
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+
+    input.forward = true;
+    input.right = true;
+    player_step(player, combat, input, frame, tuning, kStep);
+    CHECK(combat.mode == PlayerMode::Climbing);
+    CHECK(combat.band == ClimbBandId::RightShoulder);
+    CHECK(combat.bandT == doctest::Approx(0.0f));
+    CHECK(combat.weakpoint == -1);
+
+    // Climb the shoulder band forward: its top is the right arm, weakpoint 1.
+    input.right = false;
+    int frames = 0;
+    while (combat.band == ClimbBandId::RightShoulder && frames < 200) {
+        player_step(player, combat, input, frame, tuning, kStep);
+        ++frames;
+    }
+    CHECK(combat.band == ClimbBandId::RightArm);
+    CHECK(combat.bandT == doctest::Approx(0.0f));
+    CHECK(combat.weakpoint == 1);
+    CHECK(combat.mode == PlayerMode::Climbing);
+    CHECK(frames <= 60);  // 1 m of shoulder at 1.2 m/s
+}
+
+TEST_CASE("forward alone at the chest top follows up to the neck") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = torso_arm_frame(ground);
+    PlayerState player{};
+    player.position = Vec3{2.35f, 1.99f, 0.0f};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Grabbing;
+    combat.band = ClimbBandId::Chest;
+    combat.bandT = 0.99f;
+    PlayerInput input{};
+    input.grab = true;
+    input.forward = true;
+    player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    CHECK(combat.band == ClimbBandId::Neck);
+    CHECK(combat.bandT == doctest::Approx(0.0f));
+}
+
+TEST_CASE("lateral input orbits the attach point around the band axis") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = foot_frame(ground);
+    PlayerState player{};
+    player.position = Vec3{0.0f, 0.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+    REQUIRE(player_step(player, combat, input, frame, tuning, kStep).grabbed);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+    REQUIRE(combat.band == ClimbBandId::LeftFoot);
+
+    // The foot band is 1.7 m and vertical: the attach point starts at +X, one
+    // capsule radius (0.35 m) outside the band surface.
+    const float surface_radius =
+        climb_band(ClimbBandId::LeftFoot).radius + kPlayerCapsuleRadius;
+    REQUIRE(player.position.x == doctest::Approx(surface_radius).epsilon(1e-4));
+    REQUIRE(std::fabs(player.position.z) < 1e-4f);
+    const float step_angle = tuning.climbSpeed * kStep / surface_radius;
+
+    // Right orbits by -lateral * climbSpeed * dt / (radius + capsule): the
+    // rotation angle about the band's +Y axis, recovered as -atan2(z, x).
+    input.right = true;
+    const int steps = 12;
+    for (int i = 0; i < steps; ++i) {
+        player_step(player, combat, input, frame, tuning, kStep);
+    }
+    const float right_angle = -std::atan2(player.position.z, player.position.x);
+    CHECK(combat.mode == PlayerMode::Climbing);  // lateral alone climbs
+    CHECK(combat.bandT == doctest::Approx(0.0f));  // but never moves along the band
+    CHECK(player.position.y == doctest::Approx(0.0f));  // so the height is unchanged
+    CHECK(right_angle == doctest::Approx(-static_cast<float>(steps) * step_angle).epsilon(1e-3));
+    CHECK(std::hypot(player.position.x, player.position.z) ==
+          doctest::Approx(surface_radius).epsilon(1e-4));
+
+    // Left reverses the orbit: the same N steps return the attach point to +X.
+    input.right = false;
+    input.left = true;
+    for (int i = 0; i < steps; ++i) {
+        player_step(player, combat, input, frame, tuning, kStep);
+    }
+    CHECK(std::fabs(-std::atan2(player.position.z, player.position.x)) < 1e-4f);
+    CHECK(player.position.y == doctest::Approx(0.0f));
+    CHECK(player.position.x == doctest::Approx(surface_radius).epsilon(1e-4));
 }
 
 TEST_CASE("attached modes write the surface point and skip the ground and capsules") {

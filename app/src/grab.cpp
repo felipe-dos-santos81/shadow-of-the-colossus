@@ -70,13 +70,15 @@ float segment_segment_distance(Vec3 p1, Vec3 q1, Vec3 p2, Vec3 q2) {
 
 // The pinned S4 band table. Radii are the S4 capsule measurements; the chain
 // order is foot -> shin -> thigh -> waist -> chest -> neck -> head, with the
-// right arm hanging off the chest.
+// right arm hanging off the chest. The chest carries the only branch: W+D at
+// its top crosses to the right shoulder (S4.2 design §7.3).
 constexpr ClimbBand kClimbBands[] = {
     {"Bone_TUMASAKI_L", "Bone_TOE_L", 1.7f, ClimbBandId::LeftShin, ClimbBandId::Count, -1},
     {"Bone_TOE_L", "Bone_MOMO_L", 1.6f, ClimbBandId::LeftThigh, ClimbBandId::LeftFoot, -1},
     {"Bone_MOMO_L", "Bone_KOSI", 1.7f, ClimbBandId::Waist, ClimbBandId::LeftShin, -1},
     {"Bone_KOSI", "Bone_HARA", 2.0f, ClimbBandId::Chest, ClimbBandId::LeftThigh, -1},
-    {"Bone_HARA", "Bone_MUNE", 2.0f, ClimbBandId::Neck, ClimbBandId::Waist, -1},
+    {"Bone_HARA", "Bone_MUNE", 2.0f, ClimbBandId::Neck, ClimbBandId::Waist, -1,
+     ClimbBandId::RightShoulder},
     {"Bone_MUNE", "Bone_KUBI", 1.6f, ClimbBandId::Head, ClimbBandId::Chest, -1},
     {"Bone_KUBI", "Bone_KAO", 1.75f, ClimbBandId::Count, ClimbBandId::Neck, 0},
     {"Bone_MUNE", "Bone_KATA_R", 1.5f, ClimbBandId::RightArm, ClimbBandId::Chest, -1},

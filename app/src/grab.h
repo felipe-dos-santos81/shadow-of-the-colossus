@@ -13,7 +13,9 @@
 // that chain, and `ClimbBandId::Count` terminates either end. `weakpoint` is
 // -1 for an ordinary band, 0 for the forehead and 1 for the right arm — the
 // two weakpoint identifiers the fight design pins (the values the later task's
-// hit routing consumes).
+// hit routing consumes). `branch` is the one lateral fork in the chain: the
+// chest's is the right shoulder, reached by climbing forward with a lateral
+// input at the band top; every other band leaves it `Count`.
 
 enum class ClimbBandId {
     LeftFoot,
@@ -35,6 +37,7 @@ struct ClimbBand {
     ClimbBandId up;     // next band towards the head; Count at the top
     ClimbBandId down;   // next band towards the feet; Count at the bottom
     int weakpoint;      // -1 none, 0 forehead, 1 right arm
+    ClimbBandId branch = ClimbBandId::Count;  // W+lateral fork at the top; Count none
 };
 
 // The band record for `id`. `Count` (and any out-of-range cast) answers a

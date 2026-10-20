@@ -124,13 +124,40 @@ TEST_CASE("climb band table matches the pinned S4 measurements") {
         ClimbBandId::LeftThigh, ClimbBandId::Waist,         ClimbBandId::Chest,
         ClimbBandId::Neck,      ClimbBandId::Chest,         ClimbBandId::RightShoulder};
     const int expected_weakpoint[] = {-1, -1, -1, -1, -1, -1, 0, -1, 1};
+    // The one branch in the table: W+D at the top of the chest.
+    const ClimbBandId expected_branch[] = {
+        ClimbBandId::Count, ClimbBandId::Count,         ClimbBandId::Count,
+        ClimbBandId::Count, ClimbBandId::RightShoulder, ClimbBandId::Count,
+        ClimbBandId::Count, ClimbBandId::Count,         ClimbBandId::Count};
     for (int i = 0; i < static_cast<int>(ClimbBandId::Count); ++i) {
         const ClimbBand& band = climb_band(static_cast<ClimbBandId>(i));
         CHECK(band.radius == doctest::Approx(expected_radius[i]));
         CHECK(band.up == expected_up[i]);
         CHECK(band.down == expected_down[i]);
         CHECK(band.weakpoint == expected_weakpoint[i]);
+        CHECK(band.branch == expected_branch[i]);
     }
+}
+
+TEST_CASE("only the chest branches, and its branch rejoins the chain") {
+    for (int i = 0; i < static_cast<int>(ClimbBandId::Count); ++i) {
+        const ClimbBandId id = static_cast<ClimbBandId>(i);
+        const ClimbBand& band = climb_band(id);
+        if (id == ClimbBandId::Chest) {
+            CHECK(band.branch == ClimbBandId::RightShoulder);
+        } else {
+            CHECK(band.branch == ClimbBandId::Count);
+        }
+    }
+
+    const ClimbBandId branch = climb_band(ClimbBandId::Chest).branch;
+    REQUIRE(branch == ClimbBandId::RightShoulder);
+    CHECK(climb_band(branch).down == ClimbBandId::Chest);
+    CHECK(climb_band(branch).up == ClimbBandId::RightArm);
+
+    // The trailing default keeps a hand-written six-field band branchless.
+    const ClimbBand legacy{"A", "B", 1.0f, ClimbBandId::Count, ClimbBandId::Count, -1};
+    CHECK(legacy.branch == ClimbBandId::Count);
 }
 
 TEST_CASE("climb surface point sits outside the band radius") {

@@ -117,7 +117,13 @@ struct StepEvents {
 // Attached (Grabbing/Climbing/Striking): releasing the grab key drops into
 // Falling with no damage and no catch window. A forward/back axis moves `bandT`
 // by `climbSpeed * dt / segmentLength`, entering `up`/`down` at a band end (at
-// most one boundary per step). A strike press enters Striking. While strike is
+// most one boundary per step). A lateral axis (`right - left`) also counts as
+// climbing and orbits the attach point around the band's own axis by
+// `-lateral * climbSpeed * dt / (radius + kPlayerCapsuleRadius)` (a Rodrigues
+// rotation through the band segment); `bandT` is unchanged. At the top of a
+// band, forward plus any lateral input follows `branch`
+// when the band has one, otherwise `up`; forward alone always follows `up`.
+// A strike press enters Striking. While strike is
 // held the charge grows at 1 s per second up to `chargeSeconds` and stamina
 // drains at `staminaStrike`; releasing emits damage — `damageFull` at or above
 // `fullChargeFraction` of full charge, `damageWeak` below it — only when the
