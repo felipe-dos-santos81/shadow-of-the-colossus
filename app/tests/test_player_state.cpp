@@ -157,7 +157,6 @@ TEST_CASE("a zero-stamina player cannot grab") {
     PlayerState player{};
     PlayerCombat combat{};
     combat.stamina = 0.0f;
-    combat.staminaEmpty = true;
     combat.regenDelay = 1.0f;  // hold the pool at zero for this step
     PlayerInput input{};
     input.grab = true;
@@ -202,7 +201,6 @@ TEST_CASE("stamina zero forces a fall once, not every frame") {
     REQUIRE(broke.gripBroke);
     REQUIRE(combat.mode == PlayerMode::Falling);
     CHECK(combat.stamina == 0.0f);
-    CHECK(combat.staminaEmpty);
     CHECK(combat.catchSecondsLeft == doctest::Approx(0.6f));
     CHECK(combat.band == ClimbBandId::Count);
     CHECK(combat.weakpoint == -1);
@@ -254,10 +252,10 @@ TEST_CASE("stamina drains at the mode rate") {
     CHECK(combat.stamina == doctest::Approx(85.5f));  // 8.0 / s for 1 s
 }
 
-TEST_CASE("a strike deals damage once and returns to the climb") {
+TEST_CASE("a full-charge strike deals damage once and shakes the player off") {
     bool joints_ok = true;
     Heightmap high = flat_heightmap(10.0f, 8.0f);
-    PlayerFrame frame = head_frame(high, joints_ok);
+    Heightmap ground = flat_heightmap();
     PlayerState player{};
     player.position = Vec3{0.0f, 8.0f, 0.0f};
     PlayerCombat combat{};
@@ -265,7 +263,8 @@ TEST_CASE("a strike deals damage once and returns to the climb") {
     input.grab = true;
     CombatTuning tuning{};
 
-    StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
+    StepEvents e =
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
     REQUIRE(combat.mode == PlayerMode::Grabbing);
     REQUIRE(combat.band == ClimbBandId::Head);
     CHECK(combat.weakpoint == 0);
@@ -273,7 +272,7 @@ TEST_CASE("a strike deals damage once and returns to the climb") {
     input.strike = true;
     int held_damage = 0;
     for (int i = 0; i < 60; ++i) {  // hold a second: past the 0.9 s full charge
-        e = player_step(player, combat, input, frame, tuning, kStep);
+        e = player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
         held_damage += e.damageDealt;
     }
     CHECK(combat.mode == PlayerMode::Striking);
@@ -281,19 +280,35 @@ TEST_CASE("a strike deals damage once and returns to the climb") {
     CHECK(combat.charge == doctest::Approx(tuning.chargeSeconds));
 
     input.strike = false;
-    e = player_step(player, combat, input, frame, tuning, kStep);
+    e = player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
     CHECK(e.damageDealt == 34);
-    CHECK(combat.mode == PlayerMode::Striking);  // recovery keeps the mode
-    CHECK(combat.strikeHit);
+    CHECK(e.gripBroke);
+    CHECK(combat.strikeHit);                    // the swing landed
+    CHECK(combat.mode == PlayerMode::Falling);  // R7: the hit shakes him off
+    CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
+    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.weakpoint == -1);
 
-    int recovery_damage = 0;
+    // A fresh grab press inside the window catches the nearest band.
+    input.grab = false;
+    player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Falling);
+    input.grab = true;
+    StepEvents caught =
+        player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+    CHECK(caught.grabbed);
+    CHECK(caught.damageDealt == 0);
+    CHECK(caught.gripBroke == false);
+    CHECK(combat.mode == PlayerMode::Grabbing);
+    CHECK(combat.band == ClimbBandId::Head);
+
+    // The swing ended on release: no second damage event follows.
+    int extra_damage = 0;
     for (int i = 0; i < 60; ++i) {
-        e = player_step(player, combat, input, frame, tuning, kStep);
-        recovery_damage += e.damageDealt;
+        e = player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+        extra_damage += e.damageDealt;
     }
-    CHECK(recovery_damage == 0);
-    CHECK(combat.mode == PlayerMode::Grabbing);  // back to the saved mode
-    CHECK_FALSE(combat.strikeHit);
+    CHECK(extra_damage == 0);
 }
 
 TEST_CASE("an early release is a weak hit") {
@@ -316,6 +331,9 @@ TEST_CASE("an early release is a weak hit") {
     StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
 
     CHECK(e.damageDealt == 20);
+    CHECK(e.gripBroke);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
     CHECK(combat.charge < tuning.fullChargeFraction * tuning.chargeSeconds);
 }
 
@@ -391,6 +409,43 @@ TEST_CASE("a fresh grab press catches inside the catch window") {
     CHECK(combat.band == ClimbBandId::Head);
     CHECK(combat.catchSecondsLeft == 0.0f);
     CHECK(combat.weakpoint == 0);
+}
+
+TEST_CASE("a zero-stamina catch does not re-attach") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    Heightmap ground = flat_heightmap();
+    PlayerState player{};
+    player.position = Vec3{0.0f, 8.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+
+    player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+
+    combat.stamina = 0.0f;
+    StepEvents broke =
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+    REQUIRE(broke.gripBroke);
+    REQUIRE(combat.mode == PlayerMode::Falling);
+    REQUIRE(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
+
+    input.grab = false;
+    player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+    const float window = combat.catchSecondsLeft;
+    REQUIRE(window > 0.0f);
+
+    input.grab = true;  // fresh press, but the pool is empty
+    StepEvents missed =
+        player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+    CHECK_FALSE(missed.grabbed);
+    CHECK_FALSE(missed.gripBroke);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.stamina == 0.0f);
+    CHECK(combat.catchSecondsLeft <= window);  // no new 0.6 s window was opened
+    CHECK(combat.band == ClimbBandId::Count);
 }
 
 TEST_CASE("a missed catch means the ground") {
@@ -695,7 +750,7 @@ TEST_CASE("grounded is player_update plus the capsule resolver") {
     CHECK(actual.yawDeg == expected.yawDeg);
 }
 
-TEST_CASE("a strike from a climb returns to climbing") {
+TEST_CASE("a strike from a climb shakes the player off too") {
     Heightmap ground = flat_heightmap();
     PlayerFrame frame = waist_chest_frame(ground);
     PlayerState player{};
@@ -714,16 +769,12 @@ TEST_CASE("a strike from a climb returns to climbing") {
     player_step(player, combat, input, frame, tuning, kStep);
     REQUIRE(combat.mode == PlayerMode::Striking);
     input.strike = false;
-    player_step(player, combat, input, frame, tuning, kStep);  // weak hit + recovery
+    StepEvents hit = player_step(player, combat, input, frame, tuning, kStep);
 
-    for (int i = 0; i < 30; ++i) {
-        player_step(player, combat, input, frame, tuning, kStep);
-    }
-    CHECK(combat.mode == PlayerMode::Climbing);  // the saved mode, not Grabbing
-
-    input.forward = false;
-    player_step(player, combat, input, frame, tuning, kStep);
-    CHECK(combat.mode == PlayerMode::Grabbing);
+    CHECK(hit.damageDealt == 20);  // a tap, not a full charge
+    CHECK(hit.gripBroke);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
 }
 
 TEST_CASE("the combat tuning pins the design values") {
@@ -737,7 +788,6 @@ TEST_CASE("the combat tuning pins the design values") {
     CHECK(tuning.staminaRegenDelay == doctest::Approx(1.0f));
     CHECK(tuning.chargeSeconds == doctest::Approx(0.9f));
     CHECK(tuning.fullChargeFraction == doctest::Approx(0.75f));
-    CHECK(tuning.recoverySeconds == doctest::Approx(0.2f));
     CHECK(tuning.catchSeconds == doctest::Approx(0.6f));
     CHECK(tuning.catchRange == doctest::Approx(2.5f));
     CHECK(tuning.staggerSeconds == doctest::Approx(1.2f));

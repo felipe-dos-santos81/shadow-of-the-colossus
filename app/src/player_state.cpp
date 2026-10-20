@@ -60,7 +60,8 @@ void detach(PlayerCombat& combat, StepEvents& events, bool brokeGrip, float catc
     combat.fallVelocity = 0.0f;
     combat.catchSecondsLeft = std::max(0.0f, std::isfinite(catchSeconds) ? catchSeconds : 0.0f);
     combat.charge = 0.0f;
-    combat.strikeHit = false;
+    // `strikeHit` is deliberately left as it was: a landed hit stays true for
+    // the fall, and a mid-charge break was never a hit. attach_band clears it.
     combat.band = ClimbBandId::Count;
     combat.bandT = 0.5f;
     combat.weakpoint = -1;
@@ -86,17 +87,24 @@ bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame&
 }
 
 // Attaches at the band's nearest parameter and puts the player on the surface.
-// A band the solver found but the surface writer rejects drops the grip rather
-// than leaving the player in a half-attached mode.
+// A band the solver found but the surface writer rejects leaves the player in
+// `fallback` with no band: a grab that never took hold is not a grip break, so
+// it reports no event and opens no catch window.
 bool try_attach(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame,
-                ClimbBandId band, float catchSeconds, StepEvents& events) {
+                ClimbBandId band, PlayerMode fallback) {
     attach_band(combat, band,
                 nearest_t(climb_band(band), frame.jointWorld, player.position, 0.5f));
     if (!write_surface(player, combat, frame)) {
-        detach(combat, events, /*brokeGrip=*/true, catchSeconds);
+        combat.mode = fallback;
+        combat.modeSeconds = 0.0f;
+        combat.charge = 0.0f;
+        combat.strikeHit = false;
+        combat.catchSecondsLeft = 0.0f;
+        combat.band = ClimbBandId::Count;
+        combat.bandT = 0.5f;
+        combat.weakpoint = -1;
         return false;
     }
-    events.grabbed = true;
     return true;
 }
 
@@ -131,15 +139,14 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 const float stamina = std::isfinite(combat.stamina) ? combat.stamina : 0.0f;
                 combat.stamina = std::min(kMaxStamina, stamina + tuning.staminaRegen * dt);
             }
-            if (combat.stamina > 0.0f) {
-                combat.staminaEmpty = false;
-            }
 
-            if (grabPressed && !combat.staminaEmpty && combat.stamina > 0.0f) {
+            if (grabPressed && combat.stamina > 0.0f) {
                 const ClimbBandId band =
                     nearest_climb_band(frame.jointWorld, player.position, tuning.grabRange);
                 if (band != ClimbBandId::Count) {
-                    try_attach(player, combat, frame, band, tuning.catchSeconds, events);
+                    if (try_attach(player, combat, frame, band, PlayerMode::Grounded)) {
+                        events.grabbed = true;
+                    }
                 }
             }
             break;
@@ -157,7 +164,6 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
 
             if (strikePressed && (combat.mode == PlayerMode::Grabbing ||
                                   combat.mode == PlayerMode::Climbing)) {
-                combat.returnMode = combat.mode;
                 combat.mode = PlayerMode::Striking;
                 combat.modeSeconds = 0.0f;
                 combat.charge = 0.0f;
@@ -203,24 +209,19 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                     }
                 }
             } else {  // Striking: hold to charge, release to plunge once.
-                if (!combat.strikeHit) {
-                    if (input.strike) {
-                        combat.charge =
-                            std::min(combat.charge + dt, tuning.chargeSeconds);
-                    } else {
-                        const float threshold =
-                            tuning.fullChargeFraction * tuning.chargeSeconds;
-                        const float damage =
-                            combat.charge >= threshold ? tuning.damageFull : tuning.damageWeak;
-                        events.damageDealt = static_cast<int>(std::lround(damage));
-                        combat.strikeHit = true;
-                        combat.modeSeconds = 0.0f;  // recovery starts now
-                    }
-                } else if (combat.modeSeconds >= tuning.recoverySeconds) {
-                    combat.mode = combat.returnMode;
-                    combat.modeSeconds = 0.0f;
-                    combat.charge = 0.0f;
-                    combat.strikeHit = false;
+                if (input.strike) {
+                    combat.charge = std::min(combat.charge + dt, tuning.chargeSeconds);
+                } else {
+                    const float threshold =
+                        tuning.fullChargeFraction * tuning.chargeSeconds;
+                    const float damage =
+                        combat.charge >= threshold ? tuning.damageFull : tuning.damageWeak;
+                    events.damageDealt = static_cast<int>(std::lround(damage));
+                    combat.strikeHit = true;
+                    // R7: a landed hit starts the reaction and shakes the
+                    // climber off at once; the catch window opens with it.
+                    detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
+                    break;
                 }
             }
 
@@ -243,7 +244,6 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 drain_stamina(combat, rate, dt);
                 if (combat.stamina <= 0.0f) {
                     combat.stamina = 0.0f;
-                    combat.staminaEmpty = true;
                     detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
                 }
             }
@@ -256,11 +256,15 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 combat.fallVelocity = 0.0f;
             }
 
-            if (grabPressed && combat.catchSecondsLeft > 0.0f) {
+            // A catch still needs stamina: with an empty pool the press is
+            // ignored and the existing window simply runs out.
+            if (grabPressed && combat.catchSecondsLeft > 0.0f && combat.stamina > 0.0f) {
                 const ClimbBandId band =
                     nearest_climb_band(frame.jointWorld, player.position, tuning.catchRange);
                 if (band != ClimbBandId::Count) {
-                    try_attach(player, combat, frame, band, tuning.catchSeconds, events);
+                    if (try_attach(player, combat, frame, band, PlayerMode::Falling)) {
+                        events.grabbed = true;
+                    }
                 } else {
                     combat.catchSecondsLeft = 0.0f;  // the press was the catch attempt
                 }

@@ -14,16 +14,19 @@
 // band, moving along it, holding a strike to charge, the forced fall, the catch
 // window and the landing stagger.
 //
-//     Grounded -> Grabbing <-> Climbing -> Striking -> (saved mode)
-//                    |            |           |
-//                    +------------+-----------+--> Falling -> Staggered -> Grounded
+//     Grounded --> Grabbing <--> Climbing --> Striking
+//        ^             \            |            /
+//        |              +-----------+-----------+
+//        |                          v
+//        +------ Staggered <----- Falling
 //
 // Every mode is driven by one `player_step` call per frame. Grounded runs the
 // S3 controller and the S4 capsule resolver in their existing order, so the
 // S3/S4 numbers cannot move. Attached modes instead recompute the attach point
 // from this frame's posed skeleton and never sample the heightmap or run the
 // capsule resolver. Falling integrates gravity from the release point; a grip
-// break also opens the catch window in which a fresh grab press re-attaches.
+// break — including the one a landed strike causes — also opens the catch
+// window in which a fresh grab press with stamina left re-attaches.
 
 enum class PlayerMode { Grounded, Grabbing, Climbing, Striking, Falling, Staggered };
 
@@ -42,12 +45,10 @@ struct PlayerCombat {
     bool grabWasDown = false;        // rising-edge memory for the grab key
     bool strikeWasDown = false;      // rising-edge memory for the strike key
 
-    // R6 strike state.
-    PlayerMode returnMode = PlayerMode::Grabbing;  // Striking returns here
-    float charge = 0.0f;                           // s of J held, capped at chargeSeconds
-    float catchSecondsLeft = 0.0f;                 // Falling's re-grip window
-    float fallVelocity = 0.0f;                     // m/s, negative is down
-    bool staminaEmpty = false;                     // the zero-crossing latch
+    // R6/R7 strike state.
+    float charge = 0.0f;            // s of J held, capped at chargeSeconds
+    float catchSecondsLeft = 0.0f;  // Falling's re-grip window
+    float fallVelocity = 0.0f;      // m/s, negative is down
 };
 
 // One frame's view of the world: the ground, the entity's posed skeleton (the
@@ -63,7 +64,8 @@ struct PlayerFrame {
 };
 
 // The pinned S4.1 constants. Ruling R6 replaces the plan's `strikeSeconds` /
-// `strikeHitFrom` / `strikeHitTo` with the charge, threshold and recovery.
+// `strikeHitFrom` / `strikeHitTo` with the charge and its full-charge
+// threshold; ruling R7 removes the post-release recovery entirely.
 struct CombatTuning {
     float grabRange = 0.9f;      // m, surface distance for a fresh grab
     float climbSpeed = 1.2f;     // m/s along the band
@@ -74,7 +76,6 @@ struct CombatTuning {
     float staminaRegenDelay = 1.0f;  // s on the ground before regen starts
     float chargeSeconds = 0.9f;      // full charge time
     float fullChargeFraction = 0.75f;  // release at or above this is a plunge
-    float recoverySeconds = 0.2f;      // post-release lock before the saved mode
     float catchSeconds = 0.6f;         // re-grip window after a grip break
     float catchRange = 2.5f;           // m, surface distance for the catch
     float staggerSeconds = 1.2f;       // landing stagger
@@ -104,22 +105,25 @@ struct StepEvents {
 // Attached (Grabbing/Climbing/Striking): releasing the grab key drops into
 // Falling with no damage and no catch window. A forward/back axis moves `bandT`
 // by `climbSpeed * dt / segmentLength`, entering `up`/`down` at a band end (at
-// most one boundary per step). A strike press enters Striking, saving the
-// previous mode. While strike is held the charge grows at 1 s per second up to
-// `chargeSeconds` and stamina drains at `staminaStrike`; releasing emits one
-// damage event — `damageFull` at or above `fullChargeFraction` of full charge,
-// `damageWeak` below it — then runs `recoverySeconds` and returns to the saved
-// mode. A grip break mid-charge cancels with no damage. The attach point is
-// recomputed from `frame.jointWorld` every attached step and written to
-// `position`, with `yawDeg` facing the surface; the heightmap and the capsule
-// resolver are not touched.
+// most one boundary per step). A strike press enters Striking. While strike is
+// held the charge grows at 1 s per second up to `chargeSeconds` and stamina
+// drains at `staminaStrike`; releasing emits one damage event — `damageFull` at
+// or above `fullChargeFraction` of full charge, `damageWeak` below it — and the
+// hit shakes the player off immediately: `gripBroke` is reported and Falling
+// begins with the catch window (ruling R7; there is no recovery mode). A grip
+// break mid-charge cancels with no damage. The attach point is recomputed from
+// `frame.jointWorld` every attached step and written to `position`, with
+// `yawDeg` facing the surface; the heightmap and the capsule resolver are not
+// touched.
 //
 // Falling: integrates vertical velocity at 9.8 m/s² downward, keeps XZ, and
 // lands when `position.y` reaches the ground sample (the ground is only used
 // when finite; a hole keeps the fall going, never a NaN). A grip break
-// (stamina zero, or a band that can no longer be resolved) enters Falling with
-// `catchSeconds` left; a fresh grab press inside that window re-attaches to
-// `nearest_climb_band(..., catchRange)`. Landing enters Staggered, then
-// Grounded after `staggerSeconds`.
+// (stamina zero, a landed strike, or a band that can no longer be resolved)
+// enters Falling with `catchSeconds` left; a fresh grab press with stamina
+// left inside that window re-attaches to `nearest_climb_band(...,
+// catchRange)`. A grab that never took hold is not a grip break: a failed
+// initial grab stays Grounded with no event and no window. Landing enters
+// Staggered, then Grounded after `staggerSeconds`.
 StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerInput& input,
                        const PlayerFrame& frame, const CombatTuning& tuning, float dtSeconds);
