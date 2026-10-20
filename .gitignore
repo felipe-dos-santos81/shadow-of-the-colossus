@@ -16,7 +16,7 @@ export_presets.cfg
 app/build/
 
 # scratch
-out/
+out
 scratch/
 
 # SDD workspace
