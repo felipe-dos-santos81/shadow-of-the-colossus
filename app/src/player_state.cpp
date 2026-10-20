@@ -113,6 +113,33 @@ void drain_stamina(PlayerCombat& combat, float rate, float dt) {
     combat.stamina = std::clamp(stamina - rate * dt, 0.0f, kMaxStamina);
 }
 
+// Whether a release at `feet` reaches the shell of `weakpoint` (design §7.2).
+// The hit point is the closest point on the player's capsule *segment* — feet
+// to feet + kPlayerCapsuleHeight — to the shell centre; the hit lands when that
+// distance is within the shell radius. The segment, not the feet: the S4.1 head
+// strike's capsule top sits ~1.27 m from the shell centre while the feet sit
+// ~2.14 m away. A band with no weakpoint, an empty or failing lookup, or a
+// non-finite shell answers false.
+bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& lookup) {
+    if (weakpoint < 0 || !lookup) {
+        return false;
+    }
+    Vec3 center{};
+    float radius = 0.0f;
+    if (!lookup(weakpoint, center, radius)) {
+        return false;
+    }
+    if (!std::isfinite(feet.x) || !std::isfinite(feet.y) || !std::isfinite(feet.z) ||
+        !std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z) ||
+        !std::isfinite(radius) || radius < 0.0f) {
+        return false;
+    }
+    const float closestY =
+        std::clamp(center.y, feet.y, feet.y + kPlayerCapsuleHeight);
+    const Vec3 delta{center.x - feet.x, center.y - closestY, center.z - feet.z};
+    return vec3_dot(delta, delta) <= radius * radius;
+}
+
 }  // namespace
 
 const char* player_mode_name(PlayerMode mode) {
@@ -234,10 +261,16 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                         tuning.fullChargeFraction * tuning.chargeSeconds;
                     const float damage =
                         combat.charge >= threshold ? tuning.damageFull : tuning.damageWeak;
-                    events.damageDealt = static_cast<int>(std::lround(damage));
-                    combat.strikeHit = true;
-                    // R7: a landed hit starts the reaction and shakes the
-                    // climber off at once; the catch window opens with it.
+                    // §7.2: only a shell hit deals damage; a whiff is a clang.
+                    // `strikeHit` stays false so the encounter plays no reaction.
+                    if (strike_reaches_shell(player.position, combat.weakpoint,
+                                             frame.weakpointProxy)) {
+                        events.damageDealt = static_cast<int>(std::lround(damage));
+                        combat.strikeHit = true;
+                    }
+                    // R7: the swing always shakes the climber off at once (the
+                    // grip break is unconditional, so a whiff keeps the rhythm);
+                    // the catch window opens with it.
                     detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
                     break;
                 }

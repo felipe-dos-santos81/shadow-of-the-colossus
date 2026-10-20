@@ -4,6 +4,7 @@
 #include "asset_io.h"
 #include "camera.h"
 #include "collision.h"
+#include "grab.h"
 #include "heightmap.h"
 #include "manifest.h"
 #include "player.h"
@@ -644,6 +645,9 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
 // climb bands, and its capsules are the ground-mode collision proxy. The
 // camera look yaw is the Grounded movement basis (the state machine's
 // player_update call), exactly as the interactive path always supplied it.
+// The weakpoint lookup resolves a band's shell through posed_weakpoint_proxy on
+// this frame's palette; `weakpoint_material_name` answers nullptr for anything
+// but the two weakpoints, so it must be checked before building a string.
 PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                             const std::vector<std::vector<Mat4>>& palettes,
                             const Heightmap& heightmap, float cameraYawDeg) {
@@ -656,6 +660,15 @@ PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
         frame.jointWorld = [&scene, entityRig, &palettes](std::string_view name, Vec3& out) {
             return posed_joint_world_position(scene, entityRig, palettes[entityRig],
                                               std::string(name), out);
+        };
+        frame.weakpointProxy = [&scene, entityRig,
+                                &palettes](int weakpoint, Vec3& center, float& radius) {
+            const char* material = weakpoint_material_name(weakpoint);
+            if (material == nullptr) {
+                return false;
+            }
+            return posed_weakpoint_proxy(scene, entityRig, palettes[entityRig],
+                                         std::string(material), center, radius);
         };
     }
     frame.entityCapsules = entity_capsules(scene, palettes);

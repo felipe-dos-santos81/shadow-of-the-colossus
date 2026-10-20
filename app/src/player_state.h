@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 #include "collision.h"
@@ -58,10 +59,17 @@ struct PlayerCombat {
 // One frame's view of the world: the ground, the entity's posed skeleton (the
 // source of every climb band), and the entity's collision proxy. `scene` and
 // `entityRig` identify the entity for the app's weakpoint/reaction routing.
+//
+// `weakpointProxy` resolves a weakpoint id to its posed shell sphere (centre and
+// radius) on this frame's skeleton. It is empty when the app has no proxy; a
+// strike then deals no damage. The app binds it to posed_weakpoint_proxy.
+using WeakpointProxyLookup = std::function<bool(int weakpoint, Vec3& center, float& radius)>;
+
 struct PlayerFrame {
     const Scene* scene = nullptr;
     const Heightmap* heightmap = nullptr;
     JointLookup jointWorld;
+    WeakpointProxyLookup weakpointProxy;
     std::size_t entityRig = 0;
     float cameraYawDeg = 0.0f;
     std::vector<Capsule> entityCapsules;
@@ -111,14 +119,17 @@ struct StepEvents {
 // by `climbSpeed * dt / segmentLength`, entering `up`/`down` at a band end (at
 // most one boundary per step). A strike press enters Striking. While strike is
 // held the charge grows at 1 s per second up to `chargeSeconds` and stamina
-// drains at `staminaStrike`; releasing emits one damage event — `damageFull` at
-// or above `fullChargeFraction` of full charge, `damageWeak` below it — and the
-// hit shakes the player off immediately: `gripBroke` is reported and Falling
-// begins with the catch window (ruling R7; there is no recovery mode). A grip
-// break mid-charge cancels with no damage. The attach point is recomputed from
-// `frame.jointWorld` every attached step and written to `position`, with
-// `yawDeg` facing the surface; the heightmap and the capsule resolver are not
-// touched.
+// drains at `staminaStrike`; releasing emits damage — `damageFull` at or above
+// `fullChargeFraction` of full charge, `damageWeak` below it — only when the
+// band's weakpoint resolves through `frame.weakpointProxy` to a shell sphere
+// and the closest point on the player's capsule segment (feet to feet +
+// `kPlayerCapsuleHeight`) is within its radius. A whiff deals 0 and sets no
+// `strikeHit`. Either way the swing shakes the player off immediately:
+// `gripBroke` is reported and Falling begins with the catch window (ruling R7;
+// there is no recovery mode). A grip break mid-charge cancels with no damage.
+// The attach point is recomputed from `frame.jointWorld` every attached step
+// and written to `position`, with `yawDeg` facing the surface; the heightmap
+// and the capsule resolver are not touched.
 //
 // Falling: integrates vertical velocity at 9.8 m/s² downward, keeps XZ, and
 // lands when `position.y` reaches the ground sample (the ground is only used

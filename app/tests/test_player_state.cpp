@@ -76,10 +76,26 @@ PlayerFrame foot_frame(const Heightmap& ground) {
                                        {"Bone_TOE_L", Vec3{0.0f, 2.0f, 0.0f}}}));
 }
 
+// The forehead shell's fixture sphere: centred on the fake head at (0, 8.5, 0)
+// and wide enough to cover the head band's attach point at x = 1.75 + 0.35.
+WeakpointProxyLookup head_proxy() {
+    return [](int weakpoint, Vec3& center, float& radius) {
+        if (weakpoint != 0) {
+            return false;
+        }
+        center = Vec3{0.0f, 8.5f, 0.0f};
+        radius = 2.5f;
+        return true;
+    };
+}
+
 // Head band (weakpoint 0) spans y 8 -> 9 at x = 0. `joints_ok` lets a test
-// drop the skeleton mid-grip to force a technical grip break.
-PlayerFrame head_frame(const Heightmap& ground, bool& joints_ok) {
-    return frame_of(ground, [&joints_ok](std::string_view name, Vec3& out) {
+// drop the skeleton mid-grip to force a technical grip break. `proxy` defaults
+// to a sphere the attach point is inside; a gate test passes its own (or an
+// empty lookup).
+PlayerFrame head_frame(const Heightmap& ground, bool& joints_ok,
+                       WeakpointProxyLookup proxy = head_proxy()) {
+    PlayerFrame frame = frame_of(ground, [&joints_ok](std::string_view name, Vec3& out) {
         if (!joints_ok) {
             return false;
         }
@@ -93,6 +109,8 @@ PlayerFrame head_frame(const Heightmap& ground, bool& joints_ok) {
         }
         return false;
     });
+    frame.weakpointProxy = std::move(proxy);
+    return frame;
 }
 
 // Waist (y 0 -> 1, up = Chest) then Chest (y 1 -> 2), both radius 2.0, so a
@@ -335,6 +353,99 @@ TEST_CASE("an early release is a weak hit") {
     CHECK(combat.mode == PlayerMode::Falling);
     CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
     CHECK(combat.charge < tuning.fullChargeFraction * tuning.chargeSeconds);
+}
+
+TEST_CASE("a strike outside the weakpoint shell deals no damage but still breaks the grip") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    const WeakpointProxyLookup far = [](int weakpoint, Vec3& center, float& radius) {
+        if (weakpoint != 0) {
+            return false;
+        }
+        center = Vec3{0.0f, 30.0f, 0.0f};  // 21 m above the climber
+        radius = 0.5f;
+        return true;
+    };
+    PlayerFrame frame = head_frame(high, joints_ok, far);
+    PlayerState player{};
+    player.position = Vec3{0.0f, 8.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+    player_step(player, combat, input, frame, tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+    REQUIRE(combat.band == ClimbBandId::Head);
+
+    input.strike = true;
+    player_step(player, combat, input, frame, tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Striking);
+    input.strike = false;
+    StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
+
+    CHECK(e.damageDealt == 0);
+    CHECK_FALSE(combat.strikeHit);
+    CHECK(e.gripBroke);  // a whiff still shakes him off
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
+}
+
+TEST_CASE("a strike with no weakpoint lookup deals no damage") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    PlayerFrame frame = head_frame(high, joints_ok, WeakpointProxyLookup{});
+    PlayerState player{};
+    player.position = Vec3{0.0f, 8.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+    player_step(player, combat, input, frame, tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+    REQUIRE(combat.weakpoint == 0);
+
+    input.strike = true;
+    player_step(player, combat, input, frame, tuning, kStep);
+    input.strike = false;
+    StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
+
+    CHECK(e.damageDealt == 0);
+    CHECK_FALSE(combat.strikeHit);
+    CHECK(e.gripBroke);
+    CHECK(combat.mode == PlayerMode::Falling);
+}
+
+TEST_CASE("the hit point is the capsule segment, not the feet") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    // The attach point is (2.1, 8, 0). This sphere reaches the capsule top
+    // (2.1, 9.7, 0), 2.10 m away, but not the feet (2.1, 8, 0), 2.77 m away.
+    const WeakpointProxyLookup head_high = [](int weakpoint, Vec3& center, float& radius) {
+        if (weakpoint != 0) {
+            return false;
+        }
+        center = Vec3{0.0f, 9.8f, 0.0f};
+        radius = 2.2f;
+        return true;
+    };
+    PlayerFrame frame = head_frame(high, joints_ok, head_high);
+    PlayerState player{};
+    player.position = Vec3{0.0f, 8.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+    player_step(player, combat, input, frame, tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+
+    input.strike = true;
+    player_step(player, combat, input, frame, tuning, kStep);
+    input.strike = false;
+    StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
+
+    CHECK(e.damageDealt == 20);  // a feet-only test would report 0
+    CHECK(combat.strikeHit);
+    CHECK(e.gripBroke);
 }
 
 TEST_CASE("a grip break mid-charge cancels the strike") {
@@ -772,7 +883,8 @@ TEST_CASE("a strike from a climb shakes the player off too") {
     input.strike = false;
     StepEvents hit = player_step(player, combat, input, frame, tuning, kStep);
 
-    CHECK(hit.damageDealt == 20);  // a tap, not a full charge
+    CHECK(hit.damageDealt == 0);  // an ordinary band carries no weakpoint shell
+    CHECK_FALSE(combat.strikeHit);
     CHECK(hit.gripBroke);
     CHECK(combat.mode == PlayerMode::Falling);
     CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
