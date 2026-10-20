@@ -31,7 +31,9 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
     // cannot reach that point — the zones overlap — so it is a spawn/teleport
     // edge only; Task 6 must keep the spawn outside the proxy. Do not raise
     // the iteration count here without revisiting the ruling and the test that
-    // documents this behavior (test_anim.cpp, "between-feet").
+    // documents this behavior (test_anim.cpp, "Valus' posed palette drives the
+    // capsule proxy and each leg pushes the player out", the between-feet
+    // block at the end).
     for (int iteration = 0; iteration < kResolveIterations; ++iteration) {
         for (const Capsule& capsule : capsules) {
             if (!is_finite(capsule.a) || !is_finite(capsule.b) || !std::isfinite(capsule.r)) {

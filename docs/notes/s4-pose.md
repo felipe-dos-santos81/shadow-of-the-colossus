@@ -66,7 +66,7 @@ every record-bearing parent index precedes its record, all 15 `OptBone_*` report
 - **58/58 tracks map, 0 unresolved**, to **58 distinct joints** of the **238-joint** glb.
 - The **13 type-`0xD` tracks** (indices 2, 6, 15, 21, 29, 30, 32, 33, 35, 36, 38, 39, 42) are in
   the mapped set — e.g. `Bone_SUNE_L`/`_R`, `Bone_UDE_L`/`_R`, the left `KO_*`/`KUSURI_*`/
-  `NAKA_*`/`HITOSASI_*` chains, and `Bone_KO_A_R`.
+  `NAKA_*`/`HITOSASI_*` chains, and `Bone_OYA_C_L`.
 - C# pins: `SkbReaderTests.Minotaur_bank_decodes`,
   `TrackMapTests.Minotaur_stand_tracks_all_resolve_into_valus_glb`,
   `AnimWriterTests.Minotaur_stand_animation_reloads_with_pinned_shape`.
@@ -158,7 +158,9 @@ The residual is the angle between the bridged decoded local and the glb's bind l
 | `Bone_OYA_B_R` | static | 10.76 | 10.76 |
 | `Bone_OYA_C_R` | static | 16.00 | 16.00 |
 
-Family bands: **core 0.00 … 44.66°**, **arm 10.19 … 86.18°**, **all 58 bones 0.00 … 86.18°**.
+Family bands at frame 0: **core 0.00 … 44.66°**, **arm 10.19 … 86.18°**, **all 58 bones
+0.00 … 86.18°**. Across the 26-frame loop: **core 0.00 … 53.31°**, **arm 5.86 … 87.56°**,
+**all 58 bones 0.00 … 87.56°**.
 
 **Reading the numbers.** These are distances from a T-pose bind, not convention errors: the
 legs bend into a relaxed stance (knees 33–53°), the arms come down from the horizontal bind

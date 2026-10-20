@@ -29,8 +29,9 @@ struct MeshCpu {
     // vertices stay in the glb's own space.
     Mat4 model = mat4_identity();
     // The rig this mesh is drawn with: an index into Scene::rigs, or -1 for a
-    // static mesh (a manifest instance, or a single glb with no skeleton). The
-    // player's meshes are 0, each `entity`'s are 1, 2, ... in manifest order.
+    // static mesh (a manifest instance). A single glb always loads as rig 0
+    // (includeRig=true, skeleton or not). The player's meshes are 0, each
+    // `entity`'s are 1, 2, ... in manifest order.
     int rig = -1;
 };
 

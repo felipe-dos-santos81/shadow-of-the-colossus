@@ -997,6 +997,47 @@ TEST_CASE("build_playback reads the rig it is asked for") {
     CHECK_FALSE(silent.playing);
 }
 
+TEST_CASE("an empty-range rig uses identity, not the next rig's placement") {
+    // A rigged glb that contributed no geometry keeps an empty mesh range
+    // (scene.h). Rig 0 here owns no meshes at all; rig 1 owns mesh 0 and is
+    // placed at (10, 2, -3). The empty-range rig's joints must stay in its own
+    // (identity) space — without the range check they were carried by the next
+    // rig's first mesh — while rig 1's joints take its own placement.
+    Scene scene = scene_with_player_joints({
+        joint("Bone_MUNE", -1, {0.0f, 1.0f, 0.0f}, translation_matrix({0.0f, -1.0f, 0.0f})),
+    });
+    RigCpu entity;
+    entity.skin.joints = {
+        joint("Bone_MUNE", -1, {0.0f, 5.0f, 0.0f}, translation_matrix({0.0f, -5.0f, 0.0f}))};
+    scene.rigs.push_back(std::move(entity));
+
+    MeshCpu placed;
+    placed.model = translation_matrix({10.0f, 2.0f, -3.0f});
+    scene.meshes.push_back(placed);
+
+    REQUIRE(scene.rigs[0].meshBegin == 0);
+    REQUIRE(scene.rigs[0].meshEnd == 0);  // the empty range
+    REQUIRE(scene.meshes.size() == 1);    // ... but the next rig has a mesh
+    scene.rigs[1].meshBegin = 0;
+    scene.rigs[1].meshEnd = 1;
+
+    const std::vector<Mat4> empty_palette = animation_pose(scene, 0, AnimationCpu{}, 0.0f);
+    REQUIRE(empty_palette.size() == 1);
+    Vec3 empty_rig{};
+    REQUIRE(posed_joint_world_position(scene, 0, empty_palette, "Bone_MUNE", empty_rig));
+    CHECK(empty_rig.x == doctest::Approx(0.0f));
+    CHECK(empty_rig.y == doctest::Approx(1.0f));
+    CHECK(empty_rig.z == doctest::Approx(0.0f));
+
+    const std::vector<Mat4> placed_palette = animation_pose(scene, 1, AnimationCpu{}, 0.0f);
+    REQUIRE(placed_palette.size() == 1);
+    Vec3 placed_joint{};
+    REQUIRE(posed_joint_world_position(scene, 1, placed_palette, "Bone_MUNE", placed_joint));
+    CHECK(placed_joint.x == doctest::Approx(10.0f));
+    CHECK(placed_joint.y == doctest::Approx(7.0f));
+    CHECK(placed_joint.z == doctest::Approx(-3.0f));
+}
+
 // --- The real Valus pose drives the collision proxy (S4 Task 5) ---------------
 
 namespace {

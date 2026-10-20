@@ -317,9 +317,12 @@ bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
         }
         // Mesh space -> world: every mesh of the rig shares the rig's placement
         // (compose_scene bakes it; apply_rig_lift post-multiplies the ground
-        // lift), so the first mesh's model is the rig's model.
+        // lift), so the first mesh's model is the rig's model — but only when
+        // that mesh is actually the rig's. An empty range (a rigged glb that
+        // contributed no geometry) has no model of its own: it must not borrow
+        // the next rig's first mesh.
         Mat4 model = mat4_identity();
-        if (rig.meshBegin < scene.meshes.size()) {
+        if (rig.meshBegin < rig.meshEnd && rig.meshBegin < scene.meshes.size()) {
             model = scene.meshes[rig.meshBegin].model;
         }
         const Vec3 posed = transform_point(palette[joint], bind_origin);

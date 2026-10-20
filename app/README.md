@@ -77,7 +77,10 @@ is required. Escape or the close button quits.
 ## Manifests
 
 `--manifest` composes a scene from a line-oriented text file: the static arena
-instances, the player (`--model`), and any number of placed, animated entities.
+instances, the player (`--model`), and — in S4.0 — one placed, animated entity
+(the encounter's Valus). The format accepts more, but framing targets the first
+entity and the collision capsule table is Valus's bone names and radii for
+every rig, so multiple entities are not a shipping configuration.
 The committed schema is `docs/notes/scene-manifest.md`; the directives are:
 
 ```text
@@ -139,15 +142,15 @@ s1-pixels min=15,18,0 max=177,180,188 mean=28.1,28.3,27.1
 s1-screenshot path=out/s1-smoke.png width=2560 height=1440
 ```
 
-`--s4-selftest` reports the encounter in the same style:
+`--s4-selftest` reports the encounter in the same style. It prints the `s4-spawn`, `s4-entity`,
+and `s4-walk` diagnostics first and the `s4-status` line last:
 
 ```text
 s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=builder-pick spawn=data-position+builder-yaw feet=ok entity_bbox=1123,237,1485,751 pos=378.187,28.430,369.028 frames=423
 ```
 
-followed by `s4-spawn`, `s4-entity`, and `s4-walk` diagnostics. The acceptance script
-(`scripts/s4-acceptance.sh`) parses these lines; `docs/notes/s4-results.md` records the measured
-values and the walk checklist.
+The acceptance script (`scripts/s4-acceptance.sh`) parses these lines;
+`docs/notes/s4-results.md` records the measured values and the walk checklist.
 
 ## Tests
 
