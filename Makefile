@@ -14,10 +14,11 @@ PYTHON = python3
 JOBS ?= 8
 VIEWER = $(REPO_ROOT)/app/build/sotc-viewer
 WANDER = models/shadow/characters/wander/_cmn/wander.glb
+ENCOUNTER_MANIFEST ?= $(REPO_ROOT)/out/re/stage/encounter.manifest
 f ?= models/shadow/characters/wander/_cmn/wander.cmsh
 
 .PHONY: help build publish convert inspect report \
-        app app-test app-run \
+        app app-test app-run run \
         re-anb-check \
         test accept accept-m0 accept-re0 accept-s1 \
         clean
@@ -67,6 +68,14 @@ app-test: app ## [STEP 3] Run the app test suite (ctest; needs SOTC_LIB)
 
 app-run: app ## [STEP 3] Run the windowed viewer (Wander + procedural clip; cursor never captured)
 	SOTC_LIB=$(LIBRARY) $(VIEWER) --library "$(LIBRARY)" --model "$(WANDER)"
+
+run: app ## [STEP 3] Run the encounter (arena + Valus; cursor never captured)
+	@test -f "$(ENCOUNTER_MANIFEST)" || { \
+		printf 'missing %s\n' "$(ENCOUNTER_MANIFEST)"; \
+		printf 'generate it with ./scripts/s4-acceptance.sh (composes and gates the encounter manifest)\n'; \
+		exit 1; }
+	SOTC_LIB=$(LIBRARY) $(VIEWER) --library "$(LIBRARY)" \
+		--manifest "$(ENCOUNTER_MANIFEST)" --model "$(WANDER)"
 
 # ── Stage 4 · RE (probes) ────────────────────────────────────────────────────
 
