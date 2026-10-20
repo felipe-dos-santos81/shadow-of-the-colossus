@@ -269,3 +269,12 @@ TEST_CASE("capsule identity carries the rig and the table segment index") {
     CHECK(gap_capsules[0].a.y == doctest::Approx(1.0f));  // Bone_TOE_L, the left foot
     CHECK(gap_capsules[0].r == doctest::Approx(1.7f));
 }
+
+TEST_CASE("weakpoint ids map to their shell material names") {
+    REQUIRE(weakpoint_material_name(0) != nullptr);
+    CHECK(std::string(weakpoint_material_name(0)) == "weakpoint_03");
+    REQUIRE(weakpoint_material_name(1) != nullptr);
+    CHECK(std::string(weakpoint_material_name(1)) == "weakpoint_04");
+    CHECK(weakpoint_material_name(2) == nullptr);
+    CHECK(weakpoint_material_name(-1) == nullptr);
+}

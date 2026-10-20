@@ -124,6 +124,17 @@ const char* climb_band_name(ClimbBandId id) {
     return "none";
 }
 
+const char* weakpoint_material_name(int weakpoint) {
+    switch (weakpoint) {
+        case 0:
+            return "weakpoint_03";  // the forehead shell
+        case 1:
+            return "weakpoint_04";  // the right-arm shell
+        default:
+            return nullptr;
+    }
+}
+
 bool climb_band_segment(const ClimbBand& band, const JointLookup& lookup, Vec3& a, Vec3& b) {
     if (!lookup || band.boneA == nullptr || band.boneB == nullptr) {
         return false;

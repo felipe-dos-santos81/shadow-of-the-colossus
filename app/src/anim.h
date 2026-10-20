@@ -50,6 +50,21 @@ std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
 void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette,
                   Vec3& outMin, Vec3& outMax);
 
+// The world-space sphere of the weakpoint shell named `materialName` on rig
+// `rigIndex`: only that rig's own mesh range (never the player's rig, never
+// every scene mesh) is scanned, and only its meshes whose material name matches
+// exactly. Every selected vertex is posed with the weighted palette sum
+// (zero-weight passthrough), then the mesh's model transform. `outCenter` is
+// their mean and `outRadius` the farthest distance from it to the eight corners
+// of their posed bounding box. Called on strike release only, not per frame.
+// Returns false — leaving both outputs untouched — when the rig has no skin, the
+// palette does not match its joint count, no vertex matches the material, or any
+// posed value is not finite.
+bool posed_weakpoint_proxy(const Scene& scene, std::size_t rigIndex,
+                           const std::vector<Mat4>& palette,
+                           const std::string& materialName, Vec3& outCenter,
+                           float& outRadius);
+
 // The world-space position of the joint named exactly `jointName` in rig
 // `rigIndex`, under `palette` and that rig's mesh model transform (so an
 // entity's placement and grounding lift are included). The joint's bind origin

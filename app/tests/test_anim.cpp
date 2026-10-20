@@ -1253,3 +1253,210 @@ TEST_CASE("Valus' posed palette drives the capsule proxy and each leg pushes the
           kPlayerCapsuleRadius + left_foot.r - 1e-3f);
     CHECK(between_player.position.y == doctest::Approx(28.369f));
 }
+
+// --- Shell-derived weakpoint proxy (S4.2 Task 2) ----------------------------
+
+namespace {
+
+// One vertex of the weakpoint shell: position and up to two joint influences.
+Vertex shell_vertex(Vec3 p, int joint_a, float weight_a, int joint_b, float weight_b) {
+    Vertex vertex{};
+    vertex.px = p.x;
+    vertex.py = p.y;
+    vertex.pz = p.z;
+    vertex.j[0] = static_cast<uint16_t>(joint_a);
+    vertex.w[0] = weight_a;
+    vertex.j[1] = static_cast<uint16_t>(joint_b);
+    vertex.w[1] = weight_b;
+    return vertex;
+}
+
+// Rig 1 owns one shell mesh: two joints, four vertices, and a non-identity
+// model. The vertices exercise the weighted palette sum (joint 1 is translated
+// +2 y), the zero-weight passthrough (the third vertex), and the instance
+// transform (+10 x). Rig 0 is empty — the player's slot in a real scene — so a
+// proxy that reads the player's rig instead of `rigIndex` cannot answer.
+Scene weakpoint_scene() {
+    Scene scene;
+    scene.rigs.emplace_back();
+    scene.rigs.push_back(rig_of_identity_joints(2, "shell_j"));
+    RigCpu& rig = scene.rigs[1];
+    rig.meshBegin = 0;
+    rig.meshEnd = 1;
+
+    MeshCpu mesh;
+    mesh.materialIndex = 0;
+    mesh.model = mat4_from_trs(Vec3{10.0f, 0.0f, 0.0f}, Quat{0.0f, 0.0f, 0.0f, 1.0f},
+                               Vec3{1.0f, 1.0f, 1.0f});
+    mesh.rig = 1;
+    mesh.vertices = {
+        shell_vertex(Vec3{0.0f, 0.0f, 0.0f}, 0, 1.0f, 0, 0.0f),    // (10, 0, 0)
+        shell_vertex(Vec3{0.0f, 0.0f, 0.0f}, 1, 1.0f, 0, 0.0f),    // (10, 2, 0)
+        shell_vertex(Vec3{1.0f, 0.0f, 0.0f}, 0, 0.0f, 0, 0.0f),    // (11, 0, 0)
+        shell_vertex(Vec3{0.0f, -1.0f, 0.0f}, 0, 1.0f, 0, 0.0f),   // (10, -1, 0)
+    };
+    scene.meshes.push_back(std::move(mesh));
+
+    MaterialCpu material{};
+    material.name = "weakpoint_03";
+    material.baseColorTexture = -1;
+    material.normalTexture = -1;
+    scene.materials.push_back(std::move(material));
+    return scene;
+}
+
+// Joint 0 keeps the origin; joint 1 is translated +2 y, so the second vertex
+// above lands two metres above its bind position.
+std::vector<Mat4> weakpoint_palette() {
+    return {mat4_identity(), mat4_from_trs(Vec3{0.0f, 2.0f, 0.0f}, Quat{0.0f, 0.0f, 0.0f, 1.0f},
+                                           Vec3{1.0f, 1.0f, 1.0f})};
+}
+
+// Calls the proxy and asserts it refuses without touching either output.
+void check_weakpoint_refused(const Scene& scene, std::size_t rigIndex,
+                             const std::vector<Mat4>& palette,
+                             const std::string& materialName) {
+    const Vec3 center_before{-7.0f, 8.0f, 9.0f};
+    const float radius_before = 4.5f;
+    Vec3 center = center_before;
+    float radius = radius_before;
+    CHECK_FALSE(posed_weakpoint_proxy(scene, rigIndex, palette, materialName, center, radius));
+    CHECK(center.x == center_before.x);
+    CHECK(center.y == center_before.y);
+    CHECK(center.z == center_before.z);
+    CHECK(radius == radius_before);
+}
+
+}  // namespace
+
+TEST_CASE("posed weakpoint proxy reduces the shell to its world centroid and radius") {
+    const Scene scene = weakpoint_scene();
+    const std::vector<Mat4> palette = weakpoint_palette();
+
+    Vec3 center{99.0f, 99.0f, 99.0f};
+    float radius = -1.0f;
+    REQUIRE(posed_weakpoint_proxy(scene, 1, palette, "weakpoint_03", center, radius));
+
+    // Mean of (10, 0, 0), (10, 2, 0), (11, 0, 0), (10, -1, 0).
+    CHECK(center.x == doctest::Approx(10.25f));
+    CHECK(center.y == doctest::Approx(0.25f));
+    CHECK(center.z == doctest::Approx(0.0f));
+    // The posed bbox is [10, 11] x [-1, 2] x {0}; the farthest corner from the
+    // mean is (11, 2, 0) or (11, -1, 0): sqrt(0.75^2 + 1.75^2) = sqrt(3.625).
+    CHECK(radius == doctest::Approx(std::sqrt(3.625f)).epsilon(1e-5));
+}
+
+TEST_CASE("posed weakpoint proxy blends influences with the shader's weighted sum") {
+    Scene scene = weakpoint_scene();
+    scene.meshes[0].model = mat4_identity();
+    scene.meshes[0].vertices = {
+        shell_vertex(Vec3{0.0f, 0.0f, 0.0f}, 0, 0.5f, 1, 0.5f),
+    };
+
+    Vec3 center{99.0f, 99.0f, 99.0f};
+    float radius = -1.0f;
+    REQUIRE(posed_weakpoint_proxy(scene, 1, weakpoint_palette(), "weakpoint_03", center, radius));
+    // Half of joint 0 (identity) plus half of joint 1 (+2 y) is +1 y.
+    CHECK(center.x == doctest::Approx(0.0f));
+    CHECK(center.y == doctest::Approx(1.0f));
+    CHECK(center.z == doctest::Approx(0.0f));
+    // A single posed vertex is its own bounding box: it is the centre.
+    CHECK(radius == doctest::Approx(0.0f));
+}
+
+TEST_CASE("posed weakpoint proxy scans only the rig's own mesh range") {
+    Scene scene = weakpoint_scene();
+    RigCpu& rig = scene.rigs[1];
+
+    // A body mesh inside rig 1's range but with another material.
+    MeshCpu body;
+    body.materialIndex = 1;
+    body.rig = 1;
+    body.vertices = {shell_vertex(Vec3{500.0f, 500.0f, 500.0f}, 0, 1.0f, 0, 0.0f)};
+    scene.meshes.push_back(std::move(body));
+
+    // A decoy shell carrying the same material and rig-0 geometry, after the
+    // range: it must not move the answer even though its material matches.
+    MeshCpu decoy;
+    decoy.materialIndex = 0;
+    decoy.rig = 0;
+    decoy.model =
+        mat4_from_trs(Vec3{-100.0f, 0.0f, 0.0f}, Quat{0.0f, 0.0f, 0.0f, 1.0f},
+                      Vec3{1.0f, 1.0f, 1.0f});
+    decoy.vertices = {shell_vertex(Vec3{0.0f, 0.0f, 0.0f}, 0, 1.0f, 0, 0.0f)};
+    scene.meshes.push_back(std::move(decoy));
+
+    MaterialCpu body_material{};
+    body_material.name = "body";
+    body_material.baseColorTexture = -1;
+    body_material.normalTexture = -1;
+    scene.materials.push_back(std::move(body_material));
+
+    rig.meshEnd = 2;  // the shell and the body; the decoy sits at index 2
+    const std::vector<Mat4> palette = weakpoint_palette();
+    Vec3 center{};
+    float radius = 0.0f;
+    REQUIRE(posed_weakpoint_proxy(scene, 1, palette, "weakpoint_03", center, radius));
+    CHECK(center.x == doctest::Approx(10.25f));
+    CHECK(center.y == doctest::Approx(0.25f));
+    CHECK(radius == doctest::Approx(std::sqrt(3.625f)).epsilon(1e-5));
+
+    // A range end past Scene::meshes is clamped, never indexed out of bounds.
+    Scene clamped = weakpoint_scene();
+    clamped.rigs[1].meshEnd = 1000;
+    REQUIRE(posed_weakpoint_proxy(clamped, 1, palette, "weakpoint_03", center, radius));
+    CHECK(center.x == doctest::Approx(10.25f));
+    CHECK(center.y == doctest::Approx(0.25f));
+    CHECK(radius == doctest::Approx(std::sqrt(3.625f)).epsilon(1e-5));
+}
+
+TEST_CASE("posed weakpoint proxy refuses without writing on unusable input") {
+    SUBCASE("wrong material") {
+        const Scene scene = weakpoint_scene();
+        check_weakpoint_refused(scene, 1, weakpoint_palette(), "weakpoint_04");
+    }
+
+    SUBCASE("short palette") {
+        const Scene scene = weakpoint_scene();
+        check_weakpoint_refused(scene, 1, {mat4_identity()}, "weakpoint_03");
+    }
+
+    SUBCASE("long palette") {
+        const Scene scene = weakpoint_scene();
+        check_weakpoint_refused(scene, 1, {mat4_identity(), mat4_identity(), mat4_identity()},
+                                "weakpoint_03");
+    }
+
+    SUBCASE("no skin") {
+        Scene scene = weakpoint_scene();
+        scene.rigs[1].skin.joints.clear();
+        check_weakpoint_refused(scene, 1, {}, "weakpoint_03");
+    }
+
+    SUBCASE("rig index that is no rig") {
+        const Scene scene = weakpoint_scene();
+        check_weakpoint_refused(scene, 7, {}, "weakpoint_03");
+    }
+
+    SUBCASE("out-of-range material index") {
+        Scene scene = weakpoint_scene();
+        scene.meshes[0].materialIndex = 3;
+        check_weakpoint_refused(scene, 1, weakpoint_palette(), "weakpoint_03");
+
+        scene.meshes[0].materialIndex = -1;
+        check_weakpoint_refused(scene, 1, weakpoint_palette(), "weakpoint_03");
+    }
+
+    SUBCASE("non-finite posed vertex") {
+        Scene scene = weakpoint_scene();
+        scene.meshes[0].vertices[1].py = std::numeric_limits<float>::quiet_NaN();
+        check_weakpoint_refused(scene, 1, weakpoint_palette(), "weakpoint_03");
+    }
+
+    SUBCASE("non-finite palette") {
+        Scene scene = weakpoint_scene();
+        std::vector<Mat4> palette = weakpoint_palette();
+        palette[1].m[13] = std::numeric_limits<float>::infinity();
+        check_weakpoint_refused(scene, 1, palette, "weakpoint_03");
+    }
+}

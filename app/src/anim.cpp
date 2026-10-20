@@ -298,6 +298,11 @@ Vec3 transform_point(const Mat4& m, Vec3 p) {
                 m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]};
 }
 
+// Whether every component of `v` is finite.
+bool is_finite(Vec3 v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
 }  // namespace
 
 bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
@@ -330,6 +335,126 @@ bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
         return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
     }
     return false;
+}
+
+bool posed_weakpoint_proxy(const Scene& scene, std::size_t rigIndex,
+                           const std::vector<Mat4>& palette,
+                           const std::string& materialName, Vec3& outCenter,
+                           float& outRadius) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    const std::size_t joint_count = rig.skin.joints.size();
+
+    // The shell is posed with the rig's own skin: without one, or with a
+    // palette sized for another rig, no vertex can be placed.
+    if (joint_count == 0 || palette.size() != joint_count) {
+        return false;
+    }
+
+    // The rig's own half-open mesh range, clamped to the scene: an entity shell
+    // is never searched in another rig's geometry, and a malformed range end
+    // never indexes past the meshes.
+    const std::size_t mesh_end = std::min(rig.meshEnd, scene.meshes.size());
+
+    bool have_vertex = false;
+    Vec3 sum{0.0f, 0.0f, 0.0f};
+    Vec3 bounds_min{0.0f, 0.0f, 0.0f};
+    Vec3 bounds_max{0.0f, 0.0f, 0.0f};
+    std::size_t vertex_count = 0;
+
+    for (std::size_t index = rig.meshBegin; index < mesh_end; ++index) {
+        const MeshCpu& mesh = scene.meshes[index];
+        if (mesh.materialIndex < 0 ||
+            static_cast<std::size_t>(mesh.materialIndex) >= scene.materials.size() ||
+            scene.materials[static_cast<std::size_t>(mesh.materialIndex)].name != materialName) {
+            continue;
+        }
+
+        for (const Vertex& vertex : mesh.vertices) {
+            // The shader's skinning sum, verbatim: every influence adds
+            // w_i * palette[j_i] * p. A vertex with no weights (an unskinned
+            // primitive inside a skinned mesh) stays at its bind position, as
+            // the shader's zero-weight path does.
+            Vec3 posed{0.0f, 0.0f, 0.0f};
+            float total_weight = 0.0f;
+            for (int i = 0; i < 4; ++i) {
+                const float weight = vertex.w[i];
+                const std::size_t joint = vertex.j[i];
+                if (weight == 0.0f || joint >= palette.size()) {
+                    continue;
+                }
+                if (!std::isfinite(weight)) {
+                    return false;
+                }
+                const Mat4& skin = palette[joint];
+                posed.x += weight * (skin.m[0] * vertex.px + skin.m[4] * vertex.py +
+                                     skin.m[8] * vertex.pz + skin.m[12]);
+                posed.y += weight * (skin.m[1] * vertex.px + skin.m[5] * vertex.py +
+                                     skin.m[9] * vertex.pz + skin.m[13]);
+                posed.z += weight * (skin.m[2] * vertex.px + skin.m[6] * vertex.py +
+                                     skin.m[10] * vertex.pz + skin.m[14]);
+                total_weight += weight;
+            }
+            if (!std::isfinite(total_weight)) {
+                return false;
+            }
+            const Vec3 mesh_space =
+                total_weight > 0.0f ? posed : Vec3{vertex.px, vertex.py, vertex.pz};
+
+            // The instance's model transform (identity for a single glb).
+            const Vec3 world = transform_point(mesh.model, mesh_space);
+            if (!is_finite(world)) {
+                return false;
+            }
+
+            sum.x += world.x;
+            sum.y += world.y;
+            sum.z += world.z;
+            ++vertex_count;
+            if (!have_vertex) {
+                bounds_min = world;
+                bounds_max = world;
+                have_vertex = true;
+            } else {
+                bounds_min.x = std::min(bounds_min.x, world.x);
+                bounds_min.y = std::min(bounds_min.y, world.y);
+                bounds_min.z = std::min(bounds_min.z, world.z);
+                bounds_max.x = std::max(bounds_max.x, world.x);
+                bounds_max.y = std::max(bounds_max.y, world.y);
+                bounds_max.z = std::max(bounds_max.z, world.z);
+            }
+        }
+    }
+
+    if (!have_vertex) {
+        return false;  // no mesh of this rig carries the shell material
+    }
+
+    const float inv_count = 1.0f / static_cast<float>(vertex_count);
+    const Vec3 center{sum.x * inv_count, sum.y * inv_count, sum.z * inv_count};
+    if (!is_finite(center)) {
+        return false;
+    }
+
+    // The farthest of the posed bounding box's eight corners from the mean.
+    float max_distance_squared = 0.0f;
+    for (int corner = 0; corner < 8; ++corner) {
+        const Vec3 point{(corner & 1) ? bounds_max.x : bounds_min.x,
+                         (corner & 2) ? bounds_max.y : bounds_min.y,
+                         (corner & 4) ? bounds_max.z : bounds_min.z};
+        const float dx = point.x - center.x;
+        const float dy = point.y - center.y;
+        const float dz = point.z - center.z;
+        max_distance_squared =
+            std::max(max_distance_squared, dx * dx + dy * dy + dz * dz);
+    }
+    const float radius = std::sqrt(max_distance_squared);
+    if (!std::isfinite(radius)) {
+        return false;
+    }
+
+    outCenter = center;
+    outRadius = radius;
+    return true;
 }
 
 AnimationCpu make_procedural_wave(const Scene& scene, std::size_t rigIndex) {

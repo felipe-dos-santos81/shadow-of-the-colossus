@@ -45,6 +45,10 @@ const ClimbBand& climb_band(ClimbBandId id);
 // `"none"` for `Count`. Never null.
 const char* climb_band_name(ClimbBandId id);
 
+// The material shell of weakpoint `weakpoint` — 0 is "weakpoint_03" (the
+// forehead), 1 is "weakpoint_04" (the right arm). Any other id answers nullptr.
+const char* weakpoint_material_name(int weakpoint);
+
 // Resolves joint names to posed world positions. The next task adapts
 // posed_joint_world_position to this signature; returning false means the
 // joint is absent (another rig, or a malformed skeleton).
