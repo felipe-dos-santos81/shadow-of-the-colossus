@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 #include "app.h"
 #include "camera.h"
@@ -384,4 +385,201 @@ TEST_CASE("target framing fits a 17.7 m subject") {
         CHECK(clip[2] >= 0.0f);
         CHECK(clip[2] <= clip[3] * 1.001f);
     }
+}
+
+// --- Climb camera (S4.1 Task 4) ---------------------------------------------
+//
+// While the player grips the colossus the orbit is pinned to the attach point
+// instead of trailing the player. Grabbing seeds the eye *outward* along the
+// surface normal (yaw = atan2(n.x, n.z), pitch 10°, distance 6 m), so the view
+// looks back into the body. Drag orbits at the orbit camera's 0.4°/px with
+// pitch clamped to ±45°; the wheel zooms multiplicatively inside [5, 8] m.
+// Leaving the mode only clears `active` — the orbit never snaps.
+
+TEST_CASE("climb camera seeds outward and clamps distance") {
+    Camera cam{};
+    CameraClimb climb{};
+    camera_climb_enter(cam, climb, Vec3{0, 10, 0}, Vec3{1, 0, 0});
+    REQUIRE(climb.active);
+    REQUIRE(cam.distance == doctest::Approx(6.0f));
+    REQUIRE(cam.target.x == doctest::Approx(0.0f));
+    REQUIRE(cam.target.y == doctest::Approx(10.0f));
+    for (int i = 0; i < 100; ++i)
+        camera_climb_update(cam, climb, cam.target, 0, 0, 10, 1.0f / 60.0f);
+    REQUIRE(cam.distance <= 8.0f + 1e-4f);
+    REQUIRE(cam.distance >= 5.0f - 1e-4f);
+}
+
+TEST_CASE("climb camera seeds the orbit outward along the surface normal") {
+    Camera camera{};
+    camera.yaw = 123.0f;  // discarded: the grab seed wins
+    camera.pitch = -40.0f;
+    camera.distance = 26.0f;
+    CameraClimb climb{};
+    const Vec3 attach{3.0f, 12.5f, -4.0f};
+
+    camera_climb_enter(camera, climb, attach, Vec3{1.0f, 0.0f, 0.0f});
+    CHECK(climb.active);
+    CHECK(camera.target.x == doctest::Approx(attach.x));
+    CHECK(camera.target.y == doctest::Approx(attach.y));
+    CHECK(camera.target.z == doctest::Approx(attach.z));
+    CHECK(camera.yaw == doctest::Approx(90.0f));  // atan2(1, 0)
+    CHECK(camera.pitch == doctest::Approx(10.0f));
+    CHECK(camera.distance == doctest::Approx(6.0f));
+    CHECK(climb.distance == doctest::Approx(6.0f));
+    // At yaw 90 the eye-offset direction is +X: the normal's side, outward.
+    CHECK(std::sin(camera.yaw * kDegToRad) == doctest::Approx(1.0f));
+
+    // A +Z normal is the orbit's yaw-0 side; a diagonal normal seeds at 45°.
+    camera_climb_enter(camera, climb, attach, Vec3{0.0f, 0.0f, 2.0f});
+    CHECK(camera.yaw == doctest::Approx(0.0f));
+    camera_climb_enter(camera, climb, attach, Vec3{1.0f, 0.0f, 1.0f});
+    CHECK(camera.yaw == doctest::Approx(45.0f));
+    // Only the normal's direction matters, not its length.
+    camera_climb_enter(camera, climb, attach, Vec3{4.0f, 0.0f, 4.0f});
+    CHECK(camera.yaw == doctest::Approx(45.0f));
+    // Entering resets the orbit to the 6 m seed even if a climb already zoomed.
+    camera.distance = 7.5f;
+    camera_climb_enter(camera, climb, attach, Vec3{0.0f, 0.0f, 1.0f});
+    CHECK(camera.distance == doctest::Approx(6.0f));
+    CHECK(climb.distance == doctest::Approx(6.0f));
+}
+
+TEST_CASE("climb camera orbits the attach point at the orbit sensitivity") {
+    Camera camera{};
+    CameraClimb climb{};
+    camera_climb_enter(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f});
+
+    // The target follows the attach point every frame.
+    const Vec3 moved{1.5f, 11.25f, -2.0f};
+    camera_climb_update(camera, climb, moved, 100.0f, 0.0f, 0.0f, 1.0f / 60.0f);
+    CHECK(camera.target.x == doctest::Approx(moved.x));
+    CHECK(camera.target.y == doctest::Approx(moved.y));
+    CHECK(camera.target.z == doctest::Approx(moved.z));
+    // 100 px at the orbit camera's 0.4°/px.
+    CHECK(camera.yaw == doctest::Approx(40.0f));
+    CHECK(camera.pitch == doctest::Approx(10.0f));
+
+    camera_climb_update(camera, climb, moved, 0.0f, 10000.0f, 0.0f, 1.0f / 60.0f);
+    CHECK(camera.pitch == doctest::Approx(kClimbPitchLimitDeg));
+    camera_climb_update(camera, climb, moved, 0.0f, -10000.0f, 0.0f, 1.0f / 60.0f);
+    CHECK(camera.pitch == doctest::Approx(-kClimbPitchLimitDeg));
+    // A small drag still moves the clamped pitch.
+    camera_climb_update(camera, climb, moved, 0.0f, 25.0f, 0.0f, 1.0f / 60.0f);
+    CHECK(camera.pitch == doctest::Approx(-45.0f + 25.0f * 0.4f));
+}
+
+TEST_CASE("climb camera wheel is multiplicative inside [5, 8] m") {
+    Camera camera{};
+    CameraClimb climb{};
+    camera_climb_enter(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f});
+
+    // One notch in: 6 * exp(-0.15), the orbit camera's multiplicative zoom.
+    camera_climb_update(camera, climb, camera.target, 0.0f, 0.0f, 1.0f, 1.0f / 60.0f);
+    CHECK(camera.distance == doctest::Approx(6.0f * std::exp(-0.15f)));
+    CHECK(climb.distance == doctest::Approx(camera.distance));
+    camera_climb_update(camera, climb, camera.target, 0.0f, 0.0f, -1.0f, 1.0f / 60.0f);
+    CHECK(camera.distance == doctest::Approx(6.0f));
+
+    camera_climb_update(camera, climb, camera.target, 0.0f, 0.0f, 1000.0f, 1.0f / 60.0f);
+    CHECK(camera.distance == doctest::Approx(kClimbDistanceMin));
+    camera_climb_update(camera, climb, camera.target, 0.0f, 0.0f, -1000.0f, 1.0f / 60.0f);
+    CHECK(camera.distance == doctest::Approx(kClimbDistanceMax));
+}
+
+TEST_CASE("leaving the climb camera never moves the orbit") {
+    Camera camera{};
+    CameraClimb climb{};
+    camera_climb_enter(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f});
+    camera_climb_update(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, 55.0f, -20.0f, 2.0f,
+                        1.0f / 60.0f);
+    const float yaw = camera.yaw;
+    const float pitch = camera.pitch;
+    const float distance = camera.distance;
+    const Vec3 target = camera.target;
+
+    camera_climb_exit(camera, climb);
+    CHECK_FALSE(climb.active);
+    CHECK(camera.yaw == doctest::Approx(yaw));
+    CHECK(camera.pitch == doctest::Approx(pitch));
+    CHECK(camera.distance == doctest::Approx(distance));
+    CHECK(camera.target.x == doctest::Approx(target.x));
+    CHECK(camera.target.y == doctest::Approx(target.y));
+    CHECK(camera.target.z == doctest::Approx(target.z));
+
+    // An update after exit is a no-op too.
+    camera_climb_update(camera, climb, Vec3{9.0f, 9.0f, 9.0f}, 100.0f, 100.0f, 10.0f,
+                        1.0f / 60.0f);
+    CHECK(camera.yaw == doctest::Approx(yaw));
+    CHECK(camera.pitch == doctest::Approx(pitch));
+    CHECK(camera.distance == doctest::Approx(distance));
+    CHECK(camera.target.x == doctest::Approx(target.x));
+    CHECK(camera.target.y == doctest::Approx(target.y));
+    CHECK(camera.target.z == doctest::Approx(target.z));
+}
+
+TEST_CASE("climb camera ignores non-finite input") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    Camera camera{};
+    CameraClimb climb{};
+    camera_climb_enter(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f});
+    const float yaw = camera.yaw;
+    const float pitch = camera.pitch;
+    const float distance = camera.distance;
+
+    camera_climb_update(camera, climb, camera.target, nan, inf, nan, 1.0f / 60.0f);
+    CHECK(camera.yaw == doctest::Approx(yaw));
+    CHECK(camera.pitch == doctest::Approx(pitch));
+    CHECK(camera.distance == doctest::Approx(distance));
+
+    // A non-finite frame time is a broken sample: the whole call is ignored.
+    camera_climb_update(camera, climb, camera.target, 100.0f, 100.0f, 10.0f, nan);
+    CHECK(camera.yaw == doctest::Approx(yaw));
+    CHECK(camera.pitch == doctest::Approx(pitch));
+    CHECK(camera.distance == doctest::Approx(distance));
+
+    // A non-finite attach point keeps the last finite target.
+    const Vec3 last = camera.target;
+    camera_climb_update(camera, climb, Vec3{nan, inf, nan}, 0.0f, 0.0f, 0.0f, 1.0f / 60.0f);
+    CHECK(camera.target.x == doctest::Approx(last.x));
+    CHECK(camera.target.y == doctest::Approx(last.y));
+    CHECK(camera.target.z == doctest::Approx(last.z));
+
+    CHECK(std::isfinite(camera.yaw));
+    CHECK(std::isfinite(camera.pitch));
+    CHECK(std::isfinite(camera.distance));
+    CHECK(std::isfinite(camera.target.x));
+    CHECK(std::isfinite(camera.target.y));
+    CHECK(std::isfinite(camera.target.z));
+}
+
+TEST_CASE("climb camera survives a degenerate surface normal") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    Camera camera{};
+    camera.yaw = 25.0f;
+    camera.pitch = 3.0f;
+    camera.distance = 7.0f;
+    CameraClimb climb{};
+
+    // No direction to seed from: the current yaw is kept, never NaN.
+    camera_climb_enter(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, Vec3{0.0f, 0.0f, 0.0f});
+    CHECK(climb.active);
+    CHECK(camera.yaw == doctest::Approx(25.0f));
+    CHECK(camera.pitch == doctest::Approx(10.0f));
+    CHECK(camera.distance == doctest::Approx(6.0f));
+
+    // A non-finite normal is discarded the same way.
+    camera_climb_enter(camera, climb, Vec3{0.0f, 10.0f, 0.0f}, Vec3{nan, 0.0f, 0.0f});
+    CHECK(camera.yaw == doctest::Approx(25.0f));
+    CHECK(std::isfinite(camera.yaw));
+
+    // A non-finite attach point keeps the last target instead of poisoning it.
+    const Vec3 last = camera.target;
+    camera_climb_enter(camera, climb, Vec3{nan, nan, nan}, Vec3{1.0f, 0.0f, 0.0f});
+    CHECK(camera.target.x == doctest::Approx(last.x));
+    CHECK(camera.target.y == doctest::Approx(last.y));
+    CHECK(camera.target.z == doctest::Approx(last.z));
+    CHECK(camera.yaw == doctest::Approx(90.0f));  // the valid normal still seeds
 }

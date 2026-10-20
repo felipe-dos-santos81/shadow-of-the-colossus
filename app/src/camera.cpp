@@ -42,6 +42,10 @@ Vec3 orbit_offset(float yawDeg, float pitchDeg) {
     return Vec3{cos_pitch * std::sin(yaw), std::sin(pitch), cos_pitch * std::cos(yaw)};
 }
 
+bool finite_vec3(Vec3 v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
 }  // namespace
 
 Mat4 camera_view(const Camera& camera) {
@@ -269,4 +273,78 @@ void camera_target_update(Camera& camera, CameraTarget& state, Vec3 target, floa
         state.target = target;
         camera.target = target;
     }
+}
+
+void camera_climb_enter(Camera& camera, CameraClimb& state, Vec3 attachPoint,
+                        Vec3 surfaceNormal) {
+    if (finite_vec3(attachPoint)) {
+        camera.target = attachPoint;
+    }
+
+    // The orbit's eye offset points along (sin yaw, 0, cos yaw) horizontally,
+    // so yaw = atan2(n.x, n.z) puts the eye on the normal's side — outward. A
+    // zero-length or non-finite normal has no direction to seed from; keep the
+    // current yaw rather than write a NaN.
+    const float normal_length_squared = vec3_dot(surfaceNormal, surfaceNormal);
+    if (finite_vec3(surfaceNormal) && normal_length_squared > 0.0f) {
+        camera.yaw = std::atan2(surfaceNormal.x, surfaceNormal.z) / kDegToRad;
+    } else if (!std::isfinite(camera.yaw)) {
+        camera.yaw = 0.0f;
+    }
+
+    state.active = true;
+    state.distance = kClimbDefaultDistance;
+    camera.distance = state.distance;
+    camera.pitch = kClimbDefaultPitchDeg;
+}
+
+void camera_climb_update(Camera& camera, CameraClimb& state, Vec3 attachPoint, float dragDxPixels,
+                         float dragDyPixels, float wheelDelta, float dtSeconds) {
+    if (!state.active) {
+        return;
+    }
+    // The orbit responds to input samples, not to elapsed time: dt is not
+    // integrated. A non-finite frame time is a broken sample, so drop the whole
+    // call rather than feed a hand-driven orbit from an untrustworthy frame.
+    if (!std::isfinite(dtSeconds)) {
+        return;
+    }
+
+    if (finite_vec3(attachPoint)) {
+        camera.target = attachPoint;
+    }
+
+    // A hand-set non-finite orbit would poison the clamps below; reset it to the
+    // seeded values instead of propagating NaN.
+    if (!std::isfinite(camera.yaw)) {
+        camera.yaw = 0.0f;
+    }
+    if (!std::isfinite(camera.pitch)) {
+        camera.pitch = kClimbDefaultPitchDeg;
+    }
+    if (!std::isfinite(state.distance)) {
+        state.distance = kClimbDefaultDistance;
+    }
+
+    if (std::isfinite(dragDxPixels)) {
+        camera.yaw += dragDxPixels * kOrbitDegreesPerPixel;
+    }
+    if (std::isfinite(dragDyPixels)) {
+        camera.pitch += dragDyPixels * kOrbitDegreesPerPixel;
+    }
+    camera.pitch = std::clamp(camera.pitch, -kClimbPitchLimitDeg, kClimbPitchLimitDeg);
+
+    if (std::isfinite(wheelDelta) && wheelDelta != 0.0f) {
+        state.distance =
+            std::clamp(state.distance * std::exp(-kZoomPerWheelStep * wheelDelta),
+                       kClimbDistanceMin, kClimbDistanceMax);
+    }
+    state.distance = std::clamp(state.distance, kClimbDistanceMin, kClimbDistanceMax);
+    camera.distance = state.distance;
+}
+
+void camera_climb_exit(Camera&, CameraClimb& state) {
+    state.active = false;
+    // The orbit (target, yaw, pitch, distance) is deliberately left untouched:
+    // the follow camera eases back from where the user left it, with no snap.
 }

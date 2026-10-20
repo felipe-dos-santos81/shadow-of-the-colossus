@@ -136,3 +136,46 @@ void camera_target_toggle(Camera&, CameraFollow&, CameraTarget&, Vec3 target);
 // Non-finite inputs are ignored, so a hand-driven call never writes NaN.
 void camera_target_update(Camera&, CameraTarget&, Vec3 target, float dragDxPixels,
                           float dragDyPixels, float wheelDelta);
+
+// --- Climb camera (S4.1 Task 4) ---------------------------------------------
+//
+// While the player grips the colossus the orbit is pinned to the attach point
+// on the body instead of trailing the player. Entering seeds the eye *outward*
+// along the surface normal — yaw = atan2(normal.x, normal.z) in degrees, so the
+// eye sits on the normal's side and the view looks back into the body — with a
+// 10° elevation and a 6 m distance. Drag orbits at the orbit camera's
+// 0.4°/pixel sensitivity with pitch clamped to ±45°; the wheel zooms
+// multiplicatively within [5, 8] m. Leaving the mode only clears `active`: the
+// orbit stays exactly where the user left it, so the follow camera can ease
+// back without a snap.
+//
+// The orbit is input-driven (per drag pixel and per wheel notch), so dtSeconds
+// is not integrated; a non-finite frame time is a broken sample and the whole
+// call is ignored. Non-finite drag/wheel values are ignored channel by channel,
+// and a non-finite attach point or normal is discarded, so a hand-driven call
+// never writes NaN.
+inline constexpr float kClimbDistanceMin = 5.0f;
+inline constexpr float kClimbDistanceMax = 8.0f;
+inline constexpr float kClimbDefaultDistance = 6.0f;
+inline constexpr float kClimbDefaultPitchDeg = 10.0f;
+inline constexpr float kClimbPitchLimitDeg = 45.0f;
+
+struct CameraClimb {
+    bool active = false;
+    float distance = kClimbDefaultDistance;
+};
+
+// Enters the climb orbit around `attachPoint`, seeded outward along
+// `surfaceNormal` (its length does not matter; a zero or non-finite normal
+// keeps the current yaw). A non-finite attach point keeps the current target.
+void camera_climb_enter(Camera&, CameraClimb&, Vec3 attachPoint, Vec3 surfaceNormal);
+
+// One frame of the climb orbit (a no-op when inactive): the target follows the
+// attach point, drag orbits at 0.4°/pixel with pitch clamped to ±45°, and the
+// wheel zooms `distance` multiplicatively inside [5, 8] m.
+void camera_climb_update(Camera&, CameraClimb&, Vec3 attachPoint, float dragDx,
+                         float dragDy, float wheelDelta, float dtSeconds);
+
+// Leaves the climb orbit: `active = false` and nothing else — the orbit is left
+// exactly where it is (no snap).
+void camera_climb_exit(Camera&, CameraClimb&);
