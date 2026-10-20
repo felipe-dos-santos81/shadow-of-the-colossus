@@ -13,6 +13,17 @@ struct Encounter {
     float reactionSeconds = 0.0f;
 };
 
+// The encounter half of the R soft reset (design §7.5): Valus back to full
+// health, undefeated, with no reaction or death one-shot left to advance. The
+// caller also returns the entity playback to its manifest stand clip; this
+// helper owns the state, not the clip.
+inline void reset_encounter(Encounter& encounter) {
+    encounter.health = 100.0f;
+    encounter.defeated = false;
+    encounter.reactionClip = -1;
+    encounter.reactionSeconds = 0.0f;
+}
+
 // One viewer run's parameters, filled by the argument parser in main.cpp.
 struct AppOptions {
     std::string libraryDir;      // converted asset library (--library, or $SOTC_LIB)

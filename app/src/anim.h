@@ -121,9 +121,13 @@ int select_clip_index(const Playback& playback, const PlayerInput& input);
 // `select_clip_index` (the locomotion selector, unchanged), Grabbing ->
 // "player_a_grip_loop", Climbing -> "player_a_grip_move_f1", Striking ->
 // "player_a_grip_float_u_hi_attack", Falling/Staggered ->
-// "player_a_damage_m_fly2". Unlike the locomotion selector there is no
-// fallback chain: a missing named clip answers -1, and the app treats that as a
-// load error naming the missing clip — never a silent switch to the first clip.
+// "player_a_damage_m_fly2". Hurt plays "player_a_damage_m_fly2" for a medium
+// hit, or the heavy pair "player_a_damage_h_fly1" then
+// "player_a_damage_h_fly_end" once `modeSeconds` passes the first clip's own
+// duration. Dead plays "player_a_fall_damage_to_death" (the app pins it on its
+// last frame). Unlike the locomotion selector there is no fallback chain: a
+// missing named clip answers -1, and the app treats that as a load error naming
+// the missing clip — never a silent switch to the first clip.
 int select_mode_clip_index(const Playback& playback, const PlayerCombat& combat,
                            const PlayerInput& input);
 

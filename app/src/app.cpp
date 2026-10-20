@@ -295,6 +295,9 @@ constexpr const char* kGripLoopClip = "player_a_grip_loop";
 constexpr const char* kGripMoveClip = "player_a_grip_move_f1";
 constexpr const char* kGripAttackClip = "player_a_grip_float_u_hi_attack";
 constexpr const char* kFallClip = "player_a_damage_m_fly2";
+constexpr const char* kHeavyHurtClip = "player_a_damage_h_fly1";
+constexpr const char* kHeavyHurtEndClip = "player_a_damage_h_fly_end";
+constexpr const char* kPlayerDeathClip = "player_a_fall_damage_to_death";
 
 // The world position of one vertex under a rig's palette: the shader's
 // skinning sum (worldJoint * inverseBind per influence), then the mesh's own
@@ -586,6 +589,9 @@ struct PlayerClips {
     int gripMove = -1;
     int strike = -1;
     int fall = -1;
+    int hurtHeavy = -1;
+    int hurtHeavyEnd = -1;
+    int death = -1;
 };
 
 // The entity clips R3 names, resolved once at load. `stand` is the clip the
@@ -602,7 +608,10 @@ PlayerClips resolve_player_clips(const Playback& playback) {
     return PlayerClips{clip_index_named(playback, kGripLoopClip),
                        clip_index_named(playback, kGripMoveClip),
                        clip_index_named(playback, kGripAttackClip),
-                       clip_index_named(playback, kFallClip)};
+                       clip_index_named(playback, kFallClip),
+                       clip_index_named(playback, kHeavyHurtClip),
+                       clip_index_named(playback, kHeavyHurtEndClip),
+                       clip_index_named(playback, kPlayerDeathClip)};
 }
 
 EntityClips resolve_entity_clips(const Playback& playback, const std::string& standClip) {
@@ -620,14 +629,18 @@ bool require_named_clip(const Playback& playback, const std::string& model, cons
     if (clip_index_named(playback, name) >= 0) {
         return true;
     }
-    std::fprintf(stderr, "sotc-viewer: %s carries no %s clip (S4.1 combat needs it)\n",
+    std::fprintf(stderr, "sotc-viewer: %s carries no %s clip (the fight needs it)\n",
                  model.c_str(), name);
     return false;
 }
 
 // The mode-driven clip choice: Grounded keeps the existing locomotion selector,
-// the attached modes play their grip/attack clip, and a fall/stagger plays the
-// damage clip. `manualClip` (--anim/--anim-time) keeps its S2 override meaning.
+// the attached modes play their grip/attack clip, a fall/stagger plays the
+// damage clip, Hurt plays its medium/heavy reaction and Dead plays the death
+// clip. The death clip is pinned and keeps playing: it runs once and holds its
+// last frame instead of wrapping. The pin is cleared as soon as any live mode
+// is selected again (the R soft reset). `manualClip` (--anim/--anim-time) keeps
+// its S2 override meaning.
 void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCombat& combat,
                          const PlayerInput& input, bool manualClip) {
     if (manualClip) {
@@ -636,6 +649,14 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
     const int wanted = select_mode_clip_index(playback, combat, input);
     if (wanted >= 0 && wanted != playback.index) {
         select_clip(playback, scene, scene.playerRig, wanted);
+    }
+    if (combat.mode == PlayerMode::Dead) {
+        // Play once, clamp on the last frame; the pose update advances this
+        // clock because it is playing, unlike the entity's reaction clock.
+        playback.pinned = true;
+        playback.playing = true;
+    } else {
+        playback.pinned = false;
     }
     // wanted < 0 means the named clip is absent. The load already refused that
     // manifest (require_named_clip), so there is deliberately no fallback here.
@@ -1180,7 +1201,10 @@ int run_app(const AppOptions& opts) {
             if (!require_named_clip(playback, opts.modelRelPath, kGripLoopClip) ||
                 !require_named_clip(playback, opts.modelRelPath, kGripMoveClip) ||
                 !require_named_clip(playback, opts.modelRelPath, kGripAttackClip) ||
-                !require_named_clip(playback, opts.modelRelPath, kFallClip)) {
+                !require_named_clip(playback, opts.modelRelPath, kFallClip) ||
+                !require_named_clip(playback, opts.modelRelPath, kHeavyHurtClip) ||
+                !require_named_clip(playback, opts.modelRelPath, kHeavyHurtEndClip) ||
+                !require_named_clip(playback, opts.modelRelPath, kPlayerDeathClip)) {
                 return 2;
             }
             if (entityRig < playbacks.size()) {
@@ -2461,7 +2485,8 @@ int run_app(const AppOptions& opts) {
         // model), recenters behind the player (manifest mode) or re-seeds the
         // climb orbit while gripping, T orbits the entity's chest and back
         // (inert when the manifest has no entity), Space plays/pauses, [ and ]
-        // switch clips, R restarts the clip, Escape or the close button quits.
+        // switch clips, R restarts the clip (single model) or soft-resets the
+        // whole encounter (manifest mode), Escape or the close button quits.
         // In manifest mode W/A/S/D walk (Shift runs), E grabs (held) and J
         // charges a strike (held; released to plunge); the camera follows. A
         // standard SDL3 gamepad is polled once per frame: left stick moves,
@@ -2536,7 +2561,40 @@ int run_app(const AppOptions& opts) {
                                 camera_target_toggle(camera, follow, targetCamera, entityChest);
                             }
                         } else if (event.key.key == SDLK_R) {
-                            playback.time = 0.0f;
+                            if (follow_mode) {
+                                // The full soft reset (design §7.5): the player
+                                // and Valus go back to their opening state, the
+                                // death pin/hurt one-shot is left behind, and
+                                // the follow camera snaps behind the spawn.
+                                reset_player_combat(player, combat,
+                                                    spawn_position(manifest, scene),
+                                                    manifest.hasSpawn
+                                                        ? manifest.spawnYawDeg
+                                                        : 0.0f,
+                                                    tuning);
+                                reset_encounter(encounter);
+                                if (entityRig < playbacks.size() &&
+                                    entityClips.stand >= 0) {
+                                    Playback& entityPlayback = playbacks[entityRig];
+                                    entityPlayback.index = entityClips.stand;
+                                    entityPlayback.time = 0.0f;
+                                    entityPlayback.pinned = false;
+                                    entityPlayback.playing = true;
+                                }
+                                climbCamera.active = false;
+                                targetCamera = CameraTarget{};
+                                follow = CameraFollow{};
+                                camera_follow(camera, follow, player.position,
+                                              player.yawDeg, 0.0f, 0.0f, 0.0f,
+                                              /*moving=*/false, /*dtSeconds=*/10.0f);
+                                if (!manual_clip) {
+                                    playback.pinned = false;
+                                    playback.playing = true;
+                                }
+                                playback.time = 0.0f;
+                            } else {
+                                playback.time = 0.0f;
+                            }
                         } else if (!playback.clips.empty() &&
                                    (event.key.key == SDLK_LEFTBRACKET ||
                                     event.key.key == SDLK_RIGHTBRACKET)) {

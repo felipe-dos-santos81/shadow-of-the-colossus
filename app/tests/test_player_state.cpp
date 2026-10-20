@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "app.h"
 #include "collision.h"
 #include "grab.h"
 #include "heightmap.h"
@@ -954,6 +955,245 @@ TEST_CASE("staggered returns to the ground after staggerSeconds") {
     CHECK(combat.regenDelay == doctest::Approx(tuning.staminaRegenDelay));
 }
 
+// --- Player health, hurt and death (S4.2 task 5) -----------------------------
+
+TEST_CASE("damage subtracts health, starts i-frames and enters hurt") {
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    CHECK(combat.health == doctest::Approx(tuning.maxHealth));
+
+    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(combat.health == doctest::Approx(65.0f));
+    CHECK(combat.mode == PlayerMode::Hurt);
+    CHECK(combat.modeSeconds == 0.0f);
+    CHECK_FALSE(combat.heavyHit);
+    CHECK(combat.invulnSeconds == doctest::Approx(tuning.invulnSeconds));
+
+    // The i-frame window swallows the second hit whole: no HP, no new state.
+    CHECK_FALSE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(combat.health == doctest::Approx(65.0f));
+    CHECK(combat.mode == PlayerMode::Hurt);
+}
+
+TEST_CASE("i-frames tick down in player_step and then a hit lands again") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = frame_of(ground, lookup_of({}));
+    PlayerState player{};
+    PlayerInput input{};
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+
+    REQUIRE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    for (int i = 0; i < 60; ++i) {
+        player_step(player, combat, input, frame, tuning, kStep);
+    }
+    CHECK(combat.invulnSeconds == doctest::Approx(0.0f));
+    CHECK(combat.mode == PlayerMode::Grounded);
+
+    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(combat.health == doctest::Approx(30.0f));
+    CHECK(combat.mode == PlayerMode::Hurt);
+}
+
+TEST_CASE("hurt returns to the ground after the medium or heavy window") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = frame_of(ground, lookup_of({}));
+    PlayerState player{};
+    PlayerInput input{};
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Hurt;
+    combat.modeSeconds = 0.0f;
+    combat.heavyHit = false;
+
+    int medium_frames = 0;
+    while (combat.mode == PlayerMode::Hurt && medium_frames < 120) {
+        player_step(player, combat, input, frame, tuning, kStep);
+        ++medium_frames;
+    }
+    CHECK(combat.mode == PlayerMode::Grounded);
+    CHECK(medium_frames == 24);  // 0.40 s at 1/60
+
+    combat.mode = PlayerMode::Hurt;
+    combat.modeSeconds = 0.0f;
+    combat.heavyHit = true;
+    int heavy_frames = 0;
+    while (combat.mode == PlayerMode::Hurt && heavy_frames < 240) {
+        player_step(player, combat, input, frame, tuning, kStep);
+        ++heavy_frames;
+    }
+    CHECK(combat.mode == PlayerMode::Grounded);
+    CHECK(heavy_frames == 74);  // 1.23 s at 1/60, rounded up
+    CHECK_FALSE(combat.heavyHit);
+}
+
+TEST_CASE("damage while falling keeps the fall; a non-lethal hit still lands in stagger") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = frame_of(ground, lookup_of({}));
+    PlayerState player{};
+    player.position = Vec3{0.0f, 3.0f, 0.0f};
+    PlayerInput input{};
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Falling;
+
+    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.health == doctest::Approx(65.0f));
+    CHECK_FALSE(combat.pendingDeath);
+
+    int frames = 0;
+    StepEvents last{};
+    while (combat.mode == PlayerMode::Falling && frames < 600) {
+        last = player_step(player, combat, input, frame, tuning, kStep);
+        ++frames;
+    }
+    CHECK(combat.mode == PlayerMode::Staggered);
+    CHECK(last.landed);
+}
+
+TEST_CASE("lethal damage while falling sets pendingDeath and resolves to dead on landing") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = frame_of(ground, lookup_of({}));
+    PlayerState player{};
+    player.position = Vec3{0.0f, 2.0f, 0.0f};
+    PlayerInput input{};
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Falling;
+    combat.health = 30.0f;
+
+    CHECK(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning));
+    CHECK(combat.health == doctest::Approx(0.0f));
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.pendingDeath);
+
+    int frames = 0;
+    StepEvents last{};
+    while (combat.mode == PlayerMode::Falling && frames < 600) {
+        last = player_step(player, combat, input, frame, tuning, kStep);
+        ++frames;
+    }
+    CHECK(combat.mode == PlayerMode::Dead);
+    CHECK(last.landed);
+    CHECK_FALSE(combat.pendingDeath);
+}
+
+TEST_CASE("damage while staggered cancels the stagger into hurt") {
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Staggered;
+    combat.modeSeconds = 0.7f;
+
+    CHECK(player_take_damage(combat, tuning.stompWaveDamage, /*heavy=*/false, tuning));
+    CHECK(combat.health == doctest::Approx(85.0f));
+    CHECK(combat.mode == PlayerMode::Hurt);
+    CHECK(combat.modeSeconds == 0.0f);
+    CHECK_FALSE(combat.heavyHit);
+}
+
+TEST_CASE("damage while attached drops the grip and clears its fight state") {
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Grabbing;
+    combat.band = ClimbBandId::Head;
+    combat.bandT = 0.8f;
+    combat.weakpoint = 0;
+    combat.charge = 0.5f;
+    combat.strikeHit = true;
+    combat.catchSecondsLeft = 0.2f;
+    combat.fallVelocity = -1.0f;
+
+    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(combat.mode == PlayerMode::Hurt);
+    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.bandT == doctest::Approx(0.5f));
+    CHECK(combat.weakpoint == -1);
+    CHECK(combat.charge == doctest::Approx(0.0f));
+    CHECK_FALSE(combat.strikeHit);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(0.0f));
+    CHECK(combat.fallVelocity == doctest::Approx(0.0f));
+}
+
+TEST_CASE("zero health on the ground enters dead and ignores further damage") {
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.health = 10.0f;
+
+    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/true, tuning));
+    CHECK(combat.health == doctest::Approx(0.0f));
+    CHECK(combat.mode == PlayerMode::Dead);
+    CHECK(combat.modeSeconds == 0.0f);
+    CHECK_FALSE(combat.pendingDeath);
+    CHECK_FALSE(combat.heavyHit);
+
+    CHECK_FALSE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/false, tuning));
+    CHECK(combat.health == doctest::Approx(0.0f));
+    CHECK(combat.mode == PlayerMode::Dead);
+}
+
+TEST_CASE("the R soft reset restores the player and Valus") {
+    const CombatTuning tuning{};
+    PlayerState player{};
+    player.position = Vec3{4.0f, 5.0f, 6.0f};
+    player.yawDeg = 90.0f;
+
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Dead;
+    combat.modeSeconds = 0.8f;
+    combat.health = 0.0f;
+    combat.stamina = 3.0f;
+    combat.regenDelay = 2.0f;
+    combat.invulnSeconds = 0.5f;
+    combat.heavyHit = true;
+    combat.pendingDeath = true;
+    combat.band = ClimbBandId::Head;
+    combat.bandT = 0.8f;
+    combat.weakpoint = 0;
+    combat.charge = 0.4f;
+    combat.catchSecondsLeft = 0.2f;
+    combat.fallVelocity = -2.0f;
+    combat.strikeHit = true;
+    combat.grabWasDown = true;
+    combat.strikeWasDown = true;
+
+    const Vec3 spawn{1.0f, 2.0f, 3.0f};
+    reset_player_combat(player, combat, spawn, /*spawnYawDeg=*/45.0f, tuning);
+
+    CHECK(player.position.x == doctest::Approx(spawn.x));
+    CHECK(player.position.y == doctest::Approx(spawn.y));
+    CHECK(player.position.z == doctest::Approx(spawn.z));
+    CHECK(player.yawDeg == doctest::Approx(45.0f));
+    CHECK(combat.mode == PlayerMode::Grounded);
+    CHECK(combat.modeSeconds == 0.0f);
+    CHECK(combat.health == doctest::Approx(tuning.maxHealth));
+    CHECK(combat.stamina == doctest::Approx(100.0f));
+    CHECK(combat.regenDelay == doctest::Approx(0.0f));
+    CHECK(combat.invulnSeconds == doctest::Approx(0.0f));
+    CHECK_FALSE(combat.heavyHit);
+    CHECK_FALSE(combat.pendingDeath);
+    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.bandT == doctest::Approx(0.5f));
+    CHECK(combat.weakpoint == -1);
+    CHECK(combat.charge == doctest::Approx(0.0f));
+    CHECK(combat.catchSecondsLeft == doctest::Approx(0.0f));
+    CHECK(combat.fallVelocity == doctest::Approx(0.0f));
+    CHECK_FALSE(combat.strikeHit);
+    CHECK_FALSE(combat.grabWasDown);
+    CHECK_FALSE(combat.strikeWasDown);
+
+    Encounter encounter{};
+    encounter.health = 0.0f;
+    encounter.defeated = true;
+    encounter.reactionClip = 3;
+    encounter.reactionSeconds = 0.5f;
+    reset_encounter(encounter);
+    CHECK(encounter.health == doctest::Approx(100.0f));
+    CHECK_FALSE(encounter.defeated);
+    CHECK(encounter.reactionClip == -1);
+    CHECK(encounter.reactionSeconds == doctest::Approx(0.0f));
+}
+
 TEST_CASE("stamina regenerates on the ground only after the delay") {
     Heightmap ground = flat_heightmap();
     PlayerFrame frame = foot_frame(ground);
@@ -1086,6 +1326,13 @@ TEST_CASE("the combat tuning pins the design values") {
     CHECK(tuning.staggerSeconds == doctest::Approx(1.2f));
     CHECK(tuning.damageWeak == doctest::Approx(20.0f));
     CHECK(tuning.damageFull == doctest::Approx(34.0f));
+    CHECK(tuning.maxHealth == doctest::Approx(100.0f));
+    CHECK(tuning.invulnSeconds == doctest::Approx(1.0f));
+    CHECK(tuning.stompDamage == doctest::Approx(35.0f));
+    CHECK(tuning.stompWaveDamage == doctest::Approx(15.0f));
+    CHECK(tuning.clubDamage == doctest::Approx(45.0f));
+    CHECK(tuning.mediumHurtSeconds == doctest::Approx(0.40f));
+    CHECK(tuning.heavyHurtSeconds == doctest::Approx(1.23f));
 }
 
 TEST_CASE("the right arm band carries weakpoint 1") {
@@ -1112,4 +1359,6 @@ TEST_CASE("player_mode_name names every mode for the status line") {
     CHECK(std::string(player_mode_name(PlayerMode::Striking)) == "striking");
     CHECK(std::string(player_mode_name(PlayerMode::Falling)) == "falling");
     CHECK(std::string(player_mode_name(PlayerMode::Staggered)) == "staggered");
+    CHECK(std::string(player_mode_name(PlayerMode::Hurt)) == "hurt");
+    CHECK(std::string(player_mode_name(PlayerMode::Dead)) == "dead");
 }

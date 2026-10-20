@@ -13,13 +13,17 @@
 
 // The player's combat state machine (S4.1 Task 3): walking, gripping a climb
 // band, moving along it, holding a strike to charge, the forced fall, the catch
-// window and the landing stagger.
+// window and the landing stagger. S4.2 adds the damage reactions and death.
 //
 //     Grounded --> Grabbing <--> Climbing --> Striking
 //        ^             \            |            /
 //        |              +-----------+-----------+
 //        |                          v
 //        +------ Staggered <----- Falling
+//
+//     any ground mode --damage--> Hurt --> Grounded
+//     any ground mode --lethal--> Dead (terminal until the R soft reset)
+//     Falling --lethal--> pendingDeath, resolved Dead or Staggered on landing
 //
 // Every mode is driven by one `player_step` call per frame. Grounded runs the
 // S3 controller and the S4 capsule resolver in their existing order, so the
@@ -29,15 +33,26 @@
 // break — including the one a landed strike causes — also opens the catch
 // window in which a fresh grab press with stamina left re-attaches.
 
-enum class PlayerMode { Grounded, Grabbing, Climbing, Striking, Falling, Staggered };
+enum class PlayerMode {
+    Grounded,
+    Grabbing,
+    Climbing,
+    Striking,
+    Falling,
+    Staggered,
+    Hurt,
+    Dead
+};
 
 // The mode's stable lowercase status token (`grounded`, `grabbing`, `climbing`,
-// `striking`, `falling`, `staggered`) for the s41-status line. Never null.
+// `striking`, `falling`, `staggered`, `hurt`, `dead`) for the s41-status line.
+// Never null.
 const char* player_mode_name(PlayerMode mode);
 
 // The persistent combat state. The first block is the plan's contract; the
 // second is the hold-to-charge bookkeeping ruling R6 needs (the plan's fixed
-// swing window is superseded by "hold J, release to plunge").
+// swing window is superseded by "hold J, release to plunge"); the last is the
+// S4.2 health/death state.
 struct PlayerCombat {
     PlayerMode mode = PlayerMode::Grounded;
     float modeSeconds = 0.0f;
@@ -54,7 +69,14 @@ struct PlayerCombat {
     float charge = 0.0f;            // s of J held, capped at chargeSeconds
     float catchSecondsLeft = 0.0f;  // Falling's re-grip window
     float fallVelocity = 0.0f;      // m/s, negative is down
+
+    // S4.2 health and damage state.
+    float health = 100.0f;
+    float invulnSeconds = 0.0f;  // i-frame window left; > 0 ignores damage
+    bool heavyHit = false;       // this Hurt came from a heavy attack
+    bool pendingDeath = false;   // lethal damage taken while Falling
 };
+
 
 // One frame's view of the world: the ground, the entity's posed skeleton (the
 // source of every climb band), and the entity's collision proxy. `scene` and
@@ -93,6 +115,15 @@ struct CombatTuning {
     float staggerSeconds = 1.2f;       // landing stagger
     float damageWeak = 20.0f;
     float damageFull = 34.0f;
+
+    // S4.2 player health (design §7.5).
+    float maxHealth = 100.0f;
+    float invulnSeconds = 1.0f;      // i-frame window after a hit
+    float stompDamage = 35.0f;       // direct stomp
+    float stompWaveDamage = 15.0f;   // stomp shockwave
+    float clubDamage = 45.0f;        // club swing
+    float mediumHurtSeconds = 0.40f;  // m_fly2, one clip
+    float heavyHurtSeconds = 1.23f;   // h_fly1 0.60 s + h_fly_end 0.63 s
 };
 
 // What one step changed. `damageDealt` is the amount of the single damage event
@@ -147,6 +178,39 @@ struct StepEvents {
 // left inside that window re-attaches to `nearest_climb_band(...,
 // catchRange)`. A grab that never took hold is not a grip break: a failed
 // initial grab stays Grounded with no event and no window. Landing enters
-// Staggered, then Grounded after `staggerSeconds`.
+// Staggered, then Grounded after `staggerSeconds`; a landing with
+// `pendingDeath` set enters Dead instead.
+//
+// Hurt: the reaction clock runs until `mediumHurtSeconds` or
+// `heavyHurtSeconds`, then the player returns to Grounded. Dead is terminal
+// until `reset_player_combat`: it ignores input and never leaves the mode. The
+// i-frame counter ticks down in every mode.
 StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerInput& input,
                        const PlayerFrame& frame, const CombatTuning& tuning, float dtSeconds);
+
+// The one damage entry point (design §7.5). Returns true when the hit landed,
+// false when it was ignored (Dead, an active i-frame window, or a non-positive
+// or non-finite amount).
+//
+// A landed hit subtracts HP (clamped to [0, maxHealth]) and starts the i-frame
+// window. On the ground — Grounded, Grabbing, Climbing, Striking or Staggered —
+// it enters Hurt; Staggered therefore cancels into Hurt. A lethal hit on the
+// ground enters Dead at once. Damage taken while Falling never cancels the
+// fall: it keeps health/state changes, and a lethal hit only sets
+// `pendingDeath`, which `player_step` resolves on landing (Dead instead of
+// Staggered). Hurt lasts `mediumHurtSeconds` or `heavyHurtSeconds`; `heavyHit`
+// records which and selects the reaction clip.
+//
+// The function does not move the player. Attacks cannot target an attached
+// player (design §7.4), so the Hurt entry from an attached mode is a defensive
+// path rather than a reachable fight state.
+bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
+                        const CombatTuning& tuning);
+
+// The R soft reset (design §7.5): the player goes back to the manifest spawn
+// with full HP and stamina, no i-frames, no pending reactions and no stale
+// climb/strike state. The caller resets the encounter (reset_encounter in
+// app.h), the clip playbacks and the camera; this helper owns only the
+// player's own state.
+void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPosition,
+                         float spawnYawDeg, const CombatTuning& tuning);

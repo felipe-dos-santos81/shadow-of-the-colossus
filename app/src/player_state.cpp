@@ -8,6 +8,7 @@ namespace {
 constexpr float kMaxStepSeconds = 0.05f;  // a frame spike cannot skip a band
 constexpr float kGravity = 9.8f;          // m/s^2, falling
 constexpr float kMaxStamina = 100.0f;     // the pinned pool
+constexpr float kInvulnEpsilon = 1e-4f;   // float drift at the end of i-frames
 
 // A frame with no heightmap still has defined ground behaviour: the empty grid
 // has no nodes, so player_update clamps nothing and keeps y.
@@ -180,6 +181,38 @@ bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& 
     return vec3_dot(delta, delta) <= radius * radius;
 }
 
+// Leaves every fight-bearing attachment/rumble field behind and enters the
+// ground damage reaction. `heavy` selects the long h_fly1 -> h_fly_end pair.
+void enter_hurt(PlayerCombat& combat, bool heavy) {
+    combat.mode = PlayerMode::Hurt;
+    combat.modeSeconds = 0.0f;
+    combat.heavyHit = heavy;
+    combat.pendingDeath = false;
+    combat.band = ClimbBandId::Count;
+    combat.bandT = 0.5f;
+    combat.weakpoint = -1;
+    combat.charge = 0.0f;
+    combat.strikeHit = false;
+    combat.catchSecondsLeft = 0.0f;
+    combat.fallVelocity = 0.0f;
+}
+
+// The terminal ground state: the app plays the death clip once and pins it.
+// A dead player has no attachment, charge or pending fall left.
+void enter_dead(PlayerCombat& combat) {
+    combat.mode = PlayerMode::Dead;
+    combat.modeSeconds = 0.0f;
+    combat.heavyHit = false;
+    combat.pendingDeath = false;
+    combat.band = ClimbBandId::Count;
+    combat.bandT = 0.5f;
+    combat.weakpoint = -1;
+    combat.charge = 0.0f;
+    combat.strikeHit = false;
+    combat.catchSecondsLeft = 0.0f;
+    combat.fallVelocity = 0.0f;
+}
+
 }  // namespace
 
 const char* player_mode_name(PlayerMode mode) {
@@ -196,6 +229,10 @@ const char* player_mode_name(PlayerMode mode) {
             return "falling";
         case PlayerMode::Staggered:
             return "staggered";
+        case PlayerMode::Hurt:
+            return "hurt";
+        case PlayerMode::Dead:
+            return "dead";
     }
     return "unknown";
 }
@@ -206,6 +243,9 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
     const float dt =
         std::clamp(std::isfinite(dtSeconds) ? dtSeconds : 0.0f, 0.0f, kMaxStepSeconds);
     combat.modeSeconds += dt;
+    const float invuln =
+        (std::isfinite(combat.invulnSeconds) ? combat.invulnSeconds : 0.0f) - dt;
+    combat.invulnSeconds = invuln > kInvulnEpsilon ? invuln : 0.0f;
 
     const bool grabPressed = input.grab && !combat.grabWasDown;
     const bool strikePressed = input.strike && !combat.strikeWasDown;
@@ -386,11 +426,17 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 const float ground = heightmap_sample(*frame.heightmap, player.position);
                 if (std::isfinite(ground) && player.position.y <= ground) {
                     player.position.y = ground;
-                    combat.mode = PlayerMode::Staggered;
-                    combat.modeSeconds = 0.0f;
                     combat.fallVelocity = 0.0f;
                     combat.catchSecondsLeft = 0.0f;
                     events.landed = true;
+                    if (combat.pendingDeath) {
+                        // The lethal hit taken in the air resolves here: the
+                        // death clip replaces the landing stagger.
+                        enter_dead(combat);
+                    } else {
+                        combat.mode = PlayerMode::Staggered;
+                        combat.modeSeconds = 0.0f;
+                    }
                 }
             }
             if (combat.mode == PlayerMode::Falling) {
@@ -407,9 +453,82 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             }
             break;
         }
+
+        case PlayerMode::Hurt: {
+            const float duration =
+                combat.heavyHit ? tuning.heavyHurtSeconds : tuning.mediumHurtSeconds;
+            if (combat.modeSeconds >= duration) {
+                combat.mode = PlayerMode::Grounded;
+                combat.modeSeconds = 0.0f;
+                combat.heavyHit = false;
+            }
+            break;
+        }
+
+        case PlayerMode::Dead:
+            // Terminal until the R soft reset: no input, no gravity, no clip
+            // choice of its own (the app plays and pins the death clip).
+            break;
     }
 
     combat.grabWasDown = input.grab;
     combat.strikeWasDown = input.strike;
     return events;
+}
+
+bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
+                        const CombatTuning& tuning) {
+    if (combat.mode == PlayerMode::Dead || combat.invulnSeconds > 0.0f) {
+        return false;  // dead men and active i-frames take no damage
+    }
+    if (!std::isfinite(damage) || damage <= 0.0f) {
+        return false;
+    }
+
+    const float health = std::isfinite(combat.health) ? combat.health : 0.0f;
+    const float maxHealth = std::isfinite(tuning.maxHealth) ? tuning.maxHealth : 0.0f;
+    combat.health = std::clamp(health - damage, 0.0f, std::max(0.0f, maxHealth));
+    combat.invulnSeconds =
+        std::isfinite(tuning.invulnSeconds) ? std::max(0.0f, tuning.invulnSeconds) : 0.0f;
+
+    if (combat.mode == PlayerMode::Falling) {
+        // The fall owns the transition: lethal damage only arms the landing.
+        combat.heavyHit = heavy;
+        if (combat.health <= 0.0f) {
+            combat.pendingDeath = true;
+        }
+        return true;
+    }
+
+    if (combat.health <= 0.0f) {
+        enter_dead(combat);
+        return true;
+    }
+
+    enter_hurt(combat, heavy);
+    return true;
+}
+
+void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPosition,
+                         float spawnYawDeg, const CombatTuning& tuning) {
+    player.position = spawnPosition;
+    player.yawDeg = spawnYawDeg;
+
+    combat.mode = PlayerMode::Grounded;
+    combat.modeSeconds = 0.0f;
+    combat.stamina = kMaxStamina;
+    combat.regenDelay = 0.0f;
+    combat.band = ClimbBandId::Count;
+    combat.bandT = 0.5f;
+    combat.weakpoint = -1;
+    combat.strikeHit = false;
+    combat.grabWasDown = false;
+    combat.strikeWasDown = false;
+    combat.charge = 0.0f;
+    combat.catchSecondsLeft = 0.0f;
+    combat.fallVelocity = 0.0f;
+    combat.health = std::isfinite(tuning.maxHealth) ? std::max(0.0f, tuning.maxHealth) : 0.0f;
+    combat.invulnSeconds = 0.0f;
+    combat.heavyHit = false;
+    combat.pendingDeath = false;
 }

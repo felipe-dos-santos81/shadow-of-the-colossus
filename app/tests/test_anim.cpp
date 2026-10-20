@@ -600,11 +600,14 @@ TEST_CASE("build_playback leaves a model with no skin and no clips silent") {
 // --- Combat clip selection (S4.1 task 6) -------------------------------------
 
 TEST_CASE("select_mode_clip_index maps every combat mode by name") {
-    const Playback demo = playback_of({"player_a_stand", "player_a_walk", "player_a_run",
-                                       "player_a_grip_loop", "player_a_grip_move_f1",
-                                       "player_a_grip_float_u_hi_attack",
-                                       "player_a_damage_m_fly2"});
-    REQUIRE(demo.clips.size() == 7);
+    Playback demo = playback_of({"player_a_stand", "player_a_walk", "player_a_run",
+                                 "player_a_grip_loop", "player_a_grip_move_f1",
+                                 "player_a_grip_float_u_hi_attack",
+                                 "player_a_damage_m_fly2", "player_a_damage_h_fly1",
+                                 "player_a_damage_h_fly_end",
+                                 "player_a_fall_damage_to_death"});
+    REQUIRE(demo.clips.size() == 10);
+    demo.clips[7].duration = 0.60f;  // the baked h_fly1 length
     const PlayerInput still;
 
     PlayerCombat combat;
@@ -620,6 +623,19 @@ TEST_CASE("select_mode_clip_index maps every combat mode by name") {
     CHECK(select_mode_clip_index(demo, combat, still) == 6);
     combat.mode = PlayerMode::Staggered;
     CHECK(select_mode_clip_index(demo, combat, still) == 6);
+
+    // Hurt: medium is the m_fly2 reaction; heavy plays h_fly1 then h_fly_end.
+    combat.mode = PlayerMode::Hurt;
+    combat.heavyHit = false;
+    CHECK(select_mode_clip_index(demo, combat, still) == 6);
+    combat.heavyHit = true;
+    combat.modeSeconds = 0.0f;
+    CHECK(select_mode_clip_index(demo, combat, still) == 7);
+    combat.modeSeconds = 0.61f;  // past h_fly1's 0.60 s
+    CHECK(select_mode_clip_index(demo, combat, still) == 8);
+
+    combat.mode = PlayerMode::Dead;
+    CHECK(select_mode_clip_index(demo, combat, still) == 9);
 }
 
 TEST_CASE("select_mode_clip_index never falls back to the first clip") {
@@ -628,7 +644,8 @@ TEST_CASE("select_mode_clip_index never falls back to the first clip") {
 
     for (const PlayerMode mode : {PlayerMode::Grabbing, PlayerMode::Climbing,
                                   PlayerMode::Striking, PlayerMode::Falling,
-                                  PlayerMode::Staggered}) {
+                                  PlayerMode::Staggered, PlayerMode::Hurt,
+                                  PlayerMode::Dead}) {
         PlayerCombat combat;
         combat.mode = mode;
         CHECK(select_mode_clip_index(locomotion, combat, still) == -1);

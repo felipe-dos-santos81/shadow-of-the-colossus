@@ -564,6 +564,21 @@ int select_mode_clip_index(const Playback& playback, const PlayerCombat& combat,
         case PlayerMode::Falling:
         case PlayerMode::Staggered:
             return clip_index_named(playback, "player_a_damage_m_fly2");
+        case PlayerMode::Hurt:
+            if (!combat.heavyHit) {
+                return clip_index_named(playback, "player_a_damage_m_fly2");
+            }
+            // Heavy: h_fly1 runs 0.60 s, then h_fly_end takes the 0.63 s tail.
+            if (const int fly = clip_index_named(playback, "player_a_damage_h_fly1"); fly >= 0) {
+                const float duration =
+                    playback.clips[static_cast<std::size_t>(fly)].duration;
+                if (combat.modeSeconds < duration) {
+                    return fly;
+                }
+            }
+            return clip_index_named(playback, "player_a_damage_h_fly_end");
+        case PlayerMode::Dead:
+            return clip_index_named(playback, "player_a_fall_damage_to_death");
     }
     return -1;
 }
