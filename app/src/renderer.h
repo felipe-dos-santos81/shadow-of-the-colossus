@@ -5,7 +5,9 @@
 #include <vector>
 
 #include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
+#include "hud.h"
 #include "math3d.h"
 #include "scene.h"
 
@@ -51,6 +53,12 @@ public:
     // render_frame; throws if nothing has been rendered yet.
     std::vector<uint8_t> read_pixels();
 
+    // Stores the overlay state drawn at the end of every render_frame: the two
+    // stamina/health bars and, when SDL_ttf initialized, the "STAMINA <n>"
+    // label. visible=false draws nothing (the default). Never throws: a text
+    // failure degrades to bars only.
+    void set_hud(const HudState& state);
+
 private:
     struct MeshGpu {
         SDL_GPUBuffer* vertex_buffer;
@@ -69,6 +77,17 @@ private:
     };
 
     void create_pipeline();
+    // HUD pipeline plus the unit quad's vertex/index buffers. Called once from
+    // the constructor; throws on a GPU failure (a HUD is required, unlike the
+    // optional text).
+    void create_hud_pipeline();
+    // (Re)uploads the stamina label when its rounded percentage changed. A
+    // font/render failure prints one stderr line and leaves hud_text_texture_
+    // null, so the bars keep drawing. Never throws.
+    void update_hud_text();
+    // Closes the font and quits SDL_ttf, idempotently (also on a half-built
+    // constructor).
+    void release_font();
     SDL_GPUShader* create_shader(SDL_GPUShaderStage stage, const char* entry_point,
                                  uint32_t num_uniform_buffers, uint32_t num_storage_buffers,
                                  uint32_t num_samplers, const uint8_t* source, size_t source_size);
@@ -95,6 +114,28 @@ private:
     // 1x1 opaque white, used for materials without a base-color texture (a
     // draw always binds a texture, so no material can have "none").
     SDL_GPUTexture* white_texture_ = nullptr;
+
+    // HUD: a second, depth-less pipeline drawing alpha-blended textured quads
+    // over the scene pass. The quad geometry is one static unit quad; the
+    // per-draw transform/UVs/color arrive as a push uniform.
+    SDL_GPUShader* hud_vertex_shader_ = nullptr;
+    SDL_GPUShader* hud_fragment_shader_ = nullptr;
+    SDL_GPUGraphicsPipeline* hud_pipeline_ = nullptr;
+    SDL_GPUSampler* hud_sampler_ = nullptr;
+    SDL_GPUBuffer* hud_vertex_buffer_ = nullptr;
+    SDL_GPUBuffer* hud_index_buffer_ = nullptr;
+    HudState hud_{};
+
+    // Font and label texture. The label is re-rendered only when its text
+    // changes (i.e. when the rounded percentage changes). A failed font leaves
+    // hud_font_ null and text drawing off; the bars keep drawing.
+    TTF_Font* hud_font_ = nullptr;
+    bool ttf_initialized_ = false;
+    bool hud_text_unavailable_ = false;
+    char hud_text_label_[32] = {};
+    SDL_GPUTexture* hud_text_texture_ = nullptr;
+    float hud_text_width_ = 0.0f;
+    float hud_text_height_ = 0.0f;
 
     std::vector<MeshGpu> meshes_;
     std::vector<SDL_GPUTexture*> textures_;
