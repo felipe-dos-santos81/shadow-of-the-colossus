@@ -33,6 +33,13 @@ void camera_zoom(Camera&, float wheelDelta);
 // kept.
 void camera_frame(Camera&, Vec3 boundsMin, Vec3 boundsMax);
 
+// The camera's look-direction yaw in degrees — the movement basis player_update
+// takes. The orbit Camera stores the opposite direction (the eye sits at
+// `yaw`, so the look direction is yaw - 180). This is the *active* camera: in
+// entity-target mode the orbit is around the entity and the same rule holds,
+// which is what makes the movement basis follow the framed view.
+float camera_look_yaw(const Camera& camera);
+
 // A game-style third-person follow camera (S3 arena plan, W1.4): the eye trails
 // the player and looks where the player faces.
 //
@@ -63,3 +70,112 @@ struct CameraFollow {
 void camera_follow(Camera&, CameraFollow&, Vec3 playerPos, float playerYawDeg,
                    float dragDxPixels, float dragDyPixels, float wheelDelta, bool moving,
                    float dtSeconds);
+
+// --- Entity target framing (S4 Task 5) ---------------------------------------
+//
+// `T` toggles a camera-only framing mode: the orbit's target becomes the
+// entity's chest joint (Bone_MUNE) instead of the player's head. Distance is
+// widened to [22, 30] m — the builder value that fits the 17.7 m body — and
+// pitch to ±80°; drag orbits the chest, the wheel zooms. The mode is camera
+// only: the player controller keeps the same movement basis, now taken from the
+// active (target) camera's yaw via camera_look_yaw(). T-off restores the saved
+// follow offsets/distance and leaves the camera where the orbit had it, so the
+// next camera_follow call eases back without a snap.
+
+inline constexpr float kTargetDistanceMin = 22.0f;
+inline constexpr float kTargetDistanceMax = 30.0f;
+inline constexpr float kTargetDefaultDistance = 26.0f;
+inline constexpr float kTargetDefaultPitchDeg = 10.0f;
+inline constexpr float kTargetPitchLimitDeg = 80.0f;
+
+struct CameraTarget {
+    bool active = false;
+    Vec3 target{};              // the chest point this frame (world space)
+    float distance = kTargetDefaultDistance;
+    // The follow state saved when the mode was entered; restored on exit.
+    float savedYawOffsetDeg = 0.0f;
+    float savedPitchOffsetDeg = 0.0f;
+    float savedDistance = 4.5f;
+    bool saved = false;
+    // T-off transition: while true the caller eases back with
+    // camera_target_return instead of camera_follow (the saved offsets are
+    // already restored). `returnSeconds` bounds the asymptote.
+    bool returning = false;
+    float returnSeconds = 0.0f;
+};
+
+// Enters target framing around `target`: saves the follow offsets and distance,
+// sets the orbit target to the chest, restores the target distance (clamped to
+// [22, 30]), pins the framing pitch to 10°, and keeps the current yaw so the
+// view swings to the subject instead of spinning.
+void camera_target_enter(Camera&, const CameraFollow&, CameraTarget&, Vec3 target);
+
+// Leaves target framing: the saved follow offsets/distance are written back
+// into `follow`. The camera is left exactly where the orbit had it; the app
+// then calls camera_target_return once per frame until it reports the follow
+// framing has been reached (no target jump, no orientation snap).
+void camera_target_exit(CameraFollow&, CameraTarget&);
+
+// One frame of the T-off return. While `state.returning`, this runs a normal
+// camera_follow step (the saved offsets, drag/wheel and offset decay all apply)
+// but blends the orbit target from the entity's chest to the follow head point
+// at the follow camera's own 8 s^-1 rate. The blend is bounded to one second so
+// the asymptote cannot linger. Returns true while the return is in progress;
+// on false the camera is exactly at the follow state and the caller resumes
+// camera_follow normally.
+bool camera_target_return(Camera&, CameraFollow&, CameraTarget&, Vec3 playerPos,
+                          float playerYawDeg, float dragDxPixels, float dragDyPixels,
+                          float wheelDelta, bool moving, float dtSeconds);
+
+// `T`: enter when inactive, leave when active.
+void camera_target_toggle(Camera&, CameraFollow&, CameraTarget&, Vec3 target);
+
+// One frame in target mode (a no-op when inactive): drag orbits the chest at
+// the orbit camera's 0.4°/pixel sensitivity (pitch clamped to ±80°), the wheel
+// zooms multiplicatively within [22, 30] m, and the target follows `target`.
+// Non-finite inputs are ignored, so a hand-driven call never writes NaN.
+void camera_target_update(Camera&, CameraTarget&, Vec3 target, float dragDxPixels,
+                          float dragDyPixels, float wheelDelta);
+
+// --- Climb camera (S4.1 Task 4) ---------------------------------------------
+//
+// While the player grips the colossus the orbit is pinned to the attach point
+// on the body instead of trailing the player. Entering seeds the eye *outward*
+// along the surface normal — yaw = atan2(normal.x, normal.z) in degrees, so the
+// eye sits on the normal's side and the view looks back into the body — with a
+// 10° elevation and a 6 m distance. Drag orbits at the orbit camera's
+// 0.4°/pixel sensitivity with pitch clamped to ±45°; the wheel zooms
+// multiplicatively within [5, 8] m. Leaving the mode only clears `active`: the
+// orbit stays exactly where the user left it, so the follow camera can ease
+// back without a snap.
+//
+// The orbit is input-driven (per drag pixel and per wheel notch), so dtSeconds
+// is not integrated; a non-finite frame time is a broken sample and the whole
+// call is ignored. Non-finite drag/wheel values are ignored channel by channel,
+// and a non-finite attach point or normal is discarded, so a hand-driven call
+// never writes NaN.
+inline constexpr float kClimbDistanceMin = 5.0f;
+inline constexpr float kClimbDistanceMax = 8.0f;
+inline constexpr float kClimbDefaultDistance = 6.0f;
+inline constexpr float kClimbDefaultPitchDeg = 10.0f;
+inline constexpr float kClimbPitchLimitDeg = 45.0f;
+
+struct CameraClimb {
+    bool active = false;
+    float distance = kClimbDefaultDistance;
+};
+
+// Enters the climb orbit around `attachPoint`, seeded outward along
+// `surfaceNormal` (its length does not matter; a zero or non-finite normal
+// keeps the current yaw). A non-finite attach point keeps the current target.
+void camera_climb_enter(Camera&, CameraClimb&, Vec3 attachPoint, Vec3 surfaceNormal);
+
+// One frame of the climb orbit (a no-op when inactive): the target follows the
+// attach point, drag orbits at 0.4°/pixel with pitch clamped to ±45°, and the
+// wheel zooms `distance` multiplicatively inside [5, 8] m.
+void camera_climb_update(Camera&, CameraClimb&, Vec3 attachPoint, float dragDx,
+                         float dragDy, float wheelDelta, float dtSeconds);
+
+// Leaves the climb orbit: `active = false` and nothing else — the orbit is left
+// exactly where it is (no snap).
+void camera_climb_exit(Camera&, CameraClimb&);

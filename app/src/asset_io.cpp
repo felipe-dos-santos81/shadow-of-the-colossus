@@ -132,12 +132,12 @@ LocalTrs node_local_trs(const cgltf_node& node) {
     return out;
 }
 
-// The glb's skeleton — the converted models carry exactly one — appended to
-// `scene`, returning the node -> joint-slot map its clips resolve channels
+// The glb's skeleton — the converted models carry exactly one — stored on
+// `rig`, returning the node -> joint-slot map its clips resolve channels
 // against. `joint_of_node` maps a node index to its slot in the joint list, so
 // both parent links and animation channels can be resolved against the skin's
 // own order.
-std::vector<int> load_skin_into(Scene& scene, const cgltf_data& data) {
+std::vector<int> load_skin_into(RigCpu& rig, const cgltf_data& data) {
     std::vector<int> joint_of_node(data.nodes_count, -1);
     if (data.skins_count == 0) {
         return joint_of_node;
@@ -150,9 +150,9 @@ std::vector<int> load_skin_into(Scene& scene, const cgltf_data& data) {
         }
     }
 
-    scene.skin.joints.resize(skin.joints_count);
+    rig.skin.joints.resize(skin.joints_count);
     for (cgltf_size i = 0; i < skin.joints_count; ++i) {
-        JointCpu& joint = scene.skin.joints[i];
+        JointCpu& joint = rig.skin.joints[i];
         joint.parent = -1;
         joint.inverseBind = mat4_identity();
 
@@ -179,7 +179,7 @@ std::vector<int> load_skin_into(Scene& scene, const cgltf_data& data) {
             float matrix[16] = {};
             if (cgltf_accessor_read_float(inverse_bind, i, matrix, 16)) {
                 for (int k = 0; k < 16; ++k) {
-                    scene.skin.joints[i].inverseBind.m[k] = matrix[k];
+                    rig.skin.joints[i].inverseBind.m[k] = matrix[k];
                 }
             }
         }
@@ -187,11 +187,11 @@ std::vector<int> load_skin_into(Scene& scene, const cgltf_data& data) {
     return joint_of_node;
 }
 
-// The glb's clips, appended to `scene`: only channels that drive a skin joint
+// The glb's clips, appended to `rig`: only channels that drive a skin joint
 // survive — a clip's helper-bone or camera channels have no joint to land on.
 // What is dropped is counted once per clip, so the loader never discards data
 // silently.
-void load_animations_into(Scene& scene, const cgltf_data& data,
+void load_animations_into(RigCpu& rig, const cgltf_data& data,
                           const std::vector<int>& joint_of_node,
                           const std::string& model_path_string) {
     for (cgltf_size a = 0; a < data.animations_count; ++a) {
@@ -281,7 +281,7 @@ void load_animations_into(Scene& scene, const cgltf_data& data,
                          clip.name.c_str(), skipped_non_joint + skipped_unsupported,
                          skipped_non_joint, skipped_unsupported);
         }
-        scene.animations.push_back(std::move(clip));
+        rig.animations.push_back(std::move(clip));
     }
 }
 
@@ -295,17 +295,22 @@ Vec3 transform_point(const Mat4& matrix, Vec3 point) {
 }
 
 // How one glb lands in the target scene: the world matrix baked into every mesh
-// it contributes, the index its materials start at, and whether its skeleton
-// and clips are kept (only the player's are: a composed scene has one rig).
+// it contributes, the index its materials start at, and whether it contributes
+// a rig record (`includeRig`) — and, if so, whether that record is the player's
+// (`dynamic`). A static instance contributes meshes with rig = -1; a rigged
+// glb's meshes carry its new rig index and its skeleton/clips land on one
+// RigCpu.
 struct GlbPlacement {
     Mat4 model = mat4_identity();
     int materialOffset = 0;
     bool includeRig = false;
+    bool dynamic = false;
 };
 
 // Loads one glb into `scene`, appending its meshes, materials and textures —
-// and, when `placement.includeRig`, its skeleton and clips. Every contributed
-// mesh carries `placement.model`; material indices shift by
+// and, when `placement.includeRig`, one rig record holding its skeleton and
+// clips. Every contributed mesh carries `placement.model` and its rig index
+// (`placement.includeRig` ? the new record : -1); material indices shift by
 // `placement.materialOffset` (texture indices need no shift: images append to
 // the scene's shared texture list, so their index already is global).
 // `have_bounds` is the caller's running "some vertex was seen" flag: the
@@ -403,6 +408,12 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
         return loaded;
     };
 
+    // The rig record this glb will land on (its meshes carry the index even
+    // though the record is pushed after the geometry). An instance glb stays
+    // static: its meshes keep rig = -1.
+    const int rig_index = placement.includeRig ? static_cast<int>(scene.rigs.size()) : -1;
+    const std::size_t mesh_begin = scene.meshes.size();
+
     for (cgltf_size m = 0; m < document.data->meshes_count; ++m) {
         const cgltf_mesh& mesh = document.data->meshes[m];
         for (cgltf_size p = 0; p < mesh.primitives_count; ++p) {
@@ -424,6 +435,7 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
 
             MeshCpu out;
             out.model = placement.model;
+            out.rig = rig_index;
             out.materialIndex =
                 primitive.material != nullptr
                     ? static_cast<int>(cgltf_material_index(document.data, primitive.material)) +
@@ -545,16 +557,22 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
         scene.materials.push_back(std::move(out));
     }
 
-    // The rig: a composed scene has exactly one skeleton and one clip list —
-    // the player's. An instance glb's rig is skipped, loudly, rather than
-    // folded in with joint indices that mean something else.
+    // The rig: each rigged glb contributes exactly one record, and its meshes
+    // carry that record's index. An instance glb is static — its skeleton and
+    // clips are skipped, loudly, rather than folded in with joint indices that
+    // mean something else (its JOINTS_0/WEIGHTS_0 stay on the vertices but are
+    // drawn as authored).
     if (placement.includeRig) {
-        const std::vector<int> joint_of_node = load_skin_into(scene, *document.data);
-        load_animations_into(scene, *document.data, joint_of_node, model_path_string);
+        RigCpu rig;
+        rig.meshBegin = mesh_begin;
+        rig.meshEnd = scene.meshes.size();
+        rig.dynamic = placement.dynamic;
+        const std::vector<int> joint_of_node = load_skin_into(rig, *document.data);
+        load_animations_into(rig, *document.data, joint_of_node, model_path_string);
+        scene.rigs.push_back(std::move(rig));
     } else if (document.data->skins_count > 0 || document.data->animations_count > 0) {
         std::fprintf(stderr,
-                     "sotc-viewer: %s: skeleton/clips skipped (a composed scene keeps the "
-                     "player's rig)\n",
+                     "sotc-viewer: %s: skeleton/clips skipped (a static instance has no rig)\n",
                      glbRelPath.c_str());
     }
 
@@ -581,7 +599,10 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
 Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glbRelPath) {
     Scene scene;
     bool have_bounds = false;
-    load_glb_into(scene, libraryDir, glbRelPath, GlbPlacement{.includeRig = true}, have_bounds);
+    // A single glb is the scene's player: one rig record (possibly empty when
+    // the model has no skeleton), dynamic.
+    load_glb_into(scene, libraryDir, glbRelPath,
+                  GlbPlacement{.includeRig = true, .dynamic = true}, have_bounds);
     if (!have_bounds) {
         scene.boundsMin = Vec3{0.0f, 0.0f, 0.0f};
         scene.boundsMax = Vec3{0.0f, 0.0f, 0.0f};
@@ -594,6 +615,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     Scene scene;
     bool have_bounds = false;
 
+    // Static instances: no rig record, meshes keep rig = -1.
     for (const ManifestInstance& instance : manifest.instances) {
         const GlbPlacement placement{
             .model = mat4_from_trs(instance.position, instance.rotation, instance.scale),
@@ -609,19 +631,57 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
         }
     }
 
-    // The player's meshes start here: everything before is the manifest's
-    // instances (the app's player-less heightmap build splits on this index).
-    if (playerMeshBegin != nullptr) {
-        *playerMeshBegin = scene.meshes.size();
-    }
-
-    // The player: identity model, and the only rig the scene keeps. Its
-    // materials follow every instance's, so they carry the same offset.
+    // The player: identity model and rig 0, the dynamic rig. Its materials
+    // follow every instance's, so they carry the same offset.
     const GlbPlacement player_placement{
         .materialOffset = static_cast<int>(scene.materials.size()),
         .includeRig = true,
+        .dynamic = true,
     };
     load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds);
+
+    // The player's meshes start here (rig 0's meshBegin): everything before is
+    // the manifest's instances, everything after is an entity's.
+    if (playerMeshBegin != nullptr) {
+        *playerMeshBegin = scene.rigs[scene.playerRig].meshBegin;
+    }
+
+    // Entities: each one keeps its skeleton and clips as its own rig, placed by
+    // the manifest TRS, and must carry the clip it names — a manifest that
+    // asks for a clip the model does not have is a load error, not a silent
+    // rest pose.
+    for (const ManifestEntity& entity : manifest.entities) {
+        const GlbPlacement placement{
+            .model = mat4_from_trs(entity.placement.position, entity.placement.rotation,
+                                   entity.placement.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+            .includeRig = true,
+        };
+        try {
+            load_glb_into(scene, libraryDir, entity.placement.glbRelPath, placement, have_bounds);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error("compose_scene: entity \"" + entity.placement.glbRelPath +
+                                     "\": " + error.what());
+        }
+
+        const RigCpu& rig = scene.rigs.back();
+        const bool clip_found =
+            std::any_of(rig.animations.begin(), rig.animations.end(),
+                        [&entity](const AnimationCpu& clip) { return clip.name == entity.clip; });
+        if (!clip_found) {
+            std::string message = "compose_scene: entity \"" + entity.placement.glbRelPath +
+                                  "\": clip \"" + entity.clip + "\" not found";
+            if (rig.animations.empty()) {
+                message += " (the model has no animation clips)";
+            } else {
+                message += "; available clips:";
+                for (const AnimationCpu& clip : rig.animations) {
+                    message += " " + clip.name;
+                }
+            }
+            throw std::runtime_error(message);
+        }
+    }
 
     if (!have_bounds) {
         scene.boundsMin = Vec3{0.0f, 0.0f, 0.0f};

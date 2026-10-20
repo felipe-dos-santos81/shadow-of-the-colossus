@@ -42,6 +42,10 @@ Vec3 orbit_offset(float yawDeg, float pitchDeg) {
     return Vec3{cos_pitch * std::sin(yaw), std::sin(pitch), cos_pitch * std::cos(yaw)};
 }
 
+bool finite_vec3(Vec3 v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
 }  // namespace
 
 Mat4 camera_view(const Camera& camera) {
@@ -103,6 +107,11 @@ void camera_frame(Camera& camera, Vec3 boundsMin, Vec3 boundsMax) {
     camera.pitch = kFramePitchDeg;
 }
 
+float camera_look_yaw(const Camera& camera) {
+    const float yaw = std::isfinite(camera.yaw) ? camera.yaw : 0.0f;
+    return wrap_deg(yaw - 180.0f);
+}
+
 void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float playerYawDeg,
                    float dragDxPixels, float dragDyPixels, float wheelDelta, bool moving,
                    float dtSeconds) {
@@ -158,4 +167,184 @@ void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float p
 
     const float current_distance = std::isfinite(camera.distance) ? camera.distance : follow.distance;
     camera.distance = current_distance + (follow.distance - current_distance) * blend;
+}
+
+void camera_target_enter(Camera& camera, const CameraFollow& follow, CameraTarget& state,
+                         Vec3 target) {
+    state.savedYawOffsetDeg = follow.yawOffsetDeg;
+    state.savedPitchOffsetDeg = follow.pitchOffsetDeg;
+    state.savedDistance = follow.distance;
+    state.saved = true;
+    state.returning = false;
+    state.returnSeconds = 0.0f;
+
+    state.active = true;
+    state.distance = std::clamp(state.distance, kTargetDistanceMin, kTargetDistanceMax);
+    const bool finite_target =
+        std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z);
+    state.target = finite_target ? target : camera.target;
+
+    camera.target = state.target;
+    camera.distance = state.distance;
+    camera.pitch = kTargetDefaultPitchDeg;
+    // The yaw is kept: the view swings to the entity rather than resetting.
+}
+
+void camera_target_exit(CameraFollow& follow, CameraTarget& state) {
+    if (!state.active) {
+        return;
+    }
+    state.active = false;
+    if (state.saved) {
+        follow.yawOffsetDeg = state.savedYawOffsetDeg;
+        follow.pitchOffsetDeg = state.savedPitchOffsetDeg;
+        follow.distance = state.savedDistance;
+        state.saved = false;
+    }
+    // The camera is left where the orbit had it; camera_target_return blends the
+    // target back to the player without the 40 m jump a bare camera_follow
+    // would make.
+    state.returning = true;
+    state.returnSeconds = 0.0f;
+}
+
+bool camera_target_return(Camera& camera, CameraFollow& follow, CameraTarget& state,
+                          Vec3 playerPos, float playerYawDeg, float dragDxPixels,
+                          float dragDyPixels, float wheelDelta, bool moving, float dtSeconds) {
+    if (!state.returning) {
+        return false;
+    }
+    const float dt = std::max(std::isfinite(dtSeconds) ? dtSeconds : 0.0f, 0.0f);
+
+    const Vec3 from = camera.target;
+    camera_follow(camera, follow, playerPos, playerYawDeg, dragDxPixels, dragDyPixels,
+                  wheelDelta, moving, dt);
+    const Vec3 to = camera.target;
+
+    const float blend = 1.0f - std::exp(-kFollowRate * dt);
+    camera.target = Vec3{from.x + (to.x - from.x) * blend, from.y + (to.y - from.y) * blend,
+                         from.z + (to.z - from.z) * blend};
+    state.returnSeconds += dt;
+
+    const float dx = to.x - camera.target.x;
+    const float dy = to.y - camera.target.y;
+    const float dz = to.z - camera.target.z;
+    const float remaining = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (state.returnSeconds >= 1.0f || remaining < 0.01f) {
+        camera.target = to;  // land exactly on the follow target
+        camera.distance = follow.distance;
+        state.returning = false;
+        state.returnSeconds = 0.0f;
+    }
+    return state.returning;
+}
+
+void camera_target_toggle(Camera& camera, CameraFollow& follow, CameraTarget& state,
+                          Vec3 target) {
+    if (state.active) {
+        camera_target_exit(follow, state);
+    } else {
+        camera_target_enter(camera, follow, state, target);
+    }
+}
+
+void camera_target_update(Camera& camera, CameraTarget& state, Vec3 target, float dragDxPixels,
+                          float dragDyPixels, float wheelDelta) {
+    if (!state.active) {
+        return;
+    }
+    if (std::isfinite(dragDxPixels)) {
+        camera.yaw += dragDxPixels * kOrbitDegreesPerPixel;
+    }
+    if (std::isfinite(dragDyPixels)) {
+        camera.pitch += dragDyPixels * kOrbitDegreesPerPixel;
+    }
+    camera.pitch = std::clamp(camera.pitch, -kTargetPitchLimitDeg, kTargetPitchLimitDeg);
+
+    if (std::isfinite(wheelDelta) && wheelDelta != 0.0f) {
+        state.distance = std::clamp(
+            state.distance * std::exp(-kZoomPerWheelStep * wheelDelta), kTargetDistanceMin,
+            kTargetDistanceMax);
+    }
+    state.distance = std::clamp(state.distance, kTargetDistanceMin, kTargetDistanceMax);
+    camera.distance = state.distance;
+
+    if (std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z)) {
+        state.target = target;
+        camera.target = target;
+    }
+}
+
+void camera_climb_enter(Camera& camera, CameraClimb& state, Vec3 attachPoint,
+                        Vec3 surfaceNormal) {
+    if (finite_vec3(attachPoint)) {
+        camera.target = attachPoint;
+    }
+
+    // The orbit's eye offset points along (sin yaw, 0, cos yaw) horizontally,
+    // so yaw = atan2(n.x, n.z) puts the eye on the normal's side — outward. A
+    // zero-length or non-finite normal has no direction to seed from; keep the
+    // current yaw rather than write a NaN.
+    const float normal_length_squared = vec3_dot(surfaceNormal, surfaceNormal);
+    if (finite_vec3(surfaceNormal) && normal_length_squared > 0.0f) {
+        camera.yaw = std::atan2(surfaceNormal.x, surfaceNormal.z) / kDegToRad;
+    } else if (!std::isfinite(camera.yaw)) {
+        camera.yaw = 0.0f;
+    }
+
+    state.active = true;
+    state.distance = kClimbDefaultDistance;
+    camera.distance = state.distance;
+    camera.pitch = kClimbDefaultPitchDeg;
+}
+
+void camera_climb_update(Camera& camera, CameraClimb& state, Vec3 attachPoint, float dragDxPixels,
+                         float dragDyPixels, float wheelDelta, float dtSeconds) {
+    if (!state.active) {
+        return;
+    }
+    // The orbit responds to input samples, not to elapsed time: dt is not
+    // integrated. A non-finite frame time is a broken sample, so drop the whole
+    // call rather than feed a hand-driven orbit from an untrustworthy frame.
+    if (!std::isfinite(dtSeconds)) {
+        return;
+    }
+
+    if (finite_vec3(attachPoint)) {
+        camera.target = attachPoint;
+    }
+
+    // A hand-set non-finite orbit would poison the clamps below; reset it to the
+    // seeded values instead of propagating NaN.
+    if (!std::isfinite(camera.yaw)) {
+        camera.yaw = 0.0f;
+    }
+    if (!std::isfinite(camera.pitch)) {
+        camera.pitch = kClimbDefaultPitchDeg;
+    }
+    if (!std::isfinite(state.distance)) {
+        state.distance = kClimbDefaultDistance;
+    }
+
+    if (std::isfinite(dragDxPixels)) {
+        camera.yaw += dragDxPixels * kOrbitDegreesPerPixel;
+    }
+    if (std::isfinite(dragDyPixels)) {
+        camera.pitch += dragDyPixels * kOrbitDegreesPerPixel;
+    }
+    camera.pitch = std::clamp(camera.pitch, -kClimbPitchLimitDeg, kClimbPitchLimitDeg);
+
+    if (std::isfinite(wheelDelta) && wheelDelta != 0.0f) {
+        state.distance =
+            std::clamp(state.distance * std::exp(-kZoomPerWheelStep * wheelDelta),
+                       kClimbDistanceMin, kClimbDistanceMax);
+    }
+    state.distance = std::clamp(state.distance, kClimbDistanceMin, kClimbDistanceMax);
+    camera.distance = state.distance;
+}
+
+void camera_climb_exit(Camera&, CameraClimb& state) {
+    state.active = false;
+    // The orbit (target, yaw, pitch, distance) is deliberately left untouched:
+    // the follow camera eases back from where the user left it, with no snap.
 }

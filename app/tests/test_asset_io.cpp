@@ -14,6 +14,9 @@
 #include <vector>
 
 #include "asset_io.h"
+#include "anim.h"
+#include "heightmap.h"
+#include "player.h"
 
 namespace {
 
@@ -388,17 +391,23 @@ TEST_CASE("image URIs that escape the library are rejected") {
 
 TEST_CASE("wander carries its 348-joint skeleton") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
-    CHECK(scene.skin.joints.size() == 348);
-    CHECK(scene.skin.joints[0].name == "Bone_root");
+    CHECK(player_rig(scene).skin.joints.size() == 348);
+    CHECK(player_rig(scene).skin.joints[0].name == "Bone_root");
     // The S2 converter bakes the player's demo clips into the glb, named after
-    // the source clip stem: the app plays these instead of the stand-in.
-    REQUIRE(scene.animations.size() == 3);
-    CHECK(scene.animations[0].name == "player_a_stand");
-    CHECK(scene.animations[1].name == "player_a_walk");
-    CHECK(scene.animations[2].name == "player_a_run");
-    CHECK(!scene.animations[0].channels.empty());
-    CHECK(!scene.animations[1].channels.empty());
-    CHECK(!scene.animations[2].channels.empty());
+    // the source clip stem: the app plays these instead of the stand-in. S4.1
+    // bakes the full climb/fight set, so the count is pinned at 11 and the new
+    // clips are found by name — the way the app selects them.
+    REQUIRE(player_rig(scene).animations.size() == 11);
+    CHECK(player_rig(scene).animations[0].name == "player_a_stand");
+    CHECK(player_rig(scene).animations[1].name == "player_a_walk");
+    CHECK(player_rig(scene).animations[2].name == "player_a_run");
+    CHECK(!player_rig(scene).animations[0].channels.empty());
+    CHECK(!player_rig(scene).animations[1].channels.empty());
+    CHECK(!player_rig(scene).animations[2].channels.empty());
+    Playback playback;
+    build_playback(scene, scene.playerRig, playback);
+    CHECK(clip_index_named(playback, "player_a_grip_loop") >= 0);
+    CHECK(clip_index_named(playback, "player_a_atk1") >= 0);
     const auto& v = scene.meshes[0].vertices[0];
     CHECK(v.j[0] == 102); CHECK(v.j[1] == 73); CHECK(v.j[2] == 0); CHECK(v.j[3] == 0);
     CHECK(v.w[0] == doctest::Approx(0.9094f).epsilon(1e-3));
@@ -407,9 +416,9 @@ TEST_CASE("wander carries its 348-joint skeleton") {
 
 TEST_CASE("agro carries its baked kick clip") {
     auto scene = load_scene(test_library(), "models/shadow/characters/agro/_cmn/agro.glb");
-    REQUIRE(scene.animations.size() == 1);
-    CHECK(scene.animations[0].name == "horse_a_add_horse_kick");
-    CHECK(!scene.animations[0].channels.empty());
+    REQUIRE(player_rig(scene).animations.size() == 1);
+    CHECK(player_rig(scene).animations[0].name == "horse_a_add_horse_kick");
+    CHECK(!player_rig(scene).animations[0].channels.empty());
 }
 
 TEST_CASE("wander's joint rest transforms decompose from their node matrices") {
@@ -418,34 +427,34 @@ TEST_CASE("wander's joint rest transforms decompose from their node matrices") {
     // values were derived outside this code (decomposing the glb's node
     // matrices independently).
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
-    REQUIRE(scene.skin.joints.size() == 348);
+    REQUIRE(player_rig(scene).skin.joints.size() == 348);
 
     // Bone_root: an identity node matrix and no parent node at all.
-    CHECK(scene.skin.joints[0].parent == -1);
-    CHECK(scene.skin.joints[0].restT.y == doctest::Approx(0.0f));
-    CHECK(scene.skin.joints[0].restR.w == doctest::Approx(1.0f));
-    CHECK(scene.skin.joints[0].restS.x == doctest::Approx(1.0f));
+    CHECK(player_rig(scene).skin.joints[0].parent == -1);
+    CHECK(player_rig(scene).skin.joints[0].restT.y == doctest::Approx(0.0f));
+    CHECK(player_rig(scene).skin.joints[0].restR.w == doctest::Approx(1.0f));
+    CHECK(player_rig(scene).skin.joints[0].restS.x == doctest::Approx(1.0f));
 
     // Bone_HARA: a rotation about X (~80 degrees), parented to Bone_root.
-    CHECK(scene.skin.joints[1].name == "Bone_HARA");
-    CHECK(scene.skin.joints[1].parent == 0);
-    CHECK(scene.skin.joints[1].restR.x == doctest::Approx(0.6392f).epsilon(1e-3));
-    CHECK(scene.skin.joints[1].restR.y == doctest::Approx(0.0f).epsilon(1e-3));
-    CHECK(scene.skin.joints[1].restR.z == doctest::Approx(0.0f).epsilon(1e-3));
-    CHECK(scene.skin.joints[1].restR.w == doctest::Approx(0.7690f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[1].name == "Bone_HARA");
+    CHECK(player_rig(scene).skin.joints[1].parent == 0);
+    CHECK(player_rig(scene).skin.joints[1].restR.x == doctest::Approx(0.6392f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[1].restR.y == doctest::Approx(0.0f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[1].restR.z == doctest::Approx(0.0f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[1].restR.w == doctest::Approx(0.7690f).epsilon(1e-3));
 
     // Bone_KOSI: a 180 degree rotation (w = 0), the branch that a trace-based
     // decomposition alone cannot recover.
-    CHECK(scene.skin.joints[2].name == "Bone_KOSI");
-    CHECK(scene.skin.joints[2].parent == 0);
-    CHECK(scene.skin.joints[2].restR.w == doctest::Approx(0.0f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[2].name == "Bone_KOSI");
+    CHECK(player_rig(scene).skin.joints[2].parent == 0);
+    CHECK(player_rig(scene).skin.joints[2].restR.w == doctest::Approx(0.0f).epsilon(1e-3));
 
     // Bone_MOMO_L: a joint with a real translation, two levels down the tree.
-    CHECK(scene.skin.joints[20].name == "Bone_MOMO_L");
-    CHECK(scene.skin.joints[20].parent == 2);
-    CHECK(scene.skin.joints[20].restT.x == doctest::Approx(-0.06125f).epsilon(1e-3));
-    CHECK(scene.skin.joints[20].restT.y == doctest::Approx(0.018739f).epsilon(1e-3));
-    CHECK(scene.skin.joints[20].restT.z == doctest::Approx(-0.108982f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[20].name == "Bone_MOMO_L");
+    CHECK(player_rig(scene).skin.joints[20].parent == 2);
+    CHECK(player_rig(scene).skin.joints[20].restT.x == doctest::Approx(-0.06125f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[20].restT.y == doctest::Approx(0.018739f).epsilon(1e-3));
+    CHECK(player_rig(scene).skin.joints[20].restT.z == doctest::Approx(-0.108982f).epsilon(1e-3));
 }
 
 TEST_CASE("a two-joint fixture parses skin and animation") {
@@ -457,17 +466,17 @@ TEST_CASE("a two-joint fixture parses skin and animation") {
     // The skin: "Root" is not a joint, so JointA is a root and JointB its child.
     // Both keep their local rest translation; the glTF defaults fill in the
     // rest rotation and scale.
-    REQUIRE(scene.skin.joints.size() == 2);
-    CHECK(scene.skin.joints[0].name == "JointA");
-    CHECK(scene.skin.joints[0].parent == -1);
-    CHECK(scene.skin.joints[1].name == "JointB");
-    CHECK(scene.skin.joints[1].parent == 0);
-    CHECK(scene.skin.joints[0].restT.y == doctest::Approx(1.0f));
-    CHECK(scene.skin.joints[0].restR.w == doctest::Approx(1.0f));
-    CHECK(scene.skin.joints[0].restS.y == doctest::Approx(1.0f));
+    REQUIRE(player_rig(scene).skin.joints.size() == 2);
+    CHECK(player_rig(scene).skin.joints[0].name == "JointA");
+    CHECK(player_rig(scene).skin.joints[0].parent == -1);
+    CHECK(player_rig(scene).skin.joints[1].name == "JointB");
+    CHECK(player_rig(scene).skin.joints[1].parent == 0);
+    CHECK(player_rig(scene).skin.joints[0].restT.y == doctest::Approx(1.0f));
+    CHECK(player_rig(scene).skin.joints[0].restR.w == doctest::Approx(1.0f));
+    CHECK(player_rig(scene).skin.joints[0].restS.y == doctest::Approx(1.0f));
     // Inverse bind matrices: the inverse of the joints' bind world transforms.
-    CHECK(scene.skin.joints[0].inverseBind.m[13] == doctest::Approx(-1.0f));
-    CHECK(scene.skin.joints[1].inverseBind.m[13] == doctest::Approx(-2.0f));
+    CHECK(player_rig(scene).skin.joints[0].inverseBind.m[13] == doctest::Approx(-1.0f));
+    CHECK(player_rig(scene).skin.joints[1].inverseBind.m[13] == doctest::Approx(-2.0f));
 
     // The vertex carries its JOINTS_0/WEIGHTS_0 pair: joint 1, weight 1.
     REQUIRE(scene.meshes.size() == 1);
@@ -478,8 +487,8 @@ TEST_CASE("a two-joint fixture parses skin and animation") {
     CHECK(scene.meshes[0].vertices[0].w[1] == doctest::Approx(0.0f));
 
     // The clip: one LINEAR rotation channel on JointA, keys at 0 s and 1 s.
-    REQUIRE(scene.animations.size() == 1);
-    const AnimationCpu& clip = scene.animations[0];
+    REQUIRE(player_rig(scene).animations.size() == 1);
+    const AnimationCpu& clip = player_rig(scene).animations[0];
     CHECK(clip.name == "turn");
     CHECK(clip.duration == doctest::Approx(1.0f));
     REQUIRE(clip.channels.size() == 1);
@@ -504,8 +513,8 @@ TEST_CASE("a joint node carrying a matrix decomposes into its rest TRS") {
     // JointB's node is T(0,2,0) * R(90 degrees about Z) * S(2,2,2): the
     // translation is column 3, the scale the basis column lengths, the rotation
     // the normalized basis.
-    REQUIRE(scene.skin.joints.size() == 2);
-    const JointCpu& joint = scene.skin.joints[1];
+    REQUIRE(player_rig(scene).skin.joints.size() == 2);
+    const JointCpu& joint = player_rig(scene).skin.joints[1];
     CHECK(joint.restT.x == doctest::Approx(0.0f));
     CHECK(joint.restT.y == doctest::Approx(2.0f));
     CHECK(joint.restT.z == doctest::Approx(0.0f));
@@ -528,7 +537,7 @@ TEST_CASE("a primitive without JOINTS_0 defaults to zero weights (unskinned)") {
     // Zero weights are the "unskinned" signal the shader passes through
     // untransformed: full weight on joint 0 would instead select palette[0],
     // the player's animated root bone in a composed scene (F3).
-    REQUIRE(scene.skin.joints.size() == 2);
+    REQUIRE(player_rig(scene).skin.joints.size() == 2);
     REQUIRE(scene.meshes.size() == 1);
     REQUIRE(scene.meshes[0].vertices.size() == 3);
     for (const Vertex& vertex : scene.meshes[0].vertices) {
@@ -546,10 +555,10 @@ TEST_CASE("a channel targeting a non-joint node is skipped") {
     auto scene = load_scene(dir.path(), "helper.gltf");
 
     // "Helper" is not in skin.joints: its channel is dropped, the joint's stays.
-    REQUIRE(scene.animations.size() == 1);
-    REQUIRE(scene.animations[0].channels.size() == 1);
-    CHECK(scene.animations[0].channels[0].joint == 0);
-    CHECK(scene.animations[0].channels[0].path == 1);
+    REQUIRE(player_rig(scene).animations.size() == 1);
+    REQUIRE(player_rig(scene).animations[0].channels.size() == 1);
+    CHECK(player_rig(scene).animations[0].channels[0].joint == 0);
+    CHECK(player_rig(scene).animations[0].channels[0].path == 1);
 }
 
 TEST_CASE("a CUBICSPLINE sampler is refused loudly") {
@@ -645,7 +654,7 @@ TEST_CASE("compose_scene places two plank instances and the player") {
     }
 
     // The composed scene keeps the player's skeleton.
-    CHECK(scene.skin.joints.size() == 348);
+    CHECK(player_rig(scene).skin.joints.size() == 348);
 
     // Bounds are world-space: they cover both placed origins.
     CHECK(scene.boundsMin.x <= 1.0f);
@@ -726,22 +735,259 @@ TEST_CASE("compose_scene with no instances composes the player alone") {
     }
     CHECK(scene.boundsMin.x == doctest::Approx(wander.boundsMin.x));
     CHECK(scene.boundsMax.y == doctest::Approx(wander.boundsMax.y));
-    CHECK(scene.skin.joints.size() == 348);
+    CHECK(player_rig(scene).skin.joints.size() == 348);
 }
 
 TEST_CASE("a composed scene keeps the player's skeleton, not an instance's") {
     SceneManifest manifest{};
-    // Wander placed as an instance: its skeleton and clips cannot be folded
-    // into the scene's single rig, so they are skipped (with a warning) while
-    // its meshes still compose.
+    // Wander placed as an instance: an instance is static, its skeleton and
+    // clips are skipped (with a warning) while its meshes still compose.
     manifest.instances.push_back(placed_at("models/shadow/characters/wander/_cmn/wander.glb",
                                            Vec3{1.0f, 0.0f, 0.0f}));
 
     const Scene scene =
         compose_scene(test_library(), manifest, "models/objects/props/_cmn/obj_plank_01.glb");
 
-    CHECK(scene.skin.joints.empty());
-    CHECK(scene.animations.empty());
+    // The plank player is rig 0 — with no skeleton and no clips.
+    REQUIRE(scene.rigs.size() == 1);
+    CHECK(scene.rigs[0].skin.joints.empty());
+    CHECK(scene.rigs[0].animations.empty());
     REQUIRE(scene.meshes.size() == 13);
     CHECK(scene.meshes[0].model.m[12] == doctest::Approx(1.0f));
+}
+
+// --- Entities: the second rig (S4) ------------------------------------------
+//
+// The encounter fixture: one plank instance (static ground), wander as the
+// player, and the real colossus glb placed with the builder-pick transform from
+// docs/notes/re4-placement.md §8, looping minotaur_a_stand. Library-gated like
+// every other load test here.
+
+namespace {
+
+constexpr const char* kWanderGlb = "models/shadow/characters/wander/_cmn/wander.glb";
+constexpr const char* kPlankGlb = "models/objects/props/_cmn/obj_plank_01.glb";
+constexpr const char* kColossusGlb =
+    "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb";
+
+// Writes `text` as a manifest fixture and parses it, so the entity tests run
+// through the real parser and the real composer, like the app does.
+SceneManifest parsed_manifest(const TempFixtureDir& dir, const std::string& text) {
+    const std::filesystem::path path = dir.path() / "encounter.manifest";
+    write_text(path, text);
+    return parse_manifest(path);
+}
+
+// The encounter manifest's entity line: the builder-pick transform, verbatim.
+std::string colossus_entity_line() {
+    return std::string("entity ") + kColossusGlb +
+           " 382 28.369 370 0 -0.909104 0 0.416570 1 1 1 minotaur_a_stand\n";
+}
+
+}  // namespace
+
+TEST_CASE("compose_scene loads an entity as a second rig") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("# encounter fixture\ninstance ") + kPlankGlb +
+                 " 0 0 0 0 0 0 1 1 1 1\n" + colossus_entity_line());
+
+    std::size_t player_mesh_begin = 999;
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb, &player_mesh_begin);
+
+    // Load order: the static instance, then the player, then the entity. The
+    // plank contributes 1 mesh, wander 12, the colossus 12 (S4 recon §1).
+    REQUIRE(scene.meshes.size() == 25);
+    REQUIRE(scene.rigs.size() == 2);
+    CHECK(scene.playerRig == 0);
+    CHECK(player_mesh_begin == 1);
+
+    // The player's rig is rig 0 and dynamic; the entity's is rig 1.
+    const RigCpu& player = scene.rigs[0];
+    const RigCpu& entity = scene.rigs[1];
+    CHECK(player.dynamic);
+    CHECK_FALSE(entity.dynamic);
+    CHECK(player.skin.joints.size() == 348);
+    CHECK(entity.skin.joints.size() == 238);
+
+    // The player keeps its own eleven baked clips (the S4.1 climb/fight set).
+    REQUIRE(player.animations.size() == 11);
+    CHECK(player.animations[0].name == "player_a_stand");
+    // The entity carries Valus's five baked clips; the app selects the one the
+    // manifest names by name, never by position.
+    REQUIRE(entity.animations.size() == 5);
+    Playback entity_by_name;
+    build_playback(scene, 1, entity_by_name);
+    const int idle_index = clip_index_named(entity_by_name, "minotaur_a_stand");
+    REQUIRE(idle_index >= 0);
+    const AnimationCpu& idle = entity.animations[idle_index];
+    CHECK_FALSE(idle.channels.empty());
+    CHECK(idle.duration > 0.0f);
+
+    // Half-open, disjoint ranges: the static plank is rig -1, the player's 12
+    // meshes are rig 0, the entity's 12 are rig 1.
+    CHECK(player.meshBegin == 1);
+    CHECK(player.meshEnd == 13);
+    CHECK(entity.meshBegin == 13);
+    CHECK(entity.meshEnd == 25);
+    CHECK(player.meshEnd == entity.meshBegin);  // disjoint
+    for (std::size_t i = 0; i < scene.meshes.size(); ++i) {
+        const int expected = i == 0 ? -1 : (i < 13 ? 0 : 1);
+        CHECK(scene.meshes[i].rig == expected);
+    }
+
+    // The entity's meshes carry the manifest placement; the player's carry
+    // identity (its own transform is applied by the app each frame).
+    CHECK(scene.meshes[13].model.m[12] == doctest::Approx(382.0f));
+    CHECK(scene.meshes[13].model.m[13] == doctest::Approx(28.369f));
+    CHECK(scene.meshes[13].model.m[14] == doctest::Approx(370.0f));
+    for (int k = 0; k < 16; ++k) {
+        const float expected = (k % 5 == 0) ? 1.0f : 0.0f;
+        CHECK(scene.meshes[1].model.m[k] == doctest::Approx(expected));
+    }
+
+    // The bounds cover the placed entity in world space.
+    CHECK(scene.boundsMax.x >= 382.0f);
+    CHECK(scene.boundsMax.z >= 370.0f);
+
+    // The ground: the entity's meshes must contribute no sample. With the
+    // entity's bind height (feet at local -8.739 → ~19.6 world) a leak would
+    // raise every cell it covers; the static plank stays the only source.
+    const Heightmap ground = build_heightmap(scene, 1.0f);
+    const float under_entity = heightmap_sample(ground, Vec3{382.0f, 0.0f, 370.0f});
+    CHECK(under_entity < 28.369f);
+    CHECK(heightmap_sample(ground, Vec3{0.5f, 0.0f, 0.5f}) < 0.2f);  // the plank top
+
+    // The same scene without the entity: the sample over the entity's column
+    // is identical (both fall back to the nearest static ground), so the
+    // entity changed no ground sample.
+    SceneManifest plain_manifest{};
+    plain_manifest.instances.push_back(placed_at(kPlankGlb, Vec3{0.0f, 0.0f, 0.0f}));
+    const Scene plain = compose_scene(test_library(), plain_manifest, kWanderGlb);
+    const Heightmap plain_ground = build_heightmap(plain, 1.0f);
+    CHECK(heightmap_sample(plain_ground, Vec3{382.0f, 0.0f, 370.0f}) ==
+          doctest::Approx(under_entity));
+
+    // --- S4 task 4: per-rig palettes, playback and grounding ------------------
+
+    // One playback per rig: the player keeps its eleven clips, the entity its
+    // five; each pose is sized by its own rig's joint count.
+    Playback player_playback;
+    Playback entity_playback;
+    build_playback(scene, 0, player_playback);
+    build_playback(scene, 1, entity_playback);
+    REQUIRE(player_playback.clips.size() == 11);
+    REQUIRE(entity_playback.clips.size() == 5);
+    CHECK(player_playback.clips[static_cast<std::size_t>(player_playback.index)].name ==
+          "player_a_stand");
+    CHECK(entity_playback.clips[static_cast<std::size_t>(entity_playback.index)].name ==
+          "minotaur_a_stand");
+    CHECK_FALSE(player_playback.has_procedural);
+    CHECK_FALSE(entity_playback.has_procedural);
+
+    const std::vector<Mat4> player_palette =
+        animation_pose(scene, 0, player_playback.clips[0], 0.0f);
+    const std::vector<Mat4> entity_palette =
+        animation_pose(scene, 1, entity_playback.clips[0], 0.8f);
+    CHECK(player_palette.size() == 348);
+    CHECK(entity_palette.size() == 238);
+
+    // The entity's palette of its own idle at t = 0.8 has moved off its t = 0
+    // pose (its root translation and 58 rotation tracks animate).
+    const std::vector<Mat4> entity_at_rest = animation_pose(scene, 1, entity_playback.clips[0], 0.0f);
+    bool moved = false;
+    for (std::size_t i = 0; i < entity_palette.size() && !moved; ++i) {
+        for (int k = 0; k < 16; ++k) {
+            if (std::abs(entity_palette[i].m[k] - entity_at_rest[i].m[k]) > 1e-4f) {
+                moved = true;
+                break;
+            }
+        }
+    }
+    CHECK(moved);
+
+    // Every mesh draws with its own rig's palette, and every joint index its
+    // vertices carry stays inside it: the entity's indices can never reach the
+    // player's buffer (nor the reverse).
+    for (const MeshCpu& mesh : scene.meshes) {
+        const std::size_t slot = mesh_palette_slot(scene, mesh);
+        REQUIRE(slot < scene.rigs.size());
+        CHECK((mesh.rig < 0 ? slot == 0 : static_cast<std::size_t>(mesh.rig) == slot));
+        const std::size_t palette_size = scene.rigs[slot].skin.joints.size();
+        std::size_t largest_joint = 0;
+        for (const Vertex& vertex : mesh.vertices) {
+            for (int k = 0; k < 4; ++k) {
+                largest_joint = std::max(largest_joint, static_cast<std::size_t>(vertex.j[k]));
+            }
+        }
+        CAPTURE(mesh.rig);  // -1 static, 0 player, 1 the entity
+        CHECK(largest_joint < palette_size);
+    }
+
+    // Grounding: the idle carries the root translation series on Bone_root, so
+    // the entity needs no lift; a root-less clip falls back to the rig's own
+    // origin-to-feet lift — the colossus' measured 8.739 m bind offset. The
+    // player's lift is its own 0.7596 m, untouched by the entity's range.
+    CHECK(clip_has_root_translation(scene, 1, entity.animations[0]));
+    CHECK(effective_rig_lift(scene, 1, entity.animations[0]) == 0.0f);
+    const AnimationCpu rootless{};
+    CHECK(effective_rig_lift(scene, 1, rootless) == doctest::Approx(8.739f).epsilon(1e-3));
+    CHECK(rig_ground_offset(scene, entity) == doctest::Approx(8.739f).epsilon(1e-3));
+    CHECK(rig_ground_offset(scene, player) == doctest::Approx(0.7596f).epsilon(1e-4));
+    CHECK(effective_player_lift(scene, player.animations[0], player.meshBegin, player.meshEnd) ==
+          0.0f);
+}
+
+TEST_CASE("compose_scene refuses an entity clip the model does not carry") {
+    TempFixtureDir dir;
+    // Wander as the entity with a clip it does not have: the load must fail
+    // naming the glb path and the clip, never fall back to a rest pose.
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("entity ") + kWanderGlb +
+                 " 0 0 0 0 0 0 1 1 1 1 player_a_fly\n");
+
+    std::string message;
+    try {
+        compose_scene(test_library(), manifest, kPlankGlb);
+        FAIL("compose_scene did not throw for a missing entity clip");
+    } catch (const std::runtime_error& error) {
+        message = error.what();
+    }
+    CHECK(message.find("entity") != std::string::npos);
+    CHECK(message.find(kWanderGlb) != std::string::npos);
+    CHECK(message.find("player_a_fly") != std::string::npos);
+}
+
+TEST_CASE("compose_scene refuses an entity whose model has no clips") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("entity ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1 idle\n");
+
+    std::string message;
+    try {
+        compose_scene(test_library(), manifest, kWanderGlb);
+        FAIL("compose_scene did not throw for an entity without clips");
+    } catch (const std::runtime_error& error) {
+        message = error.what();
+    }
+    CHECK(message.find("entity") != std::string::npos);
+    CHECK(message.find(kPlankGlb) != std::string::npos);
+    CHECK(message.find("idle") != std::string::npos);
+    CHECK(message.find("no animation clips") != std::string::npos);
+}
+
+TEST_CASE("compose_scene names the entity glb it cannot load") {
+    TempFixtureDir dir;
+    const SceneManifest manifest =
+        parsed_manifest(dir, "entity models/no_such_entity.glb 0 0 0 0 0 0 1 1 1 1 idle\n");
+
+    std::string message;
+    try {
+        compose_scene(test_library(), manifest, kWanderGlb);
+        FAIL("compose_scene did not throw for a missing entity glb");
+    } catch (const std::runtime_error& error) {
+        message = error.what();
+    }
+    CHECK(message.find("entity") != std::string::npos);
+    CHECK(message.find("no_such_entity.glb") != std::string::npos);
 }

@@ -55,6 +55,12 @@ Modes
                              transforms, the labeled spawn pick
   check-manifest [<file>] --library <dir>
                              pinned assertions for the arena manifest (exit 0/1)
+  compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
+                             derive the S4 encounter manifest from the S3 one:
+                             the 30 instances verbatim, a rewritten spawn, one
+                             `entity` (Valus), a new provenance header
+  check-encounter [<file>] --library <dir>
+                             pinned assertions for the encounter manifest (exit 0/1)
 
 Inputs are read-only.  Files are resolved against the game tree ($SOTC_GAME_ROOT,
 default below); a bare `.fs` name also resolves inside the family's directories,
@@ -161,6 +167,26 @@ ARENA_SPAWN = (309.312, 4.394, 285.403, 0.0)
 # x/z to integers, the entrance's y to 1 dp).
 ARENA_BOUNDS_EVIDENCE = ("x[237,431]", "y[28,70]", "z[298,390]")
 ENTRANCE_BOUNDS_EVIDENCE = ("x[259,345]", "y[-1.7,81.5]", "z[249,307]")
+
+# The S4 encounter (Task 6): the S3 arena's 30 instances carried verbatim, a
+# rewritten player spawn, and one placed animated entity.  The placement values
+# are the labeled builder-pick fallback measured in docs/notes/re4-placement.md
+# §8 (the pull's verdict was negative: no shipped record satisfies the bar).
+# The composer re-samples both ground heights from the converted ground mesh, so
+# the manifest carries measured metres — not hand-copied ones.
+ENCOUNTER_OUT = "out/re/stage/encounter.manifest"
+ENCOUNTER_ENTITY_GLB = (
+    "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb"
+)
+ENCOUNTER_ENTITY_CLIP = "minotaur_a_stand"
+ENCOUNTER_GROUND_GLB = "models/shadow/levels/arena_01/_cmn/arena_01_ground.glb"
+ENCOUNTER_ENTITY_XZ = (382.0, 370.0)   # builder pick on the bowl floor
+ENCOUNTER_SPAWN_XZ = (353.0, 345.0)    # misc/playerstartpositions.txt:1 (353 29 345)
+ENCOUNTER_PLACEMENT = "builder-pick"
+ENCOUNTER_SPAWN_PROVENANCE = "data-position+builder-yaw"
+ENCOUNTER_ENTITY_GROUND_Y = 28.369     # the re4 note's rounded ground sample
+ENCOUNTER_SPAWN_GROUND_Y = 27.951
+ENCOUNTER_BOWL_XZ = ((237.37488, 431.3924), (297.56433, 390.03604))  # arena_01.glb
 
 
 def die(msg, code=2):
@@ -881,9 +907,10 @@ CHECK_CWKS_SPEC = [
 # ------------------------------------------------------- manifest (W1↔W2) format
 # W1's committed schema (docs/notes/scene-manifest.md): one directive per line;
 # `#` starts a comment to end of line; blank lines are skipped; `instance
-# <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>` (12 tokens)
-# and `spawn <px> <py> <pz> <yawDeg>` (5); every number a full-string finite
-# float (the app's parse_manifest refuses `nan`, `inf`, `1.5x`, `1e999`).
+# <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>` (12 tokens),
+# `entity <glbRelPath> <10 numbers> <clipName>` (13) and `spawn <px> <py> <pz>
+# <yawDeg>` (5); every number a full-string finite float (the app's
+# parse_manifest refuses `nan`, `inf`, `1.5x`, `1e999`).
 
 MANIFEST_FLOAT_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 
@@ -905,11 +932,13 @@ def manifest_float(token, path, line, field):
 
 
 def parse_manifest_text(text, path):
-    """Parse the W1↔W2 schema; return (instances, spawns) where instances =
-    [(glbRelPath, [10 floats])] and spawns = [[4 floats]].  Raises
-    ManifestError shaped `<path>:<line>: <reason>` (the app's message shape)."""
+    """Parse the W1↔W2 schema; return (instances, spawns, entities) where
+    instances = [(glbRelPath, [10 floats])], spawns = [[4 floats]] and entities
+    = [(glbRelPath, [10 floats], clipName)].  Raises ManifestError shaped
+    `<path>:<line>: <reason>` (the app's message shape)."""
     instances = []
     spawns = []
+    entities = []
     for number, line in enumerate(text.splitlines(), start=1):
         tokens = line.split("#", 1)[0].split()
         if not tokens:
@@ -925,6 +954,17 @@ def parse_manifest_text(text, path):
                 for i, token in enumerate(tokens[2:])
             ]
             instances.append((tokens[1], values))
+        elif tokens[0] == "entity":
+            if len(tokens) != 13:
+                raise ManifestError(
+                    "%s:%d: entity expects 13 tokens (glb path + 10 numbers + clip), got %d"
+                    % (path, number, len(tokens))
+                )
+            values = [
+                manifest_float(token, path, number, MANIFEST_INSTANCE_FIELDS[i])
+                for i, token in enumerate(tokens[2:12])
+            ]
+            entities.append((tokens[1], values, tokens[12]))
         elif tokens[0] == "spawn":
             if len(tokens) != 5:
                 raise ManifestError(
@@ -938,7 +978,7 @@ def parse_manifest_text(text, path):
             spawns.append(values)
         else:
             raise ManifestError("%s:%d: unknown directive %r" % (path, number, tokens[0]))
-    return instances, spawns
+    return instances, spawns, entities
 
 
 def fmt_manifest_float(value):
@@ -977,11 +1017,9 @@ class GlbError(Exception):
     """The file does not fit the glb container the bounds check needs."""
 
 
-def glb_bounds(path):
-    """The glb's bounds (lo, hi) as the union of every POSITION accessor's
-    min/max.  Requires identity node transforms: the converter's output has
-    none (checked), and a node transform would make the raw accessor bounds
-    wrong — fail loudly instead of silently mis-measuring."""
+def glb_container(path):
+    """The glb's JSON document and BIN chunk (b"" when absent).  Raises
+    GlbError for a container that does not match its own header."""
     try:
         with open(path, "rb") as fh:
             data = fh.read()
@@ -999,9 +1037,27 @@ def glb_bounds(path):
         doc = json.loads(data[20 : 20 + chunk_len])
     except ValueError as exc:
         raise GlbError("JSON chunk does not parse: %s" % exc)
-    for node in doc.get("nodes", []):
-        if any(key in node for key in ("translation", "rotation", "scale", "matrix")):
-            raise GlbError("node transform present; the accessor bounds would need it")
+    bin_chunk = b""
+    offset = 20 + chunk_len
+    if offset + 8 <= len(data):
+        bin_len, bin_type = struct.unpack_from("<I4s", data, offset)
+        if bin_type == b"BIN\x00":
+            bin_chunk = data[offset + 8 : offset + 8 + bin_len]
+    return doc, bin_chunk
+
+
+def glb_bounds(path, require_identity=True):
+    """The glb's bounds (lo, hi) as the union of every POSITION accessor's
+    min/max.  With `require_identity` (the default) a node transform is an
+    error: the converter's output has none, and a node transform would make the
+    raw accessor bounds wrong — fail loudly instead of silently mis-measuring.
+    A skinned model (the colossus) passes False: its vertex positions are in
+    skin space, the same space the app's skinning path uses."""
+    doc, _ = glb_container(path)
+    if require_identity:
+        for node in doc.get("nodes", []):
+            if any(key in node for key in ("translation", "rotation", "scale", "matrix")):
+                raise GlbError("node transform present; the accessor bounds would need it")
     lo = [float("inf")] * 3
     hi = [float("-inf")] * 3
     primitives = 0
@@ -1017,6 +1073,79 @@ def glb_bounds(path):
     if primitives == 0:
         raise GlbError("no POSITION accessor (0 primitives)")
     return lo, hi
+
+
+def glb_ground_height(path, x, z):
+    """The highest Y of any triangle covering the column (x, z), or None.
+    Positions/indices are read from the BIN chunk; node transforms are ignored
+    (the level glbs are already world-positioned and identity-placed)."""
+    doc, bin_chunk = glb_container(path)
+    best = None
+    for mesh in doc.get("meshes", []):
+        for primitive in mesh.get("primitives", []):
+            position = primitive["attributes"].get("POSITION")
+            if position is None:
+                continue
+            accessor = doc["accessors"][position]
+            view = doc["bufferViews"][accessor["bufferView"]]
+            base = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+            stride = view.get("byteStride", 12)
+            count = accessor["count"]
+            points = [
+                struct.unpack_from("<fff", bin_chunk, base + i * stride) for i in range(count)
+            ]
+            indices = primitive.get("indices")
+            if indices is None:
+                order = range(0, count - 2, 3)
+                tri = lambda k: (points[k], points[k + 1], points[k + 2])  # noqa: E731
+            else:
+                iacc = doc["accessors"][indices]
+                iview = doc["bufferViews"][iacc["bufferView"]]
+                ibase = iview.get("byteOffset", 0) + iacc.get("byteOffset", 0)
+                ctype = {5121: "<B", 5123: "<H", 5125: "<I"}[iacc["componentType"]]
+                isize = struct.calcsize(ctype)
+                idx = [
+                    struct.unpack_from(ctype, bin_chunk, ibase + i * isize)[0]
+                    for i in range(iacc["count"])
+                ]
+                order = range(0, len(idx) - 2, 3)
+                tri = lambda k: (points[idx[k]], points[idx[k + 1]], points[idx[k + 2]])  # noqa: E731
+            for k in order:
+                a, b, c = tri(k)
+                d = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])
+                if abs(d) < 1e-9:
+                    continue
+                u = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / d
+                v = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / d
+                if u < 0 or v < 0 or u + v > 1:
+                    continue
+                y = a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1])
+                if best is None or y > best:
+                    best = y
+    return best
+
+
+def yaw_between(source_xz, target_xz):
+    """The app's yaw convention (degrees): 0 faces +Z, 90 faces +X."""
+    return math.degrees(math.atan2(target_xz[0] - source_xz[0], target_xz[1] - source_xz[1]))
+
+
+def yaw_quaternion(yaw_deg):
+    """The +Y rotation quaternion (x, y, z, w) — the app's player/entity yaw."""
+    half = 0.5 * math.radians(yaw_deg)
+    return (0.0, math.sin(half), 0.0, math.cos(half))
+
+
+def yaw_from_quaternion(values):
+    """Recovers the +Y yaw from a glTF-order (x, y, z, w) quaternion; refuses an
+    axis that is not +Y (the encounter's placement contract)."""
+    qx, qy, qz, qw = values[3], values[4], values[5], values[6]
+    if abs(qx) > 1e-6 or abs(qz) > 1e-6:
+        raise ManifestError("entity rotation is not a pure +Y yaw (x=%.6f z=%.6f)" % (qx, qz))
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if abs(norm - 1.0) > 1e-5:
+        raise ManifestError("entity rotation is not unit length (|q|=%.6f)" % norm)
+    return math.degrees(2.0 * math.atan2(qy, qw))
 
 
 def bounds_decimals(text):
@@ -1133,8 +1262,8 @@ def cmd_compose(args):
 
     # Round-trip the text through the schema before writing: a path that the
     # format cannot carry (whitespace, `#`) must fail here, not in the app.
-    parsed_instances, parsed_spawns = parse_manifest_text(text, args.out)
-    if len(parsed_instances) != len(instances) or len(parsed_spawns) != 1:
+    parsed_instances, parsed_spawns, parsed_entities = parse_manifest_text(text, args.out)
+    if len(parsed_instances) != len(instances) or len(parsed_spawns) != 1 or parsed_entities:
         die(
             "composed manifest does not round-trip: %d instances, %d spawns"
             % (len(parsed_instances), len(parsed_spawns))
@@ -1188,7 +1317,7 @@ def cmd_check_manifest(args):
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ManifestError("%s: not UTF-8 text (%s)" % (path, exc))
-        instances, spawns = parse_manifest_text(text, path)
+        instances, spawns, _entities = parse_manifest_text(text, path)
         error = None
     except ManifestError as exc:
         instances, spawns, error = None, None, str(exc)
@@ -1359,6 +1488,582 @@ CHECK_MANIFEST_SPEC = [
 ]
 
 
+# ------------------------------------------------------- encounter (S4, Task 6)
+# The encounter manifest derives from the S3 arena manifest (one source for the
+# 30 instances), rewrites the spawn to the data position with a builder yaw,
+# appends one `entity` (Valus), and writes a NEW provenance header: the S3
+# header is not inherited, so the placement/spawn labels travel with this file.
+# docs/notes/re4-placement.md §8 is the source of the values (the pull's verdict
+# was negative; the labeled builder pick is the design's fallback).
+
+
+def encounter_instance_set(library):
+    """The S3 instance set from the library, sorted, for the set comparison."""
+    sets = arena_sets(library)
+    return [rel for _, set_instances, _ in sets for rel in set_instances]
+
+
+def fmt_ground(value):
+    """A ground sample as manifest metres: millimetre precision (the re4 note's
+    rounded values are the same numbers: 28.369 / 27.951)."""
+    return fmt_manifest_float(round(value, 3))
+
+
+def cmd_compose_encounter(args):
+    library = os.path.abspath(args.library)
+    if not os.path.isdir(library):
+        die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
+    s3_path = os.path.abspath(args.s3_manifest)
+    try:
+        with open(s3_path, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        die(
+            "S3 manifest not found: %s (%s) — regenerate it: python3 tools/re/stage/probe.py "
+            "compose --library %s --out %s"
+            % (s3_path, exc.strerror or exc, library, MANIFEST_OUT)
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        die("%s: not UTF-8 text (%s)" % (s3_path, exc))
+    try:
+        instances, spawns, entities = parse_manifest_text(text, s3_path)
+    except ManifestError as exc:
+        die("S3 manifest does not parse: %s" % exc)
+    if entities:
+        die("S3 manifest already carries %d entity line(s); compose the encounter from the arena manifest" % len(entities))
+    if len(instances) != ARENA_INSTANCES:
+        die(
+            "S3 manifest has %d instances, expected %d — regenerate it with `compose`"
+            % (len(instances), ARENA_INSTANCES)
+        )
+    if not spawns:
+        die("S3 manifest has no spawn line; `compose` always writes one")
+    want = encounter_instance_set(library)
+    rels = [rel for rel, _ in instances]
+    if sorted(rels) != sorted(want):
+        die(
+            "S3 manifest's instance set differs from the library's non-*_collision* set "
+            "(%d vs %d): regenerate it with `compose`" % (len(rels), len(want))
+        )
+
+    ground_glb = os.path.join(library, ENCOUNTER_GROUND_GLB)
+    try:
+        entity_ground = glb_ground_height(ground_glb, *ENCOUNTER_ENTITY_XZ)
+        spawn_ground = glb_ground_height(ground_glb, *ENCOUNTER_SPAWN_XZ)
+    except GlbError as exc:
+        die("ground mesh %s: %s" % (ground_glb, exc))
+    if entity_ground is None or spawn_ground is None:
+        die(
+            "ground mesh %s has no triangle under %s"
+            % (ground_glb, ENCOUNTER_ENTITY_XZ if entity_ground is None else ENCOUNTER_SPAWN_XZ)
+        )
+
+    entity_yaw = yaw_between(ENCOUNTER_ENTITY_XZ, ENCOUNTER_SPAWN_XZ)
+    spawn_yaw = yaw_between(ENCOUNTER_SPAWN_XZ, ENCOUNTER_ENTITY_XZ)
+    qx, qy, qz, qw = yaw_quaternion(entity_yaw)
+
+    header = [
+        "# encounter — S4.0 \"The encounter\", generated by tools/re/stage/probe.py compose-encounter",
+        "# source: %s (sha256 %s, %d instances); the instance lines are carried"
+        % (args.s3_manifest, digest, len(instances)),
+        "#   from that arena composition — one source for the arena; the S3 header is NOT inherited.",
+        "# placement=%s entity=%s clip=%s"
+        % (ENCOUNTER_PLACEMENT, ENCOUNTER_ENTITY_GLB, ENCOUNTER_ENTITY_CLIP),
+        "#   bowl floor (%s, %s), measured ground %s m, yaw %.6f deg (q %.6f %.6f %.6f %.6f),"
+        % (
+            fmt_manifest_float(ENCOUNTER_ENTITY_XZ[0]),
+            fmt_manifest_float(ENCOUNTER_ENTITY_XZ[1]),
+            fmt_ground(entity_ground),
+            entity_yaw,
+            qx,
+            qy,
+            qz,
+            qw,
+        ),
+        "#   facing the spawn.  Builder pick, not data: no shipped record satisfies the",
+        "#   (a)+(b)+(c) bar (docs/notes/re4-placement.md §7-8).",
+        "# spawn=%s position (%s, %s), measured ground %s m, yaw %.6f deg;"
+        % (
+            ENCOUNTER_SPAWN_PROVENANCE,
+            fmt_manifest_float(ENCOUNTER_SPAWN_XZ[0]),
+            fmt_manifest_float(ENCOUNTER_SPAWN_XZ[1]),
+            fmt_ground(spawn_ground),
+            spawn_yaw,
+        ),
+        "#   x/z from misc/playerstartpositions.txt:1 (`353 29 345`, y=29 is not the feet",
+        "#   height), y re-sampled on %s, yaw builder-chosen to face the entity."
+        % os.path.basename(ENCOUNTER_GROUND_GLB),
+        "# grounding: the manifest y is the ground sample; the idle clip carries Bone_root's",
+        "#   translation series, so the app applies no extra origin-to-feet lift (s4-status feet=ok).",
+    ]
+    lines = list(header)
+    for rel, values in instances:
+        lines.append(
+            "instance %s %s" % (rel, " ".join(fmt_manifest_float(v) for v in values))
+        )
+    lines.append(
+        "entity %s %s %s %s %s %s %s %s %s %s %s %s"
+        % (
+            ENCOUNTER_ENTITY_GLB,
+            fmt_manifest_float(ENCOUNTER_ENTITY_XZ[0]),
+            fmt_ground(entity_ground),
+            fmt_manifest_float(ENCOUNTER_ENTITY_XZ[1]),
+            "0",
+            "%.6f" % qy,
+            "0",
+            "%.6f" % qw,
+            "1",
+            "1",
+            "1",
+            ENCOUNTER_ENTITY_CLIP,
+        )
+    )
+    lines.append(
+        "spawn %s %s %s %s"
+        % (
+            fmt_manifest_float(ENCOUNTER_SPAWN_XZ[0]),
+            fmt_ground(spawn_ground),
+            fmt_manifest_float(ENCOUNTER_SPAWN_XZ[1]),
+            "%.6f" % spawn_yaw,
+        )
+    )
+    text = "\n".join(lines) + "\n"
+
+    # Round-trip through the schema before writing: a path or value the format
+    # cannot carry must fail here, not in the app.
+    try:
+        parsed = parse_manifest_text(text, args.out)
+    except ManifestError as exc:
+        die("composed encounter manifest does not parse: %s" % exc)
+    if len(parsed[0]) != ARENA_INSTANCES or len(parsed[1]) != 1 or len(parsed[2]) != 1:
+        die(
+            "composed encounter manifest does not round-trip: %d instances, %d spawns, %d entities"
+            % (len(parsed[0]), len(parsed[1]), len(parsed[2]))
+        )
+
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w") as fh:
+        fh.write(text)
+
+    print("compose-encounter: library %s" % library)
+    print(
+        "compose-encounter: source %s (sha256 %s, %d instances)"
+        % (s3_path, digest[:16] + "…", len(instances))
+    )
+    print(
+        "compose-encounter: entity %s clip %s at (%s, %s) ground %s yaw %.6f (placement=%s)"
+        % (
+            ENCOUNTER_ENTITY_GLB,
+            ENCOUNTER_ENTITY_CLIP,
+            fmt_manifest_float(ENCOUNTER_ENTITY_XZ[0]),
+            fmt_manifest_float(ENCOUNTER_ENTITY_XZ[1]),
+            fmt_ground(entity_ground),
+            entity_yaw,
+            ENCOUNTER_PLACEMENT,
+        )
+    )
+    print(
+        "compose-encounter: spawn (%s, %s) ground %s yaw %.6f (provenance=%s)"
+        % (
+            fmt_manifest_float(ENCOUNTER_SPAWN_XZ[0]),
+            fmt_manifest_float(ENCOUNTER_SPAWN_XZ[1]),
+            fmt_ground(spawn_ground),
+            spawn_yaw,
+            ENCOUNTER_SPAWN_PROVENANCE,
+        )
+    )
+    print(
+        "compose-encounter: wrote %s (%d instances + 1 entity + 1 spawn + %d comment lines)"
+        % (out, len(instances), len(header))
+    )
+    return 0
+
+
+CHECK_ENCOUNTER_SPEC = [
+    ("manifest parses (S3 schema + entity directive)", "structure", "ok"),
+    ("manifest instances (the S3 arena set)", "structure", ARENA_INSTANCES),
+    ("instance set == the library's non-*_collision* set", "structure",
+     "exact (%d)" % ARENA_INSTANCES),
+    ("every glbRelPath exists under the library", "structure",
+     "%d/%d" % (ARENA_INSTANCES, ARENA_INSTANCES)),
+    ("identity transforms on every instance", "structure",
+     "%d/%d" % (ARENA_INSTANCES, ARENA_INSTANCES)),
+    ("exactly one entity", "structure", 1),
+    ("exactly one spawn", "structure", 1),
+    ("header provenance placement=builder-pick", "provenance", ENCOUNTER_PLACEMENT),
+    ("header provenance spawn=data-position+builder-yaw", "provenance",
+     ENCOUNTER_SPAWN_PROVENANCE),
+    ("header provenance entity clip=minotaur_a_stand", "provenance", ENCOUNTER_ENTITY_CLIP),
+    ("entity glb", "structure", ENCOUNTER_ENTITY_GLB),
+    ("entity glb exists under the library", "structure", "present"),
+    ("entity clip", "structure", ENCOUNTER_ENTITY_CLIP),
+    ("spawn inside the arena bowl (x/z)", "structure", "inside"),
+    ("entity inside the arena bowl (x/z)", "structure", "inside"),
+    ("spawn y == the sampled ground (%.3f)" % ENCOUNTER_SPAWN_GROUND_Y, "measured",
+     "±0.001"),
+    ("entity y == the sampled ground (%.3f)" % ENCOUNTER_ENTITY_GROUND_Y, "measured",
+     "±0.001"),
+    ("entity faces the spawn (quaternion yaw)", "measured", "±0.01 deg"),
+    ("spawn faces the entity (yaw)", "measured", "±0.01 deg"),
+    ("entity yawed bind footprint inside the bowl", "measured", "inside"),
+    ("spawn outside the entity's yawed bind footprint", "structure", "outside"),
+    ("spawn-entity distance < 100 m", "measured", "< 100"),
+]
+
+
+def cmd_check_encounter(args):
+    library = os.path.abspath(args.library)
+    if not os.path.isdir(library):
+        die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
+    path = os.path.abspath(args.file)
+    checks = []
+
+    def add(name, kind, expected, measured, ok):
+        checks.append(Check(name, kind, expected, measured, ok))
+
+    def fail_all(reason):
+        for name, kind, expected in CHECK_ENCOUNTER_SPEC:
+            add(name, kind, expected, "unparsed: %s" % reason, False)
+
+    try:
+        if not os.path.isfile(path):
+            raise ManifestError("%s: cannot open manifest file" % path)
+        raw = read_bytes(path)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ManifestError("%s: not UTF-8 text (%s)" % (path, exc))
+        instances, spawns, entities = parse_manifest_text(text, path)
+        error = None
+    except ManifestError as exc:
+        instances, spawns, entities, error = None, None, None, str(exc)
+
+    if error is not None:
+        fail_all(error)
+    else:
+        want = encounter_instance_set(library)
+        rels = [rel for rel, _ in instances]
+        add(
+            "manifest parses (S3 schema + entity directive)",
+            "structure",
+            "ok",
+            "ok",
+            True,
+        )
+        add(
+            "manifest instances (the S3 arena set)",
+            "structure",
+            ARENA_INSTANCES,
+            len(instances),
+            len(instances) == ARENA_INSTANCES,
+        )
+        exact = sorted(rels) == sorted(want) and len(rels) == len(set(rels))
+        missing = sorted(set(want) - set(rels))
+        extra = sorted(set(rels) - set(want))
+        duplicates = sorted(rel for rel in set(rels) if rels.count(rel) > 1)
+        if exact:
+            set_detail = "exact (%d)" % len(want)
+        else:
+            parts = []
+            if missing:
+                parts.append("missing %d (%s)" % (len(missing), ", ".join(missing[:3])))
+            if extra:
+                parts.append("extra %d (%s)" % (len(extra), ", ".join(extra[:3])))
+            if duplicates:
+                parts.append("duplicates %d (%s)" % (len(duplicates), ", ".join(duplicates[:3])))
+            set_detail = "differs: " + "; ".join(parts)
+        add(
+            "instance set == the library's non-*_collision* set",
+            "structure",
+            "exact (%d)" % len(want),
+            set_detail,
+            exact,
+        )
+        existing = [rel for rel in rels if os.path.isfile(os.path.join(library, rel))]
+        missing_files = sorted(set(rels) - set(existing))
+        exists_detail = "%d/%d" % (len(existing), len(rels))
+        if missing_files:
+            exists_detail += " missing: %s" % ", ".join(missing_files[:3])
+        add(
+            "every glbRelPath exists under the library",
+            "structure",
+            "%d/%d" % (len(rels), len(rels)),
+            exists_detail,
+            len(existing) == len(rels),
+        )
+        identity = [
+            1
+            for _, v in instances
+            if v[:3] == [0, 0, 0] and v[3:7] == [0, 0, 0, 1] and v[7:10] == [1, 1, 1]
+        ]
+        add(
+            "identity transforms on every instance",
+            "structure",
+            "%d/%d" % (len(instances), len(instances)),
+            "%d/%d" % (len(identity), len(instances)),
+            len(identity) == len(instances),
+        )
+        add("exactly one entity", "structure", 1, len(entities), len(entities) == 1)
+        add("exactly one spawn", "structure", 1, len(spawns), len(spawns) == 1)
+
+        add(
+            "header provenance placement=builder-pick",
+            "provenance",
+            ENCOUNTER_PLACEMENT,
+            "present" if "placement=%s" % ENCOUNTER_PLACEMENT in text else "absent",
+            "placement=%s" % ENCOUNTER_PLACEMENT in text,
+        )
+        add(
+            "header provenance spawn=data-position+builder-yaw",
+            "provenance",
+            ENCOUNTER_SPAWN_PROVENANCE,
+            "present" if "spawn=%s" % ENCOUNTER_SPAWN_PROVENANCE in text else "absent",
+            "spawn=%s" % ENCOUNTER_SPAWN_PROVENANCE in text,
+        )
+        add(
+            "header provenance entity clip=minotaur_a_stand",
+            "provenance",
+            ENCOUNTER_ENTITY_CLIP,
+            "present" if "clip=%s" % ENCOUNTER_ENTITY_CLIP in text else "absent",
+            "clip=%s" % ENCOUNTER_ENTITY_CLIP in text,
+        )
+
+        entity = entities[0] if entities else None
+        entity_rel, entity_values, entity_clip = entity if entity is not None else ("", None, "")
+        add(
+            "entity glb",
+            "structure",
+            ENCOUNTER_ENTITY_GLB,
+            entity_rel or "absent",
+            entity_rel == ENCOUNTER_ENTITY_GLB,
+        )
+        entity_exists = entity is not None and os.path.isfile(
+            os.path.join(library, entity_rel)
+        )
+        add(
+            "entity glb exists under the library",
+            "structure",
+            "present",
+            "present" if entity_exists else "missing",
+            entity_exists,
+        )
+        add(
+            "entity clip",
+            "structure",
+            ENCOUNTER_ENTITY_CLIP,
+            entity_clip or "absent",
+            entity_clip == ENCOUNTER_ENTITY_CLIP,
+        )
+
+        bowl = ENCOUNTER_BOWL_XZ
+        spawn = spawns[0] if spawns else None
+
+        def in_bowl(point):
+            return bowl[0][0] <= point[0] <= bowl[0][1] and bowl[1][0] <= point[2] <= bowl[1][1]
+
+        add(
+            "spawn inside the arena bowl (x/z)",
+            "structure",
+            "inside",
+            "inside" if spawn is not None and in_bowl(spawn) else
+            ("outside (%s)" % ("%.3f %.3f" % (spawn[0], spawn[2]) if spawn else "absent")),
+            spawn is not None and in_bowl(spawn),
+        )
+        add(
+            "entity inside the arena bowl (x/z)",
+            "structure",
+            "inside",
+            "inside" if entity is not None and in_bowl(entity_values) else
+            ("outside (%s)" % ("%.3f %.3f" % (entity_values[0], entity_values[2])
+                               if entity is not None else "absent")),
+            entity is not None and in_bowl(entity_values),
+        )
+
+        ground_glb = os.path.join(library, ENCOUNTER_GROUND_GLB)
+        measured_spawn_ground = None
+        measured_entity_ground = None
+        try:
+            if spawn is not None:
+                measured_spawn_ground = glb_ground_height(ground_glb, spawn[0], spawn[2])
+            if entity is not None:
+                measured_entity_ground = glb_ground_height(
+                    ground_glb, entity_values[0], entity_values[2]
+                )
+        except GlbError as exc:
+            add("spawn y == the sampled ground (%.3f)" % ENCOUNTER_SPAWN_GROUND_Y,
+                "measured", "±0.001", "unparsed: %s" % exc, False)
+            add("entity y == the sampled ground (%.3f)" % ENCOUNTER_ENTITY_GROUND_Y,
+                "measured", "±0.001", "unparsed: %s" % exc, False)
+        else:
+            for label, point, measured, expected in (
+                ("spawn", spawn, measured_spawn_ground, ENCOUNTER_SPAWN_GROUND_Y),
+                ("entity", entity_values, measured_entity_ground, ENCOUNTER_ENTITY_GROUND_Y),
+            ):
+                if not point:
+                    add(
+                        "%s y == the sampled ground (%.3f)" % (label, expected),
+                        "measured",
+                        "±0.001",
+                        "absent",
+                        False,
+                    )
+                    continue
+                ok = (
+                    measured is not None
+                    and abs(point[1] - measured) <= 0.001
+                    and abs(measured - expected) <= 0.001
+                )
+                detail = (
+                    "manifest %.3f, ground %s"
+                    % (point[1], "no hit" if measured is None else "%.3f" % measured)
+                )
+                add(
+                    "%s y == the sampled ground (%.3f)" % (label, expected),
+                    "measured",
+                    "±0.001",
+                    detail,
+                    ok,
+                )
+
+        try:
+            entity_yaw = yaw_from_quaternion(entity_values) if entity is not None else None
+        except ManifestError as exc:
+            entity_yaw = None
+            add("entity faces the spawn (quaternion yaw)", "measured", "±0.01 deg",
+                "unparsed: %s" % exc, False)
+        else:
+            if entity is not None and spawn is not None:
+                expected_yaw = yaw_between(
+                    (entity_values[0], entity_values[2]), (spawn[0], spawn[2])
+                )
+                delta = abs((entity_yaw - expected_yaw + 180.0) % 360.0 - 180.0)
+                add(
+                    "entity faces the spawn (quaternion yaw)",
+                    "measured",
+                    "±0.01 deg",
+                    "%.6f (expected %.6f, delta %.6f)" % (entity_yaw, expected_yaw, delta),
+                    delta <= 0.01,
+                )
+            else:
+                add("entity faces the spawn (quaternion yaw)", "measured", "±0.01 deg",
+                    "absent", False)
+
+        if entity is not None and spawn is not None:
+            expected_yaw = yaw_between(
+                (spawn[0], spawn[2]), (entity_values[0], entity_values[2])
+            )
+            delta = abs((spawn[3] - expected_yaw + 180.0) % 360.0 - 180.0)
+            add(
+                "spawn faces the entity (yaw)",
+                "measured",
+                "±0.01 deg",
+                "%.6f (expected %.6f, delta %.6f)" % (spawn[3], expected_yaw, delta),
+                delta <= 0.01,
+            )
+        else:
+            add("spawn faces the entity (yaw)", "measured", "±0.01 deg", "absent", False)
+
+        # The yawed bind footprint (the re4 note's bowl-margin check): rotate the
+        # entity glb's local POSITION bounds by the placement yaw and translate.
+        if entity is None or entity_yaw is None:
+            add("entity yawed bind footprint inside the bowl", "measured", "inside",
+                "absent", False)
+            add("spawn outside the entity's yawed bind footprint", "structure",
+                "outside", "absent", False)
+        else:
+            try:
+                # Skinned model: its accessor bounds are already in the skin
+                # space the app poses, so node transforms must not be required.
+                local_lo, local_hi = glb_bounds(
+                    os.path.join(library, ENCOUNTER_ENTITY_GLB), require_identity=False
+                )
+            except GlbError as exc:
+                add("entity yawed bind footprint inside the bowl", "measured", "inside",
+                    "unparsed: %s" % exc, False)
+                add("spawn outside the entity's yawed bind footprint", "structure",
+                    "outside", "unparsed: %s" % exc, False)
+            else:
+                radians = math.radians(entity_yaw)
+                cos_yaw, sin_yaw = math.cos(radians), math.sin(radians)
+                corners = []
+                for lx in (local_lo[0], local_hi[0]):
+                    for lz in (local_lo[2], local_hi[2]):
+                        corners.append(
+                            (
+                                entity_values[0] + cos_yaw * lx + sin_yaw * lz,
+                                entity_values[2] - sin_yaw * lx + cos_yaw * lz,
+                            )
+                        )
+                footprint = (
+                    (min(c[0] for c in corners), max(c[0] for c in corners)),
+                    (min(c[1] for c in corners), max(c[1] for c in corners)),
+                )
+                inside = (
+                    footprint[0][0] >= bowl[0][0]
+                    and footprint[0][1] <= bowl[0][1]
+                    and footprint[1][0] >= bowl[1][0]
+                    and footprint[1][1] <= bowl[1][1]
+                )
+                add(
+                    "entity yawed bind footprint inside the bowl",
+                    "measured",
+                    "inside",
+                    "x[%.3f,%.3f] z[%.3f,%.3f]"
+                    % (footprint[0][0], footprint[0][1], footprint[1][0], footprint[1][1]),
+                    inside,
+                )
+                if spawn is not None:
+                    outside = not (
+                        footprint[0][0] <= spawn[0] <= footprint[0][1]
+                        and footprint[1][0] <= spawn[2] <= footprint[1][1]
+                    )
+                    add(
+                        "spawn outside the entity's yawed bind footprint",
+                        "structure",
+                        "outside",
+                        "outside" if outside else "inside",
+                        outside,
+                    )
+                else:
+                    add("spawn outside the entity's yawed bind footprint", "structure",
+                        "outside", "absent", False)
+        if entity is not None and spawn is not None:
+            distance = math.hypot(
+                spawn[0] - entity_values[0], spawn[2] - entity_values[2]
+            )
+            add(
+                "spawn-entity distance < 100 m",
+                "measured",
+                "< 100",
+                "%.3f m" % distance,
+                distance < 100.0,
+            )
+        else:
+            add("spawn-entity distance < 100 m", "measured", "< 100", "absent", False)
+
+    print("check-encounter: %s (library %s)" % (path, library))
+    for check in checks:
+        status = "PASS" if check.ok else "FAIL"
+        print(
+            "%-5s %-9s %-58s expected %s, measured %s"
+            % (status, check.kind, check.name, check.expected, check.measured)
+        )
+    failed = [c for c in checks if not c.ok]
+    print("summary: %d/%d gating assertions pass" % (len(checks) - len(failed), len(checks)))
+    if failed:
+        print(
+            "gate: NOT MET — %d assertion(s) fail; re-measure and record "
+            "(docs/notes/re4-placement.md §8)" % len(failed)
+        )
+        return 1
+    print("gate: MET")
+    return 0
+
+
 # ------------------------------------------------------------------------ main
 
 
@@ -1422,6 +2127,37 @@ def main(argv=None):
         "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
     )
     p_check_manifest.set_defaults(func=cmd_check_manifest)
+
+    p_compose_encounter = sub.add_parser(
+        "compose-encounter",
+        help="derive the S4 encounter manifest from the S3 arena manifest",
+    )
+    p_compose_encounter.add_argument(
+        "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
+    )
+    p_compose_encounter.add_argument(
+        "--s3-manifest",
+        default=MANIFEST_OUT,
+        metavar="FILE",
+        help="the arena manifest to derive from (default %s)" % MANIFEST_OUT,
+    )
+    p_compose_encounter.add_argument(
+        "--out",
+        default=ENCOUNTER_OUT,
+        metavar="FILE",
+        help="encounter manifest output (default %s)" % ENCOUNTER_OUT,
+    )
+    p_compose_encounter.set_defaults(func=cmd_compose_encounter)
+
+    p_check_encounter = sub.add_parser(
+        "check-encounter", help="pinned assertions for the S4 encounter manifest"
+    )
+    p_check_encounter.add_argument("file", nargs="?", default=ENCOUNTER_OUT,
+                                   help="manifest (default %s)" % ENCOUNTER_OUT)
+    p_check_encounter.add_argument(
+        "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
+    )
+    p_check_encounter.set_defaults(func=cmd_check_encounter)
 
     args = parser.parse_args(argv)
     if not args.command:

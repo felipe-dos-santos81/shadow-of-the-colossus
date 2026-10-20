@@ -19,7 +19,7 @@ struct Vertex {
 static_assert(sizeof(Vertex) == 56, "Vertex must match the pipeline vertex layout");
 
 // One primitive from the converted glb, holding every attribute the renderer
-// needs (the skeleton and the clips live on Scene).
+// needs (the skeleton and the clips live on the rig records in Scene).
 struct MeshCpu {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
@@ -28,6 +28,11 @@ struct MeshCpu {
     // single-glb load, the placed instance's TRS in a composed scene. The
     // vertices stay in the glb's own space.
     Mat4 model = mat4_identity();
+    // The rig this mesh is drawn with: an index into Scene::rigs, or -1 for a
+    // static mesh (a manifest instance). A single glb always loads as rig 0
+    // (includeRig=true, skeleton or not). The player's meshes are 0, each
+    // `entity`'s are 1, 2, ... in manifest order.
+    int rig = -1;
 };
 
 // One decoded PNG, RGBA8, top-down (glTF image origin).
@@ -76,14 +81,52 @@ struct SkinCpu {
     std::vector<JointCpu> joints;
 };
 
+// One loaded glb's rig: its skeleton, its clips, and the half-open range of
+// Scene::meshes it owns. Ranges are disjoint and cover every rigged mesh; the
+// meshes of a rigged glb that contributed no geometry leave an empty range.
+// `dynamic` marks the player's rig (0): the one the follower controller drives
+// each frame; an entity's rig (1..) plays its own clip.
+struct RigCpu {
+    SkinCpu skin;
+    std::vector<AnimationCpu> animations;
+    std::size_t meshBegin = 0;
+    std::size_t meshEnd = 0;
+    bool dynamic = false;
+};
+
 // A converted model, ready for the renderer: geometry, materials, textures, the
-// world-space bounds of all vertices, and — when the source has them — the
-// skeleton and its clips.
+// world-space bounds of all vertices, and — when the source has them — one rig
+// record per skeleton-bearing glb (the player first, then the entities).
 struct Scene {
     std::vector<MeshCpu> meshes;
     std::vector<MaterialCpu> materials;
     std::vector<TextureCpu> textures;
     Vec3 boundsMin, boundsMax;
-    SkinCpu skin;
-    std::vector<AnimationCpu> animations;
+    std::vector<RigCpu> rigs;
+    std::size_t playerRig = 0;  // index into rigs; 0 after a load
 };
+
+// The rig at `rigIndex`. An index that is no rig of this scene (a default-
+// constructed Scene, or a hand-built test fixture) answers with a shared empty
+// record — no joints, no clips, an empty mesh range — so callers never index an
+// empty vector and every query has a defined answer.
+inline const RigCpu& rig_at(const Scene& scene, std::size_t rigIndex) {
+    static const RigCpu kNoRig{};
+    return rigIndex < scene.rigs.size() ? scene.rigs[rigIndex] : kNoRig;
+}
+
+// The player's rig — rigs[playerRig], the one the S3 single-rig path drives.
+inline const RigCpu& player_rig(const Scene& scene) { return rig_at(scene, scene.playerRig); }
+
+// The palette slot a mesh is drawn with: the mesh's own rig, or slot 0 for a
+// static mesh (rig < 0) — an unskinned vertex has zero weights, so the shader
+// reads whichever palette is bound and passes it through unchanged. Slots are
+// the renderer's per-rig palette buffers, one per `Scene::rigs` entry; a scene
+// with no rigs still has slot 0 (the renderer's identity fallback).
+inline std::size_t mesh_palette_slot(const Scene& scene, const MeshCpu& mesh) {
+    if (mesh.rig <= 0) {
+        return 0;  // static (or the player): slot 0
+    }
+    const std::size_t rig = static_cast<std::size_t>(mesh.rig);
+    return rig < scene.rigs.size() ? rig : 0;  // an index no rig of this scene: static slot
+}

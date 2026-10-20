@@ -55,10 +55,29 @@ bool parse_float_token(const std::string& token, float& out) {
     return true;
 }
 
-// The directives' numeric fields, in schema order (for error messages).
-constexpr const char* kInstanceFields[] = {"px", "py", "pz", "qx", "qy",
-                                           "qz", "qw", "sx", "sy", "sz"};
+// The directives' numeric fields, in schema order (for error messages). An
+// entity places with the same ten numbers as an instance, then names its clip.
+constexpr const char* kPlacementFields[] = {"px", "py", "pz", "qx", "qy",
+                                            "qz", "qw", "sx", "sy", "sz"};
 constexpr const char* kSpawnFields[] = {"px", "py", "pz", "yawDeg"};
+
+// Parses the placement directives' shared ten-number tail starting at
+// `tokens[first]`, or fails naming the directive and field.
+void parse_placement_tokens(const std::filesystem::path& path, int line,
+                            const std::vector<std::string>& tokens, std::size_t first,
+                            const std::string& directive, ManifestInstance& out) {
+    float values[10] = {};
+    for (int i = 0; i < 10; ++i) {
+        if (!parse_float_token(tokens[first + static_cast<std::size_t>(i)], values[i])) {
+            fail(path, line, directive + ": invalid number '" +
+                                 tokens[first + static_cast<std::size_t>(i)] + "' for " +
+                                 kPlacementFields[i]);
+        }
+    }
+    out.position = Vec3{values[0], values[1], values[2]};
+    out.rotation = Quat{values[3], values[4], values[5], values[6]};
+    out.scale = Vec3{values[7], values[8], values[9]};
+}
 
 }  // namespace
 
@@ -97,17 +116,19 @@ SceneManifest parse_manifest(const std::filesystem::path& path) {
             }
             ManifestInstance instance{};
             instance.glbRelPath = tokens[1];
-            float values[10] = {};
-            for (int i = 0; i < 10; ++i) {
-                if (!parse_float_token(tokens[2 + i], values[i])) {
-                    fail(path, line_number, "instance: invalid number '" + tokens[2 + i] +
-                                                "' for " + kInstanceFields[i]);
-                }
-            }
-            instance.position = Vec3{values[0], values[1], values[2]};
-            instance.rotation = Quat{values[3], values[4], values[5], values[6]};
-            instance.scale = Vec3{values[7], values[8], values[9]};
+            parse_placement_tokens(path, line_number, tokens, 2, "instance", instance);
             manifest.instances.push_back(std::move(instance));
+        } else if (directive == "entity") {
+            if (tokens.size() != 13) {
+                fail(path, line_number,
+                     "entity expects 13 tokens (glb path + 10 numbers + clip), got " +
+                         std::to_string(tokens.size()));
+            }
+            ManifestEntity entity{};
+            entity.placement.glbRelPath = tokens[1];
+            parse_placement_tokens(path, line_number, tokens, 2, "entity", entity.placement);
+            entity.clip = tokens[12];
+            manifest.entities.push_back(std::move(entity));
         } else if (directive == "spawn") {
             if (tokens.size() != 5) {
                 fail(path, line_number, "spawn expects 5 tokens (3 position + yaw), got " +

@@ -27,13 +27,26 @@ void print_usage(FILE* out) {
                  "                    the manual override of stand/walk/run selection\n"
                  "  --anim-time SEC   pause playback at SEC seconds (deterministic captures;\n"
                  "                    also pins the clip in arena mode)\n"
+                 "  --entity-time SEC pin every manifest entity's clip to SEC seconds\n"
+                 "                    (clamped into the clip; deterministic captures)\n"
+                 "  --camera-target player|entity  initial framing for captures (entity\n"
+                 "                    frames the entity's chest; requires --manifest)\n"
                  "  --screenshot PNG  write a PNG after --frames frames, then exit\n"
                  "  --frames N        frames the --screenshot path renders first (default 3)\n"
                  "  --width N         window width in points (default 1280)\n"
                  "  --height N        window height in points (default 720)\n"
                  "  --selftest        render one frame, print s1-status, exit\n"
                  "  --s3-selftest     compose --manifest, walk 240 fixed frames, print\n"
-                 "                    s3-status, exit\n");
+                 "                    s3-status, exit\n"
+                 "  --s4-selftest     compose the encounter --manifest, pin the entity at\n"
+                 "                    t=0, walk the player into its collision proxy, print\n"
+                 "                    s4-status, exit\n"
+                 "  --s41-selftest    compose the encounter --manifest, then grab, climb,\n"
+                 "                    strike, catch, miss, force a stamina fall and land\n"
+                 "                    the killing blow through fixed 1/60 s steps; print\n"
+                 "                    s41-status, exit\n"
+                 "  --s41-stills DIR  with --s41-selftest: write grab, mid-climb, strike,\n"
+                 "                    reaction and defeat stills (plus controls) to DIR\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -75,10 +88,20 @@ int main(int argc, char** argv) {
             opts.s3Selftest = true;
             continue;
         }
+        if (arg == "--s4-selftest") {
+            opts.s4Selftest = true;
+            continue;
+        }
+        if (arg == "--s41-selftest") {
+            opts.s41Selftest = true;
+            continue;
+        }
 
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
-                                 arg == "--anim" || arg == "--anim-time" || arg == "--manifest";
+                                 arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
+                                 arg == "--entity-time" || arg == "--camera-target" ||
+                                 arg == "--s41-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -101,7 +124,7 @@ int main(int argc, char** argv) {
             opts.screenshotPath = value;
         } else if (arg == "--anim") {
             opts.animClip = value;
-        } else if (arg == "--anim-time") {
+        } else if (arg == "--anim-time" || arg == "--entity-time") {
             float seconds = 0.0f;
             if (!parse_seconds(value, seconds)) {
                 std::fprintf(stderr, "sotc-viewer: %s expects a finite number of seconds, got: %s\n",
@@ -109,8 +132,24 @@ int main(int argc, char** argv) {
                 print_usage(stderr);
                 return 2;
             }
-            opts.animTime = seconds;
-            opts.animTimeSet = true;
+            if (arg == "--anim-time") {
+                opts.animTime = seconds;
+                opts.animTimeSet = true;
+            } else {
+                opts.entityTime = seconds;
+                opts.entityTimeSet = true;
+            }
+        } else if (arg == "--camera-target") {
+            if (std::strcmp(value, "player") != 0 && std::strcmp(value, "entity") != 0) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --camera-target expects player or entity, got: %s\n",
+                             value);
+                print_usage(stderr);
+                return 2;
+            }
+            opts.cameraTarget = value;
+        } else if (arg == "--s41-stills") {
+            opts.s41StillsDir = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -148,6 +187,32 @@ int main(int argc, char** argv) {
     }
     if (opts.s3Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s3-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s4Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s4-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s41Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s41-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.s41StillsDir.empty() && !opts.s41Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s41-stills needs --s41-selftest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.entityTimeSet && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --entity-time needs --manifest (there is no entity)\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.cameraTarget == "entity" && opts.manifestPath.empty()) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --camera-target entity needs --manifest (there is no entity)\n");
         print_usage(stderr);
         return 2;
     }

@@ -45,6 +45,18 @@ float animation_loop_time(float time, float duration) {
     return wrapped;
 }
 
+float animation_clamp_time(float time, float duration) {
+    // An empty clip (duration <= 0, or a malformed NaN) has only t = 0, and a
+    // non-finite time has no place in a capture: both pin to the clip's start.
+    if (!(duration > 0.0f) || !std::isfinite(time)) {
+        return 0.0f;
+    }
+    if (time < 0.0f) {
+        return 0.0f;
+    }
+    return time > duration ? duration : time;
+}
+
 void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
     if (!std::isfinite(t)) {
         // A non-finite time (NaN, ±inf) compares false against both clamp
@@ -99,8 +111,9 @@ void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
     }
 }
 
-std::vector<Mat4> animation_pose(const Scene& scene, const AnimationCpu& clip, float time) {
-    const std::vector<JointCpu>& joints = scene.skin.joints;
+std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
+                                 const AnimationCpu& clip, float time) {
+    const std::vector<JointCpu>& joints = rig_at(scene, rigIndex).skin.joints;
     const std::size_t joint_count = joints.size();
     std::vector<Mat4> palette(joint_count);
     if (joint_count == 0) {
@@ -180,8 +193,8 @@ void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& ou
 
     // Without a usable skin the vertices are drawn as authored: bind positions
     // (and the mesh's own model transform below) are the whole answer.
-    const bool skinned =
-        !scene.skin.joints.empty() && palette.size() == scene.skin.joints.size();
+    const SkinCpu& skin = player_rig(scene).skin;
+    const bool skinned = !skin.joints.empty() && palette.size() == skin.joints.size();
 
     bool have_vertex = false;
     Vec3 bounds_min{0.0f, 0.0f, 0.0f};
@@ -246,15 +259,89 @@ void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& ou
     }
 }
 
-AnimationCpu make_procedural_wave(const Scene& scene) {
+namespace {
+
+// The joint's bind-pose origin in mesh space: solve inverseBind * p = 0 with
+// the affine 3x3 upper-left block. glTF inverse bind matrices are affine
+// (last row 0, 0, 0, 1); a singular block is refused rather than inverted.
+bool inverse_bind_origin(const Mat4& inverse_bind, Vec3& out) {
+    const float a = inverse_bind.m[0], b = inverse_bind.m[4], c = inverse_bind.m[8];
+    const float d = inverse_bind.m[1], e = inverse_bind.m[5], f = inverse_bind.m[9];
+    const float g = inverse_bind.m[2], h = inverse_bind.m[6], i = inverse_bind.m[10];
+    const float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12f) {
+        return false;
+    }
+    const float inv_det = 1.0f / determinant;
+    const float inv00 = (e * i - f * h) * inv_det;
+    const float inv01 = (c * h - b * i) * inv_det;
+    const float inv02 = (b * f - c * e) * inv_det;
+    const float inv10 = (f * g - d * i) * inv_det;
+    const float inv11 = (a * i - c * g) * inv_det;
+    const float inv12 = (c * d - a * f) * inv_det;
+    const float inv20 = (d * h - e * g) * inv_det;
+    const float inv21 = (b * g - a * h) * inv_det;
+    const float inv22 = (a * e - b * d) * inv_det;
+    const float tx = inverse_bind.m[12];
+    const float ty = inverse_bind.m[13];
+    const float tz = inverse_bind.m[14];
+    out = Vec3{-(inv00 * tx + inv01 * ty + inv02 * tz),
+               -(inv10 * tx + inv11 * ty + inv12 * tz),
+               -(inv20 * tx + inv21 * ty + inv22 * tz)};
+    return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+}
+
+// A matrix * (point, 1), returning the xyz part.
+Vec3 transform_point(const Mat4& m, Vec3 p) {
+    return Vec3{m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12],
+                m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13],
+                m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]};
+}
+
+}  // namespace
+
+bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
+                                const std::vector<Mat4>& palette,
+                                const std::string& jointName, Vec3& out) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    for (std::size_t joint = 0; joint < rig.skin.joints.size(); ++joint) {
+        if (rig.skin.joints[joint].name != jointName) {
+            continue;
+        }
+        if (joint >= palette.size()) {
+            return false;
+        }
+        Vec3 bind_origin{};
+        if (!inverse_bind_origin(rig.skin.joints[joint].inverseBind, bind_origin)) {
+            return false;
+        }
+        // Mesh space -> world: every mesh of the rig shares the rig's placement
+        // (compose_scene bakes it; apply_rig_lift post-multiplies the ground
+        // lift), so the first mesh's model is the rig's model — but only when
+        // that mesh is actually the rig's. An empty range (a rigged glb that
+        // contributed no geometry) has no model of its own: it must not borrow
+        // the next rig's first mesh.
+        Mat4 model = mat4_identity();
+        if (rig.meshBegin < rig.meshEnd && rig.meshBegin < scene.meshes.size()) {
+            model = scene.meshes[rig.meshBegin].model;
+        }
+        const Vec3 posed = transform_point(palette[joint], bind_origin);
+        out = transform_point(model, posed);
+        return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+    }
+    return false;
+}
+
+AnimationCpu make_procedural_wave(const Scene& scene, std::size_t rigIndex) {
     AnimationCpu clip;
     clip.name = "procedural-wave";
     clip.duration = 2.0f;
 
-    const std::size_t joint_count = std::min<std::size_t>(12, scene.skin.joints.size());
+    const std::vector<JointCpu>& joints = rig_at(scene, rigIndex).skin.joints;
+    const std::size_t joint_count = std::min<std::size_t>(12, joints.size());
     const Quat tilt = quat_about_x(15.0f);
     for (std::size_t i = 0; i < joint_count; ++i) {
-        const Quat rest = quat_normalize(scene.skin.joints[i].restR);
+        const Quat rest = quat_normalize(joints[i].restR);
         const Quat raised = quat_normalize(quat_mul(rest, tilt));
 
         AnimationChannelCpu channel;
@@ -270,17 +357,19 @@ AnimationCpu make_procedural_wave(const Scene& scene) {
     return clip;
 }
 
-void build_playback(const Scene& scene, Playback& playback) {
-    playback.clips = scene.animations;
+void build_playback(const Scene& scene, std::size_t rigIndex, Playback& playback) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    playback.clips = rig.animations;
     playback.index = -1;
     playback.time = 0.0f;
     playback.playing = false;
     playback.has_procedural = false;
+    playback.pinned = false;
 
     // The stand-in is the fallback, never a peer of the model's own clips: it
-    // is appended only for a skinned model whose scene carries none.
-    if (playback.clips.empty() && !scene.skin.joints.empty()) {
-        playback.clips.push_back(make_procedural_wave(scene));
+    // is appended only for a skinned rig whose record carries none.
+    if (playback.clips.empty() && !rig.skin.joints.empty()) {
+        playback.clips.push_back(make_procedural_wave(scene, rigIndex));
         playback.has_procedural = true;
     }
     if (!playback.clips.empty()) {
@@ -289,10 +378,7 @@ void build_playback(const Scene& scene, Playback& playback) {
     }
 }
 
-namespace {
-
-// The index of the clip named `name` in `playback`, or -1 when it is absent.
-int find_clip_named(const Playback& playback, const char* name) {
+int clip_index_named(const Playback& playback, const std::string& name) {
     for (std::size_t i = 0; i < playback.clips.size(); ++i) {
         if (playback.clips[i].name == name) {
             return static_cast<int>(i);
@@ -301,7 +387,10 @@ int find_clip_named(const Playback& playback, const char* name) {
     return -1;
 }
 
-}  // namespace
+float playback_time(const Playback& playback, float duration) {
+    return playback.pinned ? animation_clamp_time(playback.time, duration)
+                           : animation_loop_time(playback.time, duration);
+}
 
 int select_clip_index(const Playback& playback, const PlayerInput& input) {
     if (playback.clips.empty()) {
@@ -319,42 +408,97 @@ int select_clip_index(const Playback& playback, const PlayerInput& input) {
 
     // The requested clip, then the fallback chain: walk while moving, stand,
     // and finally the first real clip in scene order.
-    if (const int index = find_clip_named(playback, requested); index >= 0) {
+    if (const int index = clip_index_named(playback, requested); index >= 0) {
         return index;
     }
     if (moving) {
-        if (const int index = find_clip_named(playback, "player_a_walk"); index >= 0) {
+        if (const int index = clip_index_named(playback, "player_a_walk"); index >= 0) {
             return index;
         }
     }
-    if (const int index = find_clip_named(playback, "player_a_stand"); index >= 0) {
+    if (const int index = clip_index_named(playback, "player_a_stand"); index >= 0) {
         return index;
     }
     return 0;
 }
 
-bool clip_has_root_translation(const Scene& scene, const AnimationCpu& clip) {
-    // The writer targets the joint named exactly "Bone_root" for the root
-    // series, so this query is name-based too: a joint index would tie the
-    // answer to one model's skin order.
+int select_mode_clip_index(const Playback& playback, const PlayerCombat& combat,
+                           const PlayerInput& input) {
+    if (playback.clips.empty()) {
+        return -1;  // nothing to play
+    }
+    switch (combat.mode) {
+        case PlayerMode::Grounded:
+            return select_clip_index(playback, input);
+        case PlayerMode::Grabbing:
+            return clip_index_named(playback, "player_a_grip_loop");
+        case PlayerMode::Climbing:
+            return clip_index_named(playback, "player_a_grip_move_f1");
+        case PlayerMode::Striking:
+            return clip_index_named(playback, "player_a_grip_float_u_hi_attack");
+        case PlayerMode::Falling:
+        case PlayerMode::Staggered:
+            return clip_index_named(playback, "player_a_damage_m_fly2");
+    }
+    return -1;
+}
+
+namespace {
+
+// Whether `clip` carries the root translation series of a skin with these
+// joints: any translation channel (path 0) on the joint named exactly
+// "Bone_root" — the joint the converter's writer targets for the root series.
+// The joint is found by name, never by index, so the answer travels with the
+// rig; a channel on a joint outside this skin is not this rig's series.
+bool root_translation_on(const std::vector<JointCpu>& joints, const AnimationCpu& clip) {
     for (const AnimationChannelCpu& channel : clip.channels) {
         if (channel.path != 0 || channel.joint < 0 ||
-            static_cast<std::size_t>(channel.joint) >= scene.skin.joints.size()) {
+            static_cast<std::size_t>(channel.joint) >= joints.size()) {
             continue;  // not a translation channel, or not this skin's joint
         }
-        if (scene.skin.joints[static_cast<std::size_t>(channel.joint)].name == "Bone_root") {
+        if (joints[static_cast<std::size_t>(channel.joint)].name == "Bone_root") {
             return true;
         }
     }
     return false;
 }
 
-float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
-                            std::size_t playerMeshBegin) {
-    // A root-carrying clip already holds the character's ground height: the S3
-    // origin-to-feet lift on top would float the model by that offset.
-    if (clip_has_root_translation(scene, clip)) {
+// The one grounding rule behind both lift helpers: a root-carrying clip already
+// holds the ground height (lifting on top floats the model by the offset), so
+// it needs 0; otherwise the meshes' origin-to-feet offset applies.
+float lift_for(const Scene& scene, const std::vector<JointCpu>& joints,
+               const AnimationCpu& clip, std::size_t meshBegin, std::size_t meshEnd) {
+    if (root_translation_on(joints, clip)) {
         return 0.0f;
     }
-    return player_ground_offset(scene, playerMeshBegin);
+    return mesh_ground_offset(scene, meshBegin, meshEnd);
+}
+
+}  // namespace
+
+bool clip_has_root_translation(const Scene& scene, std::size_t rigIndex,
+                               const AnimationCpu& clip) {
+    return root_translation_on(rig_at(scene, rigIndex).skin.joints, clip);
+}
+
+float effective_rig_lift(const Scene& scene, std::size_t rigIndex, const AnimationCpu& clip) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    return lift_for(scene, rig.skin.joints, clip, rig.meshBegin, rig.meshEnd);
+}
+
+void apply_rig_lift(Scene& scene, std::size_t rigIndex, float lift) {
+    if (!(lift > 0.0f) || rigIndex >= scene.rigs.size()) {
+        return;  // no lift, or no such rig: the placements stand as authored
+    }
+    const RigCpu& rig = scene.rigs[rigIndex];
+    const Mat4 lift_matrix =
+        mat4_from_trs(Vec3{0.0f, lift, 0.0f}, Quat{0.0f, 0.0f, 0.0f, 1.0f}, Vec3{1.0f, 1.0f, 1.0f});
+    for (std::size_t i = rig.meshBegin; i < rig.meshEnd && i < scene.meshes.size(); ++i) {
+        scene.meshes[i].model = mat4_mul(scene.meshes[i].model, lift_matrix);
+    }
+}
+
+float effective_player_lift(const Scene& scene, const AnimationCpu& clip,
+                            std::size_t meshBegin, std::size_t meshEnd) {
+    return lift_for(scene, player_rig(scene).skin.joints, clip, meshBegin, meshEnd);
 }

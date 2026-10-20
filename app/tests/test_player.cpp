@@ -10,6 +10,7 @@
 // which is why camera_follow targets `playerYawDeg + yawOffsetDeg + 180`.
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,7 @@
 
 #include "asset_io.h"
 #include "camera.h"
+#include "collision.h"
 #include "heightmap.h"
 #include "manifest.h"
 #include "math3d.h"
@@ -495,7 +497,7 @@ TEST_CASE("player_model_matrix lifts the model by its origin-to-feet offset") {
     CHECK(lifted.m[0] == doctest::Approx(1.0f));
 }
 
-TEST_CASE("player_ground_offset reads the player meshes' lowest vertex") {
+TEST_CASE("rig_ground_offset reads the rig's meshes' lowest vertex") {
     Vertex low{};
     low.py = -5.0f;
     Vertex foot{};
@@ -510,16 +512,28 @@ TEST_CASE("player_ground_offset reads the player meshes' lowest vertex") {
     player.vertices = {hip, foot};
     scene.meshes = {instance, player};
 
-    // Only the player's meshes count: the instance's -5 does not leak in.
-    CHECK(player_ground_offset(scene, 1) == doctest::Approx(0.76f));
-    // Nothing below y = 0, and an empty range, need no lift.
-    CHECK(player_ground_offset(scene, 2) == doctest::Approx(0.0f));
-    CHECK(player_ground_offset(scene, 9) == doctest::Approx(0.0f));
+    // Only the rig's own meshes count: the instance's -5 does not leak in.
+    const RigCpu player_rig_record{/*skin=*/{}, /*animations=*/{}, /*meshBegin=*/1,
+                                   /*meshEnd=*/2, /*dynamic=*/true};
+    CHECK(rig_ground_offset(scene, player_rig_record) == doctest::Approx(0.76f));
+    // Nothing below y = 0, an empty range, and a past-the-end range need no
+    // lift.
+    const RigCpu empty_rig{/*skin=*/{}, /*animations=*/{}, 2, 2, false};
+    CHECK(rig_ground_offset(scene, empty_rig) == doctest::Approx(0.0f));
+    const RigCpu past_end{/*skin=*/{}, /*animations=*/{}, 9, 12, false};
+    CHECK(rig_ground_offset(scene, past_end) == doctest::Approx(0.0f));
+    // The mesh range primitive itself is half-open and clamped to the scene.
+    CHECK(mesh_ground_offset(scene, 0, 1) == doctest::Approx(5.0f));
+    CHECK(mesh_ground_offset(scene, 2, 9) == doctest::Approx(0.0f));
 }
 
-// --- The carried W1.3 fix: the heightmap excludes the player ----------------
+// --- The carried W1.3 fix: the heightmap excludes rigged meshes --------------
+//
+// S4 replaced the S3 "first meshCount meshes" split with the rig records: the
+// heightmap rasterizes `mesh.rig < 0` (static instances) only, so neither the
+// player's body nor a placed entity can become the ground.
 
-TEST_CASE("the player-less heightmap has ground, not the player's body") {
+TEST_CASE("the heightmap holds the static ground, not the player's body") {
     SceneManifest manifest{};
     // A plank at the origin gives the composed scene ground under the player.
     manifest.instances.push_back(
@@ -530,36 +544,36 @@ TEST_CASE("the player-less heightmap has ground, not the player's body") {
                                       "models/shadow/characters/wander/_cmn/wander.glb",
                                       &player_mesh_begin);
 
-    // The player's meshes are appended last: the manifest contributed one.
+    // The player's meshes are appended after the manifest's one static mesh,
+    // and rig 0's range starts there.
     REQUIRE(player_mesh_begin == 1);
     REQUIRE(scene.meshes.size() > player_mesh_begin);
+    const RigCpu& rig = player_rig(scene);
+    REQUIRE(rig.meshBegin == player_mesh_begin);
+    REQUIRE(rig.meshEnd == scene.meshes.size());
+    for (std::size_t i = 0; i < scene.meshes.size(); ++i) {
+        CHECK(scene.meshes[i].rig == (i < player_mesh_begin ? -1 : 0));
+    }
 
     // A 0.1 m grid so the player's thin body (its XZ footprint is ~1.2 m wide
-    // but only ~0.2 m deep, and the model is only 1.26 m tall) actually
-    // contains grid nodes: at 1 m cells the body can fall between nodes
-    // entirely, which is exactly the alignment dependence the player-less
-    // build removes.
-    const Heightmap with_player = build_heightmap(scene, 0.1f);
-    const Heightmap without_player = build_heightmap(scene, 0.1f, player_mesh_begin);
+    // but only ~0.2 m deep, and the model is only 1.26 m tall) would actually
+    // contain grid nodes: at 1 m cells the body can fall between nodes
+    // entirely, which is exactly the phantom the rig filter removes.
+    const Heightmap ground_only = build_heightmap(scene, 0.1f);
 
-    // The highest node in the full build is the player's own body; the
-    // player-less build holds the plank's top only. This is the carried W1.3
-    // phantom: built from the full composed scene, the ground under the player
-    // is the player itself.
-    const float max_with_player = max_height(with_player);
-    const float max_without_player = max_height(without_player);
+    // The highest node is the plank's top, not the player's body (which
+    // reaches ~1.26 m above its origin).
+    const float max_ground = max_height(ground_only);
+    CHECK(std::isfinite(max_ground));
+    CHECK(max_ground < 0.2f);  // the plank is a few cm thick
 
-    CHECK(max_with_player > 0.4f);           // the player's body rasterized
-    CHECK(max_without_player < 0.2f);        // the plank is a few cm thick
-    CHECK(max_with_player > max_without_player + 0.3f);
+    // The grid keeps the scene's own bounds: the walkable area is unchanged.
+    CHECK(ground_only.boundsMin.x == doctest::Approx(scene.boundsMin.x));
+    CHECK(ground_only.boundsMax.z == doctest::Approx(scene.boundsMax.z));
 
-    // Both grids share the scene's bounds: the walkable area is unchanged.
-    CHECK(without_player.boundsMin.x == doctest::Approx(scene.boundsMin.x));
-    CHECK(without_player.boundsMax.z == doctest::Approx(scene.boundsMax.z));
-
-    // The player-less ground under the player's spawn is finite and low: the
-    // app can stand the player on it without the phantom lift.
-    const float ground_at_origin = heightmap_sample(without_player, Vec3{0.0f, 0.0f, 0.0f});
+    // The ground under the player's spawn is finite and low: the app can stand
+    // the player on it without the phantom lift.
+    const float ground_at_origin = heightmap_sample(ground_only, Vec3{0.0f, 0.0f, 0.0f});
     CHECK(std::isfinite(ground_at_origin));
     CHECK(ground_at_origin < 0.5f);
 
@@ -569,6 +583,133 @@ TEST_CASE("the player-less heightmap has ground, not the player's body") {
     // ground instead of sinking into it.
     const Scene wander =
         load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
-    CHECK(player_ground_offset(scene, player_mesh_begin) == doctest::Approx(-wander.boundsMin.y));
-    CHECK(player_ground_offset(scene, player_mesh_begin) > 0.5f);
+    CHECK(rig_ground_offset(scene, rig) == doctest::Approx(-wander.boundsMin.y));
+    CHECK(rig_ground_offset(scene, rig) > 0.5f);
+}
+
+// --- Entity collision (S4 Task 5) ------------------------------------------
+//
+// The player capsule is pinned: radius 0.35 m, height 1.7 m, feet at
+// position.y. Resolution is horizontal only (2 iterations), then the ground
+// sample is reapplied. The entity capsules come from a posed skeleton (see
+// test_anim.cpp for the real-Valus integration).
+
+namespace {
+
+// A flat heightmap at height `y` over [0, size]^2.
+Heightmap flat_heightmap_at(float y, float size = 10.0f) {
+    Heightmap heightmap = flat_heightmap(size);
+    for (float& height : heightmap.heights) {
+        height = y;
+    }
+    heightmap.boundsMin.y = y;
+    heightmap.boundsMax.y = y;
+    return heightmap;
+}
+
+// The distance from `p` to the capsule's XZ axis segment (its horizontal
+// silhouette's spine) — the quantity the resolver pushes to r + 0.35.
+float capsule_xz_distance(const Capsule& capsule, Vec3 p) {
+    const float dx = capsule.b.x - capsule.a.x;
+    const float dz = capsule.b.z - capsule.a.z;
+    const float length_squared = dx * dx + dz * dz;
+    float t = 0.0f;
+    if (length_squared > 0.0f) {
+        t = ((p.x - capsule.a.x) * dx + (p.z - capsule.a.z) * dz) / length_squared;
+        t = std::clamp(t, 0.0f, 1.0f);
+    }
+    const float axis_x = capsule.a.x + dx * t;
+    const float axis_z = capsule.a.z + dz * t;
+    return std::sqrt((p.x - axis_x) * (p.x - axis_x) + (p.z - axis_z) * (p.z - axis_z));
+}
+
+}  // namespace
+
+TEST_CASE("a player overlapping a capsule is pushed out along the shortest horizontal axis") {
+    const Capsule capsule{{0.0f, 0.0f, 0.0f}, {0.0f, 2.0f, 0.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{0.2f, 0.0f, 0.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule});
+
+    // The shortest exit from a vertical capsule is its own radius plus the
+    // player's: 1.0 + 0.35, along the player's side (+X).
+    CHECK(player.position.x == doctest::Approx(1.35f));
+    CHECK(player.position.z == doctest::Approx(0.0f));
+    CHECK(player.position.y == doctest::Approx(0.0f));  // no vertical change
+}
+
+TEST_CASE("a player inside a tilted capsule exits perpendicular to its axis") {
+    // The capsule runs along +Z; the player sits exactly on the axis. The
+    // shortest exit is the horizontal perpendicular (+X by the pinned choice),
+    // not an arbitrary corner.
+    const Capsule capsule{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 4.0f}, /*r=*/0.8f};
+    PlayerState player{Vec3{0.0f, 0.0f, 2.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule});
+
+    CHECK(capsule_xz_distance(capsule, player.position) == doctest::Approx(0.8f + 0.35f));
+    CHECK(player.position.x > 0.0f);
+    CHECK(player.position.z == doctest::Approx(2.0f));
+}
+
+TEST_CASE("two overlapping capsules are both resolved") {
+    // Two overlapping vertical proxies (their silhouettes overlap): the player
+    // starts inside both. Iterating twice must leave it outside each one.
+    const Capsule left{{0.0f, 0.0f, 0.0f}, {0.0f, 2.0f, 0.0f}, /*r=*/1.0f};
+    const Capsule right{{0.8f, 0.0f, 0.0f}, {0.8f, 2.0f, 0.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{0.4f, 0.0f, 0.0f}, 0.0f};
+
+    resolve_player_collision(player, {left, right});
+
+    CHECK(capsule_xz_distance(left, player.position) >= 1.0f + 0.35f - 1e-4f);
+    CHECK(capsule_xz_distance(right, player.position) >= 1.0f + 0.35f - 1e-4f);
+}
+
+TEST_CASE("a player far from every capsule is untouched") {
+    const Capsule capsule{{5.0f, 0.0f, 5.0f}, {5.0f, 2.0f, 5.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{0.0f, 0.0f, 0.0f}, 12.0f};
+
+    resolve_player_collision(player, {capsule});
+
+    CHECK(player.position.x == doctest::Approx(0.0f));
+    CHECK(player.position.y == doctest::Approx(0.0f));
+    CHECK(player.position.z == doctest::Approx(0.0f));
+    CHECK(player.yawDeg == doctest::Approx(12.0f));
+}
+
+TEST_CASE("a capsule above the player's head does not push") {
+    // The player capsule reaches y = 1.7; a capsule whose lowest point is far
+    // above cannot be entered by walking under it.
+    const Capsule high{{0.0f, 10.0f, 0.0f}, {0.0f, 12.0f, 0.0f}, /*r=*/0.5f};
+    PlayerState player{Vec3{0.0f, 0.0f, 0.0f}, 0.0f};
+
+    resolve_player_collision(player, {high});
+
+    CHECK(player.position.x == doctest::Approx(0.0f));
+    CHECK(player.position.z == doctest::Approx(0.0f));
+}
+
+TEST_CASE("the resolved position stays on the heightmap") {
+    // The ramp's height equals z, so pushing the player in X must leave y on
+    // the ramp's surface at the resolved z.
+    const Heightmap ramp = ramp_heightmap();  // height == z
+    const Capsule capsule{{5.0f, 0.0f, 4.0f}, {5.0f, 2.0f, 4.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{5.1f, 0.0f, 4.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule}, ramp);
+
+    CHECK(player.position.x == doctest::Approx(6.35f));
+    CHECK(player.position.z == doctest::Approx(4.0f));
+    CHECK(player.position.y == doctest::Approx(4.0f));  // reapplied ground sample
+}
+
+TEST_CASE("collision keeps the feet on a flat heightmap at any elevation") {
+    const Heightmap ground = flat_heightmap_at(/*y=*/3.0f);
+    const Capsule capsule{{5.0f, 0.0f, 5.0f}, {5.0f, 2.0f, 5.0f}, /*r=*/1.0f};
+    PlayerState player{Vec3{5.0f, 3.0f, 5.0f}, 0.0f};
+
+    resolve_player_collision(player, {capsule}, ground);
+
+    CHECK(player.position.y == doctest::Approx(3.0f));
+    CHECK(capsule_xz_distance(capsule, player.position) == doctest::Approx(1.35f));
 }

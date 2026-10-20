@@ -118,9 +118,10 @@ Mat4 player_model_matrix(const PlayerState& state, float modelGroundOffsetY) {
     return mat4_from_trs(position, rotation, Vec3{1.0f, 1.0f, 1.0f});
 }
 
-float player_ground_offset(const Scene& scene, std::size_t playerMeshBegin) {
+float mesh_ground_offset(const Scene& scene, std::size_t meshBegin, std::size_t meshEnd) {
+    const std::size_t end = std::min(meshEnd, scene.meshes.size());
     float lowest = 0.0f;  // every vertex at or above 0: no lift needed
-    for (std::size_t i = playerMeshBegin; i < scene.meshes.size(); ++i) {
+    for (std::size_t i = std::min(meshBegin, end); i < end; ++i) {
         for (const Vertex& vertex : scene.meshes[i].vertices) {
             if (std::isfinite(vertex.py) && vertex.py < lowest) {
                 lowest = vertex.py;
@@ -128,4 +129,8 @@ float player_ground_offset(const Scene& scene, std::size_t playerMeshBegin) {
         }
     }
     return -lowest;
+}
+
+float rig_ground_offset(const Scene& scene, const RigCpu& rig) {
+    return mesh_ground_offset(scene, rig.meshBegin, rig.meshEnd);
 }

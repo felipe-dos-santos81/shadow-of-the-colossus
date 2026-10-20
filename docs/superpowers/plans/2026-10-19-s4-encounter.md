@@ -113,7 +113,7 @@ Docs:
   git commit -m "test: bake and validate Valus idle (minotaur_a_stand)"
   ```
 
-**Parallel:** Task 2 touches disjoint files; it may run concurrently with Task 1.
+**Parallel:** Task 2 touches disjoint files, but implementers run one at a time (SDD rule); dispatch it after Task 1.
 
 ---
 
@@ -183,7 +183,7 @@ Docs:
   - `Renderer` keeps one pose buffer **per rig** (sized by that rig's joint count) and binds the mesh's rig palette before the draw; static meshes may bind rig 0 (zero weights pass through).
   - `update_pose(scene, rigIndex, playback, palette)` and `upload_pose(rigIndex, palette)`; the player uses rig 0; the entity loops its clip.
   - `--entity-time <sec>` pins the entity's clip time (captures); `--anim`/`--anim-time` keep their player/single-model meaning.
-  - **Entity grounding:** `effective_rig_lift(scene, rig, clip)` — 0 when the clip carries a translation channel on `Bone_root` (the clip owns the ground height, the S2 rule), else the rig's origin-to-feet lift (the lowest bind vertex; **8.739 m** measured for Valus). The entity's model transform adds it; the manifest's y is the ground sample.
+  - **Entity grounding:** `effective_rig_lift(scene, rig, clip)` — 0 when the clip carries a translation channel on `Bone_root` (the clip owns the ground height, the S2 rule), else the rig's origin-to-feet lift (the lowest bind vertex; **8.739 m** measured for Valus). The entity's model transform adds it; the manifest's y is the ground sample. Generalize the S2 `effective_player_lift` into this helper and keep the player path as a thin wrapper — do not duplicate the rule.
   - `s2-anim`/`s4-status` report per-rig clip names and `procedural=0`.
 
 - [ ] **Step 1: Failing tests** — two `Playback`s from one scene produce different palettes; the mesh→rig mapping selects the right palette; an entity with a missing clip fails at load with a clear message; `effective_rig_lift` returns 0 for a root-carrying clip and 8.739 for the minotaur bind.
@@ -216,7 +216,8 @@ Docs:
   // A target-framing state: target = the entity's chest joint world position; distance
   // clamp widened to fit the 17.7 m body (builder value ~22-30 m), pitch clamp widened;
   // drag orbits the target; T toggles; movement basis = the ACTIVE camera's yaw; T-off
-  // restores the follow offsets without a snap.
+  // restores the follow offsets without a snap. A capture-only `--camera-target player|entity`
+  // selects the framing deterministically (no interactive key needed for stills).
   ```
 - [ ] **Step 1: Failing collision tests** — a player inside/overlapping a capsule is pushed out along the shortest horizontal axis; two overlapping capsules resolve; a far player is untouched; the resolved position stays on the heightmap (ground sample reapplied).
 - [ ] **Step 2: Failing camera tests** — `T` toggles; target mode fits a 17.7 m subject (target/distance/pitch); restore returns the saved follow offsets; the movement basis follows the active camera's yaw.
@@ -239,7 +240,7 @@ Docs:
 - Produces: `encounter.manifest` = the S3 30 instances + one `entity` + a new `spawn`, with a header recording `placement=data|builder-pick`, the spawn `data-position+builder-yaw`, and the entity clip. `s4-status` reports: instances, rigs, entity clip/joints, placement provenance, spawn provenance, feet-on-floor, position, frames. `--s4-selftest` walks the player toward Valus and asserts the collision stop + feet.
 
 - [ ] **Step 1: Compose the manifest.** Extend the composer (or add a small step) that reads the S3 manifest, rewrites the `spawn` to the data position (353, ground-sampled, builder yaw facing Valus), appends the `entity` line (placement from Task 2 or the labeled builder pick on the bowl floor, feet on the ground, facing the spawn), and writes a new provenance header (S3's header is not inherited). Add `check-encounter` assertions: 30 instances, 1 entity, 1 spawn, provenance present, coordinates in-bounds.
-- [ ] **Step 2: `--s4-selftest`.** Load the encounter manifest + wander player; pin the entity's time at 0; print `s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=<...> spawn=<...> feet=ok pos=<x,y,z> frames=...`; simulate a forward walk into Valus and assert the player stops before the leg capsule (a bounded penetration), staying grounded.
+- [ ] **Step 2: `--s4-selftest`.** Load the encounter manifest + wander player; pin the entity's time at 0; print `s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=<...> spawn=<...> feet=ok entity_bbox=<x0,y0,x1,y1> pos=<x,y,z> frames=...` (the bbox is the entity's projected screen region, for the idle guard); simulate a forward walk into Valus and assert the player stops before the leg capsule (a bounded penetration), staying grounded.
 - [ ] **Step 3: `scripts/s4-acceptance.sh`** (mirror `s3-acceptance.sh`): build; both suites; ensure/regenerate the S3 manifest; compose/check the encounter manifest; run `--s4-selftest` and parse `s4-status`; captures:
   - `s4-wide.png` (spawn view, `--camera-target player`, entity time 0),
   - `s4-approach.png` (walked near the legs),
@@ -274,7 +275,19 @@ Docs:
 
 - Spec coverage: Goals 1–6 map to Tasks 1 (bake/pose), 2 (placement), 3–4 (two rigs/playback), 5 (collision/camera), 6 (acceptance), 7 (results).
 - Interface consistency: `RigCpu`/`Scene.rigs`/`MeshCpu.rig`/`ManifestEntity`/`resolve_player_collision`/`--entity-time`/`--camera-target`/`s4-status` are used with the same names across tasks.
-- Values pinned: Valus glb 38,049,000 B (pre-bake), 12 meshes, 238 joints, 523,865 verts, feet −8.739; `minotaur_a_stand` 26 frames / 58 tracks / 15 fps / 1.6667 s / 21 statics; minotaur bank 73 names (58 records); 58/58 mapping; encounter 30 instances + 1 entity; spawn (353, ground, 345) + builder yaw; S3 acceptance unchanged.
+- Values pinned: Valus glb 38,049,000 B (pre-bake), 12 meshes, 238 joints, **476,666 verts** (the 523,865 figure is the M0 seven-file directory total, not this glb), feet −8.739; `minotaur_a_stand` 26 frames / 58 tracks / 15 fps / 1.6667 s / 21 statics; minotaur bank 73 names (58 records); 58/58 mapping; encounter 30 instances + 1 entity; spawn (353, ground, 345) + builder yaw; S3 acceptance unchanged.
 - The plan's one open value is the minotaur frame-0 world-pose set — Task 1 measures it with the RE tool and pins it in the same commit (the S2 precedent: the player's 0.7429/0.8343/1.0462/1.1165).
+
+---
+
+## Completion (2026-10-19)
+
+All seven tasks are complete. The acceptance note is `docs/notes/s4-results.md`; the scripted
+acceptance (`scripts/s4-acceptance.sh`) is green end to end — build, both suites (90/90, ctest
+2/2), the 30+1 encounter manifest (`check-encounter` 22/22), the self-test (`feet=ok`, collision
+stop with 0.000 penetration), five stills and the pixel guards, the perf measurement (8.95 ms →
+≈111.7 fps), and the unchanged S3 regression. The perf gate was hardened after review (`b9d64cc`).
+The unchecked boxes above are the plan's historical step list, not pending work. The milestone's
+done-line is not claimed: the user's walk (§9 of the note) is PENDING.
 
 *Personal-use fan project. No game assets are distributed from this repository.*

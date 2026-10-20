@@ -1,6 +1,8 @@
 // Heightmap tests: the W1.3 rasterizer (S3 arena plan) — fixture scenes built
 // in code, no asset library needed. The scenes mirror what the loader
-// produces: one mesh, indices 0..n-1, and world-space bounds.
+// produces: meshes with indices 0..n-1, a world-space bounds pair, and the
+// rig index (the W1.4 "player-less build" is now the S4 rig filter: only
+// `mesh.rig < 0` rasterizes).
 #include <doctest.h>
 
 #include <algorithm>
@@ -37,9 +39,9 @@ Vec3 world_point(const Mat4& matrix, Vec3 point) {
         matrix.m[2] * point.x + matrix.m[6] * point.y + matrix.m[10] * point.z + matrix.m[14]};
 }
 
-// A scene with one mesh holding `positions` (one triangle per vertex triple,
-// indices 0..n-1) under `model`, carrying the world-space vertex bounds a
-// loaded scene would carry.
+// A scene with one static (rig -1) mesh holding `positions` (one triangle per
+// vertex triple, indices 0..n-1) under `model`, carrying the world-space
+// vertex bounds a loaded scene would carry.
 Scene scene_from_triangles(const std::vector<Vec3>& positions,
                            const Mat4& model = mat4_identity()) {
     Scene scene;
@@ -227,34 +229,74 @@ TEST_CASE("a grid with no covered node samples NaN") {
     CHECK(std::isnan(heightmap_sample(hm, {0, 0, 5})));
 }
 
-TEST_CASE("build_heightmap rasterizes only the first meshCount meshes") {
-    // The W1.4 player-less build: mesh 0 is the ground plane at y = 3 (the
-    // lower-left half of [0, 10]^2), mesh 1 is a stand-in "player" plane at
-    // y = 5 covering the origin. A composed scene appends the player last, so
-    // the app passes its mesh index to keep the player out of the ground.
+TEST_CASE("build_heightmap rasterizes only rig-less (static) meshes") {
+    // The S4 ground contract: mesh 0 is the ground plane at y = 3 (the
+    // lower-left half of [0, 10]^2), mesh 1 is the player's body (rig 0) at
+    // y = 5 covering the origin, mesh 2 is an entity (rig 1) at y = 7 over the
+    // same cell. Only the rig-less mesh may become ground.
     Scene scene = scene_from_triangles({{0, 3, 0}, {10, 3, 0}, {0, 3, 10}});
     MeshCpu player;
     player.vertices = {vertex_at({0, 5, 0}), vertex_at({2, 5, 0}), vertex_at({0, 5, 2})};
     player.indices = {0, 1, 2};
+    player.rig = 0;
     scene.meshes.push_back(std::move(player));
+    MeshCpu entity;
+    entity.vertices = {vertex_at({0, 7, 0}), vertex_at({2, 7, 0}), vertex_at({0, 7, 2})};
+    entity.indices = {0, 1, 2};
+    entity.rig = 1;
+    scene.meshes.push_back(std::move(entity));
+    scene.boundsMax.y = 7.0f;  // a loaded scene's bounds cover the rigged meshes too
 
-    const Heightmap all = build_heightmap(scene, 1.0f);
-    const Heightmap ground_only = build_heightmap(scene, 1.0f, /*meshCount=*/1);
+    const Heightmap hm = build_heightmap(scene, 1.0f);
 
-    // With every mesh the player's plane wins the max-Y at the origin.
-    CHECK(heightmap_sample(all, {0.5f, 0, 0.5f}) == doctest::Approx(5.0f));
-    // With meshCount = 1 the ground plane is what remains.
-    CHECK(heightmap_sample(ground_only, {0.5f, 0, 0.5f}) == doctest::Approx(3.0f));
+    // The rigged meshes at y = 5 and y = 7 lose the max-Y rule: the static
+    // plane's 3 is the ground.
+    CHECK(heightmap_sample(hm, {0.5f, 0, 0.5f}) == doctest::Approx(3.0f));
+    // The grid keeps the scene's own bounds: the walkable area is unchanged.
+    CHECK(hm.boundsMin.x == doctest::Approx(scene.boundsMin.x));
+    CHECK(hm.boundsMax.x == doctest::Approx(scene.boundsMax.x));
+    CHECK(hm.boundsMax.y == doctest::Approx(scene.boundsMax.y));
+    CHECK(hm.boundsMax.y == doctest::Approx(7.0f));  // the entity is in the bounds
+}
 
-    // The bounds stay the scene's own (the walkable area is unchanged), and a
-    // meshCount past the end is simply "all meshes".
-    CHECK(ground_only.boundsMin.x == doctest::Approx(all.boundsMin.x));
-    CHECK(ground_only.boundsMax.x == doctest::Approx(all.boundsMax.x));
-    CHECK(heightmap_sample(build_heightmap(scene, 1.0f, 99), {0.5f, 0, 0.5f}) ==
-          doctest::Approx(5.0f));
+TEST_CASE("an entity placed over a cell changes no ground sample") {
+    // The same static ground, with and without a rigged entity covering the
+    // whole footprint at a higher Y: every sample must be identical, and both
+    // builds still sample the static ground.
+    Scene ground_only = scene_from_triangles({{0, 3, 0}, {10, 3, 0}, {10, 3, 10},
+                                              {0, 3, 0}, {10, 3, 10}, {0, 3, 10}});
+    Scene with_entity = ground_only;
+    MeshCpu entity;
+    entity.vertices = {vertex_at({0, 40, 0}), vertex_at({10, 40, 0}), vertex_at({0, 40, 10})};
+    entity.indices = {0, 1, 2};
+    entity.rig = 1;
+    with_entity.meshes.push_back(std::move(entity));
+    with_entity.boundsMax.y = 40.0f;  // the entity extends the scene's bounds
 
-    // meshCount 0 leaves nothing to rasterize: the same error as no meshes.
-    CHECK_THROWS_WITH_AS(build_heightmap(scene, 1.0f, 0), "no meshes", std::runtime_error);
+    const Heightmap plain = build_heightmap(ground_only, 1.0f);
+    const Heightmap placed = build_heightmap(with_entity, 1.0f);
+
+    REQUIRE(plain.heights.size() == placed.heights.size());
+    for (std::size_t i = 0; i < plain.heights.size(); ++i) {
+        CHECK(plain.heights[i] == placed.heights[i]);
+    }
+    CHECK(heightmap_sample(placed, {5, 0, 5}) == doctest::Approx(3.0f));
+
+    // A player rig (0) is excluded the same way.
+    Scene with_player = ground_only;
+    MeshCpu player = entity;
+    player.rig = 0;
+    with_player.meshes.push_back(std::move(player));
+    const Heightmap player_build = build_heightmap(with_player, 1.0f);
+    CHECK(heightmap_sample(player_build, {5, 0, 5}) == doctest::Approx(3.0f));
+}
+
+TEST_CASE("a scene whose meshes are all rigged has no ground to build") {
+    // Nothing static to rasterize: the same "no ground" answer the S3
+    // meshCount = 0 case gave, so the app's no-ground path is unchanged.
+    Scene scene = scene_from_triangles({{0, 5, 0}, {2, 5, 0}, {0, 5, 2}});
+    scene.meshes[0].rig = 0;
+    CHECK_THROWS_WITH_AS(build_heightmap(scene, 1.0f), "no static meshes", std::runtime_error);
 }
 
 TEST_CASE("heightmap_sample refuses an empty grid instead of reading out of bounds") {

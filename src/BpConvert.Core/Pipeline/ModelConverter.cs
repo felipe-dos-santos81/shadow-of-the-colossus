@@ -115,6 +115,13 @@ public static class ModelConverter
 
         var written = GlbWriter.Write(output, glbDirectory, Path.GetFileName(glbPath), textureUriMap);
 
+        // Provenance for the app's clip selection; ruling R2: only a conversion that baked clips
+        // gets a record, so an M0 batch run never grows empty sidecars.
+        if (animations.Count > 0)
+        {
+            ClipManifest.Write(written.GlbPath, sourceRelative, animations);
+        }
+
         return new ConvertResult(written.GlbPath, pngPaths, output.Meshes.Count,
             output.Meshes.Sum(mesh => mesh.Positions.Length / 3));
     }

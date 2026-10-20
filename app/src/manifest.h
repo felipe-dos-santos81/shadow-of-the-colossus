@@ -16,12 +16,21 @@ struct ManifestInstance {
     Vec3 scale;
 };
 
+// One placed, animated entity from a scene manifest: a placement (the same
+// glb + TRS shape as an instance's) plus the exact name of the clip its own rig
+// loops. Unlike an `instance`, an entity keeps its skeleton and clips.
+struct ManifestEntity {
+    ManifestInstance placement;
+    std::string clip;
+};
+
 // A parsed scene manifest — the W1↔W2 interface documented in
 // `docs/notes/scene-manifest.md`. `hasSpawn` is false when the file carries no
 // `spawn` directive; `spawnPosition` is then the zero vector (and
 // `spawnYawDeg` 0), and the caller picks its fallback.
 struct SceneManifest {
     std::vector<ManifestInstance> instances;
+    std::vector<ManifestEntity> entities;
     Vec3 spawnPosition;
     float spawnYawDeg;
     bool hasSpawn;
@@ -31,9 +40,12 @@ struct SceneManifest {
 // skipped and a `#` starts a comment that runs to the end of the line.
 // Directives (tokens separated by whitespace):
 //   instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+//   entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
 //   spawn <px> <py> <pz> <yawDeg>
 // Every number must be a strict, full-string finite float: the whole token has
-// to parse and be finite ("nan", "inf", "1.5x" and "1e999" are refused).
+// to parse and be finite ("nan", "inf", "1.5x" and "1e999" are refused). The
+// entity's clip is a non-numeric token: it names the clip exactly, and the
+// loader is what decides whether the model carries it.
 //
 // Throws std::runtime_error formatted `<file>:<line>: <reason>` for a
 // malformed line (wrong token count, invalid number, unknown directive), and

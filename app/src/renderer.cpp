@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -65,6 +66,63 @@ std::vector<uint8_t> read_shader_source(const char* file_name) {
 const float kDefaultBaseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 const float kDefaultEmissive[3] = {0.0f, 0.0f, 0.0f};
 
+// HUD design-space reference frame (the one hud.cpp authors its rects on): the
+// overlay is mapped to NDC by these constants, so it keeps its proportions on
+// a resized window instead of pinning to one resolution.
+constexpr float kHudDesignWidth = 1280.0f;
+constexpr float kHudDesignHeight = 720.0f;
+
+// The HUD label font. A missing font is not fatal: the bars still draw.
+constexpr const char* kHudFontPath = "/System/Library/Fonts/Supplemental/Arial.ttf";
+constexpr float kHudFontPointSize = 16.0f;
+// Gap between the label's bottom edge and the stamina bar's top edge.
+constexpr float kHudLabelGap = 4.0f;
+
+// Overlay colors, in the display-space values the mesh shader writes (it
+// encodes its output to sRGB itself, so no decode happens there either).
+constexpr float kStaminaBarColor[4] = {0.30f, 0.85f, 0.35f, 0.85f};
+constexpr float kHealthBarColor[4] = {0.85f, 0.20f, 0.16f, 0.90f};
+constexpr float kHudTextColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
+// Unit quad vertex: position in [0,1]^2 with y down, plus matching UVs.
+struct HudVertex {
+    float x, y;
+    float u, v;
+};
+static_assert(sizeof(HudVertex) == 16, "HUD vertex layout changed");
+
+// Per-draw HUD uniform: two vec4s (std140). Mirrors `Draw` in hud.metal.
+struct HudDrawUniforms {
+    float xform[4];  // xy = NDC origin (left, top), zw = NDC size
+    float color[4];  // RGBA tint multiplied into the sampled texel
+};
+static_assert(sizeof(HudDrawUniforms) == 32, "HUD uniform size changed");
+
+// One textured, alpha-blended HUD quad. An empty rect (zero fraction) draws
+// nothing; a null texture skips the draw rather than binding nothing.
+void draw_hud_quad(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass, const HudRect& rect,
+                   SDL_GPUTexture* texture, SDL_GPUSampler* sampler, const float color[4]) {
+    if (!(rect.w > 0.0f) || !(rect.h > 0.0f) || texture == nullptr) {
+        return;
+    }
+
+    HudDrawUniforms draw{};
+    draw.xform[0] = rect.x / kHudDesignWidth * 2.0f - 1.0f;
+    draw.xform[1] = 1.0f - rect.y / kHudDesignHeight * 2.0f;
+    draw.xform[2] = rect.w / kHudDesignWidth * 2.0f;
+    draw.xform[3] = rect.h / kHudDesignHeight * 2.0f;
+    std::memcpy(draw.color, color, sizeof(draw.color));
+
+    // Both stages read the same struct: the vertex stage places the quad, the
+    // fragment stage tints it.
+    SDL_PushGPUVertexUniformData(cmd, 0, &draw, sizeof(draw));
+    SDL_PushGPUFragmentUniformData(cmd, 0, &draw, sizeof(draw));
+
+    const SDL_GPUTextureSamplerBinding binding{texture, sampler};
+    SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+    SDL_DrawGPUIndexedPrimitives(pass, 6, 1, 0, 0, 0);
+}
+
 }  // namespace
 
 Renderer::Renderer(SDL_GPUDevice* device, SDL_Window* window)
@@ -78,6 +136,7 @@ Renderer::Renderer(SDL_GPUDevice* device, SDL_Window* window)
 
     try {
         create_pipeline();
+        create_hud_pipeline();
 
         SDL_GPUSamplerCreateInfo sampler_info{};
         sampler_info.min_filter = SDL_GPU_FILTER_LINEAR;
@@ -93,9 +152,38 @@ Renderer::Renderer(SDL_GPUDevice* device, SDL_Window* window)
         if (sampler_ == nullptr) {
             throw_sdl_error("renderer: SDL_CreateGPUSampler");
         }
+
+        // The HUD quad is always axis-aligned and UV-exact, so clamp instead of
+        // repeating: at u/v = 1.0 the sampler must not wrap into the opposite
+        // edge's texels.
+        SDL_GPUSamplerCreateInfo hud_sampler_info = sampler_info;
+        hud_sampler_info.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        hud_sampler_info.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        hud_sampler_info.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        hud_sampler_ = SDL_CreateGPUSampler(device_, &hud_sampler_info);
+        if (hud_sampler_ == nullptr) {
+            throw_sdl_error("renderer: SDL_CreateGPUSampler(hud)");
+        }
+
+        // The label is optional: a missing SDL_ttf or font prints one line and
+        // the HUD degrades to bars only, never failing the run.
+        if (!TTF_Init()) {
+            std::fprintf(stderr,
+                         "renderer: SDL_ttf init failed (%s); drawing the HUD bars only\n",
+                         SDL_GetError());
+        } else {
+            ttf_initialized_ = true;
+            hud_font_ = TTF_OpenFont(kHudFontPath, kHudFontPointSize);
+            if (hud_font_ == nullptr) {
+                std::fprintf(stderr,
+                             "renderer: cannot open HUD font %s (%s); drawing the HUD bars only\n",
+                             kHudFontPath, SDL_GetError());
+            }
+        }
     } catch (...) {
         // The half-built object's destructor will not run: release here.
         release_gpu_resources();
+        release_font();
         throw;
     }
 }
@@ -103,6 +191,7 @@ Renderer::Renderer(SDL_GPUDevice* device, SDL_Window* window)
 Renderer::~Renderer() {
     release_targets();
     release_gpu_resources();
+    release_font();
 }
 
 void Renderer::create_pipeline() {
@@ -172,6 +261,151 @@ void Renderer::create_pipeline() {
     pipeline_ = SDL_CreateGPUGraphicsPipeline(device_, &pipeline_info);
     if (pipeline_ == nullptr) {
         throw_sdl_error("renderer: SDL_CreateGPUGraphicsPipeline");
+    }
+}
+
+void Renderer::create_hud_pipeline() {
+    const std::vector<uint8_t> source = read_shader_source("hud.metal");
+
+    // Vertex stage: one uniform (the per-draw transform). Fragment stage: the
+    // same uniform (tint) plus the quad's texture and sampler.
+    hud_vertex_shader_ = create_shader(SDL_GPU_SHADERSTAGE_VERTEX, "hud_vertex", 1, 0, 0,
+                                       source.data(), source.size());
+    hud_fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "hud_fragment", 1, 0, 1,
+                                         source.data(), source.size());
+
+    SDL_GPUVertexBufferDescription vertex_buffer{};
+    vertex_buffer.slot = 0;
+    vertex_buffer.pitch = sizeof(HudVertex);
+    vertex_buffer.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+
+    SDL_GPUVertexAttribute attributes[2]{};
+    attributes[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(HudVertex, x)};
+    attributes[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(HudVertex, u)};
+
+    SDL_GPUVertexInputState vertex_input{};
+    vertex_input.vertex_buffer_descriptions = &vertex_buffer;
+    vertex_input.num_vertex_buffers = 1;
+    vertex_input.vertex_attributes = attributes;
+    vertex_input.num_vertex_attributes = 2;
+
+    // Straight alpha blending: the bars and the anti-aliased label glyphs
+    // composite over the scene.
+    SDL_GPUColorTargetBlendState blend{};
+    blend.enable_blend = true;
+    blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    blend.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+
+    SDL_GPUColorTargetDescription color_target{};
+    color_target.format = color_format_;
+    color_target.blend_state = blend;
+
+    // No depth: the HUD is a later pass over the already-rendered color target,
+    // so the pipeline and that pass agree on having no depth attachment.
+    SDL_GPUGraphicsPipelineTargetInfo target_info{};
+    target_info.color_target_descriptions = &color_target;
+    target_info.num_color_targets = 1;
+    target_info.has_depth_stencil_target = false;
+
+    SDL_GPURasterizerState rasterizer{};
+    rasterizer.fill_mode = SDL_GPU_FILLMODE_FILL;
+    rasterizer.cull_mode = SDL_GPU_CULLMODE_NONE;
+    rasterizer.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    rasterizer.enable_depth_clip = false;
+
+    SDL_GPUMultisampleState multisample{};
+    multisample.sample_count = SDL_GPU_SAMPLECOUNT_1;
+
+    SDL_GPUGraphicsPipelineCreateInfo pipeline_info{};
+    pipeline_info.vertex_shader = hud_vertex_shader_;
+    pipeline_info.fragment_shader = hud_fragment_shader_;
+    pipeline_info.vertex_input_state = vertex_input;
+    pipeline_info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    pipeline_info.rasterizer_state = rasterizer;
+    pipeline_info.multisample_state = multisample;
+    pipeline_info.target_info = target_info;
+
+    hud_pipeline_ = SDL_CreateGPUGraphicsPipeline(device_, &pipeline_info);
+    if (hud_pipeline_ == nullptr) {
+        throw_sdl_error("renderer: SDL_CreateGPUGraphicsPipeline(hud)");
+    }
+
+    // The one quad every HUD draw uses: unit square with y down, UV-mapped
+    // 1:1. Its transform and tint come from the push uniform.
+    const HudVertex quad[4] = {
+        {0.0f, 0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 1.0f, 0.0f},
+        {1.0f, 1.0f, 1.0f, 1.0f},
+        {0.0f, 1.0f, 0.0f, 1.0f},
+    };
+    const uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
+
+    std::vector<SDL_GPUTransferBuffer*> transfer_buffers;
+    TransferBufferGuard transfer_guard{device_, &transfer_buffers};
+
+    SDL_GPUTransferBufferCreateInfo transfer_info{};
+    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    transfer_info.size = sizeof(quad) + sizeof(indices);
+    SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
+    if (transfer == nullptr) {
+        throw_sdl_error("renderer: SDL_CreateGPUTransferBuffer(hud quad)");
+    }
+    transfer_buffers.push_back(transfer);
+
+    void* mapped = SDL_MapGPUTransferBuffer(device_, transfer, false);
+    if (mapped == nullptr) {
+        throw_sdl_error("renderer: SDL_MapGPUTransferBuffer(hud quad)");
+    }
+    std::memcpy(mapped, quad, sizeof(quad));
+    std::memcpy(static_cast<uint8_t*>(mapped) + sizeof(quad), indices, sizeof(indices));
+    SDL_UnmapGPUTransferBuffer(device_, transfer);
+
+    SDL_GPUBufferCreateInfo buffer_info{};
+    buffer_info.size = sizeof(quad);
+    buffer_info.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+    hud_vertex_buffer_ = SDL_CreateGPUBuffer(device_, &buffer_info);
+    if (hud_vertex_buffer_ == nullptr) {
+        throw_sdl_error("renderer: SDL_CreateGPUBuffer(hud vertices)");
+    }
+    buffer_info.size = sizeof(indices);
+    buffer_info.usage = SDL_GPU_BUFFERUSAGE_INDEX;
+    hud_index_buffer_ = SDL_CreateGPUBuffer(device_, &buffer_info);
+    if (hud_index_buffer_ == nullptr) {
+        throw_sdl_error("renderer: SDL_CreateGPUBuffer(hud indices)");
+    }
+
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
+    if (cmd == nullptr) {
+        throw_sdl_error("renderer: SDL_AcquireGPUCommandBuffer");
+    }
+    SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(cmd);
+    SDL_GPUTransferBufferLocation source_location{};
+    source_location.transfer_buffer = transfer;
+    source_location.offset = 0;
+    SDL_GPUBufferRegion vertex_region{};
+    vertex_region.buffer = hud_vertex_buffer_;
+    vertex_region.size = sizeof(quad);
+    SDL_UploadToGPUBuffer(copy_pass, &source_location, &vertex_region, false);
+
+    source_location.offset = sizeof(quad);
+    SDL_GPUBufferRegion index_region{};
+    index_region.buffer = hud_index_buffer_;
+    index_region.size = sizeof(indices);
+    SDL_UploadToGPUBuffer(copy_pass, &source_location, &index_region, false);
+    SDL_EndGPUCopyPass(copy_pass);
+
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    if (fence == nullptr) {
+        throw_sdl_error("renderer: SDL_SubmitGPUCommandBufferAndAcquireFence");
+    }
+    const bool waited = SDL_WaitForGPUFences(device_, true, &fence, 1);
+    SDL_ReleaseGPUFence(device_, fence);
+    if (!waited) {
+        throw_sdl_error("renderer: SDL_WaitForGPUFences");
     }
 }
 
@@ -411,21 +645,26 @@ void Renderer::upload(const Scene& scene) {
         }
     }
 
-    // The joint palette (vertex storage buffer): one matrix per skin joint, or
-    // a single matrix for a scene without a skin — the shader always reads
-    // palette[joints], and an unskinned vertex defaults to joint 0 weight 1.
-    // The initial content is the bind pose (identity per joint), so any draw
-    // that happens before the first upload_pose is well defined.
-    pose_joint_count_ = static_cast<uint32_t>(scene.skin.joints.size());
-    const std::vector<Mat4> rest_palette(std::max<uint32_t>(pose_joint_count_, 1u),
-                                         mat4_identity());
-    {
+    // One joint palette per rig (vertex storage buffer), each sized by that
+    // rig's own joint count — a rig can only ever read its own palette, so the
+    // entity's 238 joint indices can never reach a smaller player buffer. A rig
+    // with no skin (and a scene with no rigs at all) gets a single identity
+    // matrix: an unskinned vertex has zero weights, so the shader never reads
+    // the palette for it, and any draw before the first upload_pose is well
+    // defined (the initial content is the bind pose, identity per joint).
+    pose_buffers_.resize(std::max<std::size_t>(scene.rigs.size(), 1));
+    for (std::size_t rig_index = 0; rig_index < pose_buffers_.size(); ++rig_index) {
+        PoseGpu& pose = pose_buffers_[rig_index];
+        pose.joint_count = static_cast<uint32_t>(rig_at(scene, rig_index).skin.joints.size());
+        const std::vector<Mat4> rest_palette(std::max<std::size_t>(pose.joint_count, 1),
+                                             mat4_identity());
         const uint32_t pose_size = static_cast<uint32_t>(rest_palette.size() * sizeof(Mat4));
+
         SDL_GPUBufferCreateInfo buffer_info{};
         buffer_info.size = pose_size;
         buffer_info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-        pose_buffer_ = SDL_CreateGPUBuffer(device_, &buffer_info);
-        if (pose_buffer_ == nullptr) {
+        pose.buffer = SDL_CreateGPUBuffer(device_, &buffer_info);
+        if (pose.buffer == nullptr) {
             throw_sdl_error("renderer: SDL_CreateGPUBuffer(pose)");
         }
 
@@ -448,7 +687,7 @@ void Renderer::upload(const Scene& scene) {
         SDL_GPUTransferBufferLocation source{};
         source.transfer_buffer = transfer;
         SDL_GPUBufferRegion destination{};
-        destination.buffer = pose_buffer_;
+        destination.buffer = pose.buffer;
         destination.size = pose_size;
         SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
     }
@@ -470,13 +709,19 @@ void Renderer::upload(const Scene& scene) {
     uploaded_ = true;
 }
 
-void Renderer::upload_pose(const std::vector<Mat4>& palette) {
-    if (pose_joint_count_ == 0) {
+void Renderer::upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palette) {
+    if (rigIndex >= pose_buffers_.size()) {
+        throw std::runtime_error("renderer: upload_pose: no rig " + std::to_string(rigIndex) +
+                                 " in this scene");
+    }
+    const PoseGpu& pose = pose_buffers_[rigIndex];
+    if (pose.joint_count == 0) {
         return;  // no skin: the identity palette stands
     }
-    if (palette.size() != pose_joint_count_) {
-        throw std::runtime_error("renderer: upload_pose got " + std::to_string(palette.size()) +
-                                 " matrices, expected " + std::to_string(pose_joint_count_));
+    if (palette.size() != pose.joint_count) {
+        throw std::runtime_error("renderer: upload_pose(rig " + std::to_string(rigIndex) +
+                                 ") got " + std::to_string(palette.size()) +
+                                 " matrices, expected " + std::to_string(pose.joint_count));
     }
 
     const uint32_t byte_count = static_cast<uint32_t>(palette.size() * sizeof(Mat4));
@@ -507,7 +752,7 @@ void Renderer::upload_pose(const std::vector<Mat4>& palette) {
     }
     SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(cmd);
     const SDL_GPUTransferBufferLocation source{transfer, 0};
-    const SDL_GPUBufferRegion destination{pose_buffer_, 0, byte_count};
+    const SDL_GPUBufferRegion destination{pose.buffer, 0, byte_count};
     SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
     SDL_EndGPUCopyPass(copy_pass);
 
@@ -526,6 +771,12 @@ void Renderer::upload_pose(const std::vector<Mat4>& palette) {
 }
 
 void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain) {
+    // Refresh the label before the frame's command buffer: the upload is its
+    // own submission and only happens when the rounded percentage changed.
+    // Uploading is not drawing — the overlay draws only after the swapchain
+    // has been acquired below.
+    update_hud_text();
+
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
     if (cmd == nullptr) {
         throw_sdl_error("renderer: SDL_AcquireGPUCommandBuffer");
@@ -583,12 +834,6 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     // Vertex slot 0: one view-projection for the whole frame.
     SDL_PushGPUVertexUniformData(cmd, 0, &viewProj, sizeof(Mat4));
 
-    // Vertex storage buffer 0: the joint palette, shared by every draw.
-    if (pose_buffer_ != nullptr) {
-        SDL_GPUBuffer* pose_buffers[1] = {pose_buffer_};
-        SDL_BindGPUVertexStorageBuffers(pass, 0, pose_buffers, 1);
-    }
-
     for (size_t i = 0; i < scene.meshes.size() && i < meshes_.size(); ++i) {
         const MeshGpu& mesh = meshes_[i];
         if (mesh.index_buffer == nullptr || mesh.index_count == 0) {
@@ -623,6 +868,15 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
             albedo = textures_[static_cast<size_t>(texture_index)];
         }
 
+        // Vertex storage buffer 0: this mesh's own rig palette — never another
+        // rig's. A static mesh (rig < 0) binds slot 0, whose zero-weight
+        // vertices the shader passes through without reading it.
+        const std::size_t slot = mesh_palette_slot(scene, scene.meshes[i]);
+        if (slot < pose_buffers_.size() && pose_buffers_[slot].buffer != nullptr) {
+            SDL_GPUBuffer* palette_buffers[1] = {pose_buffers_[slot].buffer};
+            SDL_BindGPUVertexStorageBuffers(pass, 0, palette_buffers, 1);
+        }
+
         const SDL_GPUBufferBinding vertex_binding{mesh.vertex_buffer, 0};
         SDL_BindGPUVertexBuffers(pass, 0, &vertex_binding, 1);
         const SDL_GPUBufferBinding index_binding{mesh.index_buffer, 0};
@@ -634,6 +888,44 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     }
 
     SDL_EndGPURenderPass(pass);
+
+    // HUD overlay: a second, depth-less pass that loads the scene color and
+    // composites the bars, then the stamina label. It runs only after the
+    // swapchain acquisition above succeeded (the early returns skip the frame
+    // before this point), and before the swapchain copy below.
+    if (hud_.visible) {
+        SDL_GPUColorTargetInfo hud_target{};
+        hud_target.texture = color_target_;
+        hud_target.load_op = SDL_GPU_LOADOP_LOAD;
+        hud_target.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* hud_pass = SDL_BeginGPURenderPass(cmd, &hud_target, 1, nullptr);
+        if (hud_pass == nullptr) {
+            SDL_CancelGPUCommandBuffer(cmd);
+            throw_sdl_error("renderer: SDL_BeginGPURenderPass(hud)");
+        }
+
+        SDL_BindGPUGraphicsPipeline(hud_pass, hud_pipeline_);
+        const SDL_GPUBufferBinding hud_vertex_binding{hud_vertex_buffer_, 0};
+        SDL_BindGPUVertexBuffers(hud_pass, 0, &hud_vertex_binding, 1);
+        const SDL_GPUBufferBinding hud_index_binding{hud_index_buffer_, 0};
+        SDL_BindGPUIndexBuffer(hud_pass, &hud_index_binding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+
+        // Bars first, label last: the label sits above the stamina bar and must
+        // stay readable over it.
+        draw_hud_quad(cmd, hud_pass, hud_stamina_rect(hud_.stamina), white_texture_, hud_sampler_,
+                      kStaminaBarColor);
+        draw_hud_quad(cmd, hud_pass, hud_health_rect(hud_.health), white_texture_, hud_sampler_,
+                      kHealthBarColor);
+
+        if (hud_text_texture_ != nullptr && hud_text_width_ > 0.0f) {
+            const HudRect stamina = hud_stamina_rect(hud_.stamina);
+            const HudRect label{stamina.x, stamina.y - hud_text_height_ - kHudLabelGap,
+                                hud_text_width_, hud_text_height_};
+            draw_hud_quad(cmd, hud_pass, label, hud_text_texture_, hud_sampler_, kHudTextColor);
+        }
+
+        SDL_EndGPURenderPass(hud_pass);
+    }
 
     if (swapchain != nullptr) {
         // Same format on both sides: a texture copy, not a blit.
@@ -716,6 +1008,160 @@ std::vector<uint8_t> Renderer::read_pixels() {
     return pixels;
 }
 
+void Renderer::set_hud(const HudState& state) {
+    hud_ = state;
+}
+
+void Renderer::update_hud_text() {
+    if (!hud_.visible || hud_font_ == nullptr || hud_text_unavailable_) {
+        return;
+    }
+
+    // The label differs exactly when the rounded percentage differs, so a
+    // string compare is the "recreate only when the integer changes" gate.
+    char label[32];
+    hud_format_stamina(label, hud_.stamina);
+    if (hud_text_texture_ != nullptr && std::strcmp(label, hud_text_label_) == 0) {
+        return;
+    }
+
+    // SDL_ttf's blended surfaces are ARGB8888; the GPU wants a byte-ordered
+    // RGBA8 upload.
+    SDL_Surface* rendered =
+        TTF_RenderText_Blended(hud_font_, label, 0, SDL_Color{255, 255, 255, 255});
+    SDL_Surface* surface =
+        rendered != nullptr ? SDL_ConvertSurface(rendered, SDL_PIXELFORMAT_RGBA32) : nullptr;
+    if (rendered != nullptr) {
+        SDL_DestroySurface(rendered);
+    }
+    if (surface == nullptr || surface->w <= 0 || surface->h <= 0 || surface->pitch < 0 ||
+        surface->pitch < surface->w * 4) {
+        if (surface != nullptr) {
+            SDL_DestroySurface(surface);
+        }
+        std::fprintf(stderr, "renderer: HUD label render failed (%s); drawing the HUD bars only\n",
+                     SDL_GetError());
+        hud_text_unavailable_ = true;
+        return;
+    }
+
+    const uint32_t width = static_cast<uint32_t>(surface->w);
+    const uint32_t height = static_cast<uint32_t>(surface->h);
+    const uint32_t row_bytes = width * 4;
+
+    SDL_GPUTexture* texture = nullptr;
+    SDL_GPUTransferBuffer* transfer = nullptr;
+    SDL_GPUFence* fence = nullptr;
+    bool uploaded = false;
+
+    // One exit path for every GPU step: each stage only has to break, and the
+    // cleanup below releases whatever the earlier stages created.
+    do {
+        SDL_GPUTextureCreateInfo texture_info{};
+        texture_info.type = SDL_GPU_TEXTURETYPE_2D;
+        texture_info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        texture_info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        texture_info.width = width;
+        texture_info.height = height;
+        texture_info.layer_count_or_depth = 1;
+        texture_info.num_levels = 1;
+        texture_info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        texture = SDL_CreateGPUTexture(device_, &texture_info);
+        if (texture == nullptr) {
+            break;
+        }
+
+        SDL_GPUTransferBufferCreateInfo transfer_info{};
+        transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        transfer_info.size = row_bytes * height;
+        transfer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
+        if (transfer == nullptr) {
+            break;
+        }
+
+        void* mapped = SDL_MapGPUTransferBuffer(device_, transfer, false);
+        if (mapped == nullptr) {
+            break;
+        }
+        const uint8_t* source_pixels = static_cast<const uint8_t*>(surface->pixels);
+        if (static_cast<uint32_t>(surface->pitch) == row_bytes) {
+            std::memcpy(mapped, source_pixels, row_bytes * height);
+        } else {
+            for (uint32_t row = 0; row < height; ++row) {
+                std::memcpy(
+                    static_cast<uint8_t*>(mapped) + static_cast<std::size_t>(row) * row_bytes,
+                    source_pixels + static_cast<std::size_t>(row) * surface->pitch, row_bytes);
+            }
+        }
+        SDL_UnmapGPUTransferBuffer(device_, transfer);
+
+        SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
+        if (cmd == nullptr) {
+            break;
+        }
+        SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(cmd);
+        SDL_GPUTextureTransferInfo source{};
+        source.transfer_buffer = transfer;
+        source.pixels_per_row = width;
+        source.rows_per_layer = height;
+        SDL_GPUTextureRegion destination{};
+        destination.texture = texture;
+        destination.w = width;
+        destination.h = height;
+        destination.d = 1;
+        SDL_UploadToGPUTexture(copy_pass, &source, &destination, false);
+        SDL_EndGPUCopyPass(copy_pass);
+
+        // The upload is its own submission, like upload_pose: a fence wait
+        // before the transfer buffer can go, and the frame's own command
+        // buffer then sees a settled texture. Only a label change pays this.
+        fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+        if (fence == nullptr) {
+            break;
+        }
+        const bool waited = SDL_WaitForGPUFences(device_, true, &fence, 1);
+        SDL_ReleaseGPUFence(device_, fence);
+        fence = nullptr;
+        uploaded = waited;
+    } while (false);
+
+    if (fence != nullptr) {
+        SDL_ReleaseGPUFence(device_, fence);
+    }
+    if (transfer != nullptr) {
+        SDL_ReleaseGPUTransferBuffer(device_, transfer);
+    }
+    SDL_DestroySurface(surface);
+    if (!uploaded) {
+        if (texture != nullptr) {
+            SDL_ReleaseGPUTexture(device_, texture);
+        }
+        std::fprintf(stderr, "renderer: HUD label upload failed (%s); drawing the HUD bars only\n",
+                     SDL_GetError());
+        hud_text_unavailable_ = true;
+        return;
+    }
+
+    if (hud_text_texture_ != nullptr) {
+        SDL_ReleaseGPUTexture(device_, hud_text_texture_);
+    }
+    hud_text_texture_ = texture;
+    hud_text_width_ = static_cast<float>(width);
+    hud_text_height_ = static_cast<float>(height);
+    std::snprintf(hud_text_label_, sizeof(hud_text_label_), "%s", label);
+}
+
+void Renderer::release_font() {
+    if (hud_font_ != nullptr) {
+        TTF_CloseFont(hud_font_);
+        hud_font_ = nullptr;
+    }
+    if (ttf_initialized_) {
+        TTF_Quit();
+        ttf_initialized_ = false;
+    }
+}
+
 void Renderer::ensure_targets(uint32_t width, uint32_t height) {
     if (color_target_ != nullptr && width == target_width_ && height == target_height_) {
         return;
@@ -772,11 +1218,13 @@ void Renderer::release_gpu_resources() {
         SDL_ReleaseGPUTexture(device_, white_texture_);
         white_texture_ = nullptr;
     }
-    if (pose_buffer_ != nullptr) {
-        SDL_ReleaseGPUBuffer(device_, pose_buffer_);
-        pose_buffer_ = nullptr;
+    for (PoseGpu& pose : pose_buffers_) {
+        if (pose.buffer != nullptr) {
+            SDL_ReleaseGPUBuffer(device_, pose.buffer);
+            pose.buffer = nullptr;
+        }
     }
-    pose_joint_count_ = 0;
+    pose_buffers_.clear();
     for (MeshGpu& mesh : meshes_) {
         if (mesh.vertex_buffer != nullptr) {
             SDL_ReleaseGPUBuffer(device_, mesh.vertex_buffer);
@@ -786,13 +1234,36 @@ void Renderer::release_gpu_resources() {
         }
     }
     meshes_.clear();
+    if (hud_text_texture_ != nullptr) {
+        SDL_ReleaseGPUTexture(device_, hud_text_texture_);
+        hud_text_texture_ = nullptr;
+    }
+    hud_text_width_ = 0.0f;
+    hud_text_height_ = 0.0f;
+    hud_text_label_[0] = '\0';
+    if (hud_vertex_buffer_ != nullptr) {
+        SDL_ReleaseGPUBuffer(device_, hud_vertex_buffer_);
+        hud_vertex_buffer_ = nullptr;
+    }
+    if (hud_index_buffer_ != nullptr) {
+        SDL_ReleaseGPUBuffer(device_, hud_index_buffer_);
+        hud_index_buffer_ = nullptr;
+    }
     if (sampler_ != nullptr) {
         SDL_ReleaseGPUSampler(device_, sampler_);
         sampler_ = nullptr;
     }
+    if (hud_sampler_ != nullptr) {
+        SDL_ReleaseGPUSampler(device_, hud_sampler_);
+        hud_sampler_ = nullptr;
+    }
     if (pipeline_ != nullptr) {
         SDL_ReleaseGPUGraphicsPipeline(device_, pipeline_);
         pipeline_ = nullptr;
+    }
+    if (hud_pipeline_ != nullptr) {
+        SDL_ReleaseGPUGraphicsPipeline(device_, hud_pipeline_);
+        hud_pipeline_ = nullptr;
     }
     if (vertex_shader_ != nullptr) {
         SDL_ReleaseGPUShader(device_, vertex_shader_);
@@ -801,5 +1272,13 @@ void Renderer::release_gpu_resources() {
     if (fragment_shader_ != nullptr) {
         SDL_ReleaseGPUShader(device_, fragment_shader_);
         fragment_shader_ = nullptr;
+    }
+    if (hud_vertex_shader_ != nullptr) {
+        SDL_ReleaseGPUShader(device_, hud_vertex_shader_);
+        hud_vertex_shader_ = nullptr;
+    }
+    if (hud_fragment_shader_ != nullptr) {
+        SDL_ReleaseGPUShader(device_, hud_fragment_shader_);
+        hud_fragment_shader_ = nullptr;
     }
 }

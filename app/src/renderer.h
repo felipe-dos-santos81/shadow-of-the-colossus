@@ -5,7 +5,9 @@
 #include <vector>
 
 #include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
+#include "hud.h"
 #include "math3d.h"
 #include "scene.h"
 
@@ -27,16 +29,18 @@ public:
 
     // Buffers and textures for `scene` on the GPU. The handle arrays mirror
     // scene.meshes / scene.textures, so the scene layout must not change after
-    // this call (the app loads one model and keeps it). Also creates the joint
-    // palette buffer, sized from scene.skin.joints (a single identity matrix
-    // when the scene has no skin).
+    // this call (the app loads one model and keeps it). Also creates one joint
+    // palette buffer per scene rig, each sized by that rig's own joint count (a
+    // single identity matrix when the rig has no skin, and one identity fallback
+    // buffer when the scene has no rigs at all).
     void upload(const Scene& scene);
 
-    // Copies `palette` (one matrix per skin joint, in the skin's joint order)
-    // into the palette buffer the vertex shader reads. Called once per frame
-    // with animation_pose()'s result. No-op when the scene has no skin;
-    // throws when the size does not match the skin uploaded at upload() time.
-    void upload_pose(const std::vector<Mat4>& palette);
+    // Copies `palette` (one matrix per joint of rig `rigIndex`, in that rig's
+    // joint order) into that rig's own palette buffer — never another rig's.
+    // Called once per frame per rig with animation_pose()'s result. No-op when
+    // the rig has no skin; throws when `rigIndex` is no rig of the uploaded
+    // scene or the size does not match that rig's uploaded joint count.
+    void upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palette);
 
     // Renders the offscreen target (clear + one draw per mesh, pushing the
     // view-projection once and the per-mesh model + material uniforms), then —
@@ -49,6 +53,12 @@ public:
     // render_frame; throws if nothing has been rendered yet.
     std::vector<uint8_t> read_pixels();
 
+    // Stores the overlay state drawn at the end of every render_frame: the two
+    // stamina/health bars and, when SDL_ttf initialized, the "STAMINA <n>"
+    // label. visible=false draws nothing (the default). Never throws: a text
+    // failure degrades to bars only.
+    void set_hud(const HudState& state);
+
 private:
     struct MeshGpu {
         SDL_GPUBuffer* vertex_buffer;
@@ -56,7 +66,28 @@ private:
         uint32_t index_count;
     };
 
+    // One rig's joint palette (vertex storage buffer). `joint_count` is the
+    // rig's own skin joint count — the palette size upload_pose expects for this
+    // rig (0 = the rig has no skin, and the single identity matrix stands). The
+    // buffer always holds at least one matrix, so every draw has a valid
+    // binding.
+    struct PoseGpu {
+        SDL_GPUBuffer* buffer = nullptr;
+        uint32_t joint_count = 0;
+    };
+
     void create_pipeline();
+    // HUD pipeline plus the unit quad's vertex/index buffers. Called once from
+    // the constructor; throws on a GPU failure (a HUD is required, unlike the
+    // optional text).
+    void create_hud_pipeline();
+    // (Re)uploads the stamina label when its rounded percentage changed. A
+    // font/render failure prints one stderr line and leaves hud_text_texture_
+    // null, so the bars keep drawing. Never throws.
+    void update_hud_text();
+    // Closes the font and quits SDL_ttf, idempotently (also on a half-built
+    // constructor).
+    void release_font();
     SDL_GPUShader* create_shader(SDL_GPUShaderStage stage, const char* entry_point,
                                  uint32_t num_uniform_buffers, uint32_t num_storage_buffers,
                                  uint32_t num_samplers, const uint8_t* source, size_t source_size);
@@ -84,13 +115,34 @@ private:
     // draw always binds a texture, so no material can have "none").
     SDL_GPUTexture* white_texture_ = nullptr;
 
+    // HUD: a second, depth-less pipeline drawing alpha-blended textured quads
+    // over the scene pass. The quad geometry is one static unit quad; the
+    // per-draw transform/UVs/color arrive as a push uniform.
+    SDL_GPUShader* hud_vertex_shader_ = nullptr;
+    SDL_GPUShader* hud_fragment_shader_ = nullptr;
+    SDL_GPUGraphicsPipeline* hud_pipeline_ = nullptr;
+    SDL_GPUSampler* hud_sampler_ = nullptr;
+    SDL_GPUBuffer* hud_vertex_buffer_ = nullptr;
+    SDL_GPUBuffer* hud_index_buffer_ = nullptr;
+    HudState hud_{};
+
+    // Font and label texture. The label is re-rendered only when its text
+    // changes (i.e. when the rounded percentage changes). A failed font leaves
+    // hud_font_ null and text drawing off; the bars keep drawing.
+    TTF_Font* hud_font_ = nullptr;
+    bool ttf_initialized_ = false;
+    bool hud_text_unavailable_ = false;
+    char hud_text_label_[32] = {};
+    SDL_GPUTexture* hud_text_texture_ = nullptr;
+    float hud_text_width_ = 0.0f;
+    float hud_text_height_ = 0.0f;
+
     std::vector<MeshGpu> meshes_;
     std::vector<SDL_GPUTexture*> textures_;
     bool uploaded_ = false;
 
-    // The joint palette (vertex storage buffer): one matrix per skin joint,
-    // created by upload() from the scene's skin. A scene without a skin gets a
-    // single identity matrix, so every draw always has a valid binding.
-    SDL_GPUBuffer* pose_buffer_ = nullptr;
-    uint32_t pose_joint_count_ = 0;  // matrices upload_pose expects; 0 = no skin
+    // One palette buffer per rig (index = Scene::rigs index), each sized by
+    // that rig's own joint count; a scene with no rigs keeps one identity
+    // fallback entry. render_frame binds a mesh's own entry before its draw.
+    std::vector<PoseGpu> pose_buffers_;
 };

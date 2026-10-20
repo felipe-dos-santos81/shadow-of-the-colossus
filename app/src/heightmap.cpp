@@ -79,13 +79,23 @@ int node_index_end(float coordinate, float bound_min, float cellSize, int nodes)
 
 }  // namespace
 
-Heightmap build_heightmap(const Scene& scene, float cellSize, std::size_t meshCount) {
+Heightmap build_heightmap(const Scene& scene, float cellSize) {
     if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
         throw std::runtime_error("heightmap cell size must be positive and finite");
     }
-    const std::size_t rasterized = std::min(meshCount, scene.meshes.size());
-    if (rasterized == 0) {
+    if (scene.meshes.empty()) {
         throw std::runtime_error("no meshes");
+    }
+    // Only static meshes are ground: the player and the entities are rigged and
+    // must never rasterize into the surface they stand on.
+    std::size_t static_count = 0;
+    for (const MeshCpu& mesh : scene.meshes) {
+        if (mesh.rig < 0) {
+            ++static_count;
+        }
+    }
+    if (static_count == 0) {
+        throw std::runtime_error("no static meshes");
     }
 
     Heightmap heightmap;
@@ -98,8 +108,11 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, std::size_t meshCo
         static_cast<std::size_t>(heightmap.width) * static_cast<std::size_t>(heightmap.height),
         std::numeric_limits<float>::quiet_NaN());
 
-    for (std::size_t mesh_index = 0; mesh_index < rasterized; ++mesh_index) {
+    for (std::size_t mesh_index = 0; mesh_index < scene.meshes.size(); ++mesh_index) {
         const MeshCpu& mesh = scene.meshes[mesh_index];
+        if (mesh.rig >= 0) {
+            continue;  // a rigged mesh (player or entity): never ground
+        }
         for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
             const std::size_t i0 = mesh.indices[t];
             const std::size_t i1 = mesh.indices[t + 1];
