@@ -128,6 +128,10 @@ validated the mapping and pose; the full record is `docs/notes/s4-pose.md`.
 | bridge residual | max **12.90°** (`Bone_KO_A_L`); 54/58 records ≤ 1°; composed bind vs the glb world matrices **1.07e-14** |
 | loop closure | worst first-to-last rotation **0.0286°** (`Bone_KUBI`); 31/37 keyed tracks byte-identical first/last |
 
+**Vertex count reconciliation.** The main glb's 12 meshes carry **476,666** vertices; the
+**523,865** figure in `docs/notes/m0-results.md` is the **seven-file directory total** (246 meshes
+across the main, LOD1, hiza, weapon, collision and related files), not this glb.
+
 Frame-0 world heights (the values the C# world-pose test pins, ±0.02 m):
 
 | joint | y (m) |

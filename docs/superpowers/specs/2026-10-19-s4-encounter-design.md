@@ -82,7 +82,8 @@ a fight; the moment it delivers is the one before it — *he is there, and he is
 ## 6 · Recon facts (2026-10-19; sources in `docs/notes/s4-recon.md`)
 
 - **Asset.** `models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.cmsh`
-  (6.74 MB) converts to a **38.0 MB glb**: 12 meshes, 523,865 vertices, 1 skin / **238 joints**,
+  (6.74 MB) converts to a **38.0 MB glb**: 12 meshes, **476,666 vertices** (the M0 seven-file
+  directory total is 523,865 across 246 meshes), 1 skin / **238 joints**,
   bind AABB **34.96 × 17.67 × 9.81 m**, lowest vertex **y = −8.739**. LOD1 1.76 MB; collision glb
   229 meshes / 5,329 verts; club (`_weapon`) and knee (`_hiza`) are separate **unskinned** glbs.
 - **Animation.** All **135** `minotaur_*` clips are **flag-clear** and parse (0 errors); 82 are

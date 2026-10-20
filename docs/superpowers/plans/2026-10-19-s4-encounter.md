@@ -275,7 +275,7 @@ Docs:
 
 - Spec coverage: Goals 1–6 map to Tasks 1 (bake/pose), 2 (placement), 3–4 (two rigs/playback), 5 (collision/camera), 6 (acceptance), 7 (results).
 - Interface consistency: `RigCpu`/`Scene.rigs`/`MeshCpu.rig`/`ManifestEntity`/`resolve_player_collision`/`--entity-time`/`--camera-target`/`s4-status` are used with the same names across tasks.
-- Values pinned: Valus glb 38,049,000 B (pre-bake), 12 meshes, 238 joints, 523,865 verts, feet −8.739; `minotaur_a_stand` 26 frames / 58 tracks / 15 fps / 1.6667 s / 21 statics; minotaur bank 73 names (58 records); 58/58 mapping; encounter 30 instances + 1 entity; spawn (353, ground, 345) + builder yaw; S3 acceptance unchanged.
+- Values pinned: Valus glb 38,049,000 B (pre-bake), 12 meshes, 238 joints, **476,666 verts** (the 523,865 figure is the M0 seven-file directory total, not this glb), feet −8.739; `minotaur_a_stand` 26 frames / 58 tracks / 15 fps / 1.6667 s / 21 statics; minotaur bank 73 names (58 records); 58/58 mapping; encounter 30 instances + 1 entity; spawn (353, ground, 345) + builder yaw; S3 acceptance unchanged.
 - The plan's one open value is the minotaur frame-0 world-pose set — Task 1 measures it with the RE tool and pins it in the same commit (the S2 precedent: the player's 0.7429/0.8343/1.0462/1.1165).
 
 ---

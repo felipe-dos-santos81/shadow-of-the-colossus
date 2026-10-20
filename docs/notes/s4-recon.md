@@ -11,7 +11,8 @@ are marked. No game/port runs.
   `cclm` 73,222 B; `_collision.cmsh` 54,412 B; `_lod1.cmsh` 290,073 B; club `_weapon.cmsh`
   265,730 B and knee `_hiza.cmsh` 37,834 B (both unskinned).
 - Converted: `out/library/.../c01_minotaur_a.glb` **38,049,000 B**, 12 meshes, 12 materials,
-  250 nodes, **1 skin / 238 joints**, 523,865 vertices, 0 animations; bind AABB x[−17.481, 17.481],
+  250 nodes, **1 skin / 238 joints**, **476,666 vertices** (the M0 seven-file directory total is
+  523,865 across 246 meshes), 0 animations; bind AABB x[−17.481, 17.481],
   **y[−8.739, 8.932]**, z[−4.439, 5.367] → 34.96 × 17.67 × 9.81 m, feet at local −8.739.
   LOD1 glb 1,763,640 B; collision glb 624,940 B (229 meshes, 5,329 verts, 238 joints);
   club glb 613,576 B and knee glb 78,212 B (no skin).
