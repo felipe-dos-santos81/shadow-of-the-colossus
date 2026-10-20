@@ -593,15 +593,16 @@ TEST_CASE("attached modes write the surface point and skip the ground and capsul
     player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
     REQUIRE(combat.mode == PlayerMode::Grabbing);
 
-    // The Head band at t = 0 sits at (1.2 + 0.35, 8, 0). A 50 m ground and an
-    // overlapping capsule must not move the climber: neither runs while attached.
+    // R10's Head band at t = 0 sits at (1.75 + 0.35, 8, 0). A 50 m ground and
+    // an overlapping capsule must not move the climber: neither runs while
+    // attached.
     PlayerFrame raised_frame = head_frame(raised, joints_ok);
     raised_frame.entityCapsules.push_back(
-        Capsule{Vec3{1.55f, 8.0f, 0.0f}, Vec3{1.55f, 9.0f, 0.0f}, 0.5f});
+        Capsule{Vec3{2.1f, 8.0f, 0.0f}, Vec3{2.1f, 9.0f, 0.0f}, 0.5f});
     StepEvents e = player_step(player, combat, input, raised_frame, tuning, kStep);
 
     CHECK(combat.mode == PlayerMode::Grabbing);
-    CHECK(player.position.x == doctest::Approx(1.55f).epsilon(1e-4));
+    CHECK(player.position.x == doctest::Approx(2.1f).epsilon(1e-4));
     CHECK(player.position.y == doctest::Approx(8.0f).epsilon(1e-4));
     CHECK(player.position.z == doctest::Approx(0.0f).epsilon(1e-4));
     // The +X radial faces the player back towards the body: -X, yaw -90.

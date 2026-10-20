@@ -153,6 +153,7 @@ grab_frames="$(field "$grab_line" frames)"
 grab_band="$(field "$grab_line" band)"
 grab_pos="$(field "$grab_line" pos)"
 [[ "$grab_frames" -gt 0 ]] || fail "s41-grab frames=$grab_frames (the approach made no progress)"
+[[ "$grab_band" = "left_foot" ]] || fail "s41-grab band=$grab_band (need left_foot)"
 awk -F, -v p="$grab_pos" 'BEGIN { n = split(p, a, ","); exit !(n == 3) }' ||
   fail "s41-grab pos=$grab_pos is not three components"
 
@@ -164,6 +165,7 @@ climb_from_y="$(field "$climb_line" from_y)"
 climb_to_y="$(field "$climb_line" to_y)"
 climb_band="$(field "$climb_line" band)"
 [[ "$climb_frames" = "240" ]] || fail "s41-climb frames=$climb_frames (need the 240-frame pinned climb)"
+[[ "$climb_band" = "left_shin" ]] || fail "s41-climb band=$climb_band (need left_shin)"
 climb_rise="$(awk -v a="$climb_from_y" -v b="$climb_to_y" 'BEGIN { printf "%.2f", b - a }')"
 awk -v r="$climb_rise" 'BEGIN { exit !(r >= 3.0) }' ||
   fail "s41-climb rise=${climb_rise} m (need >= 3.0)"
@@ -172,11 +174,14 @@ awk -v a="$climb_from_y" -v b="$climb_to_y" 'BEGIN { exit !(b > a) }' ||
 
 strike_re='^s41-strike swing=[0-9]+ damage=[0-9]+ health=[0-9]+->[0-9]+ weakpoint=-?[0-9]+$'
 strike_count="$(line_count "$strike_re")"
-[[ "$strike_count" = "2" ]] || fail "expected two s41-strike lines (full + weak), found $strike_count"
+[[ "$strike_count" = "3" ]] ||
+  fail "expected three s41-strike lines (full + weak + kill), found $strike_count"
 strike1="$(printf '%s\n' "$selftest_out" | grep -m1 -E "$strike_re")" ||
   fail "s41-strike: missing the full-charge hit"
 strike2="$(printf '%s\n' "$selftest_out" | grep -E "$strike_re" | sed -n '2p')" ||
   fail "s41-strike: missing the weak hit"
+strike3="$(printf '%s\n' "$selftest_out" | grep -E "$strike_re" | sed -n '3p')" ||
+  fail "s41-strike: missing the killing hit"
 strike1_swing="$(field "$strike1" swing)"
 strike1_damage="$(field "$strike1" damage)"
 strike1_health="$(field "$strike1" health)"
@@ -184,6 +189,11 @@ strike1_weakpoint="$(field "$strike1" weakpoint)"
 strike2_swing="$(field "$strike2" swing)"
 strike2_damage="$(field "$strike2" damage)"
 strike2_health="$(field "$strike2" health)"
+strike2_weakpoint="$(field "$strike2" weakpoint)"
+strike3_swing="$(field "$strike3" swing)"
+strike3_damage="$(field "$strike3" damage)"
+strike3_health="$(field "$strike3" health)"
+strike3_weakpoint="$(field "$strike3" weakpoint)"
 [[ "$strike1_swing" = "1" ]] || fail "s41-strike swing=$strike1_swing (need 1)"
 [[ "$strike1_damage" = "34" ]] || fail "the full-charge strike dealt $strike1_damage (need 34)"
 [[ "$strike1_health" = "100->66" ]] || fail "the full-charge strike health is $strike1_health (need 100->66)"
@@ -191,23 +201,54 @@ strike2_health="$(field "$strike2" health)"
 [[ "$strike2_swing" = "2" ]] || fail "s41-strike swing=$strike2_swing (need 2)"
 [[ "$strike2_damage" = "20" ]] || fail "the weak strike dealt $strike2_damage (need 20)"
 [[ "$strike2_health" = "66->46" ]] || fail "the weak strike health is $strike2_health (need 66->46)"
+# R10's 1.75 m head band makes the head the nearest catch band, so the weak
+# strike lands on the forehead weakpoint. It still exercises the weak damage
+# path; the old neck catch's -1 is no longer the geometry.
+[[ "$strike2_weakpoint" = "0" ]] ||
+  fail "the weak strike weakpoint=$strike2_weakpoint (need the forehead after R10's head catch)"
+[[ "$strike3_swing" = "3" ]] || fail "s41-strike swing=$strike3_swing (need 3)"
+[[ "$strike3_damage" = "34" ]] || fail "the killing strike dealt $strike3_damage (need 34)"
+[[ "$strike3_health" = "34->0" ]] ||
+  fail "the killing strike health is $strike3_health (need 34->0)"
+[[ "$strike3_weakpoint" = "0" ]] || fail "the killing strike weakpoint=$strike3_weakpoint (need the forehead)"
 h1_before="${strike1_health%%->*}"
 h1_after="${strike1_health##*->}"
 h2_before="${strike2_health%%->*}"
 h2_after="${strike2_health##*->}"
+h3_before="${strike3_health%%->*}"
+h3_after="${strike3_health##*->}"
 [[ $((h1_before - h1_after)) -eq "$strike1_damage" ]] ||
   fail "the full strike's health arithmetic does not match its damage: $strike1_health vs $strike1_damage"
 [[ $((h2_before - h2_after)) -eq "$strike2_damage" ]] ||
   fail "the weak strike's health arithmetic does not match its damage: $strike2_health vs $strike2_damage"
 [[ "$h2_before" -eq "$h1_after" ]] ||
   fail "the weak strike starts at $h2_before HP, not the full strike's $h1_after"
+[[ $((h3_before - h3_after)) -eq "$strike3_damage" ]] ||
+  fail "the killing strike's health arithmetic does not match its damage: $strike3_health vs $strike3_damage"
+[[ "$h3_before" = "34" ]] ||
+  fail "the killing strike starts at $h3_before HP, not the selftest's one-plunge set-up 34"
+
+if ! player_px_line="$(one_line '^s41-strike player_px=[0-9]+,[0-9]+,[0-9]+,[0-9]+$' "s41-strike player_px")"; then
+  exit 1
+fi
+player_px="$(field "$player_px_line" player_px)"
+IFS=, read -r player_x player_y player_w player_h <<<"$player_px"
+if ((player_w <= 0 || player_h <= 0)); then
+  fail "s41-strike player_px=$player_px is empty"
+fi
+if ((player_x < 0 || player_y < 0 || player_x + player_w > 2560 ||
+     player_y + player_h > 1440)); then
+  fail "s41-strike player_px=$player_px is not inside the 2560x1440 strike still"
+fi
 
 if ! catch_line="$(one_line "^s41-catch band=($band_re)$" "s41-catch")"; then
   exit 1
 fi
 catch_band="$(field "$catch_line" band)"
-[[ "$catch_band" = "neck" ]] ||
-  fail "s41-catch band=$catch_band (the recorded catch lands on the neck band)"
+# R10's 1.75 m head band is the nearest band at the shake-off point, so the
+# catch is the head (the neck was the pre-R10 geometry).
+[[ "$catch_band" = "head" ]] ||
+  fail "s41-catch band=$catch_band (R10's head band is the nearest catch band)"
 
 if ! fall_line="$(one_line '^s41-fall frames=[0-9]+ landed=1$' "s41-fall")"; then
   exit 1
@@ -255,6 +296,8 @@ if ! defeat_line="$(one_line '^s41-defeat bbox=-?[0-9]+,-?[0-9]+,-?[0-9]+,-?[0-9
 fi
 defeat_bbox="$(field "$defeat_line" bbox)"
 defeat_screen="$(field "$defeat_line" screen)"
+[[ "$defeat_screen" = "2560x1440" ]] ||
+  fail "s41-defeat screen=$defeat_screen (need 2560x1440)"
 IFS=, read -r defeat_x0 defeat_y0 defeat_x1 defeat_y1 <<<"$defeat_bbox"
 if ((defeat_x1 <= defeat_x0 || defeat_y1 <= defeat_y0)); then
   fail "s41-defeat bbox=$defeat_bbox is empty"
@@ -272,15 +315,35 @@ span_for() {
   '
 }
 
-# check_png PHASE PATH — magic, byte floor, and the viewer's own span line.
+# size_for PATH — "WIDTH HEIGHT" from the s1-screenshot line for PATH.
+size_for() {
+  local want="$1"
+  printf '%s\n' "$selftest_out" | awk -v want="$want" '
+    /^s1-screenshot / {
+      if ($2 == "path=" want) {
+        w = $3; h = $4;
+        sub(/^width=/, "", w); sub(/^height=/, "", h);
+        print w, h; exit
+      }
+    }
+  '
+}
+
+# check_png PHASE PATH — magic, byte floor, 2560x1440, and the viewer's own
+# non-uniformity span line.
 check_png() {
-  local phase="$1" path="$2" magic bytes pixels_line min_csv max_csv
+  local phase="$1" path="$2" magic bytes pixels_line min_csv max_csv size w h
   local min_r min_g min_b max_r max_g max_b d largest
   [[ -f "$path" ]] || fail "$phase: no PNG at $path"
   magic="$(od -An -tx1 -N4 "$path" | tr -d ' \n')"
   [[ "$magic" = "89504e47" ]] || fail "$phase: $path lacks the PNG magic (got $magic)"
   bytes="$(wc -c < "$path" | tr -d '[:space:]')"
   [[ "$bytes" -gt 5000 ]] || fail "$phase: $path is only $bytes bytes (need > 5000)"
+  size="$(size_for "$path")"
+  [[ -n "$size" ]] || fail "$phase: no s1-screenshot line for $path"
+  read -r w h <<<"$size"
+  [[ "$w" = "2560" && "$h" = "1440" ]] ||
+    fail "$phase: $path is ${w}x${h} (need 2560x1440)"
   pixels_line="$(span_for "$path")"
   [[ -n "$pixels_line" ]] || fail "$phase: no s1-pixels line for $path"
   min_csv="${pixels_line#*min=}"; min_csv="${min_csv%% *}"
@@ -663,6 +726,8 @@ printf 's41-acceptance: grab         %s\n' "$grab_line"
 printf 's41-acceptance: climb        %s\n' "$climb_line"
 printf 's41-acceptance: strike       %s\n' "$strike1"
 printf 's41-acceptance: strike       %s\n' "$strike2"
+printf 's41-acceptance: strike       %s\n' "$strike3"
+printf 's41-acceptance: player px    %s\n' "$player_px_line"
 printf 's41-acceptance: catch        %s\n' "$catch_line"
 printf 's41-acceptance: fall         %s\n' "$fall_line"
 printf 's41-acceptance: stamina      %s\n' "$stamina_line"
@@ -679,7 +744,7 @@ printf 's41-acceptance: perf         load %.3f s, 240 frames %.3f s, marginal %s
   "$perf_ms" "$perf_slow_ms" "$marginal_ms" "$marginal_fps"
 printf 's41-acceptance: s4 status    %s\n' "$s4_status"
 printf 's41-acceptance: s3 status    %s\n' "$s3_status"
-printf 's41-acceptance: PASS — build, both suites, s41 timeline (grab %s, climb %s m, strikes 34+20 damage health 100->66->46, catch %s, fall %s frames landed, stamina fall once, death %s, settled grounded in %s frames), five stills (span >= 30, > 5000 B), defeat presence %s %% inside bbox %s (outside %s), HUD bars present (stamina %s green px, health %s red px; 0-HP bar absent), marginal %s ms/frame, S4+S3 regressions green\n' \
-  "$grab_band" "$climb_rise" "$catch_band" "$fall_frames" "$death_clip" \
+printf 's41-acceptance: PASS — build, both suites, s41 timeline (grab %s, climb %s m, strikes 34+20+34 damage health 100->66->46 and 34->0, catch %s, player px %s, fall %s frames landed, stamina fall once, death %s, settled grounded in %s frames), five stills (2560x1440, span >= 30, > 5000 B), defeat presence %s %% inside bbox %s (outside %s), HUD bars present (stamina %s green px, health %s red px; 0-HP bar absent), marginal %s ms/frame, S4+S3 regressions green\n' \
+  "$grab_band" "$climb_rise" "$catch_band" "$player_px" "$fall_frames" "$death_clip" \
   "$settle_frames" "$defeat_region_pct" "$defeat_region_bbox" "$defeat_region_outside" \
   "$stamina_green" "$health_red" "$marginal_ms"

@@ -77,8 +77,8 @@ constexpr ClimbBand kClimbBands[] = {
     {"Bone_MOMO_L", "Bone_KOSI", 1.7f, ClimbBandId::Waist, ClimbBandId::LeftShin, -1},
     {"Bone_KOSI", "Bone_HARA", 2.0f, ClimbBandId::Chest, ClimbBandId::LeftThigh, -1},
     {"Bone_HARA", "Bone_MUNE", 2.0f, ClimbBandId::Neck, ClimbBandId::Waist, -1},
-    {"Bone_MUNE", "Bone_KUBI", 1.4f, ClimbBandId::Head, ClimbBandId::Chest, -1},
-    {"Bone_KUBI", "Bone_KAO", 1.2f, ClimbBandId::Count, ClimbBandId::Neck, 0},
+    {"Bone_MUNE", "Bone_KUBI", 1.6f, ClimbBandId::Head, ClimbBandId::Chest, -1},
+    {"Bone_KUBI", "Bone_KAO", 1.75f, ClimbBandId::Count, ClimbBandId::Neck, 0},
     {"Bone_MUNE", "Bone_KATA_R", 1.5f, ClimbBandId::RightArm, ClimbBandId::Chest, -1},
     {"Bone_KATA_R", "Bone_UDE_R", 1.2f, ClimbBandId::Count, ClimbBandId::RightShoulder, 1},
 };

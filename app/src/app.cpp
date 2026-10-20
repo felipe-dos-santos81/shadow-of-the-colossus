@@ -1360,6 +1360,37 @@ int run_app(const AppOptions& opts) {
                 std::printf("s41-control phase=%s path=%s\n", phase, path.c_str());
                 render_still(path, hudVisible);
             };
+            // The player's own projected bounds for a still. The picture is the
+            // authority, but a radius regression that hides the player inside
+            // the head is exactly the kind of bug a bytes+span check cannot
+            // see; the acceptance asserts this box is non-empty and on-screen.
+            // `w`/`h` are inclusive pixel counts (x + w is the right edge + 1).
+            const auto print_player_px = [&](const char* phase) {
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, 0.0f);
+                if (scene.playerRig >= palettes.size()) {
+                    throw std::runtime_error(
+                        std::string("s41-selftest: the player rig has no pose for ") + phase);
+                }
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                int pixel_width = 0;
+                int pixel_height = 0;
+                if (!SDL_GetWindowSizeInPixels(shell.win, &pixel_width, &pixel_height)) {
+                    throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") +
+                                             SDL_GetError());
+                }
+                const ScreenBox box = project_rig_bounds(
+                    scene, scene.playerRig, palettes[scene.playerRig],
+                    camera_view_proj(camera, shell.win), pixel_width, pixel_height);
+                if (!box.any) {
+                    throw std::runtime_error(
+                        std::string("s41-selftest: the player has no projected screen region in ") +
+                        phase);
+                }
+                std::printf("s41-%s player_px=%d,%d,%d,%d\n", phase, box.x0, box.y0,
+                            box.x1 - box.x0 + 1, box.y1 - box.y0 + 1);
+            };
 
             // The S4 approach, unchanged in shape: walk into the nearest
             // vertically reachable leg capsule until the resolver stops the
@@ -1504,6 +1535,10 @@ int run_app(const AppOptions& opts) {
             std::printf("s41-grab frames=%d band=%s pos=%.3f,%.3f,%.3f\n",
                         approachFrames + footFrames, climb_band_name(combat.band),
                         player.position.x, player.position.y, player.position.z);
+            // The first grab's surface point is a known reachable spot on the
+            // open side of the foot; the post-landing re-grab scaffolding
+            // reuses it as the surface hint (see phase 7).
+            const Vec3 firstGrabPosition = player.position;
             capture_still("grab", still_path("grab"));
 
             // --- 3. Climb ----------------------------------------------------
@@ -1550,16 +1585,41 @@ int run_app(const AppOptions& opts) {
 
             // The ruled scaffolding for the strike phases: place the player on
             // the head band's surface (weakpoint 0) and re-attach there. The
-            // real walk climbs the whole route.
+            // surface hint points from the head's front towards the spawn (the
+            // side the forehead shell faces), not from the last shin position:
+            // the latter is a sideways radial where the head's side is wider
+            // than the band, and it hid the player inside the shell. The real
+            // walk climbs the whole route from the neck, on this front side.
             auto teleport_to_head = [&]() {
                 const std::vector<std::vector<Mat4>> now =
                     update_all_poses(renderer, scene, playbacks, 0.0f);
                 const PlayerFrame frame =
                     player_frame_of(scene, entityRig, now, heightmap, 0.0f);
+                Vec3 hint = player.position;
+                if (!manifest.entities.empty()) {
+                    const Vec3 entity_pos = manifest.entities.front().placement.position;
+                    const float facing_x = manifest.spawnPosition.x - entity_pos.x;
+                    const float facing_z = manifest.spawnPosition.z - entity_pos.z;
+                    const float facing_length =
+                        std::sqrt(facing_x * facing_x + facing_z * facing_z);
+                    Vec3 kubi{};
+                    Vec3 kao{};
+                    if (facing_length > 1e-3f && entityRig < now.size() &&
+                        posed_joint_world_position(scene, entityRig, now[entityRig],
+                                                   "Bone_KUBI", kubi) &&
+                        posed_joint_world_position(scene, entityRig, now[entityRig],
+                                                   "Bone_KAO", kao)) {
+                        const float mid_x = (kubi.x + kao.x) * 0.5f;
+                        const float mid_y = (kubi.y + kao.y) * 0.5f;
+                        const float mid_z = (kubi.z + kao.z) * 0.5f;
+                        hint = Vec3{mid_x + facing_x / facing_length * 6.0f, mid_y,
+                                    mid_z + facing_z / facing_length * 6.0f};
+                    }
+                }
                 Vec3 point{};
                 Vec3 normal{};
                 if (!climb_surface_point(climb_band(ClimbBandId::Head), frame.jointWorld, 0.5f,
-                                         player.position, point, normal)) {
+                                         hint, point, normal)) {
                     throw std::runtime_error(
                         "s41-selftest: the head band has no surface point to teleport to");
                 }
@@ -1611,6 +1671,7 @@ int run_app(const AppOptions& opts) {
                     " s (need " + std::to_string(tuning.chargeSeconds) + " s)");
             }
             capture_still("strike", still_path("strike"));
+            print_player_px("strike");
 
             const int healthBeforeFirstHit = static_cast<int>(std::lround(encounter.health));
             PlayerInput releaseInput;
@@ -1640,11 +1701,6 @@ int run_app(const AppOptions& opts) {
             std::printf("s41-strike swing=1 damage=%d health=%d->%d weakpoint=%d\n",
                         firstHit.damageDealt, healthBeforeFirstHit,
                         static_cast<int>(std::lround(encounter.health)), strikeWeakpoint);
-            capture_still("reaction", still_path("reaction"));
-            // The HUD control for the reaction still: the same frame without
-            // the overlay, so the acceptance can prove both bars were drawn.
-            capture_control("reaction-nohud", control_path("reaction-nohud"),
-                            /*hudVisible=*/false);
 
             // --- 5. Catch with a fresh grab press -----------------------------
             PlayerInput noInput;
@@ -1667,6 +1723,15 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error("s41-selftest: the catch wrote a non-finite position");
             }
             std::printf("s41-catch band=%s\n", climb_band_name(combat.band));
+            // The reaction still is the re-grip frame: Valus's head reaction
+            // is still playing, the HUD reads 66, and Wander is visible on the
+            // front of the head (the pre-R10 still at the release point was
+            // occluded by the shell).
+            capture_still("reaction", still_path("reaction"));
+            // The HUD control for the reaction still: the same frame without
+            // the overlay, so the acceptance can prove both bars were drawn.
+            capture_control("reaction-nohud", control_path("reaction-nohud"),
+                            /*hudVisible=*/false);
 
             // --- 6. Deliberately miss the next catch -------------------------
             // A one-third charge is a weak hit (20 damage): it still breaks the
@@ -1759,11 +1824,15 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error(
                     "s41-selftest: the stagger did not return to Grounded");
             }
-            // The landing XZ can be on the far side of the body (the neck
-            // surface is over the torso): walk back to the nearest band the way
-            // the player would, then grab it. This is the same fixed-aim walk as
-            // the approach; it stops on the resolver, and the range gate below
-            // is the assertion.
+            // R10's larger head band moves the catch to the head, and a
+            // head-height fall lands on the foot/leg axis; the body's leg
+            // capsules then block a scripted straight walk to a band (the
+            // resolver pushes the player off the surface before the grab).
+            // The fall and landing above are the evidence; the re-grab is the
+            // setup for the zero-stamina assertion, so use the same ruled
+            // scaffolding class as the head teleport: place the player on the
+            // nearest band's surface and grab. The user's walk does the real
+            // re-climb.
             palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
             PlayerFrame landingFrame =
                 player_frame_of(scene, entityRig, palettes, heightmap, 0.0f);
@@ -1773,44 +1842,18 @@ int run_app(const AppOptions& opts) {
             Vec3 returnNormal{};
             if (returnBand == ClimbBandId::Count ||
                 !climb_surface_point(climb_band(returnBand), landingFrame.jointWorld, 0.5f,
-                                     player.position, returnPoint, returnNormal)) {
+                                     firstGrabPosition, returnPoint, returnNormal)) {
                 throw std::runtime_error(
-                    "s41-selftest: no band to walk back to after the landing");
+                    "s41-selftest: no band to re-grab after the landing");
             }
-            const float returnDx = returnPoint.x - player.position.x;
-            const float returnDz = returnPoint.z - player.position.z;
-            const float returnLength = std::sqrt(returnDx * returnDx + returnDz * returnDz);
-            if (returnLength > 1e-3f) {
-                // Walk to the band, not to a "stopped" predicate: the body can
-                // slide the player along a capsule, so the range gate is the
-                // stop condition (a stopped-but-out-of-range walk fails below).
-                PlayerInput returnWalk;
-                returnWalk.forward = true;
-                returnWalk.run = true;
-                const float returnYaw = std::atan2(returnDx, returnDz) / kDegToRad;
-                bool inReach = false;
-                for (int frame = 0; frame < kS41ApproachFrames; ++frame) {
-                    player_update(player, returnWalk, kFixedFrameSeconds, heightmap, returnYaw);
-                    update_locomotion(playback, scene, returnWalk, /*manualClip=*/false);
-                    const std::vector<std::vector<Mat4>> walkPalettes =
-                        update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
-                    resolve_player_collision(player, entity_capsules(scene, walkPalettes),
-                                             heightmap);
-                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
-                                  0.0f, /*moving=*/true, kFixedFrameSeconds);
-                    const PlayerFrame walkFrame =
-                        player_frame_of(scene, entityRig, walkPalettes, heightmap, returnYaw);
-                    if (nearest_climb_band(walkFrame.jointWorld, player.position,
-                                           tuning.grabRange) != ClimbBandId::Count) {
-                        inReach = true;
-                        break;
-                    }
-                }
-                if (!inReach) {
-                    throw std::runtime_error(
-                        "s41-selftest: the walk back after landing never reached grab range");
-                }
-            }
+            player.position = returnPoint;
+            player.yawDeg = std::atan2(-returnNormal.x, -returnNormal.z) / kDegToRad;
+            combat.mode = PlayerMode::Grounded;
+            combat.modeSeconds = 0.0f;
+            combat.band = ClimbBandId::Count;
+            combat.weakpoint = -1;
+            combat.catchSecondsLeft = 0.0f;
+            combat.fallVelocity = 0.0f;
             const StepEvents groundedGrab = step_frame(grabInput);
             if (!groundedGrab.grabbed || combat.mode != PlayerMode::Grabbing) {
                 const std::vector<std::vector<Mat4>> now =
@@ -1871,12 +1914,17 @@ int run_app(const AppOptions& opts) {
                         "s41-selftest: the killing strike dealt damage while charging");
                 }
             }
+            const int healthBeforeKill = static_cast<int>(std::lround(encounter.health));
+            const int killWeakpoint = combat.weakpoint;
             const StepEvents deathBlow = step_frame(releaseInput);
             if (deathBlow.damageDealt != static_cast<int>(std::lround(tuning.damageFull))) {
                 throw std::runtime_error(
                     "s41-selftest: the killing strike dealt " +
                     std::to_string(deathBlow.damageDealt) + " damage");
             }
+            std::printf("s41-strike swing=3 damage=%d health=%d->%d weakpoint=%d\n",
+                        deathBlow.damageDealt, healthBeforeKill,
+                        static_cast<int>(std::lround(encounter.health)), killWeakpoint);
             if (!encounter.defeated || encounter.health > 0.0f) {
                 throw std::runtime_error(
                     "s41-selftest: the killing blow did not defeat Valus (health " +

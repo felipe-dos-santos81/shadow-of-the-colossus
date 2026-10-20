@@ -53,7 +53,8 @@ struct AppOptions {
     // --s41-stills DIR: with --s41-selftest, write one PNG per fight phase
     // (grab, mid-climb, strike, reaction) into DIR, plus the defeat still and
     // its two pixel controls under DIR/control/. The acceptance script creates
-    // the directory; an absent one is a write failure, never a silent skip.
+    // both DIR and DIR/control/; an absent one is a write failure, never a
+    // silent skip.
     std::string s41StillsDir;
     // --camera-target player|entity: the initial framing for captures. `player`
     // is the normal follow camera; `entity` starts in the chest-framing target

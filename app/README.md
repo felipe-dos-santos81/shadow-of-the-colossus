@@ -87,7 +87,7 @@ is required. Escape or the close button quits.
 | `--selftest` | render one frame, print `s1-status …`, exit |
 | `--s4-selftest` | compose the encounter `--manifest`, pin the entity at t=0, assert the spawn is clear and the entity's feet are on the ground, walk the player into the nearest leg capsule until the collision stops it, print the `s4-status`/`s4-spawn`/`s4-entity`/`s4-walk` lines, exit; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
 | `--s41-selftest` | compose the encounter `--manifest` and run the deterministic climb/fight timeline through fixed 1/60 s steps with no window input: S4's approach, grab, 240-frame climb, full-charge head strike, catch, missed catch, forced stamina fall, killing blow, and the post-kill settle to a landed player; prints the `s41-*` lines and `s41-status`, exits 1 on a failed invariant; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
-| `--s41-stills DIR` | with `--s41-selftest`, write `grab.png`, `mid-climb.png`, `strike.png` and `reaction.png` into `DIR`, plus the defeat still (to `--screenshot`, else `DIR/defeat.png`) and the pixel controls under `DIR/control/`; the directory must exist |
+| `--s41-stills DIR` | with `--s41-selftest`, write `grab.png`, `mid-climb.png`, `strike.png` and `reaction.png` into `DIR`, plus the defeat still (to `--screenshot`, else `DIR/defeat.png`) and the pixel controls under `DIR/control/`; both `DIR` and `DIR/control/` must exist (the acceptance script creates them) |
 
 ## Manifests
 
@@ -191,20 +191,23 @@ charge, catches the shake-off, deliberately misses the next catch, forces the
 stamina pool to zero while attached, lands the killing blow, and settles the
 killing blow's fall to a grounded player. The selftest's climb proves a 4.77 m
 rise from the foot band to the shin; the strike phases use the ruled test
-scaffolding that places the player on the head band's surface. The interactive
-walk (`E` then `W`) is the full route, by hand; the user's walk is the judge.
-The event lines are:
+scaffolding that places the player on the head band's surface, and the
+post-landing re-grab is placed on the nearest band's surface (the same
+scaffolding class). The interactive walk (`E` then `W`) is the full route, by
+hand; the user's walk is the judge. The event lines are:
 
 ```text
 s41-grab frames=522 band=left_foot pos=380.454,28.425,369.175
 s41-climb frames=240 from_y=28.425 to_y=33.199 band=left_shin
+s41-strike player_px=1147,661,273,93
 s41-strike swing=1 damage=34 health=100->66 weakpoint=0
-s41-strike swing=2 damage=20 health=66->46 weakpoint=-1
-s41-catch band=neck
+s41-strike swing=2 damage=20 health=66->46 weakpoint=0
+s41-catch band=head
 s41-fall frames=102 landed=1
 s41-stamina fall=1
+s41-strike swing=3 damage=34 health=34->0 weakpoint=0
 s41-death clip=minotaur_a_death_front defeated=1
-s41-settle frames=176 grounded=1
+s41-settle frames=177 grounded=1
 s41-status grab=left_foot climb=4.77 strikes=3 entity_health=0 mode=grounded defeated=1
 ```
 

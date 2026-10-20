@@ -12,12 +12,12 @@ silhouette match (S4.2+ / non-goals, design §3).
 `s41-*` timeline parsed field by field, five stills with PNG/size/span guards, the defeat presence
 and HUD pixel guards, the perf measurement, and the unchanged S4 regression (which runs S3 itself).
 The milestone's done-line is **not claimed here**: feel, scale, stamina pressure, the HUD, the
-gamepad, cursor freedom and fps are the user's walk (§9), and the head-band occlusion in §5 is an
-open fidelity gap, not a closed one.
+gamepad, cursor freedom and fps are the user's walk (§9). The R10 head-band fix is in and the
+strike/reaction stills now show Wander (§5); the user's walk still judges the head phase.
 
 | | |
 |---|---|
-| Date | 2026-10-20 (local −03; the recorded run is stamped `2026-10-20T19:46:52Z`–`19:58:29Z`) |
+| Date | 2026-10-20 (local −03; the recorded run is stamped `2026-10-20T21:00:26Z`–`21:05:36Z`) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; 1280×720 points → 2560×1440 px captures |
 | Repo / branch | `sotc-native`, worktree `s4-1-first-colossus`; base `2c49107`, this note after it |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
@@ -26,7 +26,7 @@ open fidelity gap, not a closed one.
 | Wander glb (gitignored) | `out/library/models/shadow/characters/wander/_cmn/wander.glb` — **5,512,768 B**, sha256 `d2c8093d1f8223ad57f0421971e6fffbf0e9b3e521070801cf89e2c21c53f540`, **11 clips** |
 | Valus glb (gitignored) | `out/library/models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb` — **38,352,216 B**, sha256 `98b6f7125a8de80dccac3cdd16f4bb8dd1d56dddc2e08037a46f381da55ead86`, **5 clips** |
 | Acceptance script | **`scripts/s41-acceptance.sh`** (bash 3.2; the recorded run used `/bin/bash` 3.2.57) |
-| Run log (gitignored) | `out/s41-acceptance-run.log` — 125 lines, ends `s41-acceptance: PASS` |
+| Run log (gitignored) | `out/s41-acceptance-run.log` — 128 lines, ends `s41-acceptance: PASS` |
 | Captures (gitignored) | `out/s41/` (five stills + `control/`) |
 
 ## 1 · The acceptance run
@@ -34,7 +34,9 @@ open fidelity gap, not a closed one.
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 export SOTC_LIB=/Users/felipe.dos.santos/Downloads/sotc/sotc-native/out/library
-./scripts/s41-acceptance.sh            # exit 0; everything below is from out/s41-acceptance-run.log
+./scripts/s41-acceptance.sh            # exit 0; everything below is from the recorded logs
+                                       # (out/s41-acceptance-run.log; the S3/S4 lines from
+                                       # out/s4-acceptance-regression.log)
 ```
 
 The script builds `BpConvert.sln` and `app/`, runs both suites, deletes and recreates `out/s41/`
@@ -143,6 +145,11 @@ the forehead; the design records the numbers and the builder check (`design §7.
 | `damageFull` | 34.0 | HP |
 | Valus HP | 100.0 | HP |
 
+**R10 band retune.** The climb band table's neck radius is **1.6 m** (was 1.4) and the head
+**1.75 m** (was 1.2); `app/tests/test_grab.cpp` pins both, and `app/tests/test_player_state.cpp` pins
+the head surface point at `1.75 + 0.35 = 2.10 m`. The head teleport's hint points at the head's
+front (the forehead side) rather than the last shin position.
+
 **The eboot stat pass was a closed negative (Task 1, Step 8).** The bounded pass over `eboot.elf`
 found no base HP/stamina/grip value: `WanderHealthBarMax` / `WanderGripBarMax` registration blocks
 carry no numeric field, and the only numbers near them are the debug-menu bounds
@@ -164,14 +171,16 @@ The event lines, verbatim:
 ```text
 s41-grab frames=522 band=left_foot pos=380.454,28.425,369.175
 s41-climb frames=240 from_y=28.425 to_y=33.199 band=left_shin
+s41-strike player_px=1147,661,273,93
 s41-strike swing=1 damage=34 health=100->66 weakpoint=0
-s41-strike swing=2 damage=20 health=66->46 weakpoint=-1
-s41-catch band=neck
+s41-catch band=head
+s41-strike swing=2 damage=20 health=66->46 weakpoint=0
 s41-fall frames=102 landed=1
 s41-stamina fall=1
+s41-strike swing=3 damage=34 health=34->0 weakpoint=0
 s41-death clip=minotaur_a_death_front defeated=1
-s41-settle frames=176 grounded=1
-s41-defeat bbox=0,327,2559,1044 screen=2560x1440
+s41-settle frames=177 grounded=1
+s41-defeat bbox=325,188,2559,1317 screen=2560x1440
 ```
 
 - **Grab.** The approach walks 522 frames in two legs (the S4 stop at the knee, then the fixed aim
@@ -183,23 +192,35 @@ s41-defeat bbox=0,327,2559,1044 screen=2560x1440
   on the head band (the user's walk does the full route by hand). The climb line's `band=left_shin`
   is the band at the end of the frame window; `s41-grab` records the initial `left_foot`.
 - **Strike 1.** Full charge (0.9 s held) deals **34**, `100 → 66`, `weakpoint=0` (forehead). The hit
-  shakes the player off and opens the 0.6 s catch window.
-- **Catch.** A fresh grab press catches the **`neck`** band. (The known limitation in §8: the catch
-  lands on the neck, not the head.)
-- **Strike 2.** A one-third charge deals the weak damage **20**, `66 → 46`, `weakpoint=-1` (the neck
-  is an ordinary band; this exercises the weak-damage path, not a weakpoint).
+  shakes the player off and opens the 0.6 s catch window. The `s41-strike player_px` line is the
+  player's own projected bounds in the strike still — `1147,661,273,93` (x, y, w, h, inclusive) —
+  and the acceptance asserts it is non-empty, on-screen and inside the 2560×1440 frame. **R10**
+  raises the head band from 1.2 → **1.75 m** (the forehead shell reaches ~1.73 m from `Bone_KAO` in
+  z) and the neck from 1.4 → **1.6 m**; the head teleport's surface hint now points from the head's
+  front (the side the forehead faces), not from the last shin position, so Wander is visible on the
+  front of the head in both the strike and reaction stills instead of clipped inside the shell.
+- **Catch.** A fresh grab press catches the **`head`** band. R10's larger head band is the nearest
+  band at the shake-off point (the pre-R10 catch was the neck); the 0.6 s window is unchanged.
+- **Strike 2.** A one-third charge deals the weak damage **20**, `66 → 46`. The catch is the head,
+  so this weak strike is on the forehead weakpoint too (`weakpoint=0`); it exercises the weak-damage
+  path. (The pre-R10 neck catch's `weakpoint=-1` is no longer the geometry.)
 - **Missed catch.** The next press is deliberately withheld for 0.7 s, so the window expires; the
   fall runs **102** frames to the ground, `landed=1`.
 - **Stamina.** The pool is forced to zero while attached; the grip breaks **exactly once**
-  (`s41-stamina fall=1`; the selftest asserts the next held step reports no second break). The
-  player lands and walks back to a band.
+  (`s41-stamina fall=1`; the selftest asserts the next held step reports no second break). A
+  head-height fall lands on the foot/leg axis, where the leg capsules block a scripted straight walk
+  to a band; the re-grab is therefore placed on the nearest band's surface (the same ruled
+  scaffolding class as the head teleport) and grabs `left_foot`. The user's walk does the real
+  re-climb.
 - **Kill.** The selftest sets HP to exactly one plunge (34) before the blow, proving the death path
-  in one hit; the reported full sequence is 34 (100→66), 20 (66→46), then the set-up 34 (34→0). The
-  natural fight is three clean plunges (100→66→32→0) or a messier mix — the selftest's weak hit
-  makes its own sequence four — and is the user's walk. Valus plays `minotaur_a_death_front` once,
-  freezes on its last frame, and `defeated=1`; the player is thrown clear.
+  in one hit; the kill's own line is `s41-strike swing=3 damage=34 health=34->0 weakpoint=0` (the
+  34 HP set-up is source-derived from `damageFull`). The reported full sequence is 34 (100→66), 20
+  (66→46), then the set-up 34 (34→0). The natural fight is three clean plunges (100→66→32→0) or a
+  messier mix — the selftest's weak hit makes its own sequence four — and is the user's walk. Valus
+  plays `minotaur_a_death_front` once, freezes on its last frame, and `defeated=1`; the player is
+  thrown clear.
 - **Settle (ruling R9a).** The death blow leaves the player `Falling`; the final phase advances the
-  same no-input step until the fall lands and the 1.2 s stagger resolves. **176 frames** later the
+  same no-input step until the fall lands and the 1.2 s stagger resolves. **177 frames** later the
   player is `Grounded`, on the heightmap, and the defeat still is rendered with the player landed —
   not suspended at the head.
 - **Status.** `strikes=3` counts the full, weak and killing blows; `entity_health=0`;
@@ -214,28 +235,29 @@ window or gamepad input is read.
 
 All captures are 2560×1440. The four mid-fight stills are written by `--s41-stills` at the phase
 boundary; the defeat still is the selftest's final frame. Each asserts `\x89PNG` magic, > 5000 B,
-and the viewer's own non-uniformity span (largest channel span ≥ 30 from `s1-pixels`). Stale PNGs
-are deleted with `out/s41/` before the run.
+**2560×1440**, and the viewer's own non-uniformity span (largest channel span ≥ 30 from
+`s1-pixels`); the strike still also asserts the `s41-strike player_px` box is non-empty, on-screen
+and inside the frame. Stale PNGs are deleted with `out/s41/` before the run.
 
 | file (`out/s41/`) | bytes | span | what it shows |
 |---|---:|---:|---|
 | `grab.png` | 9,584,304 | 254 | Wander crouched at the left foot ring in the grip clip; stamina 100 |
 | `mid-climb.png` | 9,472,150 | 255 | Wander on Valus's left shin, climb camera; stamina 92 |
-| `strike.png` | 8,132,919 | 255 | the forehead weakpoint rune at full charge; HUD stamina 76, health 100 |
-| `reaction.png` | 9,196,438 | 255 | the head reaction frame; HUD health 66 (two-thirds bar), stamina 76 |
-| `defeat.png` | 10,063,778 | 255 | Valus on the ground and Wander landed at the corpse; stamina 92, no health bar (0 HP) |
+| `strike.png` | 9,391,869 | 255 | the forehead weakpoint rune at full charge, with Wander at the head's front (`player_px=1147,661,273,93`); HUD stamina 76, health 100 |
+| `reaction.png` | 9,974,148 | 255 | Wander re-gripped on the front of the head while the head reaction plays; HUD health 66 (two-thirds bar), stamina 76 |
+| `defeat.png` | 9,497,981 | 254 | Valus on the ground and Wander landed at the corpse; stamina 92, no health bar (0 HP) |
 
 The defeat still pulls the follow camera to its 12 m wheel ceiling so both the landed player and the
 17.7 m corpse fit the frame; the interactive default remains 4.5 m (the selftest ends at the still).
 
-**The strike/reaction stills do not show Wander.** The head band's surface radius is 1.2 m plus the
-0.35 m player capsule = 1.55 m from the `Bone_KUBI` → `Bone_KAO` axis, while the head shell extends
-past that point; the attach point is inside the head mesh, so the camera sees the forehead rune and
-the head reaction but the player is occluded. The hit rule is band/weakpoint-based, not a
-mesh-surface proximity test (design §7.2's builder call). The stills are still valid evidence of the
-target and the HUD arithmetic (100 → 66), but the player's strike pose is not visible. This is
-recorded as an open fidelity gap in §8; the user's walk judges it, and a band-radius change would be
-a Task 2 table change plus its test pins, not a Task 7 edit.
+**R10 fixed the head clipping.** The head band is now 1.75 m (+0.35 m player = 2.10 m from the
+`Bone_KUBI` → `Bone_KAO` axis) and the neck 1.6 m, and the head teleport's surface hint points from
+the head's front towards the spawn — the side the forehead shell faces. Wander is visible at the
+head's front in the strike still (the legs/body at the right of the measured box), and the reaction
+still (captured after the catch, while the head reaction is still playing) shows him re-gripped on
+the front of the head. The acceptance now asserts the strike still's `player_px` is non-empty,
+on-screen and inside 2560×1440, so a future radius regression cannot pass with him invisible; the
+pixels-plus-bbox guard is the check, and the user's walk is the visual judge.
 
 ### The defeat presence and localization guard
 
@@ -245,23 +267,22 @@ diff proves the entity is drawn and localizes it; the no-HUD diff proves the ove
 recorded lines:
 
 ```text
-s41-defeat-region pixels=1838080 span=255 changed=917819 changed_pct=49.934 outside=0 bbox=0,328,2559,969
+s41-defeat-region pixels=2525550 span=238 changed=1066514 changed_pct=42.229 outside=0 bbox=326,188,2559,1254
 s41-defeat-hud changed=14005 outside=0 stamina_changed=14005 health_changed=0
-s41-reaction-hud changed=24763 outside=0 stamina_changed=12091 health_changed=12672
+s41-reaction-hud changed=24733 outside=0 stamina_changed=12061 health_changed=12672
 s41-hud-bars stamina_green=11520 health_red=19200 stamina_pixels=12025 health_pixels=20417
 ```
 
-- **Presence/localization.** **49.934 %** of the `s41-defeat` bbox region differs from the
+- **Presence/localization.** **42.229 %** of the `s41-defeat` bbox region differs from the
   no-entity control (need ≥ 5 %); **0** pixels differ outside the bbox (+16 px). The projected
-  entity bbox is `0,327,2559,1044`; the differing pixels are `0,328,2559,969`. The x range is the
-  full frame because the corpse is wider than the frame at 12 m — the meaningful localization is
-  the vertical band; the guard is honest about the full width rather than pretending to a tighter
-  box.
+  entity bbox is `325,188,2559,1317`; the differing pixels are `326,188,2559,1254`. The corpse
+  still reaches the right frame edge, but the box localizes both axes (x 325…2559, y 188…1317) and
+  every differing pixel is inside it.
 - **Defeat HUD.** The only HUD difference from the no-HUD control is the bottom-left stamina
   bar/label (`stamina_changed=14005`, `health_changed=0`): at **0 HP** the 600-px health bar has zero
   width, so no health pixels are drawn. That is the arithmetic the design asks the HUD to show.
 - **Reaction HUD.** The 66 HP reaction frame differs from its no-HUD control in **both** bands:
-  `stamina_changed=12091`, `health_changed=12672`, all inside the two HUD rects (`outside=0`).
+  `stamina_changed=12061`, `health_changed=12672`, all inside the two HUD rects (`outside=0`).
 - **Bar colours.** The grab still's stamina bar is green in **11,520** of its 12,025 bar pixels; the
   strike still's full health bar is red in **19,200** of its 20,417. The bars are drawn, not just
   present as geometry.
@@ -272,22 +293,22 @@ s41-hud-bars stamina_green=11520 health_red=19200 stamina_pixels=12025 health_pi
 
 | run | wall time |
 |---|---:|
-| `--frames 1` (load-dominated) | **7.988 s** |
-| `--frames 240` | **10.157 s** |
-| marginal (239 frames) | **9.08 ms/frame ≈ 110.1 fps** |
+| `--frames 1` (load-dominated) | **10.058 s** |
+| `--frames 240` | **11.625 s** |
+| marginal (239 frames) | **6.56 ms/frame ≈ 152.4 fps** |
 
 The gate is **< 16.667 ms** (60 fps); the 240-frame run also printed
 `s1-pixels min=0,0,0 max=254,254,254 mean=103.0,97.1,88.9` and wrote a 2560×1440 capture, so the
 marginal number is a real 240-frame run, not a load-only success. The S4 regression measured
-**9.09 ms/frame** in the same session. The loop is vsync-paced; the load is the fixed 30-glb arena
-+ 152 textures + the 38 MB Valus glb, a per-run startup cost. The 0.01 ms difference between the
-two runs is machine noise, not scene cost.
+**8.51 ms/frame** in the same session. The loop is vsync-paced; the load is the fixed 30-glb arena
++ 152 textures + the 38 MB Valus glb, a per-run startup cost. The ~2 ms difference between the two
+runs is machine noise, not scene cost.
 
 ## 7 · Suites and the regressions
 
-- `dotnet test tests/BpConvert.Tests -v q`: **93 passed**, 0 failed (1 m 07 s).
-- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 9.27 s, windowed 0.20 s;
-  total 9.48 s).
+- `dotnet test tests/BpConvert.Tests -v q`: **93 passed**, 0 failed (50 s).
+- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 9.43 s, windowed 0.19 s;
+  total 9.62 s).
 - `scripts/s4-acceptance.sh` (unchanged, run inside the S4.1 script): **exit 0, PASS**.
   The S4 script runs `scripts/s3-acceptance.sh` itself, so S3 was not run twice.
 
@@ -308,16 +329,22 @@ the user's.
 - **No AI, no Valus attacks, no player health.** Valus reacts to a hit and dies; he never pursues,
   stomps, or damages Wander. This is the design's builder call (§10), not an unfinished loop: the
   milestone ends at "he falls".
-- **Head-band attach point is inside the head shell.** The 1.2 m head band plus the 0.35 m player
-  capsule puts the attach point at 1.55 m from the `Bone_KUBI`→`Bone_KAO` axis; the head mesh is
-  larger, so the strike/reaction stills show the forehead rune and the HUD but not Wander. The hit
-  is band/weakpoint-routed, not a mesh-surface test. Flagged by the stills; the user's walk judges
-  whether the head phase reads.
-- **Catch lands on the neck band.** The 0.6 s catch after the head hit re-attaches to `neck`, not
-  the head; the acceptance pins `s41-catch band=neck`. Re-gripping the head is not possible from the
-  catch point in the current band graph.
+- **The head-band fix is a band-radius fix, not a mesh-surface rule.** R10 sets the head band to
+  1.75 m and the neck to 1.6 m; the hit stays band/weakpoint-routed, not a mesh-surface proximity
+  test. The strike still is a close-up of the head (Wander's `player_px` box is 273×93 at the
+  head's front); he is visible there and clearly visible in the reaction still after the catch, but
+  the still is not a full-body portrait. The head is wider at its sides than the 2.10 m surface; the
+  stills use the front (the natural route from the neck), and a side orbit may still read as a
+  float/clip at 1.75 m. The user's walk judges whether the head phase reads.
+- **Catch lands on the head band.** R10's larger head band is the nearest band at the shake-off
+  point, so `s41-catch band=head`; the weak strike is therefore on the forehead weakpoint
+  (`weakpoint=0`), not the pre-R10 neck's `-1`. The post-landing re-grab is placed on the nearest
+  band's surface (`left_foot`) as test scaffolding because a head-height fall lands on the leg axis
+  and the leg capsules block a scripted straight walk; the user's walk does the real re-climb.
 - **The selftest's kill is scaffolded.** HP is set to exactly one plunge (34) before the killing
-  blow so the death path is proven in one hit. The natural three-plunge fight is the user's walk.
+  blow so the death path is proven in one hit; the kill's own `s41-strike swing=3 … 34->0` line is
+  printed, and the 34 HP set-up is source-derived from `damageFull`. The natural three-plunge fight
+  is the user's walk.
 - **Gamepad hardware unverified.** The mapping (left stick move, right stick camera, RT grip, X
   strike, Start pause, hot-plug) is unit-tested headlessly; no physical pad was available in this
   run. If the user has one, the walk records it; otherwise it stays "hardware unverified", never
@@ -368,7 +395,7 @@ The cursor is never captured.
 | 2 | grab | hold `E` at the foot/leg | the grip clip plays; the stamina bar starts draining; Wander is on the surface, not floating or inside the leg | ☐ |
 | 3 | climb | climb the leg → torso → neck → head with `W`; watch stamina | the climb camera stays outside the body; the route is readable; the bar has margin at the forehead; releasing `E` or emptying the bar drops you | ☐ |
 | 4 | forehead strike | at the sigil, hold `J` to full charge, release | the blow lands on the forehead, Valus reacts, Wander is shaken off; a fresh `E` inside 0.6 s re-grips | ☐ |
-| 5 | catch and missed catch | re-grip after the shake-off; then deliberately miss the next catch | a catch lands on the neck; a miss means the ground, a stagger, and a walk back to a band | ☐ |
+| 5 | catch and missed catch | re-grip after the shake-off; then deliberately miss the next catch | a catch lands on the head (R10's nearest band); a miss means the ground, a stagger, and a walk back to a band | ☐ |
 | 6 | forced stamina fall | hold on until the pool empties | the grip breaks once, Wander falls, lands and recovers; no repeated break while `E` is still held | ☐ |
 | 7 | kill and death | land the remaining plunges; watch Valus | the death clip plays once and freezes; the HUD reads defeated; Wander lands clear; the camera returns to follow | ☐ |
 | 8 | fps, cursor, HUD, quit | walk while reading the title; move the mouse; read the bars; press `Escape` | the title's fps readout is in the ≥60 class (this Mac's vsync rate); the cursor stays visible and free; the HUD is legible; Escape quits cleanly | ☐ |
@@ -380,7 +407,7 @@ is a recorded result, not a pass.
 
 ## 10 · Evidence files (all gitignored)
 
-- `out/s41-acceptance-run.log` — the recorded run's full output (125 lines; quoted above).
+- `out/s41-acceptance-run.log` — the recorded run's full output (128 lines; quoted above).
 - `out/re/stage/encounter.manifest` — 4,391 B, sha256 `1e431507…3d3e69` (30 + 1 + 1).
 - `out/s41/` — `grab.png`, `mid-climb.png`, `strike.png`, `reaction.png`, `defeat.png`;
   `control/defeat-noentity.png` (presence control), `control/defeat-nohud.png` (HUD control),

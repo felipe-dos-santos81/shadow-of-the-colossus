@@ -112,7 +112,9 @@ TEST_CASE("every climb band has a distinct stable name") {
 TEST_CASE("climb band table matches the pinned S4 measurements") {
     // The brief pins these values; a later retune must update the table and
     // this expectation together.
-    const float expected_radius[] = {1.7f, 1.6f, 1.7f, 2.0f, 2.0f, 1.4f, 1.2f, 1.5f, 1.2f};
+    // R10 lifts the neck/head radii out of the mesh: the head band must clear
+    // the forehead shell (~1.73 m from Bone_KAO in z), the neck must not clip.
+    const float expected_radius[] = {1.7f, 1.6f, 1.7f, 2.0f, 2.0f, 1.6f, 1.75f, 1.5f, 1.2f};
     const ClimbBandId expected_up[] = {
         ClimbBandId::LeftShin, ClimbBandId::LeftThigh, ClimbBandId::Waist,
         ClimbBandId::Chest,    ClimbBandId::Neck,      ClimbBandId::Head,
