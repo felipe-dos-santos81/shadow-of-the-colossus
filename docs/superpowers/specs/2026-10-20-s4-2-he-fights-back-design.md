@@ -166,8 +166,9 @@ no-lookup cases.
 Movement: `lateral = right − left`. Any lateral input selects `Climbing`. At the top of a band,
 `W + lateral` follows `branch` when it exists, otherwise `up`; `W` alone follows `up`. While
 attached and not striking, lateral input orbits the attach point around the band axis by
-`−lateral × climbSpeed × dt / (radius + kPlayerCapsuleRadius)` using a Rodrigues rotation about the
-band's own axis.
+`+lateral × climbSpeed × dt / (radius + kPlayerCapsuleRadius)` using a Rodrigues rotation about the
+band's own axis, **oriented upward** (negate the axis when `boneB` is below `boneA`), so D always
+moves along the player's right (`forward × +Y`).
 
 So the designed route works: foot → shin → thigh → waist → chest → (`W+D`) shoulder → (`W`) arm,
 where `weakpoint 1` is live.
