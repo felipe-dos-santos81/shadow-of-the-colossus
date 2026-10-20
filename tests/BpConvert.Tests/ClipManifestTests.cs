@@ -37,6 +37,79 @@ public class ClipManifestTests
     }
 
     [Fact]
+    public void Write_records_root_motion_and_deletes_a_stale_record()
+    {
+        var dir = Directory.CreateTempSubdirectory("bp-clips-");
+        var glb = Path.Combine(dir.FullName, "wander.glb");
+        var clips = new[] { new AnimClip { Name = "player_a_damage_h_fly1", Frames = 9, Rate = 0.5, Tracks = [], Root = [] } };
+        var path = ClipManifest.Write(glb, "models/.../wander.cmsh", clips);
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal("body-offset", doc.RootElement.GetProperty("clips")[0].GetProperty("rootMotion").GetString());
+
+        ClipManifest.Delete(glb);
+        Assert.False(File.Exists(path));
+    }
+
+    [Theory]
+    // S4.2's prerequisite: every clip the two fight models bake carries a classification, so a
+    // later task never has to guess how a root series relates to the ground.
+    [InlineData("player_a_stand", "ground-height")]
+    [InlineData("player_a_walk", "ground-height")]
+    [InlineData("player_a_run", "ground-height")]
+    [InlineData("player_a_grip_stand_crouch", "ground-height")]
+    [InlineData("player_a_grip_loop", "ground-height")]
+    [InlineData("player_a_grip_move_f1", "ground-height")]
+    [InlineData("player_a_grip_move_f2", "ground-height")]
+    [InlineData("player_a_grip_float_u_hi_attack", "ground-height")]
+    [InlineData("player_a_atk1", "body-offset")]
+    [InlineData("player_a_damage_m_fly2", "body-offset")]
+    [InlineData("player_a_fall_damage_to_death", "ground-height")]
+    [InlineData("player_a_damage_h_fly1", "body-offset")]
+    [InlineData("player_a_damage_h_fly_end", "body-offset")]
+    [InlineData("player_a_fall_damage_start", "ground-height")]
+    [InlineData("player_a_fall_damage_end", "ground-height")]
+    [InlineData("minotaur_a_stand", "body-offset")]
+    [InlineData("minotaur_a_add_head_damage", "body-offset")]
+    [InlineData("minotaur_a_add_ude_r_damage", "body-offset")]
+    [InlineData("minotaur_a_add_mune_r_damage", "body-offset")]
+    [InlineData("minotaur_a_death_front", "body-offset")]
+    [InlineData("minotaur_a_atk_leg_l", "body-offset")]
+    [InlineData("minotaur_a_atk_leg_r", "body-offset")]
+    [InlineData("minotaur_a_atk_weapon2_a", "body-offset")]
+    [InlineData("horse_a_add_horse_kick", "unclassified")]
+    public void For_classifies_every_baked_clip(string name, string expected)
+    {
+        Assert.Equal(expected, ClipMotion.For(name));
+    }
+
+    [Fact]
+    public void Convert_WithoutClips_DeletesAStaleClipRecord()
+    {
+        // The stale-delete path (S4.2): a re-conversion that bakes no clips must remove the
+        // previous pair's sidecar, or the app would select clips the glb no longer carries.
+        var lib = Directory.CreateTempSubdirectory("bp-clips-stale-").FullName;
+        try
+        {
+            var clips = ClipSet.Resolve(TestAssets.Root, ["player_a_stand"]);
+            var baked = ModelConverter.Convert(
+                TestAssets.Root, "models/shadow/characters/wander/_cmn/wander.cmsh", lib, clips: clips);
+            var sidecar = Path.ChangeExtension(baked.GlbPath, ".clips.json");
+            Assert.True(File.Exists(sidecar), sidecar);
+
+            var plain = ModelConverter.Convert(
+                TestAssets.Root, "models/shadow/characters/wander/_cmn/wander.cmsh", lib);
+
+            Assert.Equal(baked.GlbPath, plain.GlbPath);
+            Assert.True(File.Exists(plain.GlbPath));
+            Assert.False(File.Exists(sidecar), sidecar);
+        }
+        finally
+        {
+            Directory.Delete(lib, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Convert_WithoutClips_WritesNoClipRecord()
     {
         // Ruling R2: the sidecar exists only when the conversion baked at least one clip. Without

@@ -395,9 +395,9 @@ TEST_CASE("wander carries its 348-joint skeleton") {
     CHECK(player_rig(scene).skin.joints[0].name == "Bone_root");
     // The S2 converter bakes the player's demo clips into the glb, named after
     // the source clip stem: the app plays these instead of the stand-in. S4.1
-    // bakes the full climb/fight set, so the count is pinned at 11 and the new
+    // baked the climb set and S4.2 adds the fight set (15 clips total); the
     // clips are found by name — the way the app selects them.
-    REQUIRE(player_rig(scene).animations.size() == 11);
+    REQUIRE(player_rig(scene).animations.size() == 15);
     CHECK(player_rig(scene).animations[0].name == "player_a_stand");
     CHECK(player_rig(scene).animations[1].name == "player_a_walk");
     CHECK(player_rig(scene).animations[2].name == "player_a_run");
@@ -408,6 +408,8 @@ TEST_CASE("wander carries its 348-joint skeleton") {
     build_playback(scene, scene.playerRig, playback);
     CHECK(clip_index_named(playback, "player_a_grip_loop") >= 0);
     CHECK(clip_index_named(playback, "player_a_atk1") >= 0);
+    // S4.2's fight set: the hurt reaction the combat player selects by name.
+    CHECK(clip_index_named(playback, "player_a_damage_h_fly1") >= 0);
     const auto& v = scene.meshes[0].vertices[0];
     CHECK(v.j[0] == 102); CHECK(v.j[1] == 73); CHECK(v.j[2] == 0); CHECK(v.j[3] == 0);
     CHECK(v.w[0] == doctest::Approx(0.9094f).epsilon(1e-3));
@@ -810,16 +812,21 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
     CHECK(player.skin.joints.size() == 348);
     CHECK(entity.skin.joints.size() == 238);
 
-    // The player keeps its own eleven baked clips (the S4.1 climb/fight set).
-    REQUIRE(player.animations.size() == 11);
+    // The player keeps its own fifteen baked clips (S4.1's climb set plus S4.2's
+    // fight set).
+    REQUIRE(player.animations.size() == 15);
     CHECK(player.animations[0].name == "player_a_stand");
-    // The entity carries Valus's five baked clips; the app selects the one the
-    // manifest names by name, never by position.
-    REQUIRE(entity.animations.size() == 5);
+    // The entity carries Valus's eight baked clips (S4.2 adds the three attack
+    // clips); the app selects the one the manifest names by name, never by
+    // position.
+    REQUIRE(entity.animations.size() == 8);
     Playback entity_by_name;
     build_playback(scene, 1, entity_by_name);
     const int idle_index = clip_index_named(entity_by_name, "minotaur_a_stand");
     REQUIRE(idle_index >= 0);
+    CHECK(clip_index_named(entity_by_name, "minotaur_a_atk_leg_l") >= 0);
+    CHECK(clip_index_named(entity_by_name, "minotaur_a_atk_leg_r") >= 0);
+    CHECK(clip_index_named(entity_by_name, "minotaur_a_atk_weapon2_a") >= 0);
     const AnimationCpu& idle = entity.animations[idle_index];
     CHECK_FALSE(idle.channels.empty());
     CHECK(idle.duration > 0.0f);
@@ -870,14 +877,14 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
 
     // --- S4 task 4: per-rig palettes, playback and grounding ------------------
 
-    // One playback per rig: the player keeps its eleven clips, the entity its
-    // five; each pose is sized by its own rig's joint count.
+    // One playback per rig: the player keeps its fifteen clips, the entity its
+    // eight; each pose is sized by its own rig's joint count.
     Playback player_playback;
     Playback entity_playback;
     build_playback(scene, 0, player_playback);
     build_playback(scene, 1, entity_playback);
-    REQUIRE(player_playback.clips.size() == 11);
-    REQUIRE(entity_playback.clips.size() == 5);
+    REQUIRE(player_playback.clips.size() == 15);
+    REQUIRE(entity_playback.clips.size() == 8);
     CHECK(player_playback.clips[static_cast<std::size_t>(player_playback.index)].name ==
           "player_a_stand");
     CHECK(entity_playback.clips[static_cast<std::size_t>(entity_playback.index)].name ==

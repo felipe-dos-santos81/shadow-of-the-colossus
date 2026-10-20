@@ -116,10 +116,16 @@ public static class ModelConverter
         var written = GlbWriter.Write(output, glbDirectory, Path.GetFileName(glbPath), textureUriMap);
 
         // Provenance for the app's clip selection; ruling R2: only a conversion that baked clips
-        // gets a record, so an M0 batch run never grows empty sidecars.
+        // gets a record, so an M0 batch run never grows empty sidecars. A re-conversion that
+        // bakes none removes the previous pair's record — after the glb write, so a failed
+        // conversion leaves the previous record beside its (untouched) glb.
         if (animations.Count > 0)
         {
             ClipManifest.Write(written.GlbPath, sourceRelative, animations);
+        }
+        else
+        {
+            ClipManifest.Delete(written.GlbPath);
         }
 
         return new ConvertResult(written.GlbPath, pngPaths, output.Meshes.Count,

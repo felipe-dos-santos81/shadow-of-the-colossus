@@ -6,12 +6,14 @@ namespace BpConvert.Core.Pipeline;
 /// <summary>
 /// The provenance record written beside a converted <c>.glb</c> when the conversion baked clips:
 /// <c>&lt;stem&gt;.clips.json</c>, one entry per baked clip (name, engine frame count, playback fps,
-/// track count, whether the clip carries a root-position series).
+/// track count, whether the clip carries a root-position series, and how that series relates to
+/// the ground).
 /// </summary>
 /// <remarks>
 /// The record exists so the app selects clips by name and never hard-codes a frame count. It is
 /// written <b>only</b> for conversions that baked at least one clip (S4.1 ruling R2): the caller —
-/// <see cref="ModelConverter.Convert"/> — owns that scope, so an M0 batch run stays sidecar-free.
+/// <see cref="ModelConverter.Convert"/> — owns that scope, so an M0 batch run stays sidecar-free,
+/// and removes a previous record when a re-conversion bakes none.
 /// </remarks>
 public static class ClipManifest
 {
@@ -47,13 +49,30 @@ public static class ClipManifest
                 clip.Frames,
                 clip.Fps,
                 clip.Tracks.Count,
-                clip.Root.Count > 0)).ToList());
+                clip.Root.Count > 0,
+                ClipMotion.For(clip.Name))).ToList());
 
         File.WriteAllText(path, JsonSerializer.Serialize(record, Options));
         return path;
     }
 
+    /// <summary>
+    /// Removes the record beside <paramref name="glbPath"/> (<c>&lt;stem&gt;.clips.json</c>), if any.
+    /// </summary>
+    /// <remarks>
+    /// Called by a re-conversion that bakes no clips: the fresh <c>.glb</c> and the previous
+    /// record would otherwise disagree about the clips. <see cref="File.Delete(string)"/> is a
+    /// no-op when the file is absent, so an M0 batch stays free of this call's effects.
+    /// </remarks>
+    public static void Delete(string glbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(glbPath);
+
+        File.Delete(Path.ChangeExtension(glbPath, ".clips.json"));
+    }
+
     private sealed record ClipRecord(int Version, string Source, IReadOnlyList<ClipEntry> Clips);
 
-    private sealed record ClipEntry(string Name, int Frames, double Fps, int Tracks, bool Root);
+    private sealed record ClipEntry(
+        string Name, int Frames, double Fps, int Tracks, bool Root, string RootMotion);
 }
