@@ -16,6 +16,8 @@ struct PlayerInput {
     bool left = false;
     bool right = false;
     bool run = false;  // Shift: run speed instead of walk speed
+    bool grab = false;    // E: held to grip a climb band
+    bool strike = false;  // J: held to charge, released to plunge
 };
 
 // The player's world position and facing yaw (degrees).
