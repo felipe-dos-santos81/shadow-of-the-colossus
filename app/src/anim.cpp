@@ -422,6 +422,27 @@ int select_clip_index(const Playback& playback, const PlayerInput& input) {
     return 0;
 }
 
+int select_mode_clip_index(const Playback& playback, const PlayerCombat& combat,
+                           const PlayerInput& input) {
+    if (playback.clips.empty()) {
+        return -1;  // nothing to play
+    }
+    switch (combat.mode) {
+        case PlayerMode::Grounded:
+            return select_clip_index(playback, input);
+        case PlayerMode::Grabbing:
+            return clip_index_named(playback, "player_a_grip_loop");
+        case PlayerMode::Climbing:
+            return clip_index_named(playback, "player_a_grip_move_f1");
+        case PlayerMode::Striking:
+            return clip_index_named(playback, "player_a_grip_float_u_hi_attack");
+        case PlayerMode::Falling:
+        case PlayerMode::Staggered:
+            return clip_index_named(playback, "player_a_damage_m_fly2");
+    }
+    return -1;
+}
+
 namespace {
 
 // Whether `clip` carries the root translation series of a skin with these

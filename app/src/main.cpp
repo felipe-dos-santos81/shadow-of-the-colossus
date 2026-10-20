@@ -40,7 +40,11 @@ void print_usage(FILE* out) {
                  "                    s3-status, exit\n"
                  "  --s4-selftest     compose the encounter --manifest, pin the entity at\n"
                  "                    t=0, walk the player into its collision proxy, print\n"
-                 "                    s4-status, exit\n");
+                 "                    s4-status, exit\n"
+                 "  --s41-selftest    compose the encounter --manifest, then grab, climb,\n"
+                 "                    strike, catch, miss, force a stamina fall and land\n"
+                 "                    the killing blow through fixed 1/60 s steps; print\n"
+                 "                    s41-status, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -84,6 +88,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--s4-selftest") {
             opts.s4Selftest = true;
+            continue;
+        }
+        if (arg == "--s41-selftest") {
+            opts.s41Selftest = true;
             continue;
         }
 
@@ -179,6 +187,11 @@ int main(int argc, char** argv) {
     }
     if (opts.s4Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s4-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s41Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s41-selftest needs --manifest\n");
         print_usage(stderr);
         return 2;
     }

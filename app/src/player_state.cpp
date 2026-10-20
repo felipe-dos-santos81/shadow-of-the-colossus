@@ -115,6 +115,24 @@ void drain_stamina(PlayerCombat& combat, float rate, float dt) {
 
 }  // namespace
 
+const char* player_mode_name(PlayerMode mode) {
+    switch (mode) {
+        case PlayerMode::Grounded:
+            return "grounded";
+        case PlayerMode::Grabbing:
+            return "grabbing";
+        case PlayerMode::Climbing:
+            return "climbing";
+        case PlayerMode::Striking:
+            return "striking";
+        case PlayerMode::Falling:
+            return "falling";
+        case PlayerMode::Staggered:
+            return "staggered";
+    }
+    return "unknown";
+}
+
 StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerInput& input,
                        const PlayerFrame& frame, const CombatTuning& tuning, float dtSeconds) {
     StepEvents events;

@@ -2,6 +2,17 @@
 
 #include <string>
 
+// The encounter's own state (ruling R5): Valus's health and whether he is down,
+// plus the one reaction/death clip currently playing and how long it has run.
+// `reactionClip` is an index into the entity rig's Playback (-1 = none), never a
+// clip name: the app resolves the R3 names once at load.
+struct Encounter {
+    float health = 100.0f;
+    bool defeated = false;
+    int reactionClip = -1;
+    float reactionSeconds = 0.0f;
+};
+
 // One viewer run's parameters, filled by the argument parser in main.cpp.
 struct AppOptions {
     std::string libraryDir;      // converted asset library (--library, or $SOTC_LIB)
@@ -33,6 +44,12 @@ struct AppOptions {
     // entity's feet on the ground, render the final frame, print `s4-status`,
     // and exit 0. Requires --manifest (with an entity) and --model.
     bool s4Selftest = false;
+    // --s41-selftest: compose the encounter manifest, reuse the S4 approach,
+    // then grab, climb, strike, catch, miss, force a stamina fall, and land the
+    // killing blow through fixed 1/60 s steps with no window input. Prints the
+    // `s41-*` event lines and `s41-status`, and exits 0. Requires --manifest
+    // (with an entity) and --model.
+    bool s41Selftest = false;
     // --camera-target player|entity: the initial framing for captures. `player`
     // is the normal follow camera; `entity` starts in the chest-framing target
     // mode (requires a manifest whose scene has an entity). Interactive runs

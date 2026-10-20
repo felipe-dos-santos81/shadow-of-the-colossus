@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "player.h"
+#include "player_state.h"
 #include "scene.h"
 
 // CPU pose evaluation for the skeletal path: sampling the animation channels
@@ -100,6 +101,16 @@ void build_playback(const Scene& scene, std::size_t rigIndex, Playback& playback
 // playback whose only clip is the procedural stand-in returns 0, and an empty
 // clip list returns -1 (nothing to play).
 int select_clip_index(const Playback& playback, const PlayerInput& input);
+
+// The clip the combat state machine asks for (S4.1): Grounded delegates to
+// `select_clip_index` (the locomotion selector, unchanged), Grabbing ->
+// "player_a_grip_loop", Climbing -> "player_a_grip_move_f1", Striking ->
+// "player_a_grip_float_u_hi_attack", Falling/Staggered ->
+// "player_a_damage_m_fly2". Unlike the locomotion selector there is no
+// fallback chain: a missing named clip answers -1, and the app treats that as a
+// load error naming the missing clip — never a silent switch to the first clip.
+int select_mode_clip_index(const Playback& playback, const PlayerCombat& combat,
+                           const PlayerInput& input);
 
 // The index of the clip named `name` in `playback`, or -1 when it is absent.
 // Names are exact: this is how a manifest's `entity` clip is resolved.

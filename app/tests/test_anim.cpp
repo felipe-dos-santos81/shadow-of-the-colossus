@@ -20,6 +20,7 @@
 #include "manifest.h"
 #include "math3d.h"
 #include "player.h"
+#include "player_state.h"
 
 TEST_CASE("quat_to_mat4 rotates a point 90 degrees about Z") {
     const Quat q = {0.0f, 0.0f, std::sin(kPi / 4.0f), std::cos(kPi / 4.0f)};
@@ -594,6 +595,54 @@ TEST_CASE("build_playback leaves a model with no skin and no clips silent") {
     CHECK(!playback.has_procedural);
     CHECK(playback.index == -1);
     CHECK(!playback.playing);
+}
+
+// --- Combat clip selection (S4.1 task 6) -------------------------------------
+
+TEST_CASE("select_mode_clip_index maps every combat mode by name") {
+    const Playback demo = playback_of({"player_a_stand", "player_a_walk", "player_a_run",
+                                       "player_a_grip_loop", "player_a_grip_move_f1",
+                                       "player_a_grip_float_u_hi_attack",
+                                       "player_a_damage_m_fly2"});
+    REQUIRE(demo.clips.size() == 7);
+    const PlayerInput still;
+
+    PlayerCombat combat;
+    combat.mode = PlayerMode::Grounded;
+    CHECK(select_mode_clip_index(demo, combat, still) == 0);
+    combat.mode = PlayerMode::Grabbing;
+    CHECK(select_mode_clip_index(demo, combat, still) == 3);
+    combat.mode = PlayerMode::Climbing;
+    CHECK(select_mode_clip_index(demo, combat, still) == 4);
+    combat.mode = PlayerMode::Striking;
+    CHECK(select_mode_clip_index(demo, combat, still) == 5);
+    combat.mode = PlayerMode::Falling;
+    CHECK(select_mode_clip_index(demo, combat, still) == 6);
+    combat.mode = PlayerMode::Staggered;
+    CHECK(select_mode_clip_index(demo, combat, still) == 6);
+}
+
+TEST_CASE("select_mode_clip_index never falls back to the first clip") {
+    const Playback locomotion = playback_of({"player_a_stand", "player_a_walk"});
+    const PlayerInput still;
+
+    for (const PlayerMode mode : {PlayerMode::Grabbing, PlayerMode::Climbing,
+                                  PlayerMode::Striking, PlayerMode::Falling,
+                                  PlayerMode::Staggered}) {
+        PlayerCombat combat;
+        combat.mode = mode;
+        CHECK(select_mode_clip_index(locomotion, combat, still) == -1);
+    }
+
+    // Grounded still delegates to the locomotion selector, which keeps its own
+    // documented fallback chain.
+    PlayerCombat grounded;
+    CHECK(select_mode_clip_index(locomotion, grounded, still) == 0);
+
+    // No clips at all: nothing to play, in every mode.
+    PlayerCombat combat;
+    combat.mode = PlayerMode::Grabbing;
+    CHECK(select_mode_clip_index(Playback{}, combat, still) == -1);
 }
 
 // --- Locomotion selection and grounding (task 6) -----------------------------

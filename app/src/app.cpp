@@ -7,6 +7,7 @@
 #include "heightmap.h"
 #include "manifest.h"
 #include "player.h"
+#include "player_state.h"
 #include "renderer.h"
 #include "scene.h"
 
@@ -24,6 +25,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // stb_image_write produces the --screenshot PNG; the implementation lives in
@@ -265,6 +267,33 @@ constexpr float kS4GroundTolerance = 1e-3f;  // the player's feet vs the heightm
 constexpr float kS4FeetTolerance = 0.10f;    // the entity's lowest posed vertex vs ground
 constexpr float kS4PenetrationTolerance = 0.02f;  // allowed capsule penetration (m)
 constexpr float kS4StopBeforeTolerance = 1.0f;    // the stop must be before the axis point
+
+// --- S4.1 climb/fight self-test and input ----------------------------------
+
+constexpr int kS41ClimbFrames = 240;        // 4 simulated seconds at 1/60 s
+constexpr float kS41MinRise = 3.0f;         // metres the proven climb must gain
+constexpr int kS41ApproachFrames = 240;     // walk from S4's stop to the foot band
+constexpr int kS41ChargeFrames = 60;        // held J past the 0.9 s full charge
+constexpr int kS41WeakChargeFrames = 20;    // a third of a second: a weak hit
+constexpr int kS41CatchWaitFrames = 42;     // 0.7 s with no catch press
+constexpr int kS41MaxFallFrames = 600;      // 10 s: the whole head-to-ground fall
+constexpr int kS41MaxStaggerFrames = 120;   // the 1.2 s stagger plus margin
+constexpr float kS41Eps = 1e-4f;            // monotonic and ground-contact epsilon
+constexpr float kS41StickDeadzone = 0.25f;  // gamepad axis deadzone
+constexpr float kS41StickPixelsPerSecond = 900.0f;  // right stick -> drag pixels
+
+// The R3 reaction names, plus the generic body reaction a strike on a band with
+// no weakpoint plays (the pinned bands without a weakpoint are not silent). The
+// player's combat clips are the binding's mode mapping. Every name is resolved
+// once at load; a missing one is a load error, never a silent fallback.
+constexpr const char* kHeadReactionClip = "minotaur_a_add_head_damage";
+constexpr const char* kArmReactionClip = "minotaur_a_add_ude_r_damage";
+constexpr const char* kBodyReactionClip = "minotaur_a_add_mune_r_damage";
+constexpr const char* kDeathClip = "minotaur_a_death_front";
+constexpr const char* kGripLoopClip = "player_a_grip_loop";
+constexpr const char* kGripMoveClip = "player_a_grip_move_f1";
+constexpr const char* kGripAttackClip = "player_a_grip_float_u_hi_attack";
+constexpr const char* kFallClip = "player_a_damage_m_fly2";
 
 // The world position of one vertex under a rig's palette: the shader's
 // skinning sum (worldJoint * inverseBind per influence), then the mesh's own
@@ -538,6 +567,278 @@ void update_locomotion(Playback& playback, const Scene& scene, const PlayerInput
     }
 }
 
+// --- S4.1 wiring helpers ----------------------------------------------------
+
+// The modes that hold the colossus; every other mode is the follow-camera's.
+bool mode_is_attached(PlayerMode mode) {
+    return mode == PlayerMode::Grabbing || mode == PlayerMode::Climbing ||
+           mode == PlayerMode::Striking;
+}
+
+bool finite_position(Vec3 p) {
+    return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+}
+
+// The combat clips the player's mode selector names, resolved once at load.
+struct PlayerClips {
+    int gripLoop = -1;
+    int gripMove = -1;
+    int strike = -1;
+    int fall = -1;
+};
+
+// The entity clips R3 names, resolved once at load. `stand` is the clip the
+// manifest itself named (the entity's own loop).
+struct EntityClips {
+    int stand = -1;
+    int head = -1;
+    int arm = -1;
+    int body = -1;
+    int death = -1;
+};
+
+PlayerClips resolve_player_clips(const Playback& playback) {
+    return PlayerClips{clip_index_named(playback, kGripLoopClip),
+                       clip_index_named(playback, kGripMoveClip),
+                       clip_index_named(playback, kGripAttackClip),
+                       clip_index_named(playback, kFallClip)};
+}
+
+EntityClips resolve_entity_clips(const Playback& playback, const std::string& standClip) {
+    return EntityClips{clip_index_named(playback, standClip),
+                       clip_index_named(playback, kHeadReactionClip),
+                       clip_index_named(playback, kArmReactionClip),
+                       clip_index_named(playback, kBodyReactionClip),
+                       clip_index_named(playback, kDeathClip)};
+}
+
+// Prints one load error when `name` is absent from `playback`; false means the
+// caller must exit 2. The message names the model and the exact clip: the
+// fight never silently falls back to the first clip.
+bool require_named_clip(const Playback& playback, const std::string& model, const char* name) {
+    if (clip_index_named(playback, name) >= 0) {
+        return true;
+    }
+    std::fprintf(stderr, "sotc-viewer: %s carries no %s clip (S4.1 combat needs it)\n",
+                 model.c_str(), name);
+    return false;
+}
+
+// The mode-driven clip choice: Grounded keeps the existing locomotion selector,
+// the attached modes play their grip/attack clip, and a fall/stagger plays the
+// damage clip. `manualClip` (--anim/--anim-time) keeps its S2 override meaning.
+void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCombat& combat,
+                         const PlayerInput& input, bool manualClip) {
+    if (manualClip) {
+        return;
+    }
+    const int wanted = select_mode_clip_index(playback, combat, input);
+    if (wanted >= 0 && wanted != playback.index) {
+        select_clip(playback, scene, scene.playerRig, wanted);
+    }
+    // wanted < 0 means the named clip is absent. The load already refused that
+    // manifest (require_named_clip), so there is deliberately no fallback here.
+}
+
+// This frame's PlayerFrame: the entity's posed skeleton is the only source of
+// climb bands, and its capsules are the ground-mode collision proxy. The
+// camera look yaw is the Grounded movement basis (the state machine's
+// player_update call), exactly as the interactive path always supplied it.
+PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
+                            const std::vector<std::vector<Mat4>>& palettes,
+                            const Heightmap& heightmap, float cameraYawDeg) {
+    PlayerFrame frame;
+    frame.scene = &scene;
+    frame.heightmap = &heightmap;
+    frame.entityRig = entityRig;
+    frame.cameraYawDeg = cameraYawDeg;
+    if (entityRig < palettes.size()) {
+        frame.jointWorld = [&scene, entityRig, &palettes](std::string_view name, Vec3& out) {
+            return posed_joint_world_position(scene, entityRig, palettes[entityRig],
+                                              std::string(name), out);
+        };
+    }
+    frame.entityCapsules = entity_capsules(scene, palettes);
+    return frame;
+}
+
+// Enters the climb orbit on the first attached frame (or on F, `recenter`),
+// seeded outward along the band's surface normal; every later attached frame
+// just keeps the orbit on the attach point. The player position *is* the
+// attach point (the state machine wrote the band surface into it). A band that
+// cannot be resolved enters with a zero normal, which keeps the current yaw.
+void update_climb_camera(Camera& camera, CameraClimb& climb, const PlayerState& player,
+                         const PlayerCombat& combat, const PlayerFrame& frame, float dragDx,
+                         float dragDy, float wheelDelta, bool recenter, float dtSeconds) {
+    if (climb.active && !recenter) {
+        camera_climb_update(camera, climb, player.position, dragDx, dragDy, wheelDelta,
+                            dtSeconds);
+        return;
+    }
+    Vec3 point{};
+    Vec3 normal{};
+    if (!climb_surface_point(climb_band(combat.band), frame.jointWorld, combat.bandT,
+                             player.position, point, normal)) {
+        normal = Vec3{};
+    }
+    camera_climb_enter(camera, climb, player.position, normal);
+}
+
+// Starts one entity one-shot clip (a reaction or the death): pinned so it can
+// never loop, with its clock owned by encounter.reactionSeconds (the pose
+// update does not advance a non-playing clock). `reactionSeconds == 0` is the
+// clip's first frame.
+void start_encounter_one_shot(Playback& playback, Encounter& encounter, int clipIndex) {
+    if (clipIndex < 0 || static_cast<std::size_t>(clipIndex) >= playback.clips.size()) {
+        return;
+    }
+    playback.index = clipIndex;
+    playback.time = 0.0f;
+    playback.pinned = true;    // clamp at the last frame, never wrap
+    playback.playing = false;  // encounter.reactionSeconds advances this clock
+    encounter.reactionClip = clipIndex;
+    encounter.reactionSeconds = 0.0f;
+}
+
+// Advances the encounter's one-shot clip. A reaction returns to the entity's
+// own loop when it finishes; a death freezes on its last frame (pinned, not
+// playing) and stays defeated. This is the only writer of a one-shot clock, so
+// the pose update and the status agree on the drawn time.
+void advance_encounter_reaction(Playback& playback, Encounter& encounter, int standClip,
+                                float dtSeconds) {
+    if (encounter.reactionClip < 0) {
+        return;
+    }
+    if (!(dtSeconds > 0.0f) || !std::isfinite(dtSeconds)) {
+        return;
+    }
+    const std::size_t index = static_cast<std::size_t>(encounter.reactionClip);
+    if (index >= playback.clips.size()) {
+        encounter.reactionClip = -1;
+        encounter.reactionSeconds = 0.0f;
+        return;
+    }
+    const float duration = playback.clips[index].duration;
+    encounter.reactionSeconds += dtSeconds;
+    if (encounter.reactionSeconds < duration) {
+        playback.time = encounter.reactionSeconds;
+        return;
+    }
+    if (encounter.defeated) {
+        // Death: play once, then hold the final frame.
+        playback.time = duration;
+        playback.pinned = true;
+        playback.playing = false;
+        encounter.reactionClip = -1;
+        encounter.reactionSeconds = duration;
+        return;
+    }
+    // Reaction over: back to the entity's own loop from its first frame.
+    if (standClip >= 0) {
+        playback.index = standClip;
+        playback.time = 0.0f;
+        playback.pinned = false;
+        playback.playing = true;
+    }
+    encounter.reactionClip = -1;
+    encounter.reactionSeconds = 0.0f;
+}
+
+// Applies one step's damage to the encounter and routes the entity's reaction:
+// weakpoint 0 (forehead) -> the head reaction, 1 (right arm) -> the arm
+// reaction, any other band -> the generic body reaction. A killing blow
+// supersedes the reaction and starts the death clip. A defeated entity takes
+// no further damage and no second death.
+void apply_combat_events(Encounter& encounter, Playback& entityPlayback,
+                         const EntityClips& clips, const StepEvents& events, int weakpoint) {
+    if (events.damageDealt <= 0 || encounter.defeated) {
+        return;
+    }
+    encounter.health =
+        std::max(0.0f, encounter.health - static_cast<float>(events.damageDealt));
+    if (encounter.health <= 0.0f) {
+        encounter.defeated = true;
+        start_encounter_one_shot(entityPlayback, encounter, clips.death);
+        return;
+    }
+    const int reaction =
+        weakpoint == 1 ? clips.arm : (weakpoint == 0 ? clips.head : clips.body);
+    start_encounter_one_shot(entityPlayback, encounter, reaction);
+}
+
+// The gamepad's owned input. Polled once per frame in the interactive loop;
+// open/close track hot-plug. close() drops the handle and clears every input it
+// owned, so an unplug mid-grip cannot latch the grip or a pause press on.
+struct GamepadInput {
+    SDL_Gamepad* handle = nullptr;
+    SDL_JoystickID id = 0;
+    float leftX = 0.0f;
+    float leftY = 0.0f;
+    float rightX = 0.0f;
+    float rightY = 0.0f;
+    bool grab = false;
+    bool strike = false;
+    bool pausePressed = false;
+    bool pauseWasDown = false;
+
+    ~GamepadInput() { close(); }
+
+    void open(SDL_JoystickID instance) {
+        close();
+        handle = SDL_OpenGamepad(instance);
+        id = handle != nullptr ? SDL_GetGamepadID(handle) : 0;
+    }
+
+    void close() {
+        if (handle != nullptr) {
+            SDL_CloseGamepad(handle);
+        }
+        handle = nullptr;
+        id = 0;
+        leftX = leftY = rightX = rightY = 0.0f;
+        grab = false;
+        strike = false;
+        pausePressed = false;
+        pauseWasDown = false;
+    }
+
+    void poll() {
+        leftX = leftY = rightX = rightY = 0.0f;
+        grab = false;
+        strike = false;
+        pausePressed = false;
+        if (handle == nullptr) {
+            return;
+        }
+        const auto axis = [this](SDL_GamepadAxis which) {
+            return static_cast<float>(SDL_GetGamepadAxis(handle, which)) / 32767.0f;
+        };
+        leftX = axis(SDL_GAMEPAD_AXIS_LEFTX);
+        leftY = axis(SDL_GAMEPAD_AXIS_LEFTY);
+        rightX = axis(SDL_GAMEPAD_AXIS_RIGHTX);
+        rightY = axis(SDL_GAMEPAD_AXIS_RIGHTY);
+        grab = SDL_GetGamepadAxis(handle, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16384;
+        strike = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_SOUTH);
+        const bool pauseNow = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_START);
+        pausePressed = pauseNow && !pauseWasDown;
+        pauseWasDown = pauseNow;
+    }
+};
+
+// Opens the first already-connected gamepad (a later hot-plug arrives as an
+// SDL_EVENT_GAMEPAD_ADDED in the loop).
+void open_first_gamepad(GamepadInput& gamepad) {
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    if (ids == nullptr) {
+        return;
+    }
+    for (int i = 0; i < count && gamepad.handle == nullptr; ++i) {
+        gamepad.open(ids[i]);
+    }
+    SDL_free(ids);
+}
+
 // The spawn the s3-selftest and the interactive loop start from: the
 // manifest's own spawn when it has one, otherwise the composed scene's bounds
 // centre.
@@ -650,7 +951,7 @@ int run_app(const AppOptions& opts) {
         return 1;
     }
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "sotc-viewer: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -760,6 +1061,11 @@ int run_app(const AppOptions& opts) {
         // exactly 1 in float arithmetic; later frames smooth).
         PlayerState player{spawn_position(manifest, scene),
                            manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f};
+        // The combat state machine and the encounter's own state (R5) live for
+        // the whole run; the climb camera is entered/left by the mode.
+        PlayerCombat combat{};
+        Encounter encounter{};
+        CameraClimb climbCamera{};
         CameraFollow follow;
         if (follow_mode) {
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
@@ -850,6 +1156,35 @@ int run_app(const AppOptions& opts) {
             print_anim_status(scene, rigIndex, playbacks[rigIndex]);
         }
 
+        // S4.1: a manifest with an entity is an encounter. Every clip the climb
+        // and fight name must exist before the run starts — a missing one is a
+        // load error naming the glb and the clip, never a silent fallback to the
+        // first clip. (S3's arena has no entity and needs none of them.)
+        PlayerClips playerClips{};
+        EntityClips entityClips{};
+        if (follow_mode && !manifest.entities.empty()) {
+            playerClips = resolve_player_clips(playback);
+            if (!require_named_clip(playback, opts.modelRelPath, kGripLoopClip) ||
+                !require_named_clip(playback, opts.modelRelPath, kGripMoveClip) ||
+                !require_named_clip(playback, opts.modelRelPath, kGripAttackClip) ||
+                !require_named_clip(playback, opts.modelRelPath, kFallClip)) {
+                return 2;
+            }
+            if (entityRig < playbacks.size()) {
+                entityClips = resolve_entity_clips(playbacks[entityRig],
+                                                   manifest.entities[0].clip);
+                const std::string& entityModel = manifest.entities[0].placement.glbRelPath;
+                if (!require_named_clip(playbacks[entityRig], entityModel,
+                                        manifest.entities[0].clip.c_str()) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kHeadReactionClip) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kArmReactionClip) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kBodyReactionClip) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kDeathClip)) {
+                    return 2;
+                }
+            }
+        }
+
         // Single-model framing is on the pose, after --anim/--anim-time resolved
         // the start state: the clip's root series carries the ground height, so
         // the bind-pose bounds framed at load would leave the subject out of
@@ -896,6 +1231,638 @@ int run_app(const AppOptions& opts) {
         if (follow_mode) {
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
+            // The HUD is a manifest-mode overlay (S4.1): both pools start full.
+            // The interactive loop refreshes it every frame; the scripted paths
+            // render their final frame with these starting values.
+            renderer.set_hud(HudState{true, combat.stamina / 100.0f,
+                                      encounter.health / 100.0f});
+        }
+
+        if (opts.s41Selftest) {
+            // The deterministic S4.1 acceptance timeline: S4's approach, a real
+            // grab, a 240-frame climb with a proven rise, a full-charge strike
+            // on the head weakpoint, a catch, a deliberately missed catch, a
+            // forced stamina fall, and the killing blow. Fixed 1/60 s steps and
+            // no window input; any failed invariant exits 1 with a specific
+            // message. The only teleport is the ruled scaffolding that places
+            // the player on the head band's surface for the strike phases — the
+            // user's walk does the whole climb.
+            if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
+                entityRig >= playbacks.size()) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s41-selftest: the manifest has no entity\n");
+                return 2;
+            }
+            if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
+                entityClips.body < 0 || entityClips.death < 0 || playerClips.gripLoop < 0 ||
+                playerClips.gripMove < 0 || playerClips.strike < 0 || playerClips.fall < 0) {
+                // The load gate above already refused this case; keep the
+                // invariant explicit so no future path can reach a fallback.
+                throw std::runtime_error(
+                    "s41-selftest: a combat clip is missing despite the load gate");
+            }
+
+            Playback& entity_playback = playbacks[entityRig];
+            entity_playback.index = entityClips.stand;
+            entity_playback.time = 0.0f;
+            entity_playback.playing = false;
+            entity_playback.pinned = true;  // one known idle pose for the approach
+
+            const CombatTuning tuning{};
+            const float stepSeconds = kFixedFrameSeconds;
+            int strikes = 0;
+            ClimbBandId grabBand = ClimbBandId::Count;
+            bool grabBandSet = false;
+
+            // One frame of the fight: the entity's one-shot clock, the player's
+            // mode clip, this frame's poses, the PlayerFrame, the step, the
+            // encounter events, and the camera. Every phase below goes through
+            // this so the attach point always samples the pose the step saw.
+            auto step_frame = [&](const PlayerInput& input) -> StepEvents {
+                advance_encounter_reaction(entity_playback, encounter, entityClips.stand,
+                                           stepSeconds);
+                update_combat_clips(playback, scene, combat, input, /*manualClip=*/false);
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, stepSeconds);
+                const PlayerFrame frame =
+                    player_frame_of(scene, entityRig, palettes, heightmap,
+                                    camera_look_yaw(camera));
+                const int weakpoint = combat.weakpoint;  // detach() clears it
+                const StepEvents events =
+                    player_step(player, combat, input, frame, tuning, stepSeconds);
+                if (events.damageDealt > 0) {
+                    ++strikes;
+                }
+                apply_combat_events(encounter, entity_playback, entityClips, events, weakpoint);
+                if (mode_is_attached(combat.mode)) {
+                    update_climb_camera(camera, climbCamera, player, combat, frame, 0.0f, 0.0f,
+                                        0.0f, /*recenter=*/false, stepSeconds);
+                } else {
+                    if (climbCamera.active) {
+                        camera_climb_exit(camera, climbCamera);
+                    }
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                  0.0f,
+                                  input.forward || input.back || input.left || input.right,
+                                  stepSeconds);
+                }
+                return events;
+            };
+
+            // The S4 approach, unchanged in shape: walk into the nearest
+            // vertically reachable leg capsule until the resolver stops the
+            // player. It ends at the knee, so a second fixed-aim walk closes the
+            // final couple of metres to the foot band the grab can reach.
+            auto walk_toward = [&](float aimYawDeg, int maxFrames) -> int {
+                PlayerInput input;
+                input.forward = true;
+                input.run = true;
+                int frames = 0;
+                int still = 0;
+                bool stopped = false;
+                while (frames < maxFrames) {
+                    const Vec3 previous = player.position;
+                    player_update(player, input, stepSeconds, heightmap, aimYawDeg);
+                    update_locomotion(playback, scene, input, /*manualClip=*/false);
+                    const std::vector<std::vector<Mat4>> palettes =
+                        update_all_poses(renderer, scene, playbacks, stepSeconds);
+                    resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                  0.0f, /*moving=*/true, stepSeconds);
+                    const float dx = player.position.x - previous.x;
+                    const float dz = player.position.z - previous.z;
+                    ++frames;
+                    if (std::sqrt(dx * dx + dz * dz) < kS4StopEpsilon) {
+                        if (++still >= kS4StopFrames) {
+                            stopped = true;
+                            break;
+                        }
+                    } else {
+                        still = 0;
+                    }
+                }
+                if (!stopped) {
+                    throw std::runtime_error("s41-selftest: the approach walked " +
+                                             std::to_string(frames) +
+                                             " frames without reaching a collision stop");
+                }
+                if (!finite_position(player.position)) {
+                    throw std::runtime_error(
+                        "s41-selftest: the approach left a non-finite player position");
+                }
+                const float ground = heightmap_sample(heightmap, player.position);
+                if (!std::isfinite(ground) ||
+                    std::fabs(player.position.y - ground) > kS4GroundTolerance) {
+                    throw std::runtime_error(
+                        "s41-selftest: the approach left the ground (y " +
+                        std::to_string(player.position.y) + ", ground " +
+                        std::to_string(ground) + ")");
+                }
+                return frames;
+            };
+
+            // --- 1. Approach -------------------------------------------------
+            std::vector<std::vector<Mat4>> palettes =
+                update_all_poses(renderer, scene, playbacks, 0.0f);
+            if (entityRig >= palettes.size()) {
+                throw std::runtime_error("s41-selftest: the entity rig has no pose");
+            }
+            const std::vector<Capsule> capsules =
+                entity_collision_capsules(scene, entityRig, palettes[entityRig]);
+            if (capsules.empty()) {
+                throw std::runtime_error(
+                    "s41-selftest: the entity rig has no collision capsules");
+            }
+
+            const float feet = player.position.y;
+            const float head = feet + kPlayerCapsuleHeight;
+            Vec3 aim{};
+            float aimDistance = std::numeric_limits<float>::infinity();
+            for (const Capsule& capsule : capsules) {
+                if (!capsule_overlaps_vertically(capsule, feet, head)) {
+                    continue;
+                }
+                Vec3 closest{};
+                const float distance =
+                    capsule_horizontal_distance(capsule, player.position, closest);
+                if (distance < aimDistance) {
+                    aimDistance = distance;
+                    aim = closest;
+                }
+            }
+            const float aimDx = aim.x - player.position.x;
+            const float aimDz = aim.z - player.position.z;
+            const float aimLength = std::sqrt(aimDx * aimDx + aimDz * aimDz);
+            if (!std::isfinite(aimDistance) || !(aimLength > 0.0f)) {
+                throw std::runtime_error(
+                    "s41-selftest: no reachable entity capsule to walk into");
+            }
+            const float aimYaw = std::atan2(aimDx, aimDz) / kDegToRad;
+            const int approachFrames = walk_toward(aimYaw, kS4MaxWalkFrames);
+
+            // The foot-band walk: the S4 stop is at the knee, so aim at the
+            // nearest band's surface for a fixed extra leg. The resolver stops
+            // the player on the body; the grab range check below is the gate.
+            palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
+            PlayerFrame footFrame =
+                player_frame_of(scene, entityRig, palettes, heightmap, aimYaw);
+            const ClimbBandId approachBand =
+                nearest_climb_band(footFrame.jointWorld, player.position, 1000.0f);
+            Vec3 footPoint{};
+            Vec3 footNormal{};
+            if (approachBand == ClimbBandId::Count ||
+                !climb_surface_point(climb_band(approachBand), footFrame.jointWorld, 0.5f,
+                                     player.position, footPoint, footNormal)) {
+                throw std::runtime_error(
+                    "s41-selftest: the entity has no resolvable climb band");
+            }
+            const float footDx = footPoint.x - player.position.x;
+            const float footDz = footPoint.z - player.position.z;
+            if (!(std::sqrt(footDx * footDx + footDz * footDz) > 1e-3f)) {
+                throw std::runtime_error(
+                    "s41-selftest: the foot band is under the player's first stop");
+            }
+            const float footYaw = std::atan2(footDx, footDz) / kDegToRad;
+            const int footFrames = walk_toward(footYaw, kS41ApproachFrames);
+
+            // --- 2. Grab -----------------------------------------------------
+            palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
+            PlayerFrame reachFrame =
+                player_frame_of(scene, entityRig, palettes, heightmap, footYaw);
+            if (nearest_climb_band(reachFrame.jointWorld, player.position, tuning.grabRange) ==
+                ClimbBandId::Count) {
+                throw std::runtime_error(
+                    "s41-selftest: the approach stopped out of grab range of every climb "
+                    "band");
+            }
+            PlayerInput grabInput;
+            grabInput.grab = true;
+            const StepEvents grabEvents = step_frame(grabInput);
+            if (!grabEvents.grabbed || combat.mode != PlayerMode::Grabbing ||
+                combat.band == ClimbBandId::Count) {
+                throw std::runtime_error(
+                    "s41-selftest: the grab did not attach (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            if (!finite_position(player.position)) {
+                throw std::runtime_error("s41-selftest: the grab wrote a non-finite position");
+            }
+            grabBand = combat.band;
+            grabBandSet = true;
+            std::printf("s41-grab frames=%d band=%s pos=%.3f,%.3f,%.3f\n",
+                        approachFrames + footFrames, climb_band_name(combat.band),
+                        player.position.x, player.position.y, player.position.z);
+
+            // --- 3. Climb ----------------------------------------------------
+            const float climbFromY = player.position.y;
+            float previousY = climbFromY;
+            PlayerInput climbInput;
+            climbInput.grab = true;
+            climbInput.forward = true;
+            for (int frame = 0; frame < kS41ClimbFrames; ++frame) {
+                const StepEvents events = step_frame(climbInput);
+                if (combat.mode != PlayerMode::Climbing) {
+                    throw std::runtime_error(
+                        "s41-selftest: the climb left Climbing at frame " +
+                        std::to_string(frame) + " (mode " +
+                        std::string(player_mode_name(combat.mode)) + ", gripBroke " +
+                        (events.gripBroke ? "1" : "0") + ")");
+                }
+                if (!finite_position(player.position)) {
+                    throw std::runtime_error(
+                        "s41-selftest: the climb wrote a non-finite position at frame " +
+                        std::to_string(frame));
+                }
+                if (player.position.y + kS41Eps < previousY) {
+                    throw std::runtime_error(
+                        "s41-selftest: the climb went backwards at frame " +
+                        std::to_string(frame) + " (" + std::to_string(previousY) + " -> " +
+                        std::to_string(player.position.y) + ")");
+                }
+                previousY = player.position.y;
+            }
+            const float climbRise = player.position.y - climbFromY;
+            if (!std::isfinite(climbRise) || climbRise < kS41MinRise) {
+                throw std::runtime_error(
+                    "s41-selftest: the climb rose " + std::to_string(climbRise) +
+                    " m in " + std::to_string(kS41ClimbFrames) + " frames (need " +
+                    std::to_string(kS41MinRise) + " m)");
+            }
+            std::printf("s41-climb frames=%d from_y=%.3f to_y=%.3f band=%s\n",
+                        kS41ClimbFrames, climbFromY, player.position.y,
+                        climb_band_name(combat.band));
+
+            // The ruled scaffolding for the strike phases: place the player on
+            // the head band's surface (weakpoint 0) and re-attach there. The
+            // real walk climbs the whole route.
+            auto teleport_to_head = [&]() {
+                const std::vector<std::vector<Mat4>> now =
+                    update_all_poses(renderer, scene, playbacks, 0.0f);
+                const PlayerFrame frame =
+                    player_frame_of(scene, entityRig, now, heightmap, 0.0f);
+                Vec3 point{};
+                Vec3 normal{};
+                if (!climb_surface_point(climb_band(ClimbBandId::Head), frame.jointWorld, 0.5f,
+                                         player.position, point, normal)) {
+                    throw std::runtime_error(
+                        "s41-selftest: the head band has no surface point to teleport to");
+                }
+                player.position = point;
+                player.yawDeg = std::atan2(-normal.x, -normal.z) / kDegToRad;
+                combat.mode = PlayerMode::Grabbing;
+                combat.modeSeconds = 0.0f;
+                combat.band = ClimbBandId::Head;
+                combat.bandT = 0.5f;
+                combat.weakpoint = climb_band(ClimbBandId::Head).weakpoint;
+                combat.charge = 0.0f;
+                combat.strikeHit = false;
+                combat.catchSecondsLeft = 0.0f;
+            };
+
+            // --- 4. Full-charge strike on the forehead -----------------------
+            teleport_to_head();
+            PlayerInput holdGrab;
+            holdGrab.grab = true;
+            const StepEvents attachedAtHead = step_frame(holdGrab);
+            if (combat.mode != PlayerMode::Grabbing ||
+                combat.band != ClimbBandId::Head || combat.weakpoint != 0) {
+                throw std::runtime_error(
+                    "s41-selftest: the head teleport did not hold the head band");
+            }
+            (void)attachedAtHead;
+            const int strikeWeakpoint = combat.weakpoint;
+
+            PlayerInput chargeInput;
+            chargeInput.grab = true;
+            chargeInput.strike = true;
+            for (int frame = 0; frame < kS41ChargeFrames; ++frame) {
+                const StepEvents events = step_frame(chargeInput);
+                if (events.damageDealt != 0) {
+                    throw std::runtime_error(
+                        "s41-selftest: the strike dealt damage while still charging at "
+                        "frame " + std::to_string(frame));
+                }
+                if (combat.mode != PlayerMode::Striking) {
+                    throw std::runtime_error(
+                        "s41-selftest: the charge left Striking at frame " +
+                        std::to_string(frame) + " (mode " +
+                        std::string(player_mode_name(combat.mode)) + ")");
+                }
+            }
+            if (combat.charge + 1e-4f < tuning.chargeSeconds) {
+                throw std::runtime_error(
+                    "s41-selftest: the charge reached only " + std::to_string(combat.charge) +
+                    " s (need " + std::to_string(tuning.chargeSeconds) + " s)");
+            }
+
+            const int healthBeforeFirstHit = static_cast<int>(std::lround(encounter.health));
+            PlayerInput releaseInput;
+            releaseInput.grab = true;
+            releaseInput.strike = false;
+            const StepEvents firstHit = step_frame(releaseInput);
+            if (firstHit.damageDealt != static_cast<int>(std::lround(tuning.damageFull))) {
+                throw std::runtime_error(
+                    "s41-selftest: the full strike dealt " +
+                    std::to_string(firstHit.damageDealt) + " damage, not " +
+                    std::to_string(static_cast<int>(std::lround(tuning.damageFull))));
+            }
+            if (!firstHit.gripBroke || combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s41-selftest: the landed strike did not shake the player into Falling");
+            }
+            if (std::fabs(combat.catchSecondsLeft - tuning.catchSeconds) > 1e-4f) {
+                throw std::runtime_error(
+                    "s41-selftest: the catch window is " +
+                    std::to_string(combat.catchSecondsLeft) + " s, not " +
+                    std::to_string(tuning.catchSeconds) + " s");
+            }
+            if (encounter.defeated || entity_playback.index != entityClips.head) {
+                throw std::runtime_error(
+                    "s41-selftest: the head hit did not play the head reaction");
+            }
+            std::printf("s41-strike swing=1 damage=%d health=%d->%d weakpoint=%d\n",
+                        firstHit.damageDealt, healthBeforeFirstHit,
+                        static_cast<int>(std::lround(encounter.health)), strikeWeakpoint);
+
+            // --- 5. Catch with a fresh grab press -----------------------------
+            PlayerInput noInput;
+            const StepEvents falling = step_frame(noInput);  // release the key
+            if (combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s41-selftest: the fall left Falling before the catch");
+            }
+            (void)falling;
+            PlayerInput catchInput;
+            catchInput.grab = true;
+            const StepEvents caught = step_frame(catchInput);
+            if (!caught.grabbed || combat.mode != PlayerMode::Grabbing ||
+                combat.band == ClimbBandId::Count) {
+                throw std::runtime_error(
+                    "s41-selftest: the fresh grab press did not catch a band (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            if (!finite_position(player.position)) {
+                throw std::runtime_error("s41-selftest: the catch wrote a non-finite position");
+            }
+            std::printf("s41-catch band=%s\n", climb_band_name(combat.band));
+
+            // --- 6. Deliberately miss the next catch -------------------------
+            // A one-third charge is a weak hit (20 damage): it still breaks the
+            // grip and opens the window, which this phase lets expire.
+            PlayerInput weakCharge;
+            weakCharge.grab = true;
+            weakCharge.strike = true;
+            for (int frame = 0; frame < kS41WeakChargeFrames; ++frame) {
+                const StepEvents events = step_frame(weakCharge);
+                if (events.damageDealt != 0) {
+                    throw std::runtime_error(
+                        "s41-selftest: the weak strike dealt damage while charging");
+                }
+            }
+            PlayerInput weakRelease;
+            weakRelease.grab = true;
+            const StepEvents weakHit = step_frame(weakRelease);
+            if (weakHit.damageDealt != static_cast<int>(std::lround(tuning.damageWeak))) {
+                throw std::runtime_error(
+                    "s41-selftest: the weak strike dealt " +
+                    std::to_string(weakHit.damageDealt) + " damage, not " +
+                    std::to_string(static_cast<int>(std::lround(tuning.damageWeak))));
+            }
+            if (!weakHit.gripBroke || combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s41-selftest: the weak hit did not start the missed-catch fall");
+            }
+
+            // 0.7 s without a press: the 0.6 s window is gone before the ground.
+            int fallFrames = 0;
+            for (int frame = 0; frame < kS41CatchWaitFrames; ++frame) {
+                const StepEvents events = step_frame(noInput);
+                ++fallFrames;
+                if (combat.mode != PlayerMode::Falling || events.landed) {
+                    throw std::runtime_error(
+                        "s41-selftest: the deliberate miss left Falling inside the catch "
+                        "window");
+                }
+            }
+            if (combat.catchSecondsLeft > 0.0f) {
+                throw std::runtime_error(
+                    "s41-selftest: the catch window is still open after 0.7 s");
+            }
+            bool landed = false;
+            while (fallFrames < kS41MaxFallFrames) {
+                const StepEvents events = step_frame(noInput);
+                ++fallFrames;
+                if (events.landed) {
+                    landed = true;
+                    break;
+                }
+                if (combat.mode != PlayerMode::Falling) {
+                    throw std::runtime_error(
+                        "s41-selftest: the fall left Falling without a landing (mode " +
+                        std::string(player_mode_name(combat.mode)) + ")");
+                }
+                if (!finite_position(player.position)) {
+                    throw std::runtime_error(
+                        "s41-selftest: the fall wrote a non-finite position");
+                }
+            }
+            if (!landed || combat.mode != PlayerMode::Staggered) {
+                throw std::runtime_error(
+                    "s41-selftest: the missed catch did not reach the ground in " +
+                    std::to_string(kS41MaxFallFrames) + " frames");
+            }
+            const float landingGround = heightmap_sample(heightmap, player.position);
+            if (!std::isfinite(landingGround) ||
+                std::fabs(player.position.y - landingGround) > kS41Eps) {
+                throw std::runtime_error(
+                    "s41-selftest: the landing is not on the ground (y " +
+                    std::to_string(player.position.y) + ", ground " +
+                    std::to_string(landingGround) + ")");
+            }
+            std::printf("s41-fall frames=%d landed=1\n", fallFrames);
+
+            // --- 7. Zero stamina while attached ------------------------------
+            for (int frame = 0; frame < kS41MaxStaggerFrames; ++frame) {
+                if (combat.mode == PlayerMode::Grounded) {
+                    break;
+                }
+                step_frame(noInput);
+            }
+            if (combat.mode != PlayerMode::Grounded) {
+                throw std::runtime_error(
+                    "s41-selftest: the stagger did not return to Grounded");
+            }
+            // The landing XZ can be on the far side of the body (the neck
+            // surface is over the torso): walk back to the nearest band the way
+            // the player would, then grab it. This is the same fixed-aim walk as
+            // the approach; it stops on the resolver, and the range gate below
+            // is the assertion.
+            palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
+            PlayerFrame landingFrame =
+                player_frame_of(scene, entityRig, palettes, heightmap, 0.0f);
+            const ClimbBandId returnBand =
+                nearest_climb_band(landingFrame.jointWorld, player.position, 1000.0f);
+            Vec3 returnPoint{};
+            Vec3 returnNormal{};
+            if (returnBand == ClimbBandId::Count ||
+                !climb_surface_point(climb_band(returnBand), landingFrame.jointWorld, 0.5f,
+                                     player.position, returnPoint, returnNormal)) {
+                throw std::runtime_error(
+                    "s41-selftest: no band to walk back to after the landing");
+            }
+            const float returnDx = returnPoint.x - player.position.x;
+            const float returnDz = returnPoint.z - player.position.z;
+            const float returnLength = std::sqrt(returnDx * returnDx + returnDz * returnDz);
+            if (returnLength > 1e-3f) {
+                // Walk to the band, not to a "stopped" predicate: the body can
+                // slide the player along a capsule, so the range gate is the
+                // stop condition (a stopped-but-out-of-range walk fails below).
+                PlayerInput returnWalk;
+                returnWalk.forward = true;
+                returnWalk.run = true;
+                const float returnYaw = std::atan2(returnDx, returnDz) / kDegToRad;
+                bool inReach = false;
+                for (int frame = 0; frame < kS41ApproachFrames; ++frame) {
+                    player_update(player, returnWalk, kFixedFrameSeconds, heightmap, returnYaw);
+                    update_locomotion(playback, scene, returnWalk, /*manualClip=*/false);
+                    const std::vector<std::vector<Mat4>> walkPalettes =
+                        update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
+                    resolve_player_collision(player, entity_capsules(scene, walkPalettes),
+                                             heightmap);
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                  0.0f, /*moving=*/true, kFixedFrameSeconds);
+                    const PlayerFrame walkFrame =
+                        player_frame_of(scene, entityRig, walkPalettes, heightmap, returnYaw);
+                    if (nearest_climb_band(walkFrame.jointWorld, player.position,
+                                           tuning.grabRange) != ClimbBandId::Count) {
+                        inReach = true;
+                        break;
+                    }
+                }
+                if (!inReach) {
+                    throw std::runtime_error(
+                        "s41-selftest: the walk back after landing never reached grab range");
+                }
+            }
+            const StepEvents groundedGrab = step_frame(grabInput);
+            if (!groundedGrab.grabbed || combat.mode != PlayerMode::Grabbing) {
+                const std::vector<std::vector<Mat4>> now =
+                    update_all_poses(renderer, scene, playbacks, 0.0f);
+                const PlayerFrame frame =
+                    player_frame_of(scene, entityRig, now, heightmap, 0.0f);
+                const ClimbBandId nearest =
+                    nearest_climb_band(frame.jointWorld, player.position, 1000.0f);
+                throw std::runtime_error(
+                    "s41-selftest: the player could not grab again after landing (pos " +
+                    std::to_string(player.position.x) + "," +
+                    std::to_string(player.position.y) + "," +
+                    std::to_string(player.position.z) + " nearest " +
+                    climb_band_name(nearest) + " mode " +
+                    player_mode_name(combat.mode) + " stamina " +
+                    std::to_string(combat.stamina) + ")");
+            }
+            combat.stamina = 0.0f;  // the forced-empty pool of the design
+            const StepEvents forcedFall = step_frame(grabInput);
+            if (!forcedFall.gripBroke || combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s41-selftest: a zero-stamina grip did not break into Falling");
+            }
+            // Exactly once: the next step still holds E and must not report a
+            // second break.
+            const StepEvents afterForcedFall = step_frame(grabInput);
+            if (afterForcedFall.gripBroke) {
+                throw std::runtime_error(
+                    "s41-selftest: the zero-stamina fall reported a second grip break");
+            }
+            std::printf("s41-stamina fall=1\n");
+
+            // --- 8. The killing blow -----------------------------------------
+            combat.stamina = 100.0f;  // restore the pool the forced fall emptied
+            const StepEvents releasedAfterFall = step_frame(noInput);
+            (void)releasedAfterFall;
+            PlayerInput catchAgain;
+            catchAgain.grab = true;
+            const StepEvents recaught = step_frame(catchAgain);
+            if (!recaught.grabbed || combat.mode != PlayerMode::Grabbing) {
+                throw std::runtime_error(
+                    "s41-selftest: the post-stamina re-grab did not attach");
+            }
+            teleport_to_head();
+            const StepEvents attachedForKill = step_frame(holdGrab);
+            (void)attachedForKill;
+            if (combat.band != ClimbBandId::Head || combat.weakpoint != 0) {
+                throw std::runtime_error(
+                    "s41-selftest: the killing-blow teleport did not hold the head band");
+            }
+            // The next full hit must kill: set the health to exactly one plunge.
+            encounter.health = tuning.damageFull;
+
+            for (int frame = 0; frame < kS41ChargeFrames; ++frame) {
+                const StepEvents events = step_frame(chargeInput);
+                if (events.damageDealt != 0) {
+                    throw std::runtime_error(
+                        "s41-selftest: the killing strike dealt damage while charging");
+                }
+            }
+            const StepEvents deathBlow = step_frame(releaseInput);
+            if (deathBlow.damageDealt != static_cast<int>(std::lround(tuning.damageFull))) {
+                throw std::runtime_error(
+                    "s41-selftest: the killing strike dealt " +
+                    std::to_string(deathBlow.damageDealt) + " damage");
+            }
+            if (!encounter.defeated || encounter.health > 0.0f) {
+                throw std::runtime_error(
+                    "s41-selftest: the killing blow did not defeat Valus (health " +
+                    std::to_string(encounter.health) + ")");
+            }
+            if (entity_playback.index != entityClips.death || !entity_playback.pinned) {
+                throw std::runtime_error(
+                    "s41-selftest: the killing blow did not start the pinned death clip");
+            }
+            // It plays once, then freezes on its last frame (pinned, not
+            // playing) instead of looping.
+            const float deathDuration = entity_playback.clips[
+                static_cast<std::size_t>(entityClips.death)].duration;
+            int deathFrames = 0;
+            while (encounter.reactionClip >= 0 && deathFrames < 1200) {
+                advance_encounter_reaction(entity_playback, encounter, entityClips.stand,
+                                           stepSeconds);
+                ++deathFrames;
+            }
+            if (encounter.reactionClip >= 0 || entity_playback.playing ||
+                !entity_playback.pinned ||
+                std::fabs(playback_time(entity_playback, deathDuration) - deathDuration) >
+                    1e-3f) {
+                throw std::runtime_error(
+                    "s41-selftest: the death clip did not freeze on its last frame");
+            }
+            std::printf("s41-death clip=%s defeated=1\n",
+                        entity_playback.clips[static_cast<std::size_t>(entityClips.death)]
+                            .name.c_str());
+
+            // --- 9. The final frame and status -------------------------------
+            if (!grabBandSet || grabBand == ClimbBandId::Count) {
+                throw std::runtime_error(
+                    "s41-selftest: the status has no resolved grab band");
+            }
+            update_combat_clips(playback, scene, combat, noInput, /*manualClip=*/false);
+            update_all_poses(renderer, scene, playbacks, 0.0f);
+            apply_player_transform(scene, player_rig_record, player,
+                                   active_player_lift(scene, playback, player_rig_record));
+            renderer.set_hud(HudState{true, combat.stamina / 100.0f,
+                                      encounter.health / 100.0f});
+            renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                  /*acquire_swapchain=*/true);
+            if (!opts.screenshotPath.empty()) {
+                write_screenshot(renderer, shell.win, opts.screenshotPath);
+            }
+            print_status_line(opts, shell.win);
+            std::printf("s41-status grab=%s climb=%.2f strikes=%d entity_health=%d mode=%s "
+                        "defeated=%d\n",
+                        climb_band_name(grabBand), climbRise, strikes,
+                        static_cast<int>(std::lround(encounter.health)),
+                        player_mode_name(combat.mode), encounter.defeated ? 1 : 0);
+            return 0;
         }
 
         if (opts.s4Selftest) {
@@ -1265,14 +2232,22 @@ int run_app(const AppOptions& opts) {
 
         // Interactive: left-drag orbits (single-model mode) or turns the follow
         // camera's view (manifest mode), the wheel zooms, F reframes (single
-        // model) or recenters behind the player (manifest mode), T orbits the
-        // entity's chest and back (inert when the manifest has no entity), Space
-        // plays/pauses, [ and ] switch clips, R restarts the clip, Escape or
-        // the close button quits. In manifest mode W/A/S/D walk (Shift runs)
-        // and the camera follows. Input needs no capture: plain mouse-motion
-        // events with SDL_BUTTON_LMASK held (never relative mode, never
-        // SDL_CaptureMouse) — the cursor stays visible and free.
+        // model), recenters behind the player (manifest mode) or re-seeds the
+        // climb orbit while gripping, T orbits the entity's chest and back
+        // (inert when the manifest has no entity), Space plays/pauses, [ and ]
+        // switch clips, R restarts the clip, Escape or the close button quits.
+        // In manifest mode W/A/S/D walk (Shift runs), E grabs (held) and J
+        // charges a strike (held; released to plunge); the camera follows. A
+        // standard SDL3 gamepad is polled once per frame: left stick moves,
+        // right stick turns the camera, RT grips, X/square strikes, Start
+        // pauses; hot-plug opens/closes it. Input needs no capture: plain
+        // mouse-motion events with SDL_BUTTON_LMASK held (never relative mode,
+        // never SDL_CaptureMouse) — the cursor stays visible and free.
         bool running = true;
+        bool climb_recenter = false;
+        GamepadInput gamepad;
+        open_first_gamepad(gamepad);
+        const CombatTuning tuning{};
         std::deque<Uint64> frame_ticks;  // frame arrival times within the last second
         Uint64 last_title_update = SDL_GetTicks();
         Uint64 last_ticks = SDL_GetTicks();
@@ -1282,6 +2257,7 @@ int run_app(const AppOptions& opts) {
             float drag_dx = 0.0f;
             float drag_dy = 0.0f;
             float wheel_delta = 0.0f;
+            climb_recenter = false;
 
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
@@ -1289,15 +2265,34 @@ int run_app(const AppOptions& opts) {
                     case SDL_EVENT_QUIT:
                         running = false;
                         break;
+                    case SDL_EVENT_GAMEPAD_ADDED:
+                        if (gamepad.handle == nullptr) {
+                            gamepad.open(event.gdevice.which);
+                        }
+                        break;
+                    case SDL_EVENT_GAMEPAD_REMOVED:
+                        // Drop the handle and every input it owned: an unplug
+                        // mid-grip must read as a released E, not a latched one.
+                        if (gamepad.handle != nullptr && gamepad.id == event.gdevice.which) {
+                            gamepad.close();
+                        }
+                        break;
                     case SDL_EVENT_KEY_DOWN:
                         if (event.key.key == SDLK_ESCAPE) {
                             running = false;
                         } else if (event.key.key == SDLK_F) {
                             if (follow_mode) {
-                                // Recenter the follow camera behind the player.
-                                follow.yawOffsetDeg = 0.0f;
-                                follow.pitchOffsetDeg = 0.0f;
-                                follow.distance = CameraFollow{}.distance;
+                                if (mode_is_attached(combat.mode) && climbCamera.active) {
+                                    // While gripping, F re-seeds the climb orbit
+                                    // outward at 6 m — the follow camera's F
+                                    // recenter, applied to the climb camera.
+                                    climb_recenter = true;
+                                } else {
+                                    // Recenter the follow camera behind the player.
+                                    follow.yawOffsetDeg = 0.0f;
+                                    follow.pitchOffsetDeg = 0.0f;
+                                    follow.distance = CameraFollow{}.distance;
+                                }
                             } else {
                                 // Keep the whole subject in frame when the clip's root series
                                 // carries the ground height: frame the current pose, not the
@@ -1358,19 +2353,41 @@ int run_app(const AppOptions& opts) {
             const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
             last_ticks = now;
 
+            gamepad.poll();
+            if (gamepad.pausePressed) {
+                playback.playing = !playback.playing;
+            }
+
             if (follow_mode) {
                 const bool* keys = SDL_GetKeyboardState(nullptr);
+                const auto deadzoned = [](float value) {
+                    return std::fabs(value) > kS41StickDeadzone ? value : 0.0f;
+                };
                 PlayerInput input;
-                input.forward = keys[SDL_SCANCODE_W];
-                input.back = keys[SDL_SCANCODE_S];
-                input.left = keys[SDL_SCANCODE_A];
-                input.right = keys[SDL_SCANCODE_D];
-                input.run = keys[SDL_SCANCODE_LSHIFT];
+                input.forward = keys[SDL_SCANCODE_W] || deadzoned(gamepad.leftY) < 0.0f;
+                input.back = keys[SDL_SCANCODE_S] || deadzoned(gamepad.leftY) > 0.0f;
+                input.left = keys[SDL_SCANCODE_A] || deadzoned(gamepad.leftX) < 0.0f;
+                input.right = keys[SDL_SCANCODE_D] || deadzoned(gamepad.leftX) > 0.0f;
+                input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
+                input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
+                input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
                 const bool moving = input.forward || input.back || input.left || input.right;
 
-                // The clip choice, then this frame's poses: the target camera
-                // and the collision proxy both read the palettes drawn today.
-                update_locomotion(playback, scene, input, manual_clip);
+                // The right stick feeds the cameras' drag channel; clamp the
+                // frame time so a hitch cannot fling the view.
+                const float stick_dt = std::clamp(dt, 0.0f, 0.05f);
+                drag_dx += deadzoned(gamepad.rightX) * kS41StickPixelsPerSecond * stick_dt;
+                drag_dy += deadzoned(gamepad.rightY) * kS41StickPixelsPerSecond * stick_dt;
+
+                // The encounter's one-shot clock, then the clip choice (from the
+                // mode the previous step left) and this frame's poses: the
+                // target camera, the collision proxy and the climb attach point
+                // all read the palettes drawn today.
+                if (entityRig < playbacks.size()) {
+                    advance_encounter_reaction(playbacks[entityRig], encounter,
+                                               entityClips.stand, dt);
+                }
+                update_combat_clips(playback, scene, combat, input, manual_clip);
                 const std::vector<std::vector<Mat4>> palettes =
                     update_all_poses(renderer, scene, playbacks, dt);
                 if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
@@ -1378,26 +2395,67 @@ int run_app(const AppOptions& opts) {
                                                            entityChest);
                 }
 
-                // The camera before player_update: its yaw is the movement
-                // basis, and in target mode that is the orbit around the chest.
-                if (targetCamera.active) {
-                    if (haveEntityChest) {
-                        camera_target_update(camera, targetCamera, entityChest, drag_dx, drag_dy,
-                                             wheel_delta);
+                // While gripping, the climb orbit owns the camera: it is updated
+                // after the step, on this frame's attach point. Otherwise the
+                // camera runs before player_update (its yaw is the movement
+                // basis, and in target mode that is the orbit around the chest).
+                const bool attached_before = mode_is_attached(combat.mode);
+                if (!attached_before) {
+                    if (targetCamera.active) {
+                        if (haveEntityChest) {
+                            camera_target_update(camera, targetCamera, entityChest, drag_dx,
+                                                 drag_dy, wheel_delta);
+                        }
+                    } else if (targetCamera.returning) {
+                        camera_target_return(camera, follow, targetCamera, player.position,
+                                             player.yawDeg, drag_dx, drag_dy, wheel_delta,
+                                             moving, dt);
+                    } else {
+                        camera_follow(camera, follow, player.position, player.yawDeg, drag_dx,
+                                      drag_dy, wheel_delta, moving, dt);
                     }
-                } else if (targetCamera.returning) {
-                    camera_target_return(camera, follow, targetCamera, player.position,
-                                         player.yawDeg, drag_dx, drag_dy, wheel_delta, moving, dt);
-                } else {
-                    camera_follow(camera, follow, player.position, player.yawDeg, drag_dx, drag_dy,
-                                  wheel_delta, moving, dt);
                 }
-                player_update(player, input, dt, heightmap, camera_look_yaw(camera));
-                // The collision hook: after player_update, before the player
-                // transform this frame is drawn with.
-                resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
+
+                // The player step: the state machine runs the Grounded
+                // controller + capsule resolver in the S3/S4 order, or recomputes
+                // the attach point from this frame's entity palette.
+                const PlayerFrame frame =
+                    player_frame_of(scene, entityRig, palettes, heightmap,
+                                    camera_look_yaw(camera));
+                const int weakpoint = combat.weakpoint;  // detach() clears it
+                const StepEvents events =
+                    player_step(player, combat, input, frame, tuning, dt);
+                if (events.damageDealt > 0 && entityRig < playbacks.size()) {
+                    apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
+                                        weakpoint);
+                }
+
+                if (mode_is_attached(combat.mode)) {
+                    update_climb_camera(camera, climbCamera, player, combat, frame, drag_dx,
+                                        drag_dy, wheel_delta, climb_recenter, dt);
+                } else if (climbCamera.active) {
+                    camera_climb_exit(camera, climbCamera);
+                    // The camera was held by the climb orbit this frame: run one
+                    // follow step now so the view eases back without a snap.
+                    if (targetCamera.active) {
+                        if (haveEntityChest) {
+                            camera_target_update(camera, targetCamera, entityChest, drag_dx,
+                                                 drag_dy, wheel_delta);
+                        }
+                    } else if (targetCamera.returning) {
+                        camera_target_return(camera, follow, targetCamera, player.position,
+                                             player.yawDeg, drag_dx, drag_dy, wheel_delta,
+                                             moving, dt);
+                    } else {
+                        camera_follow(camera, follow, player.position, player.yawDeg, drag_dx,
+                                      drag_dy, wheel_delta, moving, dt);
+                    }
+                }
+
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
+                renderer.set_hud(HudState{true, combat.stamina / 100.0f,
+                                          encounter.health / 100.0f});
             } else {
                 update_all_poses(renderer, scene, playbacks, dt);
             }

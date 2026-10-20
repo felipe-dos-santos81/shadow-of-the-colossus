@@ -811,3 +811,12 @@ TEST_CASE("the right arm band carries weakpoint 1") {
     CHECK(combat.band == ClimbBandId::RightArm);
     CHECK(combat.weakpoint == 1);
 }
+
+TEST_CASE("player_mode_name names every mode for the status line") {
+    CHECK(std::string(player_mode_name(PlayerMode::Grounded)) == "grounded");
+    CHECK(std::string(player_mode_name(PlayerMode::Grabbing)) == "grabbing");
+    CHECK(std::string(player_mode_name(PlayerMode::Climbing)) == "climbing");
+    CHECK(std::string(player_mode_name(PlayerMode::Striking)) == "striking");
+    CHECK(std::string(player_mode_name(PlayerMode::Falling)) == "falling");
+    CHECK(std::string(player_mode_name(PlayerMode::Staggered)) == "staggered");
+}

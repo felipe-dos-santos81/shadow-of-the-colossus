@@ -4,7 +4,7 @@ The native macOS viewer for the converted *Shadow of the Colossus* asset library
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb` + `.png`) — never the game tree or original containers.
 
-**Status (milestone S4.0): the encounter — Valus stands in the arena (user walk pending).**
+**Status (milestone S4.1): the first colossus — grab, climb, strike, defeat (user walk pending).**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -30,6 +30,19 @@ to reframe; `Space` plays/pauses, `[`/`]` switch clips in single-model mode (in
 arena mode the controller owns the clip), `R` restarts. The window
 title shows the fps readout. Escape or the window's close button quits.
 `--screenshot` writes the same frame to a PNG.
+
+In a composed scene with an `entity` the encounter is playable: hold `E` at
+Valus's body to grab the nearest climb band, climb with `W`/`S` (the grip camera
+follows the attach point), hold `J` to charge and release to strike. A landed
+hit damages Valus, plays his body-part reaction and shakes the player off; a
+fresh `E` press inside the 0.6 s window catches the nearest band, otherwise the
+player lands and staggers. Stamina drains while gripping/climbing/charging and
+regenerates on the ground; at zero it forces the fall. The top health bar and
+the bottom-left stamina bar are drawn from `renderer.set_hud`. Valus dies at
+zero: the death clip plays once, freezes on its last frame, and the fight stops
+reacting. A gamepad is mapped the same way (left stick move, right stick camera,
+RT grip, X/square strike, Start pause) and hot-plugs without latching an input.
+`--s41-selftest` runs the deterministic acceptance timeline described below.
 
 ## Build
 
@@ -73,6 +86,7 @@ is required. Escape or the close button quits.
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
 | `--selftest` | render one frame, print `s1-status …`, exit |
 | `--s4-selftest` | compose the encounter `--manifest`, pin the entity at t=0, assert the spawn is clear and the entity's feet are on the ground, walk the player into the nearest leg capsule until the collision stops it, print the `s4-status`/`s4-spawn`/`s4-entity`/`s4-walk` lines, exit; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
+| `--s41-selftest` | compose the encounter `--manifest` and run the deterministic climb/fight timeline through fixed 1/60 s steps with no window input: S4's approach, grab, 240-frame climb, full-charge head strike, catch, missed catch, forced stamina fall, killing blow; prints the `s41-*` lines and `s41-status`, exits 1 on a failed invariant; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
 
 ## Manifests
 
@@ -108,14 +122,31 @@ Controls (no mouse capture: the cursor stays visible and free):
 
 | Gesture | Action |
 | --- | --- |
-| Left-drag | Orbit: yaw freely, pitch stops at ±89°; in entity target mode, orbit the entity's chest (pitch ±80°) |
-| Scroll | Zoom: distance clamped to [0.5, 500]; in entity target mode, [22, 30] m |
-| `F` | Reframe the scene bounds (single model) / recenter behind the player (manifest mode) |
+| `W` / `A` / `S` / `D` | Move (camera-relative); Shift runs. While gripping: `W`/`S` climb up/down the band |
+| `E` | Grab (held): attach to the nearest climb band, release to drop. While falling inside the 0.6 s catch window, a fresh press catches the nearest band |
+| `J` | Strike (held): charge over 0.9 s, release to plunge. One damage event per swing; a landed hit shakes the player off |
+| Left-drag | Orbit: yaw freely, pitch stops at ±89°; in entity target mode, orbit the entity's chest (pitch ±80°); while gripping, orbit the climb camera (pitch ±45°) |
+| Scroll | Zoom: distance clamped to [0.5, 500]; in entity target mode, [22, 30] m; while gripping, [5, 8] m |
+| `F` | Reframe the scene bounds (single model) / recenter behind the player (manifest mode) / re-seed the climb orbit outward at 6 m (while gripping) |
 | `T` | Toggle entity target framing: orbit the entity's chest; `T` again restores the follow view without a snap. Inert when the manifest has no entity (the S3 arena) |
 | `Space` | Play/pause the current clip |
 | `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
 | `R` | Restart the current clip |
 | Escape / close button | Quit |
+
+Gamepad (standard SDL3 mapping, polled once per frame, hot-plugged):
+
+| Gesture | Action |
+| --- | --- |
+| Left stick | Move (camera-relative); while gripping, up/down the band |
+| Right stick | Turn the camera (same drag channel as the mouse) |
+| RT (right trigger, past half) | Grab, held |
+| X / square (south face button) | Strike, held to charge |
+| Start | Play/pause the current clip |
+
+A removed gamepad closes its handle and clears every input it owned, so an
+unplug mid-grip reads as a released `E` (the grip releases cleanly) rather than a
+latched one.
 
 A model whose glb carries baked clips starts playing the model's first clip
 (`player_a_stand` on the converted Wander). The `procedural-wave` stand-in (a
@@ -151,6 +182,39 @@ s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=builder-pick spa
 
 The acceptance script (`scripts/s4-acceptance.sh`) parses these lines;
 `docs/notes/s4-results.md` records the measured values and the walk checklist.
+
+`--s41-selftest` is the deterministic S4.1 timeline. It reuses the S4 approach,
+walks the last metres to the foot band, grabs, climbs for 240 fixed frames
+(asserting a ≥ 3.0 m monotonic rise), strikes the forehead weakpoint with a full
+charge, catches the shake-off, deliberately misses the next catch, forces the
+stamina pool to zero while attached, and lands the killing blow. The only
+teleport is the ruled test scaffolding that places the player on the head band's
+surface for the strike phases — the walk itself climbs the whole route. The
+event lines are:
+
+```text
+s41-grab frames=522 band=left_foot pos=380.454,28.425,369.175
+s41-climb frames=240 from_y=28.425 to_y=33.199 band=left_shin
+s41-strike swing=1 damage=34 health=100->66 weakpoint=0
+s41-catch band=neck
+s41-fall frames=102 landed=1
+s41-stamina fall=1
+s41-death clip=minotaur_a_death_front defeated=1
+s41-status grab=left_foot climb=4.77 strikes=3 entity_health=0 mode=falling defeated=1
+```
+
+Every failed invariant exits 1 with a `sotc-viewer: s41-selftest: …` stderr
+message naming the phase and the measured value (a climb that rose too little, a
+strike that dealt the wrong damage, a death clip that did not freeze, …).
+
+A manifest with an `entity` is an encounter: the player's combat clips
+(`player_a_grip_loop`, `player_a_grip_move_f1`,
+`player_a_grip_float_u_hi_attack`, `player_a_damage_m_fly2`) and the entity's
+reaction/death clips (`minotaur_a_add_head_damage`,
+`minotaur_a_add_ude_r_damage`, `minotaur_a_add_mune_r_damage`,
+`minotaur_a_death_front`) must all be in the loaded glbs. A missing name is a
+load error (exit 2) naming the glb and the clip — never a silent fallback to the
+first clip. The S3 arena has no entity and needs none of them.
 
 ## Tests
 

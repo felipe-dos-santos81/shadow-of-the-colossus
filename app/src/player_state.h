@@ -30,6 +30,10 @@
 
 enum class PlayerMode { Grounded, Grabbing, Climbing, Striking, Falling, Staggered };
 
+// The mode's stable lowercase status token (`grounded`, `grabbing`, `climbing`,
+// `striking`, `falling`, `staggered`) for the s41-status line. Never null.
+const char* player_mode_name(PlayerMode mode);
+
 // The persistent combat state. The first block is the plan's contract; the
 // second is the hold-to-charge bookkeeping ruling R6 needs (the plan's fixed
 // swing window is superseded by "hold J, release to plunge").
