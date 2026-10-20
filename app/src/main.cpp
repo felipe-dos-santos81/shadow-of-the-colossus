@@ -44,7 +44,9 @@ void print_usage(FILE* out) {
                  "  --s41-selftest    compose the encounter --manifest, then grab, climb,\n"
                  "                    strike, catch, miss, force a stamina fall and land\n"
                  "                    the killing blow through fixed 1/60 s steps; print\n"
-                 "                    s41-status, exit\n");
+                 "                    s41-status, exit\n"
+                 "  --s41-stills DIR  with --s41-selftest: write grab, mid-climb, strike,\n"
+                 "                    reaction and defeat stills (plus controls) to DIR\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -98,7 +100,8 @@ int main(int argc, char** argv) {
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
                                  arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
-                                 arg == "--entity-time" || arg == "--camera-target";
+                                 arg == "--entity-time" || arg == "--camera-target" ||
+                                 arg == "--s41-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -145,6 +148,8 @@ int main(int argc, char** argv) {
                 return 2;
             }
             opts.cameraTarget = value;
+        } else if (arg == "--s41-stills") {
+            opts.s41StillsDir = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -192,6 +197,11 @@ int main(int argc, char** argv) {
     }
     if (opts.s41Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s41-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.s41StillsDir.empty() && !opts.s41Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s41-stills needs --s41-selftest\n");
         print_usage(stderr);
         return 2;
     }

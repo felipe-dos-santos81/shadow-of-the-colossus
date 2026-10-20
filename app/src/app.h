@@ -50,6 +50,11 @@ struct AppOptions {
     // `s41-*` event lines and `s41-status`, and exits 0. Requires --manifest
     // (with an entity) and --model.
     bool s41Selftest = false;
+    // --s41-stills DIR: with --s41-selftest, write one PNG per fight phase
+    // (grab, mid-climb, strike, reaction) into DIR, plus the defeat still and
+    // its two pixel controls under DIR/control/. The acceptance script creates
+    // the directory; an absent one is a write failure, never a silent skip.
+    std::string s41StillsDir;
     // --camera-target player|entity: the initial framing for captures. `player`
     // is the normal follow camera; `entity` starts in the chest-framing target
     // mode (requires a manifest whose scene has an entity). Interactive runs

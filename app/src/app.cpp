@@ -1309,6 +1309,58 @@ int run_app(const AppOptions& opts) {
                 return events;
             };
 
+            // --s41-stills: one rendered PNG at a named phase. The frame is
+            // rebuilt from the current playback/combat state, so a still shows
+            // exactly what the timeline has reached (a mid-climb grip, a held
+            // charge, a head reaction); the final defeat still is written by
+            // the last phase. `hudVisible` also lets the acceptance render its
+            // HUD control from the same frame.
+            const auto still_dir = [&]() {
+                std::string dir = opts.s41StillsDir;
+                if (!dir.empty() && dir.back() != '/') {
+                    dir += '/';
+                }
+                return dir;
+            };
+            const auto still_path = [&](const char* name) {
+                return still_dir() + name + ".png";
+            };
+            const auto control_path = [&](const char* name) {
+                return still_dir() + "control/" + name + ".png";
+            };
+            const auto render_still = [&](const std::string& path, bool hudVisible) {
+                // Select the mode's clip before posing: the step's own clip
+                // selection runs before the step, so the grab frame still
+                // carries the locomotion clip (the one-frame lag Task 6
+                // records). A still is evidence of the mode, so it samples
+                // the mode clip at its current time (0 on entry).
+                const PlayerInput no_input;
+                update_combat_clips(playback, scene, combat, no_input, /*manualClip=*/false);
+                update_all_poses(renderer, scene, playbacks, 0.0f);
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                renderer.set_hud(HudState{hudVisible, combat.stamina / 100.0f,
+                                          encounter.health / 100.0f});
+                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                      /*acquire_swapchain=*/true);
+                write_screenshot(renderer, shell.win, path);
+            };
+            const auto capture_still = [&](const char* phase, const std::string& path) {
+                if (opts.s41StillsDir.empty()) {
+                    return;
+                }
+                std::printf("s41-still phase=%s path=%s\n", phase, path.c_str());
+                render_still(path, /*hudVisible=*/true);
+            };
+            const auto capture_control = [&](const char* phase, const std::string& path,
+                                             bool hudVisible) {
+                if (opts.s41StillsDir.empty()) {
+                    return;
+                }
+                std::printf("s41-control phase=%s path=%s\n", phase, path.c_str());
+                render_still(path, hudVisible);
+            };
+
             // The S4 approach, unchanged in shape: walk into the nearest
             // vertically reachable leg capsule until the resolver stops the
             // player. It ends at the knee, so a second fixed-aim walk closes the
@@ -1452,6 +1504,7 @@ int run_app(const AppOptions& opts) {
             std::printf("s41-grab frames=%d band=%s pos=%.3f,%.3f,%.3f\n",
                         approachFrames + footFrames, climb_band_name(combat.band),
                         player.position.x, player.position.y, player.position.z);
+            capture_still("grab", still_path("grab"));
 
             // --- 3. Climb ----------------------------------------------------
             const float climbFromY = player.position.y;
@@ -1480,6 +1533,9 @@ int run_app(const AppOptions& opts) {
                         std::to_string(player.position.y) + ")");
                 }
                 previousY = player.position.y;
+                if (frame == kS41ClimbFrames / 2) {
+                    capture_still("mid-climb", still_path("mid-climb"));
+                }
             }
             const float climbRise = player.position.y - climbFromY;
             if (!std::isfinite(climbRise) || climbRise < kS41MinRise) {
@@ -1554,6 +1610,7 @@ int run_app(const AppOptions& opts) {
                     "s41-selftest: the charge reached only " + std::to_string(combat.charge) +
                     " s (need " + std::to_string(tuning.chargeSeconds) + " s)");
             }
+            capture_still("strike", still_path("strike"));
 
             const int healthBeforeFirstHit = static_cast<int>(std::lround(encounter.health));
             PlayerInput releaseInput;
@@ -1583,6 +1640,11 @@ int run_app(const AppOptions& opts) {
             std::printf("s41-strike swing=1 damage=%d health=%d->%d weakpoint=%d\n",
                         firstHit.damageDealt, healthBeforeFirstHit,
                         static_cast<int>(std::lround(encounter.health)), strikeWeakpoint);
+            capture_still("reaction", still_path("reaction"));
+            // The HUD control for the reaction still: the same frame without
+            // the overlay, so the acceptance can prove both bars were drawn.
+            capture_control("reaction-nohud", control_path("reaction-nohud"),
+                            /*hudVisible=*/false);
 
             // --- 5. Catch with a fresh grab press -----------------------------
             PlayerInput noInput;
@@ -1621,6 +1683,8 @@ int run_app(const AppOptions& opts) {
             }
             PlayerInput weakRelease;
             weakRelease.grab = true;
+            const int healthBeforeWeakHit = static_cast<int>(std::lround(encounter.health));
+            const int weakWeakpoint = combat.weakpoint;  // the catch band's; -1 off a weakpoint
             const StepEvents weakHit = step_frame(weakRelease);
             if (weakHit.damageDealt != static_cast<int>(std::lround(tuning.damageWeak))) {
                 throw std::runtime_error(
@@ -1632,6 +1696,9 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error(
                     "s41-selftest: the weak hit did not start the missed-catch fall");
             }
+            std::printf("s41-strike swing=2 damage=%d health=%d->%d weakpoint=%d\n",
+                        weakHit.damageDealt, healthBeforeWeakHit,
+                        static_cast<int>(std::lround(encounter.health)), weakWeakpoint);
 
             // 0.7 s without a press: the 0.6 s window is gone before the ground.
             int fallFrames = 0;
@@ -1840,21 +1907,119 @@ int run_app(const AppOptions& opts) {
                         entity_playback.clips[static_cast<std::size_t>(entityClips.death)]
                             .name.c_str());
 
+            // --- 8b. The killing blow's fall lands (ruling R9a) ---------------
+            // The death blow shakes the player off the head. Let the same
+            // no-input step carry the fall to the ground and the landing
+            // stagger back to Grounded, so the defeat still shows a landed
+            // player instead of one suspended at the head.
+            if (combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s41-selftest: the killing blow did not leave the player falling (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            int settleFrames = 0;
+            while (combat.mode != PlayerMode::Grounded && settleFrames < kS41MaxFallFrames) {
+                step_frame(noInput);
+                ++settleFrames;
+                if (combat.mode != PlayerMode::Falling &&
+                    combat.mode != PlayerMode::Staggered &&
+                    combat.mode != PlayerMode::Grounded) {
+                    throw std::runtime_error(
+                        "s41-selftest: the post-kill settle entered " +
+                        std::string(player_mode_name(combat.mode)) + " at frame " +
+                        std::to_string(settleFrames));
+                }
+            }
+            if (combat.mode != PlayerMode::Grounded) {
+                throw std::runtime_error(
+                    "s41-selftest: the post-kill fall did not reach the ground in " +
+                    std::to_string(kS41MaxFallFrames) + " frames");
+            }
+            if (!finite_position(player.position)) {
+                throw std::runtime_error(
+                    "s41-selftest: the post-kill settle wrote a non-finite position");
+            }
+            const float settledGround = heightmap_sample(heightmap, player.position);
+            if (!std::isfinite(settledGround) ||
+                std::fabs(player.position.y - settledGround) > kS41Eps) {
+                throw std::runtime_error(
+                    "s41-selftest: the post-kill landing is not on the ground (y " +
+                    std::to_string(player.position.y) + ", ground " +
+                    std::to_string(settledGround) + ")");
+            }
+            std::printf("s41-settle frames=%d grounded=1\n", settleFrames);
+
             // --- 9. The final frame and status -------------------------------
             if (!grabBandSet || grabBand == ClimbBandId::Count) {
                 throw std::runtime_error(
                     "s41-selftest: the status has no resolved grab band");
             }
             update_combat_clips(playback, scene, combat, noInput, /*manualClip=*/false);
-            update_all_poses(renderer, scene, playbacks, 0.0f);
+            const std::vector<std::vector<Mat4>> finalPalettes =
+                update_all_poses(renderer, scene, playbacks, 0.0f);
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
             renderer.set_hud(HudState{true, combat.stamina / 100.0f,
                                       encounter.health / 100.0f});
-            renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                  /*acquire_swapchain=*/true);
-            if (!opts.screenshotPath.empty()) {
-                write_screenshot(renderer, shell.win, opts.screenshotPath);
+            // The defeat still pulls the follow camera out to its 12 m wheel
+            // ceiling so the landed player and the fallen body share the
+            // frame; the arm's-length follow view points into the corpse. The
+            // interactive camera is untouched — the selftest ends here.
+            follow.distance = 12.0f;
+            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                          /*moving=*/false, 1.0f);
+            const Mat4 finalViewProj = camera_view_proj(camera, shell.win);
+            int pixel_width = 0;
+            int pixel_height = 0;
+            if (!SDL_GetWindowSizeInPixels(shell.win, &pixel_width, &pixel_height)) {
+                throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") +
+                                         SDL_GetError());
+            }
+            const ScreenBox defeat_bbox =
+                entityRig < finalPalettes.size()
+                    ? project_rig_bounds(scene, entityRig, finalPalettes[entityRig],
+                                         finalViewProj, pixel_width, pixel_height)
+                    : ScreenBox{};
+            if (!defeat_bbox.any) {
+                throw std::runtime_error(
+                    "s41-selftest: the defeated entity has no projected screen region");
+            }
+            std::printf("s41-defeat bbox=%d,%d,%d,%d screen=%dx%d\n", defeat_bbox.x0,
+                        defeat_bbox.y0, defeat_bbox.x1, defeat_bbox.y1, pixel_width,
+                        pixel_height);
+            renderer.render_frame(scene, finalViewProj, /*acquire_swapchain=*/true);
+            const std::string defeat_path =
+                !opts.screenshotPath.empty() ? opts.screenshotPath : still_path("defeat");
+            if (!opts.s41StillsDir.empty() || !opts.screenshotPath.empty()) {
+                std::printf("s41-still phase=defeat path=%s\n", defeat_path.c_str());
+                write_screenshot(renderer, shell.win, defeat_path);
+            }
+            if (!opts.s41StillsDir.empty()) {
+                // The presence control: the same final frame with the entity's
+                // meshes translated out of view. Its diff against the defeat
+                // still proves the entity is drawn and locates it inside
+                // s41-defeat's bbox.
+                const RigCpu& entity_rig = rig_at(scene, entityRig);
+                const std::size_t entity_mesh_end =
+                    std::min(entity_rig.meshEnd, scene.meshes.size());
+                std::vector<Mat4> saved_models;
+                for (std::size_t i = std::min(entity_rig.meshBegin, entity_mesh_end);
+                     i < entity_mesh_end; ++i) {
+                    saved_models.push_back(scene.meshes[i].model);
+                    scene.meshes[i].model.m[12] += 100000.0f;
+                }
+                capture_control("defeat-noentity", control_path("defeat-noentity"),
+                                /*hudVisible=*/true);
+                std::size_t slot = 0;
+                for (std::size_t i = std::min(entity_rig.meshBegin, entity_mesh_end);
+                     i < entity_mesh_end; ++i, ++slot) {
+                    scene.meshes[i].model = saved_models[slot];
+                }
+                // The HUD control: the same frame with the overlay hidden.
+                capture_control("defeat-nohud", control_path("defeat-nohud"),
+                                /*hudVisible=*/false);
+                renderer.set_hud(HudState{true, combat.stamina / 100.0f,
+                                          encounter.health / 100.0f});
             }
             print_status_line(opts, shell.win);
             std::printf("s41-status grab=%s climb=%.2f strikes=%d entity_health=%d mode=%s "
