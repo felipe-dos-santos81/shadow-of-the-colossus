@@ -124,7 +124,7 @@ TEST_CASE("climb band table matches the pinned S4 measurements") {
         ClimbBandId::LeftThigh, ClimbBandId::Waist,         ClimbBandId::Chest,
         ClimbBandId::Neck,      ClimbBandId::Chest,         ClimbBandId::RightShoulder};
     const int expected_weakpoint[] = {-1, -1, -1, -1, -1, -1, 0, -1, 1};
-    // The one branch in the table: W+D at the top of the chest.
+    // The one branch in the table: W plus any lateral at the top of the chest.
     const ClimbBandId expected_branch[] = {
         ClimbBandId::Count, ClimbBandId::Count,         ClimbBandId::Count,
         ClimbBandId::Count, ClimbBandId::RightShoulder, ClimbBandId::Count,

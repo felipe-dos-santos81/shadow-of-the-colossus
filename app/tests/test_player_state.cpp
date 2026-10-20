@@ -779,8 +779,8 @@ TEST_CASE("lateral input orbits the attach point around the band axis") {
     REQUIRE(std::fabs(player.position.z) < 1e-4f);
     const float step_angle = tuning.climbSpeed * kStep / surface_radius;
 
-    // Right orbits by -lateral * climbSpeed * dt / (radius + capsule): the
-    // rotation angle about the band's +Y axis, recovered as -atan2(z, x).
+    // Right orbits by +lateral * climbSpeed * dt / (radius + capsule) about the
+    // upward axis: the rotation angle, recovered as -atan2(z, x) around +Y.
     input.right = true;
     const int steps = 12;
     for (int i = 0; i < steps; ++i) {
@@ -790,7 +790,7 @@ TEST_CASE("lateral input orbits the attach point around the band axis") {
     CHECK(combat.mode == PlayerMode::Climbing);  // lateral alone climbs
     CHECK(combat.bandT == doctest::Approx(0.0f));  // but never moves along the band
     CHECK(player.position.y == doctest::Approx(0.0f));  // so the height is unchanged
-    CHECK(right_angle == doctest::Approx(-static_cast<float>(steps) * step_angle).epsilon(1e-3));
+    CHECK(right_angle == doctest::Approx(static_cast<float>(steps) * step_angle).epsilon(1e-3));
     CHECK(std::hypot(player.position.x, player.position.z) ==
           doctest::Approx(surface_radius).epsilon(1e-4));
 
@@ -803,6 +803,72 @@ TEST_CASE("lateral input orbits the attach point around the band axis") {
     CHECK(std::fabs(-std::atan2(player.position.z, player.position.x)) < 1e-4f);
     CHECK(player.position.y == doctest::Approx(0.0f));
     CHECK(player.position.x == doctest::Approx(surface_radius).epsilon(1e-4));
+}
+
+TEST_CASE("lateral right moves the climber along the player's right") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = foot_frame(ground);
+    PlayerState player{};
+    player.position = Vec3{0.0f, 0.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+    REQUIRE(player_step(player, combat, input, frame, tuning, kStep).grabbed);
+    REQUIRE(combat.band == ClimbBandId::LeftFoot);
+
+    // The player faces the band (forward = -normal) and reads right as
+    // forward x +Y, exactly like player_update's camera-relative basis.
+    Vec3 surface{};
+    Vec3 normal{};
+    REQUIRE(climb_surface_point(climb_band(combat.band), frame.jointWorld, combat.bandT,
+                                player.position, surface, normal));
+    const Vec3 right =
+        vec3_cross(Vec3{-normal.x, -normal.y, -normal.z}, Vec3{0.0f, 1.0f, 0.0f});
+    const Vec3 before = player.position;
+
+    input.right = true;
+    player_step(player, combat, input, frame, tuning, kStep);
+
+    const Vec3 moved{player.position.x - before.x, player.position.y - before.y,
+                     player.position.z - before.z};
+    CHECK(vec3_dot(moved, right) > 0.0f);
+    CHECK(player.position.z < before.z);  // with normal +X, player-right is -Z
+}
+
+TEST_CASE("a downward bone order still orbits right along the player's right") {
+    Heightmap ground = flat_heightmap();
+    // The foot band with its joints swapped: boneA is now the top of the band,
+    // so boneB - boneA points downward. Ruling R6 orients the axis upward
+    // before applying the angle, so D must land on the same player side.
+    PlayerFrame frame =
+        frame_of(ground, lookup_of({{"Bone_TUMASAKI_L", Vec3{0.0f, 2.0f, 0.0f}},
+                                    {"Bone_TOE_L", Vec3{0.0f, 0.0f, 0.0f}}}));
+    PlayerState player{};
+    player.position = Vec3{0.0f, 2.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    CombatTuning tuning{};
+    REQUIRE(player_step(player, combat, input, frame, tuning, kStep).grabbed);
+    REQUIRE(combat.band == ClimbBandId::LeftFoot);
+
+    Vec3 surface{};
+    Vec3 normal{};
+    REQUIRE(climb_surface_point(climb_band(combat.band), frame.jointWorld, combat.bandT,
+                                player.position, surface, normal));
+    const Vec3 right =
+        vec3_cross(Vec3{-normal.x, -normal.y, -normal.z}, Vec3{0.0f, 1.0f, 0.0f});
+    const Vec3 before = player.position;
+
+    input.right = true;
+    player_step(player, combat, input, frame, tuning, kStep);
+
+    const Vec3 moved{player.position.x - before.x, player.position.y - before.y,
+                     player.position.z - before.z};
+    CHECK(vec3_dot(moved, right) > 0.0f);
+    CHECK(player.position.z < before.z);
+    CHECK(player.position.y == doctest::Approx(before.y));  // the orbit keeps the height
 }
 
 TEST_CASE("attached modes write the surface point and skip the ground and capsules") {

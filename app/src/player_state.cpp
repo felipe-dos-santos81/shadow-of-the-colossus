@@ -52,26 +52,25 @@ Vec3 rotate_about_axis(Vec3 point, Vec3 origin, Vec3 axis, float angle) {
                 origin.z + v.z * c + cross.z * s + axis.z * along * one_minus_c};
 }
 
-// Orbits the attach point around the band's own axis (S4.2 design §7.3): a
-// surface step of climbSpeed * dt at the capsule's radius, signed by
-// -lateral. The current position is last frame's surface point, so rotating it
-// moves the radial hint that write_surface projects back onto the band; the
-// attach height and bandT are untouched. A band that cannot be formed leaves
-// the hint alone, and write_surface then breaks the grip as before.
-void orbit_about_band(PlayerState& player, ClimbBandId id, const PlayerFrame& frame,
-                      float lateral, float speed, float dt) {
-    const ClimbBand& band = climb_band(id);
-    Vec3 a{};
-    Vec3 b{};
-    if (!climb_band_segment(band, frame.jointWorld, a, b)) {
-        return;
+// Orbits the attach point around the band segment `a -> b` (S4.2 design §7.3,
+// ruling R6): a surface step of climbSpeed * dt at the capsule's radius. The
+// axis is oriented upward first, so a positive lateral (D) is a positive
+// rotation about it: the player faces the band (forward = -normal) and reads
+// right as forward x +Y, so D moves along the player's right. The current
+// position is last frame's surface point, so rotating it moves the radial hint
+// that write_surface projects back onto the band; the attach height and bandT
+// are untouched.
+void orbit_about_segment(PlayerState& player, Vec3 a, Vec3 b, float bandRadius,
+                         float lateral, float speed, float dt) {
+    Vec3 axis = vec3_normalize(Vec3{b.x - a.x, b.y - a.y, b.z - a.z});
+    if (axis.y < 0.0f) {
+        axis = Vec3{-axis.x, -axis.y, -axis.z};
     }
-    const Vec3 axis = vec3_normalize(Vec3{b.x - a.x, b.y - a.y, b.z - a.z});
-    const float surface_radius = band.radius + kPlayerCapsuleRadius;
+    const float surface_radius = bandRadius + kPlayerCapsuleRadius;
     if (!std::isfinite(surface_radius) || !(surface_radius > 0.0f)) {
         return;
     }
-    const float angle = -lateral * speed * dt / surface_radius;
+    const float angle = lateral * speed * dt / surface_radius;
     if (!std::isfinite(angle)) {
         return;
     }
@@ -257,54 +256,55 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             }
 
             if (combat.mode == PlayerMode::Grabbing || combat.mode == PlayerMode::Climbing) {
+                const ClimbBand& band = climb_band(combat.band);
                 const float axis =
                     (input.forward ? 1.0f : 0.0f) - (input.back ? 1.0f : 0.0f);
                 const float lateral =
                     (input.right ? 1.0f : 0.0f) - (input.left ? 1.0f : 0.0f);
+                const bool moving = axis != 0.0f || lateral != 0.0f;
                 // Lateral input is climbing too: it orbits around the band.
-                const PlayerMode wanted =
-                    (axis != 0.0f || lateral != 0.0f) ? PlayerMode::Climbing
-                                                      : PlayerMode::Grabbing;
+                const PlayerMode wanted = moving ? PlayerMode::Climbing : PlayerMode::Grabbing;
                 if (wanted != combat.mode) {
                     combat.mode = wanted;
                     combat.modeSeconds = 0.0f;
                 }
-                if (lateral != 0.0f) {
-                    orbit_about_band(player, combat.band, frame, lateral, tuning.climbSpeed,
-                                     dt);
+                // One segment resolution serves both the orbit and the climb; an
+                // idle hang leaves write_surface to resolve the band as before.
+                Vec3 a{};
+                Vec3 b{};
+                const bool resolved =
+                    moving && climb_band_segment(band, frame.jointWorld, a, b);
+                if (lateral != 0.0f && resolved) {
+                    orbit_about_segment(player, a, b, band.radius, lateral,
+                                        tuning.climbSpeed, dt);
                 }
-                if (axis != 0.0f) {
-                    Vec3 a{};
-                    Vec3 b{};
-                    if (climb_band_segment(climb_band(combat.band), frame.jointWorld, a, b)) {
-                        const Vec3 ab{b.x - a.x, b.y - a.y, b.z - a.z};
-                        const float length = std::sqrt(vec3_dot(ab, ab));
-                        if (length > 0.0f) {
-                            const float t =
-                                combat.bandT + axis * tuning.climbSpeed * dt / length;
-                            if (t >= 1.0f) {
-                                const ClimbBand& band = climb_band(combat.band);
-                                // W + lateral takes the branch when the band has
-                                // one; W alone always follows the chain up.
-                                ClimbBandId next = band.up;
-                                if (lateral != 0.0f && band.branch != ClimbBandId::Count) {
-                                    next = band.branch;
-                                }
-                                if (next != ClimbBandId::Count) {
-                                    select_band(combat, next, 0.0f);
-                                } else {
-                                    combat.bandT = 1.0f;
-                                }
-                            } else if (t <= 0.0f) {
-                                const ClimbBandId down = climb_band(combat.band).down;
-                                if (down != ClimbBandId::Count) {
-                                    select_band(combat, down, 1.0f);
-                                } else {
-                                    combat.bandT = 0.0f;
-                                }
-                            } else {
-                                combat.bandT = t;
+                if (axis != 0.0f && resolved) {
+                    const Vec3 ab{b.x - a.x, b.y - a.y, b.z - a.z};
+                    const float length = std::sqrt(vec3_dot(ab, ab));
+                    if (length > 0.0f) {
+                        const float t =
+                            combat.bandT + axis * tuning.climbSpeed * dt / length;
+                        if (t >= 1.0f) {
+                            // W + lateral takes the branch when the band has
+                            // one; W alone always follows the chain up.
+                            ClimbBandId next = band.up;
+                            if (lateral != 0.0f && band.branch != ClimbBandId::Count) {
+                                next = band.branch;
                             }
+                            if (next != ClimbBandId::Count) {
+                                select_band(combat, next, 0.0f);
+                            } else {
+                                combat.bandT = 1.0f;
+                            }
+                        } else if (t <= 0.0f) {
+                            const ClimbBandId down = band.down;
+                            if (down != ClimbBandId::Count) {
+                                select_band(combat, down, 1.0f);
+                            } else {
+                                combat.bandT = 0.0f;
+                            }
+                        } else {
+                            combat.bandT = t;
                         }
                     }
                 }

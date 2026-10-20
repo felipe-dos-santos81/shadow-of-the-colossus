@@ -118,10 +118,12 @@ struct StepEvents {
 // Falling with no damage and no catch window. A forward/back axis moves `bandT`
 // by `climbSpeed * dt / segmentLength`, entering `up`/`down` at a band end (at
 // most one boundary per step). A lateral axis (`right - left`) also counts as
-// climbing and orbits the attach point around the band's own axis by
-// `-lateral * climbSpeed * dt / (radius + kPlayerCapsuleRadius)` (a Rodrigues
-// rotation through the band segment); `bandT` is unchanged. At the top of a
-// band, forward plus any lateral input follows `branch`
+// climbing and orbits the attach point around the band's own axis: the axis is
+// oriented upward and the angle is
+// `+lateral * climbSpeed * dt / (radius + kPlayerCapsuleRadius)` (a Rodrigues
+// rotation through the band segment), so D moves along the player's right
+// (forward = -normal, right = forward x +Y); `bandT` is unchanged. At the top
+// of a band, forward plus any lateral input follows `branch`
 // when the band has one, otherwise `up`; forward alone always follows `up`.
 // A strike press enters Striking. While strike is
 // held the charge grows at 1 s per second up to `chargeSeconds` and stamina
