@@ -4,7 +4,7 @@ The native macOS viewer for the converted *Shadow of the Colossus* asset library
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb` + `.png`) — never the game tree or original containers.
 
-**Status (milestone S2, task 5): real clips by default.**
+**Status (milestone S4.0): the encounter — Valus stands in the arena (user walk pending).**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -22,7 +22,10 @@ run on independent clocks, and every mesh draws with its own rig's palette.
 arena's ground lift is skipped
 while the active clip carries the root translation series (the series already
 holds the ground height), so the feet stay on the heightmap instead of floating
-by the model's origin-to-feet offset. Drag to orbit, scroll to zoom, press `F`
+by the model's origin-to-feet offset. A minimal capsule proxy built from the
+entity's posed legs and torso stops the player walking through it; `T` toggles a
+camera-only framing around the entity's chest (`--camera-target entity` selects
+it for captures). Drag to orbit, scroll to zoom, press `F`
 to reframe; `Space` plays/pauses, `[`/`]` switch clips in single-model mode (in
 arena mode the controller owns the clip), `R` restarts. The window
 title shows the fps readout. Escape or the window's close button quits.
@@ -54,25 +57,58 @@ app/build/sotc-viewer --library out/library \
 The converted library comes from `--library DIR`, else `$SOTC_LIB`; one of the two
 is required. Escape or the close button quits.
 
+## Options
+
 | Option | Meaning |
 | --- | --- |
 | `--library DIR` | converted asset library (default: `$SOTC_LIB`) |
-| `--model REL` | model to load, relative to the library |
+| `--model REL` | model to load, relative to the library; with `--manifest`, the player's glb |
+| `--manifest PATH` | compose the scene from a scene manifest; the player is `--model`, the static instances and animated entities come from the file (see [Manifests](#manifests)) |
 | `--anim NAME\|IDX` | clip to play, by name or 0-based index (default: the model's first clip; `procedural-wave` only when a skinned model carries no clips); in arena mode it is the manual override of stand/walk/run selection; an unknown name or index exits 2 |
 | `--anim-time SEC` | start paused at `SEC` seconds into the clip (wrapped into the clip's duration) — the deterministic-capture flag; it also pins the clip, so arena selection leaves it alone |
-| `--entity-time SEC` | pin every manifest `entity`'s clip at `SEC` seconds (clamped into the clip's duration) — the deterministic entity capture; needs `--manifest` with an entity |
+| `--entity-time SEC` | pin every manifest `entity`'s clip at `SEC` seconds (clamped into the clip's duration) — the deterministic entity capture; the entity starts paused; needs `--manifest` with an entity |
+| `--camera-target player\|entity` | initial framing for captures: `player` (default) is the normal follow camera; `entity` starts in the chest-framing target mode and needs a `--manifest` whose scene has an entity |
 | `--screenshot PNG` | render `--frames` frames into the offscreen target, write the PNG, exit |
 | `--frames N` | frames the `--screenshot` path renders first (default 3) |
 | `--width N` / `--height N` | window size in points (default 1280 × 720) |
 | `--selftest` | render one frame, print `s1-status …`, exit |
+| `--s4-selftest` | compose the encounter `--manifest`, pin the entity at t=0, assert the spawn is clear and the entity's feet are on the ground, walk the player into the nearest leg capsule until the collision stops it, print the `s4-status`/`s4-spawn`/`s4-entity`/`s4-walk` lines, exit; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
+
+## Manifests
+
+`--manifest` composes a scene from a line-oriented text file: the static arena
+instances, the player (`--model`), and any number of placed, animated entities.
+The committed schema is `docs/notes/scene-manifest.md`; the directives are:
+
+```text
+instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+entity   <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
+spawn    <px> <py> <pz> <yawDeg>
+```
+
+`entity` is S4's addition: the ten numbers are the same placement as an
+`instance`'s, and `<clipName>` names the exact clip the entity's own rig loops —
+a model that does not carry it (or carries no clips) is a load error naming the
+glb and the clip, never a silent rest pose. The player is rig 0; entities are
+rigs 1, 2, …; each keeps its own skeleton, palette, and playback clock. The
+ground heightmap is built from the static instances only, never from the player
+or an entity. The encounter scene (gitignored, composed by
+`tools/re/stage/probe.py compose-encounter`) is
+`out/re/stage/encounter.manifest`:
+
+```bash
+app/build/sotc-viewer --library out/library --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb
+```
 
 Controls (no mouse capture: the cursor stays visible and free):
 
 | Gesture | Action |
 | --- | --- |
-| Left-drag | Orbit: yaw freely, pitch stops at ±89° |
-| Scroll | Zoom: distance clamped to [0.5, 500] |
-| `F` | Reframe the scene bounds (keeps the viewing direction) |
+| Left-drag | Orbit: yaw freely, pitch stops at ±89°; in entity target mode, orbit the entity's chest (pitch ±80°) |
+| Scroll | Zoom: distance clamped to [0.5, 500]; in entity target mode, [22, 30] m |
+| `F` | Reframe the scene bounds (single model) / recenter behind the player (manifest mode) |
+| `T` | Toggle entity target framing: orbit the entity's chest; `T` again restores the follow view without a snap. Inert when the manifest has no entity (the S3 arena) |
 | `Space` | Play/pause the current clip |
 | `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
 | `R` | Restart the current clip |
@@ -102,6 +138,16 @@ A screenshot run also prints its size and a per-channel pixel summary, e.g.
 s1-pixels min=15,18,0 max=177,180,188 mean=28.1,28.3,27.1
 s1-screenshot path=out/s1-smoke.png width=2560 height=1440
 ```
+
+`--s4-selftest` reports the encounter in the same style:
+
+```text
+s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=builder-pick spawn=data-position+builder-yaw feet=ok entity_bbox=1123,237,1485,751 pos=378.187,28.430,369.028 frames=423
+```
+
+followed by `s4-spawn`, `s4-entity`, and `s4-walk` diagnostics. The acceptance script
+(`scripts/s4-acceptance.sh`) parses these lines; `docs/notes/s4-results.md` records the measured
+values and the walk checklist.
 
 ## Tests
 

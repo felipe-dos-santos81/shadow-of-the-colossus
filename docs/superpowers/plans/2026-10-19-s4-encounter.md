@@ -278,4 +278,16 @@ Docs:
 - Values pinned: Valus glb 38,049,000 B (pre-bake), 12 meshes, 238 joints, 523,865 verts, feet −8.739; `minotaur_a_stand` 26 frames / 58 tracks / 15 fps / 1.6667 s / 21 statics; minotaur bank 73 names (58 records); 58/58 mapping; encounter 30 instances + 1 entity; spawn (353, ground, 345) + builder yaw; S3 acceptance unchanged.
 - The plan's one open value is the minotaur frame-0 world-pose set — Task 1 measures it with the RE tool and pins it in the same commit (the S2 precedent: the player's 0.7429/0.8343/1.0462/1.1165).
 
+---
+
+## Completion (2026-10-19)
+
+All seven tasks are complete. The acceptance note is `docs/notes/s4-results.md`; the scripted
+acceptance (`scripts/s4-acceptance.sh`) is green end to end — build, both suites (90/90, ctest
+2/2), the 30+1 encounter manifest (`check-encounter` 22/22), the self-test (`feet=ok`, collision
+stop with 0.000 penetration), five stills and the pixel guards, the perf measurement (8.95 ms →
+≈111.7 fps), and the unchanged S3 regression. The perf gate was hardened after review (`b9d64cc`).
+The unchecked boxes above are the plan's historical step list, not pending work. The milestone's
+done-line is not claimed: the user's walk (§9 of the note) is PENDING.
+
 *Personal-use fan project. No game assets are distributed from this repository.*
