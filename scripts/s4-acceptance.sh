@@ -434,20 +434,50 @@ idle_max=$((idle_total / 10))  # 10 %: measured 3.595 %
 
 # --- Step 8: performance (load + marginal frame cost) -------------------------
 
-# timed CMD... — wall seconds with millisecond resolution (bash's TIMEFORMAT %R).
+# timed LOG CMD... — wall seconds with millisecond resolution (bash's TIMEFORMAT
+# %R), with CMD's stdout+stderr kept in LOG, and CMD's own exit status returned:
+# a failed run is never timed as a success. The caller must check the status.
 timed() {
-  local seconds
+  local log="$1"
+  shift
+  local seconds status
   TIMEFORMAT='%R'
-  seconds=$({ time "$@" >/dev/null 2>&1; } 2>&1)
+  seconds=$({ time "$@" >"$log" 2>&1; } 2>&1)
+  status=$?
   printf '%s' "$seconds"
+  return "$status"
 }
 
+# Both runs must succeed AND write their frame: the 240-frame timing only
+# means something when 240 frames were actually rendered, and a load-only
+# failure cannot masquerade as a plausible marginal cost.
 perf_png="$control_dir/s4-perf.png"
-perf_ms="$(timed "$viewer" --library "$lib" --manifest "$encounter_manifest" \
-  --model "$player" --screenshot "$perf_png" --frames 1 --anim-time 0 --entity-time 0)"
-perf_slow_ms="$(timed "$viewer" --library "$lib" --manifest "$encounter_manifest" \
-  --model "$player" --screenshot "$perf_png" --frames 240 --anim-time 0 --entity-time 0)"
+perf_log="$control_dir/s4-perf-1.log"
+perf_slow_log="$control_dir/s4-perf-240.log"
 rm -f "$perf_png"
+if ! perf_ms="$(timed "$perf_log" "$viewer" --library "$lib" --manifest "$encounter_manifest" \
+  --model "$player" --screenshot "$perf_png" --frames 1 --anim-time 0 --entity-time 0)"; then
+  tail -20 "$perf_log" >&2
+  fail "perf: the 1-frame run failed (log: $perf_log)"
+fi
+[[ -s "$perf_png" ]] || fail "perf: the 1-frame run wrote no capture"
+rm -f "$perf_png"
+if ! perf_slow_ms="$(timed "$perf_slow_log" "$viewer" --library "$lib" \
+  --manifest "$encounter_manifest" --model "$player" --screenshot "$perf_png" \
+  --frames 240 --anim-time 0 --entity-time 0)"; then
+  tail -20 "$perf_slow_log" >&2
+  fail "perf: the 240-frame run failed (log: $perf_slow_log)"
+fi
+[[ -s "$perf_png" ]] || fail "perf: the 240-frame run wrote no capture"
+perf_pixels_line="$(grep -m1 '^s1-pixels ' "$perf_slow_log")" ||
+  fail "perf: the 240-frame run printed no s1-pixels line"
+perf_screenshot_line="$(grep -m1 '^s1-screenshot ' "$perf_slow_log")" ||
+  fail "perf: the 240-frame run printed no s1-screenshot line"
+perf_bytes="$(wc -c < "$perf_png" | tr -d '[:space:]')"
+[[ "$perf_bytes" -gt 5000 ]] || fail "perf: the 240-frame capture is only $perf_bytes bytes"
+rm -f "$perf_png"
+printf '%s\n' "$perf_screenshot_line"
+stamp "perf frames240: $perf_pixels_line"
 
 marginal_ms="$(awk -v one="$perf_ms" -v many="$perf_slow_ms" \
   'BEGIN { printf "%.2f", (many - one) * 1000.0 / 239.0 }')"
