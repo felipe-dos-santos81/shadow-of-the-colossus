@@ -28,6 +28,11 @@ struct AppOptions {
     // centre), simulate 240 fixed 1/60 s frames of forward+run, render one
     // frame, print `s3-status ...`, and exit 0. Requires --manifest and --model.
     bool s3Selftest = false;
+    // --s4-selftest: compose the encounter manifest, pin the entity at t = 0,
+    // walk the player into the entity's collision proxy, assert the stop and the
+    // entity's feet on the ground, render the final frame, print `s4-status`,
+    // and exit 0. Requires --manifest (with an entity) and --model.
+    bool s4Selftest = false;
     // --camera-target player|entity: the initial framing for captures. `player`
     // is the normal follow camera; `entity` starts in the chest-framing target
     // mode (requires a manifest whose scene has an entity). Interactive runs

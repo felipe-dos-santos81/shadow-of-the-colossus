@@ -37,7 +37,10 @@ void print_usage(FILE* out) {
                  "  --height N        window height in points (default 720)\n"
                  "  --selftest        render one frame, print s1-status, exit\n"
                  "  --s3-selftest     compose --manifest, walk 240 fixed frames, print\n"
-                 "                    s3-status, exit\n");
+                 "                    s3-status, exit\n"
+                 "  --s4-selftest     compose the encounter --manifest, pin the entity at\n"
+                 "                    t=0, walk the player into its collision proxy, print\n"
+                 "                    s4-status, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -77,6 +80,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--s3-selftest") {
             opts.s3Selftest = true;
+            continue;
+        }
+        if (arg == "--s4-selftest") {
+            opts.s4Selftest = true;
             continue;
         }
 
@@ -167,6 +174,11 @@ int main(int argc, char** argv) {
     }
     if (opts.s3Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s3-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s4Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s4-selftest needs --manifest\n");
         print_usage(stderr);
         return 2;
     }
