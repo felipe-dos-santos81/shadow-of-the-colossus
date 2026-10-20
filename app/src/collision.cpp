@@ -130,14 +130,18 @@ std::vector<Capsule> entity_collision_capsules(const Scene& scene, std::size_t r
                                                const std::vector<Mat4>& palette) {
     std::vector<Capsule> capsules;
     capsules.reserve(std::size(kValusCapsules));
-    for (const CapsuleSpec& spec : kValusCapsules) {
+    for (std::size_t segment = 0; segment < std::size(kValusCapsules); ++segment) {
+        const CapsuleSpec& spec = kValusCapsules[segment];
         Vec3 from{};
         Vec3 to{};
         if (!posed_joint_world_position(scene, rigIndex, palette, spec.from, from) ||
             !posed_joint_world_position(scene, rigIndex, palette, spec.to, to)) {
             continue;  // not this rig's skeleton (or a missing joint)
         }
-        capsules.push_back(Capsule{from, to, spec.radius});
+        Capsule capsule{from, to, spec.radius};
+        capsule.rig = static_cast<int>(rigIndex);
+        capsule.segment = static_cast<int>(segment);
+        capsules.push_back(capsule);
     }
     return capsules;
 }

@@ -21,6 +21,13 @@
 struct Capsule {
     Vec3 a, b;  // the segment's endpoints, world space
     float r;    // radius (metres)
+    // Identity of the body segment that produced this capsule: the rig index
+    // and the capsule's index in that rig's table (kValusCapsules order).
+    // -1 means hand-built/unknown. The grab solver uses these to exclude the
+    // limb the player already holds; they are trailing fields so the original
+    // aggregate initialiser `Capsule{a, b, r}` still compiles.
+    int rig = -1;
+    int segment = -1;
 };
 
 inline constexpr float kPlayerCapsuleRadius = 0.35f;
