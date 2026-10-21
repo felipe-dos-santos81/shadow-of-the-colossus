@@ -59,6 +59,13 @@ struct JointCpu {
     int parent;          // index into SkinCpu::joints, -1 = root
     Mat4 inverseBind;
     Vec3 restT; Quat restR; Vec3 restS;   // rest local TRS, decomposed from the node matrix
+    // The joint's bind-pose world transform, composed once at load, parent
+    // first, from the rest chain: bindWorld[j] = bindWorld[parent] *
+    // TRS(restT, restR, restS). The rest pose is the bind pose, so this is the
+    // inverse of inverseBind without ever inverting a matrix. The club is
+    // authored in OptBone_sword's bind frame, and palette[j] * bindWorld[j] is
+    // the posed joint its vertices are placed by.
+    Mat4 bindWorld = mat4_identity();
 };
 
 // One animation channel, flattened for sampling: `values` holds 3 (T/S) or 4

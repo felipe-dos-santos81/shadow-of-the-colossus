@@ -1477,3 +1477,116 @@ TEST_CASE("posed weakpoint proxy refuses without writing on unusable input") {
         check_weakpoint_refused(scene, 1, palette, "weakpoint_03");
     }
 }
+
+// --- Club attachment (S4.2 task 6) ------------------------------------------
+
+namespace {
+
+// A point through a column-major matrix (w = 1), the convention the pose code
+// and the loader use.
+Vec3 transform_point(const Mat4& m, Vec3 p) {
+    return Vec3{m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12],
+                m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13],
+                m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]};
+}
+
+// The two-joint fixture with the bind-world matrices the loader composes from
+// its rest chain (JointA binds at y = 1, JointB at y = 2). The inverse bind
+// matrices stay the ones the fixture's glTF carries.
+Scene turn_fixture_scene_with_bind_world() {
+    Scene scene = turn_fixture_scene();
+    scene.rigs[0].skin.joints[0].bindWorld = translation_matrix({0.0f, 1.0f, 0.0f});
+    scene.rigs[0].skin.joints[1].bindWorld = translation_matrix({0.0f, 2.0f, 0.0f});
+    return scene;
+}
+
+}  // namespace
+
+TEST_CASE("palette times bindWorld maps the bind origin to the posed joint position") {
+    const Scene scene = turn_fixture_scene_with_bind_world();
+    const std::vector<JointCpu>& joints = scene.rigs[0].skin.joints;
+
+    SUBCASE("at the rest pose the origin stays at the bound position") {
+        // No clip: every joint keeps its rest TRS, and the rest pose is the bind
+        // pose. palette * bindWorld is the identity, so the origin does not
+        // move from the joint's bind position.
+        const std::vector<Mat4> palette = animation_pose(scene, 0, AnimationCpu{}, 0.0f);
+        REQUIRE(palette.size() == 2);
+        const Vec3 a = transform_point(mat4_mul(palette[0], joints[0].bindWorld), Vec3{0, 0, 0});
+        const Vec3 b = transform_point(mat4_mul(palette[1], joints[1].bindWorld), Vec3{0, 0, 0});
+        CHECK(a.x == doctest::Approx(0.0f).epsilon(1e-5));
+        CHECK(a.y == doctest::Approx(1.0f).epsilon(1e-5));
+        CHECK(a.z == doctest::Approx(0.0f).epsilon(1e-5));
+        CHECK(b.x == doctest::Approx(0.0f).epsilon(1e-5));
+        CHECK(b.y == doctest::Approx(2.0f).epsilon(1e-5));
+        CHECK(b.z == doctest::Approx(0.0f).epsilon(1e-5));
+    }
+
+    SUBCASE("under the turn clip the child's origin follows the rotated parent") {
+        // The "turn" clip rotates JointA 90 degrees about Z at t = 1. JointA
+        // stays at its bind position; JointB orbits to (-1, 1, 0), which is
+        // exactly palette[1] * bindWorld[1] applied to the bind origin.
+        const std::vector<Mat4> palette = animation_pose(scene, 0, turn_clip(0), 1.0f);
+        REQUIRE(palette.size() == 2);
+
+        const Vec3 a = transform_point(mat4_mul(palette[0], joints[0].bindWorld), Vec3{0, 0, 0});
+        const Vec3 b = transform_point(mat4_mul(palette[1], joints[1].bindWorld), Vec3{0, 0, 0});
+        CHECK(a.x == doctest::Approx(0.0f).epsilon(1e-5));
+        CHECK(a.y == doctest::Approx(1.0f).epsilon(1e-5));
+        CHECK(a.z == doctest::Approx(0.0f).epsilon(1e-5));
+        CHECK(b.x == doctest::Approx(-1.0f).epsilon(1e-5));
+        CHECK(b.y == doctest::Approx(1.0f).epsilon(1e-5));
+        CHECK(b.z == doctest::Approx(0.0f).epsilon(1e-5));
+    }
+}
+
+TEST_CASE("club_model composes entityModel * palette * bindWorld") {
+    const Scene scene = turn_fixture_scene_with_bind_world();
+    const std::vector<Mat4> palette = animation_pose(scene, 0, turn_clip(0), 1.0f);
+    REQUIRE(palette.size() == 2);
+
+    // A placement with rotation and scale, so a transposed or reordered product
+    // cannot pass: the entity mesh model the composer bakes into every mesh.
+    const Mat4 entityModel =
+        mat4_from_trs(Vec3{10.0f, 20.0f, 30.0f}, Quat{0.0f, 0.0f, std::sin(kPi / 8.0f),
+                                                        std::cos(kPi / 8.0f)},
+                      Vec3{2.0f, 3.0f, 4.0f});
+    const Mat4 expected = mat4_mul(mat4_mul(entityModel, palette[1]),
+                                   scene.rigs[0].skin.joints[1].bindWorld);
+    const Mat4 actual = club_model(scene, palette, 1, entityModel);
+    for (int k = 0; k < 16; ++k) {
+        CAPTURE(k);
+        CHECK(actual.m[k] == doctest::Approx(expected.m[k]).epsilon(1e-5));
+    }
+
+    // The club's authored grip (its local origin) lands on the posed joint: the
+    // same point the scene's joint query reports for "JointB".
+    const Vec3 grip = transform_point(actual, Vec3{0.0f, 0.0f, 0.0f});
+    const Vec3 bindOrigin =
+        transform_point(scene.rigs[0].skin.joints[1].bindWorld, Vec3{0.0f, 0.0f, 0.0f});
+    const Vec3 posed = transform_point(entityModel, transform_point(palette[1], bindOrigin));
+    CHECK(grip.x == doctest::Approx(posed.x).epsilon(1e-5));
+    CHECK(grip.y == doctest::Approx(posed.y).epsilon(1e-5));
+    CHECK(grip.z == doctest::Approx(posed.z).epsilon(1e-5));
+}
+
+TEST_CASE("club_model resolves the rig that produced the palette") {
+    // Two rigs of the same size: the player's (0) and the entity's (1). Their
+    // bind worlds differ, so using the wrong rig would place the grip at y = 9
+    // instead of y = 5.
+    Scene scene = scene_with_two_rigs(3, 3);
+    scene.rigs[0].skin.joints[2].bindWorld = translation_matrix({0.0f, 9.0f, 0.0f});
+    scene.rigs[1].skin.joints[2].bindWorld = translation_matrix({0.0f, 5.0f, 0.0f});
+
+    const std::vector<Mat4> entityPalette(3, mat4_identity());
+    const Mat4 model = club_model(scene, entityPalette, 2, mat4_identity());
+    CHECK(model.m[12] == doctest::Approx(0.0f));
+    CHECK(model.m[13] == doctest::Approx(5.0f));
+    CHECK(model.m[14] == doctest::Approx(0.0f));
+
+    // A palette that names no rig of this scene, or a joint outside it, is
+    // refused with the identity — never NaN, never another rig's joint.
+    CHECK(is_identity(club_model(scene, {}, 2, mat4_identity()), 1e-6f));
+    CHECK(is_identity(club_model(scene, {mat4_identity()}, 0, mat4_identity()), 1e-6f));
+    CHECK(is_identity(club_model(scene, entityPalette, 3, mat4_identity()), 1e-6f));
+}

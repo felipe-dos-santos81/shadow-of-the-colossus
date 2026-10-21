@@ -337,6 +337,41 @@ bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
     return false;
 }
 
+Mat4 club_model(const Scene& scene, const std::vector<Mat4>& entityPalette,
+                std::size_t swordJoint, const Mat4& entityMeshModel) {
+    // The interface carries no rig index: the palette's size is what names its
+    // rig. An empty palette (an unskinned rig) or an out-of-range joint has no
+    // binding at all.
+    if (entityPalette.empty() || swordJoint >= entityPalette.size()) {
+        return mat4_identity();
+    }
+
+    // An entity rig is preferred over the player's: the club is an entity prop,
+    // and a scene can hold both rigs. A single-rig scene (the tests, a
+    // standalone load) falls back to whichever rig matches the palette.
+    const RigCpu* binding = nullptr;
+    for (std::size_t i = 0; i < scene.rigs.size() && binding == nullptr; ++i) {
+        if (i == scene.playerRig) {
+            continue;
+        }
+        if (scene.rigs[i].skin.joints.size() == entityPalette.size()) {
+            binding = &scene.rigs[i];
+        }
+    }
+    if (binding == nullptr && scene.playerRig < scene.rigs.size() &&
+        scene.rigs[scene.playerRig].skin.joints.size() == entityPalette.size()) {
+        binding = &scene.rigs[scene.playerRig];
+    }
+    if (binding == nullptr || swordJoint >= binding->skin.joints.size()) {
+        return mat4_identity();
+    }
+
+    // The grip socket's pose in mesh space, carried back through the bind world
+    // into the frame the prop's vertices were authored in.
+    return mat4_mul(mat4_mul(entityMeshModel, entityPalette[swordJoint]),
+                    binding->skin.joints[swordJoint].bindWorld);
+}
+
 bool posed_weakpoint_proxy(const Scene& scene, std::size_t rigIndex,
                            const std::vector<Mat4>& palette,
                            const std::string& materialName, Vec3& outCenter,

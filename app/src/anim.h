@@ -76,6 +76,22 @@ bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
                                 const std::vector<Mat4>& palette,
                                 const std::string& jointName, Vec3& out);
 
+// The model matrix for a prop authored in `swordJoint`'s bind frame (the club):
+// entityMeshModel * palette[swordJoint] * bindWorld[swordJoint]. The middle
+// factor is the joint's posed mesh-space matrix; the bind world turns it back
+// into the bind frame the prop's vertices live in, so the prop's authored grip
+// (its local origin) lands on the posed joint. No matrix inverse: bindWorld was
+// composed once at load from the rest chain (the rest pose is the bind pose).
+//
+// `entityPalette` is the only rig identity the signature carries, so the
+// binding rig is the one whose skin has exactly that many joints — preferring a
+// rig other than Scene::playerRig, since the club belongs to an entity. Returns
+// the identity — never NaN — when no rig matches the palette or `swordJoint` is
+// outside it; the app resolves the socket by name at load and does not call
+// this otherwise.
+Mat4 club_model(const Scene& scene, const std::vector<Mat4>& entityPalette,
+                std::size_t swordJoint, const Mat4& entityMeshModel);
+
 // A deterministic 2-second "wave" clip: rotation channels for the first
 // min(12, joints) joints of rig `rigIndex` with keys at t = 0/1/2 s holding
 // restR, restR tilted 15 degrees about X, and restR again — a smooth wobble

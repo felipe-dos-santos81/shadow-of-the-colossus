@@ -132,11 +132,54 @@ LocalTrs node_local_trs(const cgltf_node& node) {
     return out;
 }
 
+// Composes every joint's bind-pose world transform from the rest chain: the
+// rest pose is the bind pose, so no matrix inverse is needed. Parent-first with
+// the same order-independent chain walk as animation_pose, so a skeleton whose
+// joints are not listed parent-first still composes correctly; the chain-length
+// guard breaks a malformed cycle instead of hanging.
+void compose_bind_world(SkinCpu& skin) {
+    const std::size_t joint_count = skin.joints.size();
+    std::vector<bool> resolved(joint_count, false);
+    std::vector<int> chain;
+    for (std::size_t i = 0; i < joint_count; ++i) {
+        if (resolved[i]) {
+            continue;
+        }
+        chain.clear();
+        int j = static_cast<int>(i);
+        while (j >= 0 && !resolved[static_cast<std::size_t>(j)]) {
+            chain.push_back(j);
+            if (chain.size() > joint_count) {
+                break;
+            }
+            j = skin.joints[static_cast<std::size_t>(j)].parent;
+        }
+        Mat4 parent_world = (j >= 0 && resolved[static_cast<std::size_t>(j)])
+                                ? skin.joints[static_cast<std::size_t>(j)].bindWorld
+                                : mat4_identity();
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            const std::size_t index = static_cast<std::size_t>(*it);
+            const JointCpu& joint = skin.joints[index];
+            skin.joints[index].bindWorld =
+                mat4_mul(parent_world, mat4_from_trs(joint.restT, joint.restR, joint.restS));
+            parent_world = skin.joints[index].bindWorld;
+            resolved[index] = true;
+        }
+    }
+}
+
 // The glb's skeleton — the converted models carry exactly one — stored on
 // `rig`, returning the node -> joint-slot map its clips resolve channels
 // against. `joint_of_node` maps a node index to its slot in the joint list, so
 // both parent links and animation channels can be resolved against the skin's
 // own order.
+//
+// `bindWorld` is composed here from the rest chain, parent first: the rest pose
+// IS the bind pose, so the chain of local TRS matrices is the inverse of the
+// glTF inverse bind without ever inverting one. Joints whose parent is listed
+// after them are resolved by walking up to the first resolved ancestor (the
+// same order-independent pass animation_pose uses); a malformed cycle stops at
+// the chain-length guard with identity parents, never a hang.
 std::vector<int> load_skin_into(RigCpu& rig, const cgltf_data& data) {
     std::vector<int> joint_of_node(data.nodes_count, -1);
     if (data.skins_count == 0) {
@@ -184,6 +227,7 @@ std::vector<int> load_skin_into(RigCpu& rig, const cgltf_data& data) {
             }
         }
     }
+    compose_bind_world(rig.skin);
     return joint_of_node;
 }
 
@@ -688,4 +732,19 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
         scene.boundsMax = Vec3{0.0f, 0.0f, 0.0f};
     }
     return scene;
+}
+
+std::size_t append_static_model(Scene& scene, const std::filesystem::path& libraryDir,
+                                const std::string& glbRelPath, const Mat4& model) {
+    const std::size_t mesh_begin = scene.meshes.size();
+    // Material indices must stay global; an already-composed scene has some.
+    const GlbPlacement placement{
+        .model = model,
+        .materialOffset = static_cast<int>(scene.materials.size()),
+    };
+    // A scene with geometry grows its existing bounds; a default-constructed
+    // scene (no meshes) starts them from this glb rather than from the origin.
+    bool have_bounds = !scene.meshes.empty();
+    load_glb_into(scene, libraryDir, glbRelPath, placement, have_bounds);
+    return mesh_begin;
 }

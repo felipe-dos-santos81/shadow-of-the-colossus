@@ -43,3 +43,19 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 // callers; the rig records carry the authoritative ranges now.
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
                     const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr);
+
+// Appends `glbRelPath`'s meshes to an already-composed scene as static
+// geometry: no rig record, every appended mesh carries rig = -1 (static meshes
+// draw with palette slot 0), and its materials/textures append with their
+// indices kept valid (materials shift by the scene's existing material count;
+// textures already are global). `model` is baked into the appended meshes'
+// `model` — identity by default — and the scene's world bounds grow by their
+// placed vertices. Returns the first appended mesh index; a glb that contributes
+// no geometry returns `scene.meshes.size()` unchanged.
+//
+// This is the club's path (S4.2): an unskinned prop placed by hand each frame
+// from a skinned rig's joint, never a skinned model of its own. Throws
+// std::runtime_error like load_scene.
+std::size_t append_static_model(Scene& scene, const std::filesystem::path& libraryDir,
+                                const std::string& glbRelPath,
+                                const Mat4& model = mat4_identity());

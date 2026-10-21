@@ -204,17 +204,109 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
     return palette;
 }
 
+// S4.2: Valus's club is a separate, unskinned glb authored in the bind frame of
+// the entity rig's OptBone_sword. It is appended as static geometry (rig = -1)
+// and placed from that joint's posed frame each frame.
+constexpr const char* kClubGlb =
+    "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a_weapon.glb";
+constexpr const char* kClubSocketJoint = "OptBone_sword";
+
+// The club, once loaded into a composed scene: the entity rig it binds to, the
+// socket joint resolved by name, and its half-open static mesh range. `loaded`
+// stays false in single-model mode, in a manifest scene with no entity, and
+// when the entity rig carries no OptBone_sword — in every case the club is
+// simply not drawn.
+struct ClubAttachment {
+    bool loaded = false;
+    std::size_t rigIndex = 0;
+    std::size_t swordJoint = 0;
+    std::size_t meshBegin = 0;
+    std::size_t meshEnd = 0;
+};
+
+// The slot of the joint named exactly `name` in `rig`, or -1. The club socket
+// is resolved by name, never by an index that could mean another bone.
+int joint_index_named(const RigCpu& rig, std::string_view name) {
+    for (std::size_t i = 0; i < rig.skin.joints.size(); ++i) {
+        if (rig.skin.joints[i].name == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+// Loads the club into a composed scene and resolves its socket. The entity rig
+// and its first mesh must exist (compose_scene guarantees both for an entity);
+// a rig without OptBone_sword leaves the club undrawn, with one line naming the
+// missing joint rather than a silently wrong-hand prop.
+ClubAttachment load_club(Scene& scene, const std::filesystem::path& libraryDir,
+                         std::size_t entityRig, const std::string& entityGlb) {
+    ClubAttachment club{};
+    if (entityRig >= scene.rigs.size()) {
+        return club;
+    }
+    const RigCpu& rig = scene.rigs[entityRig];
+    const int socket = joint_index_named(rig, kClubSocketJoint);
+    if (socket < 0) {
+        std::fprintf(stderr, "sotc-viewer: %s has no %s joint; the club is not drawn\n",
+                     entityGlb.c_str(), kClubSocketJoint);
+        return club;
+    }
+    if (rig.meshBegin >= scene.meshes.size()) {
+        std::fprintf(stderr,
+                     "sotc-viewer: the entity rig has no meshes; the club is not drawn\n");
+        return club;
+    }
+
+    // Static geometry at the entity's placement; each frame its model is
+    // rewritten from the posed socket (update_club_model).
+    club.meshBegin = append_static_model(scene, libraryDir, kClubGlb,
+                                         scene.meshes[rig.meshBegin].model);
+    club.meshEnd = scene.meshes.size();
+    club.loaded = true;
+    club.rigIndex = entityRig;
+    club.swordJoint = static_cast<std::size_t>(socket);
+    return club;
+}
+
+// Places the club's meshes at the entity's posed sword joint. The entity's own
+// first mesh carries the placement (manifest TRS plus the once-per-run grounding
+// lift), so the club reads it instead of keeping a copy that could drift. A
+// no-op when the club is not loaded or this frame has no palette for its rig.
+void update_club_model(Scene& scene, const std::vector<std::vector<Mat4>>& palettes,
+                       const ClubAttachment& club) {
+    if (!club.loaded || club.rigIndex >= palettes.size() ||
+        club.rigIndex >= scene.rigs.size()) {
+        return;
+    }
+    const RigCpu& rig = scene.rigs[club.rigIndex];
+    if (rig.meshBegin >= scene.meshes.size() || club.meshBegin >= scene.meshes.size()) {
+        return;
+    }
+    const Mat4 model =
+        club_model(scene, palettes[club.rigIndex], club.swordJoint,
+                   scene.meshes[rig.meshBegin].model);
+    const std::size_t end = std::min(club.meshEnd, scene.meshes.size());
+    for (std::size_t i = club.meshBegin; i < end; ++i) {
+        scene.meshes[i].model = model;
+    }
+}
+
 // Every rig's pose for this frame: the player's (locomotion) and each entity's
 // (its own loop, on its own clock), each into its own palette buffer. The
 // palettes are returned so this frame's consumers (the entity collision proxy,
 // the target camera's chest point) read exactly the matrices the renderer was
-// given, not a second evaluation of the clip.
-std::vector<std::vector<Mat4>> update_all_poses(Renderer& renderer, const Scene& scene,
-                                                std::vector<Playback>& playbacks, float dt) {
+// given, not a second evaluation of the clip. The club, when loaded, is placed
+// from the entity's fresh palette here: every draw path goes through this one
+// function, so no renderer frame can show a stale club.
+std::vector<std::vector<Mat4>> update_all_poses(Renderer& renderer, Scene& scene,
+                                                std::vector<Playback>& playbacks, float dt,
+                                                const ClubAttachment& club) {
     std::vector<std::vector<Mat4>> palettes(playbacks.size());
     for (std::size_t rigIndex = 0; rigIndex < playbacks.size(); ++rigIndex) {
         palettes[rigIndex] = update_pose(renderer, scene, rigIndex, playbacks[rigIndex], dt);
     }
+    update_club_model(scene, palettes, club);
     return palettes;
 }
 
@@ -1039,6 +1131,9 @@ int run_app(const AppOptions& opts) {
         // zeroed bounds for a model-less run, so camera_frame stays finite even
         // when there is nothing to draw.
         Scene scene{};
+        // The entity prop: loaded only in a composed scene with an entity (see
+        // load_club); identity/unloaded everywhere else.
+        ClubAttachment club{};
         SceneManifest manifest{};          // empty when --manifest is absent
         Heightmap heightmap{};             // an empty heightmap = no ground
         const bool follow_mode = !opts.manifestPath.empty();
@@ -1061,19 +1156,29 @@ int run_app(const AppOptions& opts) {
                 return 2;
             }
             scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath);
-            renderer.upload(scene);
-            print_scene_line(scene);
 
             // The ground is built from the scene's static meshes only: the
             // player's own body and the placed entities must never rasterize
             // into the ground they stand on. A scene with no ground at all (no
             // static meshes) leaves the heightmap empty — ground=none, no
-            // clamp.
+            // clamp. This runs before the club is appended: the club is static
+            // geometry (rig = -1) but it is held in the air, not terrain, and
+            // must never raise the heightmap under Valus.
             try {
                 heightmap = build_heightmap(scene, kHeightmapCellSize);
             } catch (const std::exception& error) {
                 std::fprintf(stderr, "sotc-viewer: no ground: %s\n", error.what());
             }
+
+            // S4.2: the club, in a manifest scene that has an entity. The
+            // renderer uploads its mesh list exactly once, so the append must
+            // precede upload().
+            if (!manifest.entities.empty()) {
+                club = load_club(scene, opts.libraryDir, scene.playerRig + 1,
+                                 manifest.entities[0].placement.glbRelPath);
+            }
+            renderer.upload(scene);
+            print_scene_line(scene);
         } else if (!opts.modelRelPath.empty()) {
             scene = load_scene(opts.libraryDir, opts.modelRelPath);
             renderer.upload(scene);
@@ -1320,7 +1425,7 @@ int run_app(const AppOptions& opts) {
                                            stepSeconds);
                 update_combat_clips(playback, scene, combat, input, /*manualClip=*/false);
                 const std::vector<std::vector<Mat4>> palettes =
-                    update_all_poses(renderer, scene, playbacks, stepSeconds);
+                    update_all_poses(renderer, scene, playbacks, stepSeconds, club);
                 const PlayerFrame frame =
                     player_frame_of(scene, entityRig, palettes, heightmap,
                                     camera_look_yaw(camera));
@@ -1373,7 +1478,7 @@ int run_app(const AppOptions& opts) {
                 // the mode clip at its current time (0 on entry).
                 const PlayerInput no_input;
                 update_combat_clips(playback, scene, combat, no_input, /*manualClip=*/false);
-                update_all_poses(renderer, scene, playbacks, 0.0f);
+                update_all_poses(renderer, scene, playbacks, 0.0f, club);
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
                 renderer.set_hud(HudState{hudVisible, combat.stamina / 100.0f,
@@ -1404,7 +1509,7 @@ int run_app(const AppOptions& opts) {
             // `w`/`h` are inclusive pixel counts (x + w is the right edge + 1).
             const auto print_player_px = [&](const char* phase) {
                 const std::vector<std::vector<Mat4>> palettes =
-                    update_all_poses(renderer, scene, playbacks, 0.0f);
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
                 if (scene.playerRig >= palettes.size()) {
                     throw std::runtime_error(
                         std::string("s41-selftest: the player rig has no pose for ") + phase);
@@ -1445,7 +1550,7 @@ int run_app(const AppOptions& opts) {
                     player_update(player, input, stepSeconds, heightmap, aimYawDeg);
                     update_locomotion(playback, scene, input, /*manualClip=*/false);
                     const std::vector<std::vector<Mat4>> palettes =
-                        update_all_poses(renderer, scene, playbacks, stepSeconds);
+                        update_all_poses(renderer, scene, playbacks, stepSeconds, club);
                     resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
                     camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
                                   0.0f, /*moving=*/true, stepSeconds);
@@ -1483,7 +1588,7 @@ int run_app(const AppOptions& opts) {
 
             // --- 1. Approach -------------------------------------------------
             std::vector<std::vector<Mat4>> palettes =
-                update_all_poses(renderer, scene, playbacks, 0.0f);
+                update_all_poses(renderer, scene, playbacks, 0.0f, club);
             if (entityRig >= palettes.size()) {
                 throw std::runtime_error("s41-selftest: the entity rig has no pose");
             }
@@ -1523,7 +1628,7 @@ int run_app(const AppOptions& opts) {
             // The foot-band walk: the S4 stop is at the knee, so aim at the
             // nearest band's surface for a fixed extra leg. The resolver stops
             // the player on the body; the grab range check below is the gate.
-            palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
+            palettes = update_all_poses(renderer, scene, playbacks, 0.0f, club);
             PlayerFrame footFrame =
                 player_frame_of(scene, entityRig, palettes, heightmap, aimYaw);
             const ClimbBandId approachBand =
@@ -1546,7 +1651,7 @@ int run_app(const AppOptions& opts) {
             const int footFrames = walk_toward(footYaw, kS41ApproachFrames);
 
             // --- 2. Grab -----------------------------------------------------
-            palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
+            palettes = update_all_poses(renderer, scene, playbacks, 0.0f, club);
             PlayerFrame reachFrame =
                 player_frame_of(scene, entityRig, palettes, heightmap, footYaw);
             if (nearest_climb_band(reachFrame.jointWorld, player.position, tuning.grabRange) ==
@@ -1629,7 +1734,7 @@ int run_app(const AppOptions& opts) {
             // walk climbs the whole route from the neck, on this front side.
             auto teleport_to_head = [&]() {
                 const std::vector<std::vector<Mat4>> now =
-                    update_all_poses(renderer, scene, playbacks, 0.0f);
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
                 const PlayerFrame frame =
                     player_frame_of(scene, entityRig, now, heightmap, 0.0f);
                 Vec3 hint = player.position;
@@ -1870,7 +1975,7 @@ int run_app(const AppOptions& opts) {
             // scaffolding class as the head teleport: place the player on the
             // nearest band's surface and grab. The user's walk does the real
             // re-climb.
-            palettes = update_all_poses(renderer, scene, playbacks, 0.0f);
+            palettes = update_all_poses(renderer, scene, playbacks, 0.0f, club);
             PlayerFrame landingFrame =
                 player_frame_of(scene, entityRig, palettes, heightmap, 0.0f);
             const ClimbBandId returnBand =
@@ -1894,7 +1999,7 @@ int run_app(const AppOptions& opts) {
             const StepEvents groundedGrab = step_frame(grabInput);
             if (!groundedGrab.grabbed || combat.mode != PlayerMode::Grabbing) {
                 const std::vector<std::vector<Mat4>> now =
-                    update_all_poses(renderer, scene, playbacks, 0.0f);
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
                 const PlayerFrame frame =
                     player_frame_of(scene, entityRig, now, heightmap, 0.0f);
                 const ClimbBandId nearest =
@@ -2041,7 +2146,7 @@ int run_app(const AppOptions& opts) {
             }
             update_combat_clips(playback, scene, combat, noInput, /*manualClip=*/false);
             const std::vector<std::vector<Mat4>> finalPalettes =
-                update_all_poses(renderer, scene, playbacks, 0.0f);
+                update_all_poses(renderer, scene, playbacks, 0.0f, club);
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
             renderer.set_hud(HudState{true, combat.stamina / 100.0f,
@@ -2087,18 +2192,29 @@ int run_app(const AppOptions& opts) {
                 const RigCpu& entity_rig = rig_at(scene, entityRig);
                 const std::size_t entity_mesh_end =
                     std::min(entity_rig.meshEnd, scene.meshes.size());
-                std::vector<Mat4> saved_models;
+                // Hide the club with the body it is attached to: it is static
+                // geometry, so the entity mesh range alone would leave it
+                // floating in the control frame.
+                std::vector<std::size_t> hidden;
                 for (std::size_t i = std::min(entity_rig.meshBegin, entity_mesh_end);
                      i < entity_mesh_end; ++i) {
+                    hidden.push_back(i);
+                }
+                for (std::size_t i = club.meshBegin; club.loaded && i < club.meshEnd &&
+                                                      i < scene.meshes.size();
+                     ++i) {
+                    hidden.push_back(i);
+                }
+                std::vector<Mat4> saved_models;
+                saved_models.reserve(hidden.size());
+                for (const std::size_t i : hidden) {
                     saved_models.push_back(scene.meshes[i].model);
                     scene.meshes[i].model.m[12] += 100000.0f;
                 }
                 capture_control("defeat-noentity", control_path("defeat-noentity"),
                                 /*hudVisible=*/true);
-                std::size_t slot = 0;
-                for (std::size_t i = std::min(entity_rig.meshBegin, entity_mesh_end);
-                     i < entity_mesh_end; ++i, ++slot) {
-                    scene.meshes[i].model = saved_models[slot];
+                for (std::size_t slot = 0; slot < hidden.size(); ++slot) {
+                    scene.meshes[hidden[slot]].model = saved_models[slot];
                 }
                 // The HUD control: the same frame with the overlay hidden.
                 capture_control("defeat-nohud", control_path("defeat-nohud"),
@@ -2238,7 +2354,7 @@ int run_app(const AppOptions& opts) {
                 const Vec3 previous = player.position;
                 player_update(player, input, kFixedFrameSeconds, heightmap, aim_yaw);
                 update_locomotion(playback, scene, input, manual_clip);
-                update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
+                update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds, club);
                 resolve_player_collision(player, capsules, heightmap);
 
                 if (targetCamera.active) {
@@ -2394,7 +2510,7 @@ int run_app(const AppOptions& opts) {
                               camera_look_yaw(camera));
                 update_locomotion(playback, scene, input, manual_clip);
                 const std::vector<std::vector<Mat4>> palettes =
-                    update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds);
+                    update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds, club);
                 // The collision hook: after this frame's pose/playback update,
                 // before the player transform that is drawn below the loop.
                 resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
@@ -2424,7 +2540,7 @@ int run_app(const AppOptions& opts) {
         }
 
         if (opts.selftest) {
-            update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f);
+            update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f, club);
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                   /*acquire_swapchain=*/true);
             print_status_line(opts, shell.win);
@@ -2444,7 +2560,7 @@ int run_app(const AppOptions& opts) {
                     const PlayerInput still;
                     update_locomotion(playback, scene, still, manual_clip);
                     const std::vector<std::vector<Mat4>> palettes =
-                        update_all_poses(renderer, scene, playbacks, dt);
+                        update_all_poses(renderer, scene, playbacks, dt, club);
                     if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
                         haveEntityChest = entity_chest_position(scene, entityRig,
                                                                palettes[entityRig], entityChest);
@@ -2470,7 +2586,7 @@ int run_app(const AppOptions& opts) {
                                            active_player_lift(scene, playback,
                                                               player_rig_record));
                 } else {
-                    update_all_poses(renderer, scene, playbacks, dt);
+                    update_all_poses(renderer, scene, playbacks, dt, club);
                 }
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                       /*acquire_swapchain=*/true);
@@ -2673,7 +2789,7 @@ int run_app(const AppOptions& opts) {
                 }
                 update_combat_clips(playback, scene, combat, input, manual_clip);
                 const std::vector<std::vector<Mat4>> palettes =
-                    update_all_poses(renderer, scene, playbacks, dt);
+                    update_all_poses(renderer, scene, playbacks, dt, club);
                 if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
                     haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
                                                            entityChest);
@@ -2741,7 +2857,7 @@ int run_app(const AppOptions& opts) {
                 renderer.set_hud(HudState{true, combat.stamina / 100.0f,
                                           encounter.health / 100.0f});
             } else {
-                update_all_poses(renderer, scene, playbacks, dt);
+                update_all_poses(renderer, scene, playbacks, dt, club);
             }
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),

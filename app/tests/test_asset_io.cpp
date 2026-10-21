@@ -2,12 +2,14 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -479,6 +481,21 @@ TEST_CASE("a two-joint fixture parses skin and animation") {
     // Inverse bind matrices: the inverse of the joints' bind world transforms.
     CHECK(player_rig(scene).skin.joints[0].inverseBind.m[13] == doctest::Approx(-1.0f));
     CHECK(player_rig(scene).skin.joints[1].inverseBind.m[13] == doctest::Approx(-2.0f));
+    // The bind world is composed parent-first from the rest chain (no matrix
+    // inverse): JointA at y = 1, JointB one more unit up at y = 2.
+    CHECK(player_rig(scene).skin.joints[0].bindWorld.m[13] == doctest::Approx(1.0f));
+    CHECK(player_rig(scene).skin.joints[1].bindWorld.m[13] == doctest::Approx(2.0f));
+    CHECK(player_rig(scene).skin.joints[1].bindWorld.m[12] == doctest::Approx(0.0f));
+    // The rest chain and the inverse bind agree: bindWorld * inverseBind is the
+    // identity, which is why palette * bindWorld is the posed joint.
+    const Mat4 joint_identity =
+        mat4_mul(player_rig(scene).skin.joints[1].bindWorld,
+                 player_rig(scene).skin.joints[1].inverseBind);
+    for (int k = 0; k < 16; ++k) {
+        CAPTURE(k);
+        CHECK(joint_identity.m[k] ==
+              doctest::Approx((k % 5 == 0) ? 1.0f : 0.0f).epsilon(1e-5));
+    }
 
     // The vertex carries its JOINTS_0/WEIGHTS_0 pair: joint 1, weight 1.
     REQUIRE(scene.meshes.size() == 1);
@@ -527,6 +544,11 @@ TEST_CASE("a joint node carrying a matrix decomposes into its rest TRS") {
     CHECK(joint.restR.y == doctest::Approx(0.0f).epsilon(1e-4));
     CHECK(joint.restR.z == doctest::Approx(std::sin(kPi / 4.0f)).epsilon(1e-4));
     CHECK(joint.restR.w == doctest::Approx(std::cos(kPi / 4.0f)).epsilon(1e-4));
+    // The bind world composes that local matrix under JointA's T(0,1,0): the
+    // child's bind origin is at (0,3,0), its basis columns scaled by 2.
+    CHECK(joint.bindWorld.m[13] == doctest::Approx(3.0f).epsilon(1e-4));
+    CHECK(joint.bindWorld.m[1] == doctest::Approx(2.0f).epsilon(1e-4));
+    CHECK(joint.bindWorld.m[4] == doctest::Approx(-2.0f).epsilon(1e-4));
 }
 
 TEST_CASE("a primitive without JOINTS_0 defaults to zero weights (unskinned)") {
@@ -771,6 +793,8 @@ constexpr const char* kWanderGlb = "models/shadow/characters/wander/_cmn/wander.
 constexpr const char* kPlankGlb = "models/objects/props/_cmn/obj_plank_01.glb";
 constexpr const char* kColossusGlb =
     "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb";
+constexpr const char* kClubGlb =
+    "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a_weapon.glb";
 
 // Writes `text` as a manifest fixture and parses it, so the entity tests run
 // through the real parser and the real composer, like the app does.
@@ -997,4 +1021,131 @@ TEST_CASE("compose_scene names the entity glb it cannot load") {
     }
     CHECK(message.find("entity") != std::string::npos);
     CHECK(message.find("no_such_entity.glb") != std::string::npos);
+}
+
+// --- The club (S4.2 task 6) -------------------------------------------------
+//
+// The club is a separate, unskinned glb authored in OptBone_sword's bind
+// frame. It is appended to a composed scene as static geometry (rig = -1) and
+// placed each frame by club_model, which is what the app does. Library-gated.
+
+TEST_CASE("the club glb loads as one static mesh with 9701 vertices") {
+    Scene scene;
+    const std::size_t begin = append_static_model(scene, test_library(), kClubGlb);
+
+    // One node / one primitive / one material, no skin: the append adds no rig
+    // record, and the mesh is static so the renderer binds palette slot 0.
+    REQUIRE(scene.meshes.size() == 1);
+    CHECK(begin == 0);
+    CHECK(scene.meshes[0].rig == -1);
+    CHECK(scene.meshes[0].vertices.size() == 9701);
+    CHECK(scene.rigs.empty());
+    REQUIRE(scene.materials.size() == 1);
+    CHECK(scene.materials[0].name == "colossus_01_legs");
+    // Its textures resolve through the library that already holds Valus's.
+    CHECK_FALSE(scene.textures.empty());
+    CHECK(std::filesystem::exists(test_library() / scene.textures[0].sourceRelPath));
+
+    // Every face index stays inside the vertex array.
+    uint32_t largest_index = 0;
+    for (const uint32_t index : scene.meshes[0].indices) {
+        largest_index = std::max(largest_index, index);
+    }
+    CHECK(largest_index < scene.meshes[0].vertices.size());
+}
+
+TEST_CASE("OptBone_sword resolves in the Valus rig and carries the club") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("# club fixture\ninstance ") + kPlankGlb +
+                 " 0 0 0 0 0 0 1 1 1 1\n" + colossus_entity_line());
+    Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+
+    // The entity is rig 1 and its skeleton names the grip socket exactly. The
+    // joint's bind world is the rest chain (not an inverse): it must agree with
+    // the sequence's own inverse bind.
+    REQUIRE(scene.rigs.size() == 2);
+    const std::size_t entityRig = 1;
+    std::size_t swordJoint = 0;
+    bool found = false;
+    for (std::size_t i = 0; i < scene.rigs[entityRig].skin.joints.size(); ++i) {
+        if (scene.rigs[entityRig].skin.joints[i].name == "OptBone_sword") {
+            swordJoint = i;
+            found = true;
+            break;
+        }
+    }
+    REQUIRE(found);
+    const JointCpu& sword = scene.rigs[entityRig].skin.joints[swordJoint];
+    const Mat4 bind_identity = mat4_mul(sword.bindWorld, sword.inverseBind);
+    for (int k = 0; k < 16; ++k) {
+        CAPTURE(k);
+        CHECK(bind_identity.m[k] == doctest::Approx((k % 5 == 0) ? 1.0f : 0.0f).epsilon(1e-4));
+    }
+
+    // Append the club exactly as the app does: at the entity's mesh placement.
+    const std::size_t entityMeshBegin = scene.rigs[entityRig].meshBegin;
+    REQUIRE(entityMeshBegin < scene.meshes.size());
+    const Mat4 entityModel = scene.meshes[entityMeshBegin].model;
+    const std::size_t clubBegin =
+        append_static_model(scene, test_library(), kClubGlb, entityModel);
+    REQUIRE(clubBegin == scene.meshes.size() - 1);
+    CHECK(scene.meshes[clubBegin].rig == -1);
+
+    // The idle clip at t = 0: the club model places the grip on the posed
+    // OptBone_sword origin. The scene's own joint query reconstructs that
+    // origin from the inverse bind, so the comparison checks the composed
+    // bindWorld against an independent path.
+    Playback entityPlayback;
+    build_playback(scene, entityRig, entityPlayback);
+    REQUIRE(entityPlayback.index >= 0);
+    const AnimationCpu& idle =
+        entityPlayback.clips[static_cast<std::size_t>(entityPlayback.index)];
+    const std::vector<Mat4> palette = animation_pose(scene, entityRig, idle, 0.0f);
+    REQUIRE(palette.size() == scene.rigs[entityRig].skin.joints.size());
+
+    const Mat4 clubModel = club_model(scene, palette, swordJoint, entityModel);
+    Vec3 swordWorld{};
+    REQUIRE(posed_joint_world_position(scene, entityRig, palette, "OptBone_sword", swordWorld));
+    CHECK(clubModel.m[12] == doctest::Approx(swordWorld.x).epsilon(1e-4));
+    CHECK(clubModel.m[13] == doctest::Approx(swordWorld.y).epsilon(1e-4));
+    CHECK(clubModel.m[14] == doctest::Approx(swordWorld.z).epsilon(1e-4));
+
+    // A point 7 m down the club's authored -Z is its tip (OptBone_hit's local
+    // (0, 0, -7) in the socket frame). The recon measured that tip 1.5 cm from
+    // OptBone_hit under identity attachment; the bind world's rotation is what
+    // carries it there, so a wrong socket frame fails this, not just a wrong
+    // translation.
+    const Vec3 clubTip{clubModel.m[8] * -7.0f + clubModel.m[12],
+                       clubModel.m[9] * -7.0f + clubModel.m[13],
+                       clubModel.m[10] * -7.0f + clubModel.m[14]};
+    Vec3 hitWorld{};
+    REQUIRE(posed_joint_world_position(scene, entityRig, palette, "OptBone_hit", hitWorld));
+    const float tipDx = clubTip.x - hitWorld.x;
+    const float tipDy = clubTip.y - hitWorld.y;
+    const float tipDz = clubTip.z - hitWorld.z;
+    CHECK(std::sqrt(tipDx * tipDx + tipDy * tipDy + tipDz * tipDz) < 0.02f);
+
+    // The club's pose is finite and its lowest vertex is comfortably above the
+    // entity's ground (the manifest y = 28.369): at the stand pose it hangs
+    // from the right hand, not from the floor.
+    float minY = std::numeric_limits<float>::infinity();
+    float maxY = -std::numeric_limits<float>::infinity();
+    bool finite = true;
+    for (const Vertex& vertex : scene.meshes[clubBegin].vertices) {
+        const Vec3 p{vertex.px, vertex.py, vertex.pz};
+        const Vec3 world{clubModel.m[0] * p.x + clubModel.m[4] * p.y + clubModel.m[8] * p.z +
+                             clubModel.m[12],
+                         clubModel.m[1] * p.x + clubModel.m[5] * p.y + clubModel.m[9] * p.z +
+                             clubModel.m[13],
+                         clubModel.m[2] * p.x + clubModel.m[6] * p.y + clubModel.m[10] * p.z +
+                             clubModel.m[14]};
+        finite = finite && std::isfinite(world.x) && std::isfinite(world.y) &&
+                 std::isfinite(world.z);
+        minY = std::min(minY, world.y);
+        maxY = std::max(maxY, world.y);
+    }
+    CHECK(finite);
+    CHECK(maxY > minY);
+    CHECK(minY > 28.369f + 1.0f);
 }
