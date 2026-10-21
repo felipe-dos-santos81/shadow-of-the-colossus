@@ -111,6 +111,13 @@ struct AppOptions {
     // both DIR and DIR/control/; an absent one is a write failure, never a
     // silent skip.
     std::string s41StillsDir;
+    // --s42-stills DIR: with --s42-selftest, write one PNG per fight phase
+    // (stomp telegraph, stomp impact, club swing, hurt, death, arm weakpoint)
+    // into DIR, HUD visible. The acceptance script creates DIR; an absent one
+    // is a write failure, never a silent skip. Each capture snapshots and
+    // restores the playback clocks around its render, so the timeline's
+    // `s42-*` event values are identical with and without stills.
+    std::string s42StillsDir;
     // --camera-target player|entity: the initial framing for captures. `player`
     // is the normal follow camera; `entity` starts in the chest-framing target
     // mode (requires a manifest whose scene has an entity). Interactive runs

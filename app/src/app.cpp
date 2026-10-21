@@ -391,6 +391,7 @@ constexpr float kS42StompStandoff = 1.0f;     // m from the impact foot (direct 
 constexpr float kS42ArmStrikeT = 1.0f;        // bandT on the right arm that reaches shell 1
 constexpr float kS42MinClimbRise = 10.0f;     // m the full foot -> head route must gain
 constexpr float kS42Eps = 1e-3f;              // shell, ground and contact epsilon
+constexpr int kS42TelegraphLeadFrames = 5;    // stills: capture this many steps before an impact
 
 // The R3 reaction names, plus the generic body reaction a strike on a band with
 // no weakpoint plays (the pinned bands without a weakpoint are not silent). The
@@ -2831,6 +2832,56 @@ int run_app(const AppOptions& opts) {
                 pin_stand();
             };
 
+            // --s42-stills: one rendered PNG at a named phase, HUD visible (the
+            // hurt and death stills must show Wander's amber bar). The frame is
+            // rebuilt from the current playback/combat state, so a still shows
+            // exactly what the timeline has reached. A render is an observation:
+            // every rig's clock is snapshotted and restored, so no capture can
+            // move the clip time, the clip selection, or a playing/pinned flag
+            // between two timeline steps.
+            struct PlaybackClockState {
+                int index;
+                float time;
+                bool playing;
+                bool pinned;
+            };
+            const auto still_dir = [&]() {
+                std::string dir = opts.s42StillsDir;
+                if (!dir.empty() && dir.back() != '/') {
+                    dir += '/';
+                }
+                return dir;
+            };
+            const auto still_path = [&](const char* name) {
+                return still_dir() + name + ".png";
+            };
+            const auto capture_still = [&](const char* phase, const std::string& path) {
+                if (opts.s42StillsDir.empty()) {
+                    return;
+                }
+                std::printf("s42-still phase=%s path=%s\n", phase, path.c_str());
+                std::vector<PlaybackClockState> saved;
+                saved.reserve(playbacks.size());
+                for (const Playback& p : playbacks) {
+                    saved.push_back(PlaybackClockState{p.index, p.time, p.playing, p.pinned});
+                }
+                const PlayerInput no_input;
+                update_combat_clips(playback, scene, combat, no_input, /*manualClip=*/false);
+                update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                renderer.set_hud(hud_state(/*visible=*/true));
+                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                      /*acquire_swapchain=*/true);
+                write_screenshot(renderer, shell.win, path);
+                for (std::size_t i = 0; i < saved.size() && i < playbacks.size(); ++i) {
+                    playbacks[i].index = saved[i].index;
+                    playbacks[i].time = saved[i].time;
+                    playbacks[i].playing = saved[i].playing;
+                    playbacks[i].pinned = saved[i].pinned;
+                }
+            };
+
             // --- 1. Proxy: both shells on the pinned stand frame --------------
             const std::vector<std::vector<Mat4>> standPalettes = palettes_now();
             if (entityRig >= standPalettes.size()) {
@@ -3016,6 +3067,10 @@ int run_app(const AppOptions& opts) {
             }
             std::printf("s42-arm band=%s weakpoint=%d damage=%d\n",
                         climb_band_name(armBand), armWeakpoint, armStrike.damageDealt);
+            // The arm weakpoint is live on the shell: capture before the
+            // reaction wait, while the strike's fall and the arm reaction are
+            // the frame the timeline has just asserted.
+            capture_still("arm-weakpoint", still_path("arm-weakpoint"));
             wait_for_reaction();
 
             const auto clip_at = [&](int index, const char* phase) -> const AnimationCpu& {
@@ -3070,8 +3125,19 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error("s42-selftest: the stomp attack did not start");
             }
             bool stompLanded = false;
+            bool stompTelegraphCaptured = false;
             for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
                 step_frame(noInput, /*driveAttack=*/true);
+                if (!stompTelegraphCaptured &&
+                    encounter.attack == ValusAttack::StompL &&
+                    encounter.attackSeconds >=
+                        kValusStompImpactBegin -
+                            kS42TelegraphLeadFrames * stepSeconds) {
+                    // The telegraph is the stomp clip itself; this frame is a
+                    // few steps before the [0.55, 0.70] impact window.
+                    capture_still("stomp-telegraph", still_path("stomp-telegraph"));
+                    stompTelegraphCaptured = true;
+                }
                 if (static_cast<int>(std::lround(combat.health)) != healthBeforeStomp) {
                     stompLanded = true;
                     break;
@@ -3085,6 +3151,10 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error(
                     "s42-selftest: the stomp never landed in " +
                     std::to_string(kS42MaxAttackFrames) + " frames");
+            }
+            if (!opts.s42StillsDir.empty() && !stompTelegraphCaptured) {
+                throw std::runtime_error(
+                    "s42-selftest: the stomp impact arrived before its telegraph still");
             }
             const int stompDamage = healthBeforeStomp -
                                     static_cast<int>(std::lround(combat.health));
@@ -3104,6 +3174,9 @@ int run_app(const AppOptions& opts) {
                         healthBeforeStomp,
                         static_cast<int>(std::lround(combat.health)),
                         player_mode_name(combat.mode));
+            // Immediately after the impact: Wander is Hurt at 65 HP and the
+            // stomp frame is still the entity's current pose.
+            capture_still("stomp-impact", still_path("stomp-impact"));
 
             // A second immediate hit is the same attack's impact applied again
             // on this frame: the i-frame window, not the once-only mark, is what
@@ -3156,8 +3229,17 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error("s42-selftest: the club attack did not start");
             }
             bool clubLanded = false;
+            bool clubSwingCaptured = false;
             for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
                 step_frame(noInput, /*driveAttack=*/true);
+                if (!clubSwingCaptured && encounter.attack == ValusAttack::Club &&
+                    encounter.attackSeconds >=
+                        kValusClubImpactBegin - kS42TelegraphLeadFrames * stepSeconds) {
+                    // The club's own clip is the telegraph; this frame is a few
+                    // steps before the [0.45, 0.65] impact window.
+                    capture_still("club-swing", still_path("club-swing"));
+                    clubSwingCaptured = true;
+                }
                 if (static_cast<int>(std::lround(combat.health)) != healthBeforeClub) {
                     clubLanded = true;
                     break;
@@ -3171,6 +3253,10 @@ int run_app(const AppOptions& opts) {
                 throw std::runtime_error(
                     "s42-selftest: the club never landed in " +
                     std::to_string(kS42MaxAttackFrames) + " frames");
+            }
+            if (!opts.s42StillsDir.empty() && !clubSwingCaptured) {
+                throw std::runtime_error(
+                    "s42-selftest: the club impact arrived before its swing still");
             }
             const int clubDamage =
                 healthBeforeClub - static_cast<int>(std::lround(combat.health));
@@ -3188,6 +3274,9 @@ int run_app(const AppOptions& opts) {
             std::printf("s42-club damage=%d health=%d->%d\n", clubDamage,
                         healthBeforeClub,
                         static_cast<int>(std::lround(combat.health)));
+            // Immediately after the club impact: Wander is Hurt and the amber
+            // player bar reads 20 HP.
+            capture_still("hurt", still_path("hurt"));
 
             // --- 6. Death: one more club at 45 HP ---------------------------
             clear_attack();
@@ -3250,6 +3339,9 @@ int run_app(const AppOptions& opts) {
             std::printf("s42-death clip=%s mode=%s\n",
                         playback.clips[static_cast<std::size_t>(playerClips.death)].name.c_str(),
                         player_mode_name(combat.mode));
+            // The death clip has played once and is asserted pinned on its last
+            // frame; the still is that frame, with the HUD's depleted amber bar.
+            capture_still("death", still_path("death"));
 
             // --- 7. Full soft reset (the R key's own sequence) --------------
             reset_player_combat(player, combat, spawn, spawnYaw, tuning);

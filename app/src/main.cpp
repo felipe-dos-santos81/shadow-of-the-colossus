@@ -50,7 +50,9 @@ void print_usage(FILE* out) {
                  "  --s42-selftest    compose the encounter --manifest, then run the\n"
                  "                    weakpoint, gate, arm-route, stomp, club, death,\n"
                  "                    reset and stamina timeline through fixed 1/60 s\n"
-                 "                    steps; print s42-status, exit\n");
+                 "                    steps; print s42-status, exit\n"
+                 "  --s42-stills DIR  with --s42-selftest: write the stomp, club, hurt,\n"
+                 "                    death and arm-weakpoint stills to DIR\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -109,7 +111,7 @@ int main(int argc, char** argv) {
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
                                  arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
                                  arg == "--entity-time" || arg == "--camera-target" ||
-                                 arg == "--s41-stills";
+                                 arg == "--s41-stills" || arg == "--s42-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -158,6 +160,8 @@ int main(int argc, char** argv) {
             opts.cameraTarget = value;
         } else if (arg == "--s41-stills") {
             opts.s41StillsDir = value;
+        } else if (arg == "--s42-stills") {
+            opts.s42StillsDir = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -215,6 +219,11 @@ int main(int argc, char** argv) {
     }
     if (!opts.s41StillsDir.empty() && !opts.s41Selftest) {
         std::fprintf(stderr, "sotc-viewer: --s41-stills needs --s41-selftest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.s42StillsDir.empty() && !opts.s42Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s42-stills needs --s42-selftest\n");
         print_usage(stderr);
         return 2;
     }
