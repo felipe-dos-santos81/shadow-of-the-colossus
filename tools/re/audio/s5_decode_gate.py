@@ -275,6 +275,19 @@ def at9_riff(payload, channels, rate, superframe_bytes, frame_bytes):
     return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
+def at9_riff_with_config(payload, channels, rate, block_align, cfg4):
+    """Like at9_riff but with an explicit 4-byte config (used by --probe-0x42)."""
+    extradata = struct.pack("<I", 0) + cfg4 + b"\0\0\0\0"
+    mask = {1: 0x4, 2: 0x3, 4: 0x33, 6: 0x3F, 8: 0x63F}[channels]
+    fmt = struct.pack("<HHIIHH", 0xFFFE, channels, rate, 0, block_align, 0)
+    fmt += struct.pack("<H", 22 + len(extradata))
+    fmt += struct.pack("<HI", 0, mask)
+    fmt += AT9_GUID + extradata
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", len(payload)) + payload
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
 # --------------------------------------------------------------------------- #
 # PS-ADPCM (resident banks)
 # --------------------------------------------------------------------------- #
@@ -535,10 +548,18 @@ def carve_resident(root, out_dir, bank, log):
     data_heap = data_off + 0x20
     heap_bytes = data_size - 24
 
-    records = [read_wave_record(buf, rec, path)
-               for rec, tag in table_records(buf, wave_off, path)]
+    table = table_records(buf, wave_off, path)
+    records = [read_wave_record(buf, rec, path) for rec, _tag in table]
     if not records:
         raise GateError(f"{path}: empty WAVE table")
+    # Record stride comes from the next record (variable 48/56/68/76 B in boss01).
+    for k, r in enumerate(records):
+        nxt = table[k + 1][0] if k + 1 < len(table) else len(buf)
+        r["stride"] = nxt - r["offset"]
+        # Records 56 B and longer carry an ATRAC9 config word at +0x2C; the 0x42
+        # family's value matches its own geometry exactly (see note §5).
+        r["at9_hint"] = (struct.unpack_from("<I", buf, r["offset"] + 0x2C)[0]
+                         if r["stride"] >= 0x30 else None)
     if min(r["start"] for r in records) == 0:
         raise GateError(f"{path}: resident starts unexpectedly begin at 0")
 
@@ -556,6 +577,7 @@ def carve_resident(root, out_dir, bank, log):
     by_fmt = {}
     for r in records:
         by_fmt.setdefault(r["fmt"], r)
+    variants = []
     carved = []
     for fmt, rec in sorted(by_fmt.items()):
         kind = "ps_adpcm" if rec["channels"] in (1, 2) and fmt & 0xFF == 0x21 else None
@@ -563,23 +585,33 @@ def carve_resident(root, out_dir, bank, log):
         blob = buf[base:base + rec["bytes"]]
         name = "%s_fmt%08X_%dch_rec%04d" % (bank.split(".")[0], fmt, rec["channels"],
                                             rec["offset"])
+        hint = rec["at9_hint"]
         record = {
             "kind": "resident",
+            "record": "resident",
             "name": name,
             "fmt": fmt_word(fmt),
+            "fmt_value": fmt,
             "channels": rec["channels"],
             "rate": rec["rate"],
             "start": rec["start"],
             "heap_offset": rec["heap_offset"],
             "bytes": rec["bytes"],
             "samples": rec["samples"],
+            "stride": rec["stride"],
+            "at9_config_record": ("%08x" % hint) if hint and hint >> 24 == 0xFE else None,
             "codec": kind or "unresolved",
         }
         if kind is None:
-            record["status"] = "skipped: codec unresolved (2 bit/sample, 16 B per 64 samples)"
+            record["status"] = "skipped: codec unresolved"
+            record["reason"] = (
+                "0x42 family: record carries an ATRAC9 config word (see "
+                "at9_config_record) but its payload is not in the resident heap at "
+                "the declared offsets; no ffmpeg ADPCM decoder matches 16 B / 64 samples")
             carved.append(record)
             log(f"  resident {fmt_word(fmt)} {rec['channels']}ch {rec['bytes']} B: "
-                f"skipped (codec unresolved)")
+                f"skipped (codec unresolved; record config "
+                f"{record['at9_config_record'] or 'n/a'})")
             continue
         channels = rec["channels"]
         pcm = ps_adpcm_decode(blob, channels)
@@ -609,13 +641,152 @@ def carve_resident(root, out_dir, bank, log):
         }
         record["stats"] = stats
         record["wav"] = os.path.relpath(wav_path, out_dir)
-        record["status"] = "decoded"
+        # Exploratory only: 16 B / 28 samples matches PS-ADPCM, but the heap
+        # offset is NOT proven - `start` values overlap (137/137 pairs, 2.5 MB
+        # total excess), so the carve position is a guess.  Never gate on this.
+        record["status"] = "exploratory"
+        record["mapping"] = "heap + (start - min(start)) - UNVERIFIED"
+        record["reason"] = (
+            "16 B / 28-sample PS-ADPCM geometry fits, but the resident (start, "
+            "bytes) fields overlap for all 137 consecutive pairs, so the heap "
+            "offset cannot be derived from them; the WAV is an exploratory "
+            "artifact, not a validated decode")
         carved.append(record)
         log(f"  resident {fmt_word(fmt)} {channels}ch {rec['bytes']} B -> "
             f"{stats['duration_s']:.3f} s  RMS {stats['rms_dbfs']:.1f} dBFS")
+    for rec in carved:
+        variants.append({"fmt": rec["fmt"], "fmt_value": rec["fmt_value"],
+                         "status": rec["status"],
+                         "channels": rec["channels"], "bytes": rec["bytes"],
+                         "samples": rec["samples"],
+                         "at9_config_record": rec.get("at9_config_record")})
     return {"header": header, "heap_bytes": heap_bytes, "heap_base": data_heap,
             "min_start": min_start, "record_count": len(records),
-            "fmt_words": [fmt_word(f) for f in sorted(by_fmt)], "records": carved}
+            "fmt_words": [fmt_word(f) for f in sorted(by_fmt)],
+            "variants": variants, "records": carved}
+
+
+def parse_fmt_list(text):
+    """Parse '0x0142,0x0242' (or bare hex) into [int]."""
+    out = []
+    for tok in (text or "").replace(";", ",").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            value = int(tok, 16)
+        except ValueError:
+            raise GateError(f"bad format word {tok!r} (expected hex, e.g. 0x0142)")
+        # Resident formats are 0x00FF____; accept the short 0x0142 form.
+        out.append(0x00FF0000 | value if value <= 0xFFFF else value)
+    return out
+
+
+def probe_0x42(root, out_dir, bank, log):
+    """Bounded identification attempt for the 0x42 family (note §5).
+
+    Three hypotheses are tried against the first 0x42 record of each channel
+    count, all with the record's declared byte range at the measured heap
+    offset: (a) ATRAC9 with the config word the record itself carries at +0x2C,
+    (b) PS-ADPCM at 16 B / 64 samples through ffmpeg's adpcm_psx, (c) the other
+    ADPCM decoders whose block geometry can express 64 samples per 16 bytes.
+    Nothing is written as a WAV: the probe reports and exits.
+    """
+    path = os.path.join(root, "sound", "shadow", bank)
+    buf = read_bytes(path)
+    chunks = chunk_map(buf, path)
+    wave_off = chunks["WAVE"][0]
+    data_off, data_size = chunks["DATA"]
+    heap = data_off + 0x20
+    table = table_records(buf, wave_off, path)
+    records = [read_wave_record(buf, rec, path) for rec, _ in table]
+    for k, r in enumerate(records):
+        nxt = table[k + 1][0] if k + 1 < len(table) else len(buf)
+        r["stride"] = nxt - r["offset"]
+        r["at9_hint"] = (struct.unpack_from("<I", buf, r["offset"] + 0x2C)[0]
+                         if r["stride"] >= 0x30 else None)
+    min_start = min(r["start"] for r in records)
+    probe_dir = os.path.join(out_dir, "probe_0x42")
+    os.makedirs(probe_dir, exist_ok=True)
+
+    seen = set()
+    for r in records:
+        if (r["fmt"] & 0xFF) != 0x42 or r["channels"] in seen:
+            continue
+        seen.add(r["channels"])
+        base = heap + (r["start"] - min_start)
+        blob = buf[base:base + r["bytes"]]
+        hint = r["at9_hint"]
+        log(f"0x42 {fmt_word(r['fmt'])} {r['channels']}ch: {r['bytes']} B, "
+            f"{r['samples']} samples, heap offset {r['start'] - min_start:#x}, "
+            f"record config {('%08x' % hint) if hint else 'none'}")
+        if not hint or hint >> 24 != 0xFE:
+            log("  no ATRAC9 config word in the record; skipping the AT9 probe")
+            continue
+        sri = (hint >> 20) & 0xF
+        bci = (hint >> 17) & 7
+        frame_bytes = ((hint >> 5) & 0x7FF) + 1
+        sf = (hint >> 3) & 3
+        channels = {0: 1, 1: 2, 2: 2, 3: 6, 4: 8, 5: 4}[bci]
+        rate = 48000
+        log(f"  record config decodes to sri={sri} blockcfg={bci} ({channels}ch) "
+            f"frame_bytes={frame_bytes} superframe={sf}")
+        riff = at9_riff_with_config(blob, channels, rate, frame_bytes << sf, hint.to_bytes(4, "big"))
+        p = os.path.join(probe_dir, "fmt%08X.at9.wav" % r["fmt"])
+        with open(p, "wb") as fh:
+            fh.write(riff)
+        rc, frames, err = _ffmpeg_decode(p, [], channels)
+        log(f"  (a) ATRAC9 @ heap {r['start'] - min_start:#x}: rc {rc}, "
+            f"{frames} frames ({frames / rate:.2f} s of {r['samples'] / rate:.2f} s)"
+            f" {err}")
+
+        # (b) ffmpeg adpcm_psx via a VAG wrapper, 16-byte blocks -> 28 samples.
+        vag = (b"VAGp" + struct.pack("<I", 0x20) + struct.pack(">I", len(blob))
+               + struct.pack("<I", rate) + b"probe\0" + b"\0" * 16 + blob)
+        p = os.path.join(probe_dir, "fmt%08X.vag" % r["fmt"])
+        with open(p, "wb") as fh:
+            fh.write(vag)
+        rc, frames, err = _ffmpeg_decode(p, ["-f", "vag"], 1)
+        log(f"  (b) adpcm_psx (.vag, 16 B -> 28 samples): rc {rc}, {frames} frames "
+            f"({frames / rate:.2f} s of {r['samples'] / rate:.2f} s) {err}")
+
+        # (c) the WAV-tagged ADPCM decoders at 64 samples per 16 bytes.
+        for tag, name in ((0x0002, "adpcm_ms"), (0x0011, "adpcm_ima_wav"),
+                          (0x0020, "adpcm_ct")):
+            wav = _adpcm_wav(tag, 1, rate, 64, blob)
+            p = os.path.join(probe_dir, "fmt%08X_%s.wav" % (r["fmt"], name))
+            with open(p, "wb") as fh:
+                fh.write(wav)
+            rc, frames, err = _ffmpeg_decode(p, [], 1)
+            log(f"  (c) {name} (tag {tag:#06x}, block 64): rc {rc}, {frames} frames "
+                f"({frames / rate:.2f} s of {r['samples'] / rate:.2f} s) {err}")
+        log("  verdict: ATRAC9 is the only hypothesis that decodes this family's "
+            "bytes at all; it does not reach the declared length at the mapped base, "
+            "so the variant stays an accepted gap (note 5)")
+
+
+def _adpcm_wav(tag, channels, rate, block_align, data):
+    fmt = struct.pack("<HHIIHH", tag, channels, rate, rate * block_align // 64,
+                      block_align, 0)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", len(data)) + data
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def _ffmpeg_decode(path, extra_in, channels):
+    raw = path + ".f32"
+    cmd = (["ffmpeg", "-hide_banner", "-v", "error", "-y"] + extra_in
+           + ["-i", path, "-c:a", "pcm_f32le", "-f", "f32le", raw])
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    frames = 0
+    if os.path.exists(raw):
+        frames = os.path.getsize(raw) // (4 * channels)
+        os.remove(raw)
+    first = ""
+    if proc.returncode != 0:
+        lines = [l.strip() for l in proc.stderr.splitlines() if l.strip()]
+        first = "| " + (lines[0][:90] if lines else "")
+    return proc.returncode, frames, first
 
 
 # --------------------------------------------------------------------------- #
@@ -636,6 +807,14 @@ def main(argv=None):
     ap.add_argument("--no-resident", action="store_true",
                     help="skip the boss01 resident-bank carve")
     ap.add_argument("--bank", default="boss01.sxd", help="resident bank to carve")
+    ap.add_argument("--require", default="",
+                    help="comma-separated resident format words the gate MUST decode "
+                         "(default: every variant found in the bank)")
+    ap.add_argument("--allow-unresolved", default="",
+                    help="comma-separated resident format words whose absence is an "
+                         "accepted, printed gap")
+    ap.add_argument("--probe-0x42", action="store_true", dest="probe42",
+                    help="run the bounded 0x42 identification attempt and exit")
     args = ap.parse_args(argv)
 
     if shutil.which("ffmpeg") is None:
@@ -647,6 +826,10 @@ def main(argv=None):
 
     log(f"SXDF/AT9 decode gate — root {args.root}")
     manifest = {"music": None, "resident": None, "checks": []}
+
+    if args.probe42:
+        probe_0x42(args.root, args.out, args.bank, log)
+        return 0
 
     music = carve_music(args.root, args.out, args.tracks, log, args.first)
     manifest["music"] = music
@@ -662,12 +845,14 @@ def main(argv=None):
 
     failures = 0
     skipped = 0
+    gaps = []
     for group in ("music", "resident"):
         if not manifest[group]:
             continue
         for rec in manifest[group]["records"]:
             if "stats" not in rec:
                 skipped += 1
+                gaps.append(rec.get("fmt_value"))
                 manifest["checks"].append({"name": rec["name"], "ok": True,
                                            "skipped": True, "problems": [],
                                            "reason": rec.get("status", "")})
@@ -686,14 +871,70 @@ def main(argv=None):
         json.dump(manifest, fh, indent=2)
     log(f"  manifest -> {os.path.relpath(manifest_path, args.out)}")
 
-    if failures:
-        log(f"GATE FAILED: {failures} file(s)")
-        return 1
-    if skipped:
-        log(f"  NOTE: {skipped} resident record(s) not decoded (codec unresolved) — "
-            "see docs/notes/s5-audio-recon.md §5")
+    # --- variant honesty --------------------------------------------------
+    # Every resident format word found in the bank is required by default.  A
+    # variant that is skipped fails the gate unless it is named in
+    # --allow-unresolved, and even then the gate prints what that costs.
+    explicit_required = parse_fmt_list(args.require)
+    required = explicit_required or None
+    allowed = parse_fmt_list(args.allow_unresolved)
+    decoded = []
+    if manifest["resident"]:
+        decoded = [v["fmt_value"] for v in manifest["resident"]["variants"]
+                   if v["status"] == "decoded"]
+        if required is None:
+            required = [v["fmt_value"] for v in manifest["resident"]["variants"]]
+    required = required or []
+    # Only an explicit --require clashes with --allow-unresolved; the default
+    # "require every variant" is exactly what the allowlist is allowed to carve out.
+    overlap = [f for f in explicit_required if f in allowed]
+    if overlap:
+        log("GATE ERROR: %s both required and allowed-unresolved"
+            % ", ".join(fmt_word(f) for f in overlap))
+        return 2
+    unacceptable = [f for f in gaps if f not in allowed]
+    missing = [f for f in required if f not in decoded and f not in allowed]
+    unacceptable = [f for f in unacceptable if f not in missing]
+    manifest["variants"] = {"required": [fmt_word(f) for f in required],
+                            "decoded": [fmt_word(f) for f in decoded],
+                            "allowed_unresolved": [fmt_word(f) for f in allowed],
+                            "unresolved": [fmt_word(f) for f in gaps]}
     if args.check:
-        log("GATE PASSED: every carved WAV is 48 kHz, non-silent and full length")
+        if missing:
+            for f in missing:
+                log(f"  FAIL required variant {fmt_word(f)} was not decoded and is not "
+                    "in --allow-unresolved")
+            failures += len(missing)
+        if unacceptable:
+            for f in unacceptable:
+                log(f"  FAIL variant {fmt_word(f)} skipped but not named in "
+                    "--allow-unresolved")
+            failures += len(unacceptable)
+
+    if args.check and gaps and not decoded and not failures:
+        log("  BLOCKED: no resident family is validated — the accepted gaps cover "
+            "every variant, so there is no decodable family for Task 1 to attribute "
+            "the curated cues to.")
+        log("  POLICY: the milestone stops at Task 1 until a resident family decodes "
+            "(note §7).")
+        return 3
+    if failures:
+        log(f"GATE FAILED: {failures} problem(s)")
+        if missing or unacceptable:
+            log("  the gate is a hard stop: decode the variant or accept the gap "
+                "explicitly with --allow-unresolved")
+        return 1
+    if gaps:
+        log("  ALLOWED GAPS: %s (%d resident variant(s) not decoded) — see "
+            "docs/notes/s5-audio-recon.md §5" % (", ".join(fmt_word(f) for f in gaps), len(gaps)))
+        log("  POLICY: the curated cues must come from the decoded families (%s); "
+            "if Task 1 attributes a core cue to %s the milestone stops at Task 1."
+            % (", ".join(fmt_word(f) for f in decoded) or "none",
+               ", ".join(fmt_word(f) for f in gaps)))
+    if args.check:
+        log(f"GATE PASSED: music 48 kHz non-silent; resident variants decoded "
+            f"{', '.join(fmt_word(f) for f in decoded) or 'none'}"
+            + (f"; accepted gaps {', '.join(fmt_word(f) for f in gaps)}" if gaps else ""))
     else:
         log("carve complete (run with --check to gate)")
     return 0
