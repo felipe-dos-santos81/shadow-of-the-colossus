@@ -4,8 +4,16 @@
 Reads `tools/re/audio/s5_map.json`, decodes each mapped `(bank, wave)` with the
 loader-derived payload formula (`wave_record_offset + 0x24 + start`, see
 `docs/notes/s5-audio-recon.md` §7), writes WAVs under
-`out/s5/audition/<bank>/`, and with `--check` fails if any mapped wave is
-missing, silent, or not 48 kHz.
+`out/s5/audition/<bank>/`, and with `--check` fails if:
+
+* any of the seven core events has no cue row with a valid wave (or is also
+  listed as deferred);
+* a `ghidra` row's `reqd` does not match the NAME hash, or its
+  `TONE[tone].wave` does not equal the mapped wave;
+* an `audition` row does not set `verified_index` (identity is not claimed);
+* two cue rows share a name;
+* a mapped wave is missing, silent, not 48 kHz, or shorter/longer than the
+  record by more than 50 ms.
 
 Usage
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
@@ -75,6 +83,44 @@ def load_bank(root, bank):
             "names": names, "payload_base": payload_base}
 
 
+def name_hash(name):
+    """The engine's name hash (`FUN_00987a80`): u = c + u*0x83."""
+    u = 0
+    for c in name.encode("latin1"):
+        u = (c + u * 0x83) & 0xFFFFFFFF
+    return u
+
+
+def lookup_name_id(buf, chunks, name):
+    """NAME hash -> REQD id, or None (the exact `FUN_00987a80` walk)."""
+    if "NAME" not in chunks:
+        return None
+    no, ns = chunks["NAME"]
+    count = struct.unpack_from("<I", buf, no + 0x0C)[0]
+    base = no + 0x10
+    hv = name_hash(name)
+    for i in range(count):
+        e = base + 12 * i
+        so, h, idx = struct.unpack_from("<III", buf, e)
+        if h != hv:
+            continue
+        s = buf[e + so:buf.find(b"\0", e + so)].decode("latin1")
+        if s == name:
+            return idx
+    return None
+
+
+def tone_wave(buf, chunks, tone):
+    """TONE[tone].wave from the flat 12-byte table at TONE+0x20 (boss01 form)."""
+    if "TONE" not in chunks or tone is None:
+        return None
+    to, ts = chunks["TONE"]
+    off = to + 0x20 + 12 * tone
+    if tone < 0 or off + 12 > to + 8 + ts:
+        return None
+    return struct.unpack_from("<6H", buf, off)[4]
+
+
 def bank_names(buf, chunks):
     """The name pool in insertion order (WAVE order follows it for the first N)."""
     if "NAME" not in chunks:
@@ -131,7 +177,7 @@ def decode_wave(bank, index, out_dir, label=None):
                  "expected_duration_s": rec["samples"] / rec["rate"],
                  "duration_error_ms": abs(frames - rec["samples"]) / rec["rate"] * 1e3,
                  "rms_dbfs": 20.0 * math.log10(rms) if rms > 0 else -999.0,
-                 "peak": peak / 32768.0, "finite": True}
+                 "peak": peak / 32768.0, "finite": True, "rate": rec["rate"]}
         return wav_path, stats
     if codec == 0x42:
         if not rec["at9_hint"]:
@@ -155,6 +201,7 @@ def decode_wave(bank, index, out_dir, label=None):
         stats = gate.analyze_f32(raw_path, wav_path, rec["channels"],
                                  rec["rate"], rec["samples"])
         stats["codec"] = "atrac9"
+        stats["rate"] = rec["rate"]
         return wav_path, stats
     raise AuditionError(f"{bank['path']}: wave {index} format 0x{codec:02X} "
                         "has no decoder in this audition")
@@ -162,6 +209,8 @@ def decode_wave(bank, index, out_dir, label=None):
 
 def check_stats(stats):
     problems = []
+    if stats.get("rate") != 48000:
+        problems.append(f"rate {stats.get('rate')} Hz != 48000")
     if not stats.get("finite", True):
         problems.append("non-finite samples")
     if stats["duration_error_ms"] > 50.0:
@@ -210,16 +259,66 @@ def main(argv=None):
     with open(args.map) as fh:
         cue_map = json.load(fh)
     cues = cue_map.get("cues", [])
+    deferred = cue_map.get("deferred", [])
     problems = []
     decoded = 0
+
+    # --- map structure: every core event needs one cue row with a valid wave ---
+    seen_events = {}
+    seen_names = {}
+    for cue in cues:
+        event = cue.get("event")
+        if event in seen_events:
+            problems.append(f"duplicate cue event {event!r}")
+        seen_events[event] = cue
+        name = cue.get("name")
+        if name:
+            if name in seen_names:
+                problems.append(f"duplicate cue name {name!r}")
+            seen_names[name] = event
+    deferred_events = {d.get("event") for d in deferred}
+    for event in CORE_EVENTS:
+        cue = seen_events.get(event)
+        if cue is None:
+            problems.append(f"{event}: core cue has no row in cues")
+        elif not isinstance(cue.get("wave"), int) or cue["wave"] < 0:
+            problems.append(f"{event}: core cue has no valid wave")
+        if event in deferred_events:
+            problems.append(f"{event}: core cue is also listed as deferred")
+
+    # --- identity: chain-verified rows must walk, audition rows must be explicit ---
     for cue in cues:
         event = cue.get("event", "?")
         if cue.get("status") == "deferred" or cue.get("wave") is None:
             print(f"  {event:<16} deferred: {cue.get('reason', 'no wave')}")
-            if event in CORE_EVENTS and args.check:
-                problems.append(f"{event}: core cue is deferred")
             continue
         bank = load_bank(args.root, cue["bank"])
+        reqd = lookup_name_id(bank["buf"], bank["chunks"], cue.get("name", ""))
+        if reqd is None:
+            problems.append(f"{event}: name {cue.get('name')!r} is not in the NAME table")
+        elif cue.get("reqd") is not None and int(cue["reqd"]) != reqd:
+            problems.append(f"{event}: reqd {cue['reqd']} != NAME lookup {reqd}")
+        method = cue.get("method")
+        if method == "ghidra":
+            tone = cue.get("tone")
+            if tone is None:
+                problems.append(f"{event}: ghidra row is missing tone")
+            else:
+                tw = tone_wave(bank["buf"], bank["chunks"], int(tone))
+                if tw != int(cue["wave"]):
+                    problems.append(
+                        f"{event}: TONE[{tone}].wave={tw} != mapped wave {cue['wave']}")
+                else:
+                    print(f"  {event:<16} chain: reqd {reqd} -> tone {tone} -> wave {tw}")
+        elif method == "audition":
+            if not cue.get("verified_index"):
+                problems.append(f"{event}: audition row must set verified_index")
+            else:
+                print(f"  {event:<16} audition: wave {cue['wave']} "
+                      "(identity not chain-proven)")
+        else:
+            problems.append(f"{event}: unknown method {method!r}")
+
         out_dir = os.path.join(args.out, cue["bank"].split(".")[0])
         wav, stats = decode_wave(bank, int(cue["wave"]), out_dir,
                                  label=cue.get("name"))
@@ -231,14 +330,15 @@ def main(argv=None):
         else:
             print(f"  {event:<16} {cue['bank']:<12} w{int(cue['wave']):03d} "
                   f"{cue.get('name', ''):<28} "
-                  f"{stats['duration_s']:.3f} s  RMS {stats['rms_dbfs']:.1f} dBFS")
+                  f"{stats['duration_s']:.3f} s  {stats['rate']} Hz  "
+                  f"RMS {stats['rms_dbfs']:.1f} dBFS")
     if args.check and problems:
         print(f"AUDITION FAILED: {len(problems)} problem(s)", file=sys.stderr)
         for p in problems:
             print(f"  {p}", file=sys.stderr)
         return 1
     if args.check:
-        print(f"AUDITION PASSED: {decoded} mapped wave(s) decoded, 48 kHz, non-silent")
+        print(f"AUDITION PASSED: {decoded} mapped wave(s), all 48000 Hz, non-silent")
     else:
         print(f"decoded {decoded} mapped wave(s) (run with --check to gate)")
     return 0

@@ -741,9 +741,25 @@ def parse_fmt_list(text):
             value = int(tok, 16)
         except ValueError:
             raise GateError(f"bad format word {tok!r} (expected hex, e.g. 0x0142)")
-        # Resident formats are 0x00FF____; accept the short 0x0142 form.
-        out.append(0x00FF0000 | value if value <= 0xFFFF else value)
+        # Resident formats are 0x00FF____; accept the short 0x0142 form and the
+        # 24-bit 0xFF0642 form, and normalize both to 0x00FF____.
+        if value <= 0xFFFF:
+            value |= 0x00FF0000
+        elif value >> 16 == 0xFF:
+            value = 0x00FF0000 | (value & 0xFFFF)
+        out.append(value)
     return out
+
+
+def bank_format_words(root, bank):
+    """Return every format word present in a resident bank (read-only)."""
+    path = os.path.join(root, "sound", "shadow", bank)
+    buf = read_bytes(path)
+    chunks = chunk_map(buf, path)
+    if "WAVE" not in chunks:
+        raise GateError(f"{path}: no WAVE chunk")
+    table = table_records(buf, chunks["WAVE"][0], path)
+    return sorted(set(read_wave_record(buf, rec, path)["fmt"] for rec, _tag in table))
 
 
 def probe_0x42(root, out_dir, bank, log):
@@ -896,6 +912,19 @@ def main(argv=None):
     log(f"SXDF/AT9 decode gate — root {args.root}")
     manifest = {"music": None, "resident": None, "checks": []}
 
+    resident_skipped = False
+    if args.no_resident and args.check:
+        allowed = parse_fmt_list(args.allow_unresolved)
+        variants = bank_format_words(args.root, args.bank)
+        unnamed = [f for f in variants if f not in allowed]
+        if unnamed:
+            log("GATE ERROR: --no-resident --check requires --allow-unresolved for every "
+                "resident variant: %s" % ", ".join(fmt_word(f) for f in unnamed))
+            return 2
+        resident_skipped = True
+        log("  resident skipped: all %d variant(s) named in --allow-unresolved"
+            % len(variants))
+
     if args.probe42:
         probe_0x42(args.root, args.out, args.bank, log)
         return 0
@@ -923,7 +952,7 @@ def main(argv=None):
             if "stats" not in rec:
                 skipped += 1
                 gaps.append(rec.get("fmt_value"))
-                manifest["checks"].append({"name": rec["name"], "ok": True,
+                manifest["checks"].append({"name": rec["name"], "ok": False,
                                            "skipped": True, "problems": [],
                                            "reason": rec.get("status", "")})
                 continue
@@ -1002,9 +1031,13 @@ def main(argv=None):
             % (", ".join(fmt_word(f) for f in decoded) or "none",
                ", ".join(fmt_word(f) for f in gaps)))
     if args.check:
-        log(f"GATE PASSED: music 48 kHz non-silent; resident variants decoded "
-            f"{', '.join(fmt_word(f) for f in decoded) or 'none'}"
-            + (f"; accepted gaps {', '.join(fmt_word(f) for f in gaps)}" if gaps else ""))
+        if resident_skipped:
+            log("GATE PASSED: music 48 kHz non-silent; resident skipped "
+                "(all variants allow-listed)")
+        else:
+            log(f"GATE PASSED: music 48 kHz non-silent; resident variants decoded "
+                f"{', '.join(fmt_word(f) for f in decoded) or 'none'}"
+                + (f"; accepted gaps {', '.join(fmt_word(f) for f in gaps)}" if gaps else ""))
     else:
         log("carve complete (run with --check to gate)")
     return 0

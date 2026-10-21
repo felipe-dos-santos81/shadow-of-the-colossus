@@ -138,7 +138,7 @@ proof.
 
 ### 4.1 The config word
 
-The AT9 config is 4 bytes, big-endian:
+The AT9 config is a 4-byte **big-endian bit layout**:
 
 ```
 FE  <sri:4><blockconfig:3><verify:1>  <frame_bytes−1:11><superframe:2>
@@ -147,9 +147,11 @@ FE  <sri:4><blockconfig:3><verify:1>  <frame_bytes−1:11><superframe:2>
 For the music: `sri = 7` (48 kHz), `blockconfig = 3` (**5.1**), `frame_bytes = 240`,
 `superframe = 2` (4 frames/superframe) → **`FE761DF0`**.
 
-The record also carries that word verbatim at `+0x40` (`0xFE761DF0` on all 33 music
-records), and the script asserts that the derived word equals it — so the derivation and
-the shipped bytes check each other. Tasks 2/3 can simply read `WAVE+0x40`.
+The record stores that word as a **little-endian u32** (`0xFE761DF0`, bytes
+`f0 1d 76 fe`) at `+0x40` on all 33 music records. The code unpacks the u32
+little-endian and re-emits the four bytes big-endian into the AT9 extradata; the
+assertion is on the integer value, not on the byte order. Tasks 2/3 can simply read the
+u32 at `WAVE+0x40` and call `to_bytes(4, "big")`.
 
 That split is not a guess: the engine's own validator at `eboot.elf` vaddr `0x00984240`
 reads a `u32`, compares its top byte with `0xFE000000`, extracts **bits 5..15** with
@@ -342,10 +344,11 @@ payload = wave_record_offset + 0x24 + start        # length = bytes
 
 and the DATA chunk's payload starts at `DATA + 0x10` (8-byte chunk header + 8 zero
 bytes). On `boss01` the 138 ranges tile `[DATA+0x10, DATA+8+size)` with **zero gaps**;
-`com_obj` (241 records) and `com_v` (63) tile their payloads exactly too. The 17
-duplicate groups (e.g. records 21/24, 22/25) share a range instead of drifting. `edp01`
-is the exception: 11 merged segments with 70 bytes of gaps, so its bank has unlisted or
-streamed data — the gate does not carve it.
+`com_obj` (241 records) and `com_v` (63) tile their payloads exactly too. Duplicate
+records share a range instead of drifting: **9 groups / 18 records** on boss01
+(identical `(payload, length)`; e.g. records 21/24, 22/25), 24 / 60 on com_obj, 7 / 14 on
+com_v and 89 / 302 on com_b_h. `edp01` is the exception: 11 merged segments with 70 bytes
+of gaps, so its bank has unlisted or streamed data — the gate does not carve it.
 
 Why the raw `start` values overlap: the old `heap + (start − min(start))` reading ignored
 the per-record `+0x24 + record_offset` term. Since the records have different addresses in
@@ -381,10 +384,25 @@ on records 1-99:
 COEF[5] = (126, -62)   COEF[6] = (128, -64)   COEF[7] = (126, -63)
 ```
 
-Evidence: with filters 5-7 treated as 0 the boundary jump (`|x[28k] − x[28k−1]|`) is
-2.5-4.8× the mean sample step; with the fitted table it drops to 1.0-2.8× on records not
-used in the fit (7, 10, 20, 30). The gate uses the fitted table. The exact firmware table
-is still open, but the duration and envelope are unaffected.
+The fitted table is a **fidelity compromise, not a firmware proof**. Per mapped cue
+(block count, fraction of blocks using filters 5-7, boundary-jump ratio
+`|x[28k]−x[28k−1]| / mean|Δx|`):
+
+| cue | wave | blocks | filter 5-7 | boundary ratio |
+|---|---|---|---|---|
+| `valus.telegraph` | 3 | 2 060 | 10.5 % | 2.73 |
+| `valus.impact` | 26 | 25 862 | 11.1 % | 0.98 |
+| `valus.hurt` | 6 | 1 802 | 21.0 % | 2.86 |
+| `player.swing` | 7 | 797 | 29.9 % | 2.66 |
+| `player.hit` | 21 | 1 215 | 39.3 % | 1.64 |
+| `player.hurt` | 40 | 463 | 23.3 % | 1.26 |
+| `player.death` | 657 | 1 392 | 27.8 % | 2.52 |
+
+The metric is neutral or worse for w006/w007/w657, so the earlier "1.0-2.8×" claim was
+selective. A targeted search of `eboot.elf` found **no** PS-ADPCM coefficient table (exact
+and approximate int16, int32×64 and float scans: 0 hits), so the real filters 5-7 live in
+the NGS2 firmware. The gate proves existence, rate, length and non-silence — **not
+fidelity**; the user's ear is the final identity/fidelity check for the 0x21 cues.
 
 ### 7.3 `0x42` — ATRAC9 at 96 kbps/channel
 
@@ -406,8 +424,8 @@ Open (Task 2 must not assume otherwise):
 
 1. the exact NGS2 filter-5..7 coefficients (the fitted table is documented above);
 2. the name→wave resolution for banks whose `TONE` table is not the flat 12-byte form
-   used by boss01; the attribution note uses the name-pool/WAVE order plus audition for
-   those.
+   used by boss01; the attribution note uses the boss01 request-order/TONE chain and
+   explicit audition indices for the other banks.
 
 ## 8. Converter policy (from the measured facts)
 
