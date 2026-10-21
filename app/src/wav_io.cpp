@@ -3,6 +3,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <system_error>

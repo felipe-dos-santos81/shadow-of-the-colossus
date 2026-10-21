@@ -3,12 +3,18 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -19,8 +25,11 @@ namespace {
 constexpr float kCategoryGains[] = {0.7f, 0.5f, 1.0f};  // music, ambience, sfx
 constexpr float kReferenceDistance = 8.0f;              // attenuation 1/(1 + d/8)
 constexpr float kPanSpread = 0.7f;
-constexpr int kMixdownFramesStep = 800;                 // 1/60 s at 48 kHz
+constexpr int kBlockFrames = 800;                       // 1/60 s at 48 kHz
+constexpr int kLeadBlocks = 3;                          // ~50 ms of prebuffer
+constexpr int kTargetQueuedBytes = kLeadBlocks * kBlockFrames * 2 * 4;
 constexpr int kMaxQueuedBytes = 48000 * 2 * 4 / 2;      // half a second of output
+constexpr int kMaxTopUpBlocks = 8;                      // ~133 ms per call, bounded
 
 float category_gain(AudioCategory category) {
     return kCategoryGains[static_cast<int>(category)];
@@ -147,6 +156,11 @@ bool AudioEngine::load_manifest(const std::string& manifestPath,
             return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
                         "' has no file=");
         }
+        if (std::filesystem::path(file_it->second).is_absolute()) {
+            return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
+                        "' file= must be libraryRoot-relative, got '" + file_it->second +
+                        "'");
+        }
         const std::filesystem::path wav_path =
             std::filesystem::path(libraryRoot) / file_it->second;
 
@@ -245,6 +259,9 @@ void AudioEngine::play(const std::string& name, const Vec3& position, float gain
         }
     }
     start_voice(slot, clip, AudioCategory::Sfx, gain, position, spatial);
+    // The device opens (and primes) on the first play, so headless timelines
+    // that never play never touch audio hardware.
+    ensure_device();
 }
 
 void AudioEngine::play_ui(const std::string& name, float gain) {
@@ -260,9 +277,15 @@ void AudioEngine::play_music(const std::string& name, float gain) {
     // Slot 0 is a single voice: a new cue replaces the current music.
     start_voice(kMusicSlot, clip, AudioCategory::Music, gain, Vec3{0.0f, 0.0f, 0.0f},
                 /*spatial=*/false);
+    ensure_device();
 }
 
-void AudioEngine::stop_music() { stop_slot(kMusicSlot); }
+void AudioEngine::stop_music() {
+    stop_slot(kMusicSlot);
+    // The prebuffer still holds the last ~50 ms of music; drop it so the stop
+    // is heard now rather than after the lead.
+    clear_stream();
+}
 
 void AudioEngine::play_ambience(const std::string& name, float gain) {
     const AudioClip* clip = find_clip(name);
@@ -272,11 +295,22 @@ void AudioEngine::play_ambience(const std::string& name, float gain) {
     }
     start_voice(kAmbienceSlot, clip, AudioCategory::Ambience, gain,
                 Vec3{0.0f, 0.0f, 0.0f}, /*spatial=*/false);
+    ensure_device();
 }
 
-void AudioEngine::reset() { stop_all_voices(); }
+void AudioEngine::reset() {
+    stop_all_voices();
+    clear_stream();
+}
 
-void AudioEngine::set_muted(bool muted) { muted_ = muted; }
+void AudioEngine::set_muted(bool muted) {
+    if (muted && !muted_) {
+        // Muting must not trail the prebuffer: drop it. Unmuting deliberately
+        // keeps the queue so the stream restarts without a priming gap.
+        clear_stream();
+    }
+    muted_ = muted;
+}
 
 int AudioEngine::active_voices() const {
     int count = 0;
@@ -301,8 +335,17 @@ bool AudioEngine::is_playing(const std::string& name) const {
     return false;
 }
 
+int AudioEngine::queued_audio_bytes() const {
+    if (stream_ == nullptr) {
+        return 0;
+    }
+    const int queued = SDL_GetAudioStreamQueued(stream_);
+    return queued > 0 ? queued : 0;
+}
+
 void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
                       float listenerYawDeg) {
+    assert(frames * 2 <= mixBuffer_.size());
     const std::size_t sample_count = frames * 2;
     std::fill(out, out + sample_count, 0.0f);
 
@@ -381,6 +424,40 @@ void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
     }
 }
 
+void AudioEngine::push_block(std::size_t frames) {
+    if (stream_ == nullptr || frames == 0) {
+        return;
+    }
+    assert(frames * 2 <= mixBuffer_.size());
+    mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+    const int bytes = static_cast<int>(frames * 2 * sizeof(float));
+    if (!SDL_PutAudioStreamData(stream_, mixBuffer_.data(), bytes)) {
+        std::fprintf(stderr, "sotc-viewer: audio: stream push failed: %s\n",
+                     SDL_GetError());
+        SDL_DestroyAudioStream(stream_);
+        stream_ = nullptr;
+    }
+}
+
+void AudioEngine::top_up() {
+    // Keep ~3 blocks (50 ms) queued. Without this the 60 Hz producer supplies
+    // one block per frame against a ~20 ms device buffer and the beat between
+    // producer and consumer starves the stream (SDL pads silence: clicks).
+    for (int block = 0; stream_ != nullptr && block < kMaxTopUpBlocks; ++block) {
+        const int queued = SDL_GetAudioStreamQueued(stream_);
+        if (queued < 0 || queued >= kMaxQueuedBytes || queued >= kTargetQueuedBytes) {
+            return;
+        }
+        push_block(kBlockFrames);
+    }
+}
+
+void AudioEngine::clear_stream() {
+    if (stream_ != nullptr) {
+        SDL_ClearAudioStream(stream_);
+    }
+}
+
 void AudioEngine::ensure_device() {
     if (deviceTried_) {
         return;
@@ -416,6 +493,9 @@ void AudioEngine::ensure_device() {
         return;
     }
     SDL_SetAudioStreamGain(stream_, 1.0f);
+    // Prime before the device has a chance to run dry: the lead contains the
+    // voice that just started (play* opens after the slot is filled).
+    top_up();
 }
 
 void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg) {
@@ -425,28 +505,25 @@ void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg
     listenerPos_ = listenerPos;
     listenerYawDeg_ = std::isfinite(listenerYawDeg) ? listenerYawDeg : 0.0f;
 
-    ensure_device();
-
     const float clamped = std::min(dt, static_cast<float>(kMaxMixFrames) / 48000.0f);
     const std::size_t frames = static_cast<std::size_t>(std::lround(clamped * 48000.0f));
     if (frames == 0) {
         return;
     }
-    mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
     if (stream_ == nullptr) {
-        return;  // silent, already logged once
-    }
-    // Never let the device backlog grow: the simulation's clock is the mixer's.
-    if (SDL_GetAudioStreamQueued(stream_) >= kMaxQueuedBytes) {
+        // Nothing has played yet: the mixer still advances on the simulation
+        // clock, but no audio device is opened by a headless timeline.
+        mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
         return;
     }
-    const int bytes = static_cast<int>(frames * 2 * sizeof(float));
-    if (!SDL_PutAudioStreamData(stream_, mixBuffer_.data(), bytes)) {
-        std::fprintf(stderr, "sotc-viewer: audio: stream push failed: %s\n",
-                     SDL_GetError());
-        SDL_DestroyAudioStream(stream_);
-        stream_ = nullptr;
+    if (SDL_GetAudioStreamQueued(stream_) < kMaxQueuedBytes) {
+        push_block(frames);
+    } else {
+        // Backlog at the cap: keep the voices on the simulation clock and drop
+        // this block rather than grow the latency.
+        mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
     }
+    top_up();
 }
 
 bool AudioEngine::render_mixdown(const std::string& path, int seconds) {
@@ -462,10 +539,10 @@ bool AudioEngine::render_mixdown(const std::string& path, int seconds) {
     std::vector<float> samples;
     samples.reserve(total_frames * 2);
     for (std::size_t done = 0; done < total_frames;
-         done += static_cast<std::size_t>(kMixdownFramesStep)) {
-        mix(mixBuffer_.data(), static_cast<std::size_t>(kMixdownFramesStep), listenerPos_,
+         done += static_cast<std::size_t>(kBlockFrames)) {
+        mix(mixBuffer_.data(), static_cast<std::size_t>(kBlockFrames), listenerPos_,
             listenerYawDeg_);
-        const std::size_t produced = static_cast<std::size_t>(kMixdownFramesStep) * 2;
+        const std::size_t produced = static_cast<std::size_t>(kBlockFrames) * 2;
         samples.insert(samples.end(), mixBuffer_.begin(), mixBuffer_.begin() + produced);
     }
 

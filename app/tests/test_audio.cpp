@@ -25,6 +25,16 @@
 
 namespace {
 
+// Force SDL's dummy driver for the whole test binary: every play* call now
+// opens (and primes) a device, and the smoke test below needs a deterministic,
+// silent one. This runs during static initialization — before main and before
+// the first SDL audio init — so the driver choice is stable regardless of test
+// order. No other test in this binary initializes SDL audio.
+[[maybe_unused]] const bool kDummyAudioDriver = [] {
+    ::setenv("SDL_AUDIODRIVER", "dummy", 1);
+    return true;
+}();
+
 // A scratch directory that deletes itself. The counter keeps the cases apart
 // even when they run inside the same process.
 class TempDir {
@@ -384,8 +394,8 @@ TEST_CASE("voice stealing keeps the newest") {
         const std::string name = "voice." + (i < 10 ? std::string("0") : std::string()) +
                                  std::to_string(i);
         const std::string file = "audio/test/" + name + ".wav";
-        write_tone_wav(dir, file, 0.05f, 0.1f, 1);
-        entries.push_back({name, file, 1, 2400, 0});
+        write_tone_wav(dir, file, 0.2f, 0.1f, 1);
+        entries.push_back({name, file, 1, 9600, 0});
     }
     const std::filesystem::path manifest = write_manifest(dir, entries);
 
@@ -429,6 +439,17 @@ TEST_CASE("load_manifest rejects a duplicate or a missing file") {
         CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
         CHECK(engine.last_error().find("ghost") != std::string::npos);
         CHECK_FALSE(engine.has("ghost"));
+    }
+
+    SUBCASE("absolute file escapes the library") {
+        const TempDir dir;
+        const std::filesystem::path manifest =
+            write_manifest(dir, {{"escape", "/tmp/escape.wav", 1, 24000, 0}});
+
+        AudioEngine engine;
+        CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
+        CHECK(engine.last_error().find("libraryRoot-relative") != std::string::npos);
+        CHECK_FALSE(engine.has("escape"));
     }
 }
 
@@ -499,6 +520,7 @@ TEST_CASE("music and ambience each own one replaceable voice") {
     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
                     engine.last_error());
     engine.play_music("music");
+    CHECK(engine.queued_audio_bytes() > 0);  // primed on the first play
     engine.play_music("music");
     CHECK(engine.active_voices() == 1);  // a second cue replaces the first
     engine.play_ambience("wind");
@@ -507,6 +529,39 @@ TEST_CASE("music and ambience each own one replaceable voice") {
     CHECK_FALSE(engine.is_playing("music"));
     CHECK(engine.is_playing("wind"));
     CHECK(engine.active_voices() == 1);
+    // stop_music drops the prebuffer so the cue stops now, not after the lead.
+    CHECK(engine.queued_audio_bytes() == 0);
+}
+
+TEST_CASE("the dummy device gets a primed lead and clears on mute") {
+    const TempDir dir;
+    write_tone_wav(dir, "audio/test/device.wav", 2.0f, 0.5f, 1);
+    const std::filesystem::path manifest =
+        write_manifest(dir, {{"device", "audio/test/device.wav", 1, 96000, 0}});
+
+    AudioEngine engine;
+    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                    engine.last_error());
+    REQUIRE(engine.queued_audio_bytes() == 0);  // no device before a play
+
+    engine.play_ui("device");
+    CHECK(engine.active_voices() == 1);
+    CHECK(engine.queued_audio_bytes() > 0);  // ~3 blocks of lead
+
+    engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
+    CHECK(engine.queued_audio_bytes() > 0);  // top-up keeps the lead
+    CHECK(engine.active_voices() == 1);
+
+    engine.set_muted(true);
+    CHECK(engine.queued_audio_bytes() == 0);  // no mute trail
+    engine.set_muted(false);
+    engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
+    CHECK(engine.queued_audio_bytes() > 0);  // unmute keeps pushing
+
+    engine.reset();
+    CHECK(engine.queued_audio_bytes() == 0);  // reset clears too
+    engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
+    CHECK(engine.queued_audio_bytes() > 0);  // top-up resumes even with no voice
 }
 
 TEST_CASE("the shipped audio manifest loads every entry") {

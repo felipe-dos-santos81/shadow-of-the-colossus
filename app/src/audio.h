@@ -49,12 +49,12 @@ public:
     AudioEngine& operator=(const AudioEngine&) = delete;
 
     // Parses `manifestPath` (R1 `key=value` lines) and loads every entry's WAV
-    // from `libraryRoot + "/" + file`. A duplicate name, a malformed line or a
-    // missing/unsupported file returns false with the offending name/path in
-    // `last_error()`; a missing manifest leaves the engine empty and warns
-    // once. A failed load leaves the previous clip set and voices untouched —
-    // the load is transactional. `gain_db` is provenance only (R12): the clip
-    // is never rescaled.
+    // from `libraryRoot + "/" + file`. A duplicate name, a malformed line, an
+    // absolute `file=` or a missing/unsupported file returns false with the
+    // offending name/path in `last_error()`; a parse/load failure is
+    // transactional (the previous clip set and voices stay untouched), while a
+    // missing manifest empties the engine and warns once. `gain_db` is
+    // provenance only (R12): the clip is never rescaled.
     bool load_manifest(const std::string& manifestPath, const std::string& libraryRoot);
 
     bool has(const std::string& name) const;
@@ -73,14 +73,16 @@ public:
     // Slot 1; a second call replaces the current ambience.
     void play_ambience(const std::string& name, float gain = 1.0f);
 
-    // Stops every voice (music included); the mute state is kept.
+    // Stops every voice (music included) and clears queued device audio; the
+    // mute state is kept.
     void reset();
     void set_muted(bool muted);
     bool muted() const { return muted_; }
 
-    // Mixes `dt` seconds and pushes to the device (lazy-open). `dt` is clamped
-    // to [0, 1] s; a non-positive or non-finite dt is a no-op. The listener
-    // pose is remembered for `render_mixdown`.
+    // Mixes `dt` seconds and tops up the device queue (the device itself opens
+    // on the first play* call). `dt` is clamped to [0, 1] s; a non-positive or
+    // non-finite dt is a no-op. The listener pose is remembered for
+    // `render_mixdown`.
     void update(float dt, const Vec3& listenerPos, float listenerYawDeg);
 
     // Runs the same mixer for `seconds` at dt = 1/60 (800 frames a step) and
@@ -89,9 +91,11 @@ public:
     bool render_mixdown(const std::string& path, int seconds);
 
     // Introspection for tests and acceptance: active voice count, whether any
-    // active voice plays `name`, and the last load/mixdown failure.
+    // active voice plays `name`, the device queue lead in bytes (0 when no
+    // device is open), and the last load/mixdown failure.
     int active_voices() const;
     bool is_playing(const std::string& name) const;
+    int queued_audio_bytes() const;
     const std::string& last_error() const { return last_error_; }
 
 private:
@@ -112,7 +116,9 @@ private:
     // One second of headroom: `update` clamps dt here and the buffer is
     // preallocated, so the per-frame mix never allocates.
     static constexpr int kMaxMixFrames = 48000;
-    static constexpr int kMixdownSecondsCap = 120;
+    // 600 s covers the full 125.93 s `music.boss` with room to spare: the S5
+    // acceptance can dump a whole encounter without truncation.
+    static constexpr int kMixdownSecondsCap = 600;
 
     void start_voice(std::size_t slot, const AudioClip* clip, AudioCategory category,
                      float gain, const Vec3& position, bool spatial);
@@ -127,6 +133,15 @@ private:
              float listenerYawDeg);
 
     void ensure_device();
+    // Mixes one 800-frame block and pushes it to the bound stream. A failed
+    // push destroys the stream (the engine stays silent, already logged once).
+    void push_block(std::size_t frames);
+    // Keeps ~3 blocks (50 ms) queued so the device never starves between
+    // frames; bounded by the 0.5 s cap and a small iteration guard.
+    void top_up();
+    // Drops queued device audio, so mute/stop/reset take effect immediately
+    // instead of trailing the prebuffer.
+    void clear_stream();
     void warn_missing(const std::string& name);
 
     std::unordered_map<std::string, AudioClip> clips_;
