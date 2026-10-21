@@ -34,7 +34,7 @@ enable_testing()
 add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/test_asset_io.cpp
   tests/test_anim.cpp tests/test_manifest.cpp tests/test_heightmap.cpp tests/test_player.cpp
   tests/test_grab.cpp tests/test_player_state.cpp tests/test_hud.cpp tests/test_valus.cpp
-  tests/test_gamepad.cpp tests/test_audio.cpp
+  tests/test_gamepad.cpp tests/test_audio.cpp tests/test_audio_events.cpp
   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
   src/audio.cpp src/wav_io.cpp src/gamepad_map.h)

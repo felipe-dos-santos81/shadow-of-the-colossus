@@ -128,11 +128,21 @@ struct CombatTuning {
 
 // What one step changed. `damageDealt` is the amount of the single damage event
 // this step emitted (0 when none); the app applies it to the encounter.
+//
+// The S5 seam (design §7.4) adds report-only flags: the state machine never
+// plays a sound or touches a device, it says what happened and the app's
+// translation layer decides. `struck` is the release of a swing (a hit or a
+// whiff); `hurtLight`/`hurtHeavy` are damage taken (`heavy` selects the long
+// reaction); `died` is the death mode being entered.
 struct StepEvents {
     int damageDealt = 0;
     bool gripBroke = false;
     bool landed = false;
     bool grabbed = false;
+    bool struck = false;
+    bool hurtLight = false;
+    bool hurtHeavy = false;
+    bool died = false;
 };
 
 // Advances the state machine one frame and returns its events.
@@ -184,7 +194,9 @@ struct StepEvents {
 // Hurt: the reaction clock runs until `mediumHurtSeconds` or
 // `heavyHurtSeconds`, then the player returns to Grounded. Dead is terminal
 // until `reset_player_combat`: it ignores input and never leaves the mode. The
-// i-frame counter ticks down in every mode.
+// i-frame counter ticks down in every mode. The S5 report flags are set on the
+// release (`struck`, hit or whiff) and on a landing that resolves
+// `pendingDeath` (`died`); a step never plays a sound or touches a device.
 StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerInput& input,
                        const PlayerFrame& frame, const CombatTuning& tuning, float dtSeconds);
 
@@ -201,11 +213,15 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
 // Staggered). Hurt lasts `mediumHurtSeconds` or `heavyHurtSeconds`; `heavyHit`
 // records which and selects the reaction clip.
 //
+// `events`, when given, receives the S5 report flags for the same hit: a
+// non-lethal hit sets `hurtLight`/`hurtHeavy` (also in the air — the hit is
+// heard), a ground-lethal hit sets `died` only. The call never plays a sound.
+//
 // The function does not move the player. Attacks cannot target an attached
 // player (design §7.4), so the Hurt entry from an attached mode is a defensive
 // path rather than a reachable fight state.
 bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
-                        const CombatTuning& tuning);
+                        const CombatTuning& tuning, StepEvents* events = nullptr);
 
 // The R soft reset (design §7.5): the player goes back to the manifest spawn
 // with full HP and stamina, no i-frames, no pending reactions and no stale

@@ -374,6 +374,8 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 if (input.strike) {
                     combat.charge = std::min(combat.charge + dt, tuning.chargeSeconds);
                 } else {
+                    // S5: the release is the swing itself, hit or whiff.
+                    events.struck = true;
                     const float threshold =
                         tuning.fullChargeFraction * tuning.chargeSeconds;
                     const float damage =
@@ -455,6 +457,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                         // The lethal hit taken in the air resolves here: the
                         // death clip replaces the landing stagger.
                         enter_dead(combat);
+                        events.died = true;
                     } else {
                         combat.mode = PlayerMode::Staggered;
                         combat.modeSeconds = 0.0f;
@@ -499,7 +502,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
 }
 
 bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
-                        const CombatTuning& tuning) {
+                        const CombatTuning& tuning, StepEvents* events) {
     if (combat.mode == PlayerMode::Dead || combat.invulnSeconds > 0.0f) {
         return false;  // dead men and active i-frames take no damage
     }
@@ -516,7 +519,15 @@ bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
     if (combat.mode == PlayerMode::Falling) {
         // The fall owns the transition: lethal damage only arms the landing.
         // R7: a killing hit also closes the catch window, so a grab press
-        // cannot escape the death the landing owes.
+        // cannot escape the death the landing owes. The hit is still heard: the
+        // air reaction is reported now and `died` arrives on landing.
+        if (events != nullptr) {
+            if (heavy) {
+                events->hurtHeavy = true;
+            } else {
+                events->hurtLight = true;
+            }
+        }
         if (combat.health <= 0.0f) {
             combat.pendingDeath = true;
             combat.catchSecondsLeft = 0.0f;
@@ -526,10 +537,20 @@ bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
 
     if (combat.health <= 0.0f) {
         enter_dead(combat);
+        if (events != nullptr) {
+            events->died = true;
+        }
         return true;
     }
 
     enter_hurt(combat, heavy);
+    if (events != nullptr) {
+        if (heavy) {
+            events->hurtHeavy = true;
+        } else {
+            events->hurtLight = true;
+        }
+    }
     return true;
 }
 

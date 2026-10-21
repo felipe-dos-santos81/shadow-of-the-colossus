@@ -43,6 +43,15 @@ public:
     static constexpr int kMaxVoices = 32;
     static constexpr int kMaxSfxVoices = kMaxVoices - 2;
 
+    // R14 headroom: the output stage scales the summed voices by 0.85 before
+    // the clamp. The shipped clips are normalized to 0.99, so the cue table's
+    // gains (music 0.45, most SFX 0.5-0.8) keep an ordinary music + SFX stack
+    // under the 0.99 delivery ceiling instead of square-waving. A per-voice gain
+    // is accepted up to 2.0 so the table can boost one clip (HurtHeavy's 1.25)
+    // and still be scaled by the master stage.
+    static constexpr float kMasterGain = 0.85f;
+    static constexpr float kMaxVoiceGain = 2.0f;
+
     AudioEngine();
     ~AudioEngine();
     AudioEngine(const AudioEngine&) = delete;
@@ -62,7 +71,7 @@ public:
 
     // World SFX. `spatial` true applies distance attenuation and pan; false
     // plays centred. A voice at 0 m is unattenuated and centred. `gain` is
-    // clamped into [0, 1]; the category gain is applied on top.
+    // clamped into [0, kMaxVoiceGain]; the category gain is applied on top.
     void play(const std::string& name, const Vec3& position, float gain = 1.0f,
               bool spatial = true);
     // Centred SFX (UI/player-local) — same SFX pool as `play`.
@@ -89,6 +98,16 @@ public:
     // writes float32 stereo 48 kHz RIFF/WAVE to `path`. No device is opened.
     // Uses the last listener pose passed to `update` (origin, yaw 0 by default).
     bool render_mixdown(const std::string& path, int seconds);
+
+    // Headless capture (S5 Task 5): while capturing, every `update` appends the
+    // block it mixed to an internal buffer and no device is opened — a capture
+    // must work without hardware. `end_capture` writes the accumulated mix as a
+    // float32 stereo 48 kHz WAV and releases the buffer. Only one capture at a
+    // time; a second `begin_capture` fails.
+    bool begin_capture(const std::string& path);
+    bool end_capture();
+    bool capturing() const { return capturing_; }
+    std::size_t captured_frames() const { return capture_samples_.size() / 2; }
 
     // Introspection for tests and acceptance: active voice count, whether any
     // active voice plays `name`, the device queue lead in bytes (0 when no
@@ -127,10 +146,13 @@ private:
     const AudioClip* find_clip(const std::string& name) const;
 
     // The pure mix: sums every active voice into `out` (interleaved stereo,
-    // `frames` frames), applies category gain, attenuation/pan, mute and the
-    // [-1, 1] clamp, and advances the voices' cursors.
+    // `frames` frames), applies category gain, attenuation/pan, mute, the
+    // master headroom gain and the [-1, 1] clamp, and advances the voices'
+    // cursors.
     void mix(float* out, std::size_t frames, const Vec3& listenerPos,
              float listenerYawDeg);
+    // Appends the block just mixed to the capture buffer (interleaved stereo).
+    void append_capture(std::size_t frames);
 
     void ensure_device();
     // Mixes one 800-frame block and pushes it to the bound stream. A failed
@@ -155,5 +177,10 @@ private:
     bool deviceTried_ = false;
     std::uint32_t device_ = 0;
     SDL_AudioStream* stream_ = nullptr;
+    // Capture state: the sink path, the accumulated float stereo samples, and
+    // whether `update` should append instead of pushing to a device.
+    bool capturing_ = false;
+    std::string capture_path_;
+    std::vector<float> capture_samples_;
     std::string last_error_;
 };

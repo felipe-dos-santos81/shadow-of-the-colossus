@@ -39,7 +39,7 @@ float sanitize_gain(float gain) {
     if (!std::isfinite(gain)) {
         return 0.0f;
     }
-    return std::clamp(gain, 0.0f, 1.0f);
+    return std::clamp(gain, 0.0f, AudioEngine::kMaxVoiceGain);
 }
 
 // Whitespace-separated tokens; `#` starts a comment. `\r` counts as
@@ -417,11 +417,56 @@ void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
         return;
     }
     // The output stage is the only place samples are clamped: a loud stack may
-    // saturate but never leaves the float WAV's [-1, 1] range.
+    // saturate but never leaves the float WAV's [-1, 1] range. R14's 0.85
+    // master gain sits just before the clamp, so an ordinary music + SFX stack
+    // stays below the 0.99 delivery ceiling instead of square-waving.
     for (std::size_t i = 0; i < sample_count; ++i) {
-        const float sample = out[i];
+        const float sample = out[i] * kMasterGain;
         out[i] = std::isfinite(sample) ? std::clamp(sample, -1.0f, 1.0f) : 0.0f;
     }
+}
+
+void AudioEngine::append_capture(std::size_t frames) {
+    if (!capturing_ || frames == 0) {
+        return;
+    }
+    assert(frames * 2 <= mixBuffer_.size());
+    capture_samples_.insert(capture_samples_.end(), mixBuffer_.begin(),
+                            mixBuffer_.begin() + static_cast<std::ptrdiff_t>(frames * 2));
+}
+
+bool AudioEngine::begin_capture(const std::string& path) {
+    last_error_.clear();
+    if (capturing_) {
+        last_error_ = path + ": a capture is already in progress";
+        return false;
+    }
+    if (path.empty()) {
+        last_error_ = "capture path is empty";
+        return false;
+    }
+    capture_path_ = path;
+    capture_samples_.clear();
+    capturing_ = true;
+    return true;
+}
+
+bool AudioEngine::end_capture() {
+    if (!capturing_) {
+        last_error_ = "no capture is in progress";
+        return false;
+    }
+    capturing_ = false;
+    std::string error;
+    if (!write_wav(capture_path_, capture_samples_, 2, 48000, &error)) {
+        last_error_ = error;
+        capture_path_.clear();
+        capture_samples_.clear();
+        return false;
+    }
+    capture_path_.clear();
+    capture_samples_.clear();
+    return true;
 }
 
 void AudioEngine::push_block(std::size_t frames) {
@@ -459,6 +504,11 @@ void AudioEngine::clear_stream() {
 }
 
 void AudioEngine::ensure_device() {
+    if (capturing_) {
+        // A capture is a disk sink: never open hardware while it runs, even if
+        // a play was queued after begin_capture.
+        return;
+    }
     if (deviceTried_) {
         return;
     }
@@ -510,10 +560,12 @@ void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg
     if (frames == 0) {
         return;
     }
-    if (stream_ == nullptr) {
-        // Nothing has played yet: the mixer still advances on the simulation
-        // clock, but no audio device is opened by a headless timeline.
+    if (stream_ == nullptr || capturing_) {
+        // Nothing has played yet, or a capture owns the sink: the mixer still
+        // advances on the simulation clock, but no audio device is opened by a
+        // headless timeline.
         mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+        append_capture(frames);
         return;
     }
     if (SDL_GetAudioStreamQueued(stream_) < kMaxQueuedBytes) {
@@ -523,6 +575,7 @@ void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg
         // this block rather than grow the latency.
         mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
     }
+    append_capture(frames);
     top_up();
 }
 

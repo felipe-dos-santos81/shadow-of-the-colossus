@@ -6,9 +6,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -1420,6 +1424,204 @@ TEST_CASE("the right arm band carries weakpoint 1") {
     REQUIRE(combat.mode == PlayerMode::Grabbing);
     CHECK(combat.band == ClimbBandId::RightArm);
     CHECK(combat.weakpoint == 1);
+}
+
+// --- S5 seam: the additive hurt/death/strike reports -------------------------
+
+TEST_CASE("damage reports light and heavy hurt flags, and death as died") {
+    const CombatTuning tuning{};
+
+    // A light hit reports HurtLight (the i-frame window then swallows the next
+    // hit whole, so no second report).
+    {
+        PlayerCombat combat{};
+        StepEvents events;
+        REQUIRE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning,
+                                   &events));
+        CHECK(events.hurtLight);
+        CHECK_FALSE(events.hurtHeavy);
+        CHECK_FALSE(events.died);
+
+        StepEvents blocked;
+        CHECK_FALSE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning,
+                                       &blocked));
+        CHECK_FALSE(blocked.hurtLight);
+        CHECK_FALSE(blocked.hurtHeavy);
+        CHECK_FALSE(blocked.died);
+    }
+
+    // A heavy hit is the club's: HurtHeavy, not HurtLight.
+    {
+        PlayerCombat combat{};
+        StepEvents events;
+        REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning,
+                                   &events));
+        CHECK(events.hurtHeavy);
+        CHECK_FALSE(events.hurtLight);
+        CHECK_FALSE(events.died);
+    }
+
+    // A lethal ground hit enters Dead: died, and no hurt reaction (the death
+    // clip supersedes it).
+    {
+        PlayerCombat combat{};
+        combat.health = tuning.clubDamage;
+        StepEvents events;
+        REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning,
+                                   &events));
+        CHECK(combat.mode == PlayerMode::Dead);
+        CHECK(events.died);
+        CHECK_FALSE(events.hurtLight);
+        CHECK_FALSE(events.hurtHeavy);
+    }
+
+    // The same flags are optional: the four-argument call still compiles and
+    // reports through its return value alone.
+    {
+        PlayerCombat combat{};
+        CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+        CHECK(combat.mode == PlayerMode::Hurt);
+    }
+}
+
+TEST_CASE("a strike release reports struck on a hit and on a whiff") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    const CombatTuning tuning{};
+
+    // A landed full charge.
+    {
+        PlayerState player{};
+        player.position = Vec3{0.0f, 8.0f, 0.0f};
+        PlayerCombat combat{};
+        PlayerInput input;
+        input.grab = true;
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+        REQUIRE(combat.mode == PlayerMode::Grabbing);
+        input.strike = true;
+        for (int i = 0; i < 60; ++i) {
+            const StepEvents held =
+                player_step(player, combat, input, head_frame(high, joints_ok), tuning,
+                            kStep);
+            CHECK_FALSE(held.struck);  // the release, not the charge
+        }
+        input.strike = false;
+        const StepEvents release =
+            player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+        CHECK(release.struck);
+        CHECK(release.damageDealt == 34);
+        CHECK(combat.strikeHit);
+    }
+
+    // A whiff: the release still swings (struck), with no damage.
+    {
+        PlayerState player{};
+        player.position = Vec3{0.0f, 8.0f, 0.0f};
+        PlayerCombat combat{};
+        PlayerInput input;
+        input.grab = true;
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+        REQUIRE(combat.mode == PlayerMode::Grabbing);
+        input.strike = true;
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+        input.strike = false;
+        const WeakpointProxyLookup far = [](int, Vec3& center, float& radius) {
+            center = Vec3{0.0f, 8.5f, 0.0f};
+            radius = 0.01f;
+            return true;
+        };
+        const StepEvents release =
+            player_step(player, combat, input, head_frame(high, joints_ok, far), tuning,
+                        kStep);
+        CHECK(release.struck);
+        CHECK(release.damageDealt == 0);
+        CHECK_FALSE(combat.strikeHit);
+    }
+}
+
+TEST_CASE("a pending death reports died when the landing resolves it") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = frame_of(ground, lookup_of({}));
+    PlayerState player{};
+    player.position = Vec3{0.0f, 1.0f, 0.0f};
+    PlayerInput input{};
+    const CombatTuning tuning{};
+    PlayerCombat combat{};
+    combat.mode = PlayerMode::Falling;
+
+    // The air hit reports hurt (the hit landed) but not died: the fall resolves
+    // it on landing.
+    StepEvents hit;
+    REQUIRE(player_take_damage(combat, tuning.maxHealth, /*heavy=*/true, tuning, &hit));
+    CHECK(hit.hurtHeavy);
+    CHECK_FALSE(hit.died);
+    REQUIRE(combat.pendingDeath);
+
+    StepEvents last{};
+    int frames = 0;
+    while (combat.mode == PlayerMode::Falling && frames < 600) {
+        last = player_step(player, combat, input, frame, tuning, kStep);
+        ++frames;
+    }
+    CHECK(combat.mode == PlayerMode::Dead);
+    CHECK(last.landed);
+    CHECK(last.died);
+}
+
+TEST_CASE("player_step stays a pure function of its arguments") {
+    // The seam is structural: StepEvents is a plain value with no handle, so a
+    // step can report sound only through its return value (no callback, no
+    // device, no file). The same inputs from the same state produce the same
+    // state and events.
+    static_assert(std::is_trivially_copyable_v<StepEvents>);
+    static_assert(std::is_trivially_copyable_v<PlayerCombat>);
+
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = frame_of(ground, lookup_of({}));
+    const CombatTuning tuning{};
+    PlayerInput input;
+    input.grab = true;
+
+    PlayerState first{};
+    PlayerCombat firstCombat{};
+    PlayerState second{};
+    PlayerCombat secondCombat{};
+    for (int i = 0; i < 30; ++i) {
+        const StepEvents a = player_step(first, firstCombat, input, frame, tuning, kStep);
+        const StepEvents b = player_step(second, secondCombat, input, frame, tuning, kStep);
+        CHECK(a.grabbed == b.grabbed);
+        CHECK(a.struck == b.struck);
+        CHECK(a.damageDealt == b.damageDealt);
+        CHECK(a.hurtLight == b.hurtLight);
+        CHECK(a.hurtHeavy == b.hurtHeavy);
+        CHECK(a.died == b.died);
+    }
+    CHECK(first.position.x == second.position.x);
+    CHECK(first.position.y == second.position.y);
+    CHECK(first.position.z == second.position.z);
+    CHECK(firstCombat.mode == secondCombat.mode);
+    CHECK(firstCombat.health == secondCombat.health);
+}
+
+TEST_CASE("player_step has no I/O in its translation unit") {
+    // The state machine is the simulation; sound is an observer. The build
+    // would allow an SDL/audio include here, so pin the invariant in the source:
+    // no device, no file, no console. Any future I/O in the step has to move to
+    // the app's translation layer instead.
+    const std::filesystem::path source =
+        std::filesystem::path(__FILE__).parent_path().parent_path() / "src" /
+        "player_state.cpp";
+    REQUIRE(std::filesystem::is_regular_file(source));
+    std::ifstream in(source);
+    REQUIRE(in.good());
+    const std::string text((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    CHECK(text.find("#include <SDL3") == std::string::npos);
+    CHECK(text.find("#include \"audio") == std::string::npos);
+    CHECK(text.find("printf(") == std::string::npos);
+    CHECK(text.find("fopen(") == std::string::npos);
+    CHECK(text.find("std::cout") == std::string::npos);
+    CHECK(text.find("std::cerr") == std::string::npos);
 }
 
 TEST_CASE("player_mode_name names every mode for the status line") {

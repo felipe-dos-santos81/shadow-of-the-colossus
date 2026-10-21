@@ -579,3 +579,77 @@ TEST_CASE("the shipped audio manifest loads every entry") {
         CHECK_MESSAGE(engine.has(name), name);
     }
 }
+
+TEST_CASE("the capture API writes a non-silent 48 kHz WAV from played cues") {
+    const TempDir dir;
+    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
+    const std::filesystem::path manifest =
+        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
+
+    AudioEngine engine;
+    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                    engine.last_error());
+    CHECK_FALSE(engine.capturing());
+    CHECK_FALSE(engine.end_capture());  // nothing to finish
+
+    const std::filesystem::path mix = dir.path() / "capture.wav";
+    REQUIRE_MESSAGE(engine.begin_capture(mix.string()), engine.last_error());
+    CHECK(engine.capturing());
+    CHECK_FALSE(engine.begin_capture((dir.path() / "second.wav").string()));
+    CHECK(engine.last_error().find("in progress") != std::string::npos);
+
+    // The cue is played after the capture starts; no device may open.
+    engine.play_ui("tone");
+    CHECK(engine.queued_audio_bytes() == 0);
+    for (int frame = 0; frame < 60; ++frame) {
+        engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
+    }
+    CHECK(engine.captured_frames() == 48000);
+    REQUIRE_MESSAGE(engine.end_capture(), engine.last_error());
+    CHECK_FALSE(engine.capturing());
+    CHECK(engine.queued_audio_bytes() == 0);  // still no device
+
+    const AudioClip clip = read_mixdown(mix);
+    CHECK(clip.frames() == 48000);
+    CHECK(stereo_rms(clip) > 0.05f);
+    CHECK(peak(clip) > 0.1f);
+    CHECK(peak(clip) <= 1.0f);
+
+    // 60 frames at 1/60 s is exactly one second of 48 kHz stereo float32.
+    CHECK(std::filesystem::file_size(mix) == 44u + 48000u * 2u * 4u);
+}
+
+TEST_CASE("the master gain keeps a music+SFX sum under 0.99") {
+    const TempDir dir;
+    // The realistic worst pair: a 0.5-peak music bed (category 0.7) under a
+    // 0.8-peak one-shot (category 1.0) sums to 1.15 before the master stage.
+    write_tone_wav(dir, "audio/test/score.wav", 1.0f, 0.5f, 1);
+    write_tone_wav(dir, "audio/test/impact.wav", 1.0f, 0.8f, 1);
+    write_tone_wav(dir, "audio/test/full.wav", 1.0f, 1.0f, 1);
+    const std::filesystem::path manifest =
+        write_manifest(dir, {{"score", "audio/test/score.wav", 1, 48000, 1},
+                             {"impact", "audio/test/impact.wav", 1, 48000, 0},
+                             {"full", "audio/test/full.wav", 1, 48000, 0}});
+
+    AudioEngine engine;
+    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                    engine.last_error());
+
+    engine.play_music("score");
+    engine.play_ui("impact");
+    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "sum.wav").string(), 1),
+                    engine.last_error());
+    const AudioClip sum = read_mixdown(dir.path() / "sum.wav");
+    // Without the 0.85 master gain this block would peak at 1.15 (clamped);
+    // with it the sum lands at 0.9775, inside the 0.99 delivery ceiling.
+    CHECK(peak(sum) == doctest::Approx(AudioEngine::kMasterGain * 1.15f).epsilon(0.01));
+    CHECK(peak(sum) <= 0.99f);
+
+    // A lone full-scale sample proves the stage itself: exactly -1.41 dB.
+    engine.reset();
+    engine.play_ui("full");
+    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "full.wav").string(), 1),
+                    engine.last_error());
+    const AudioClip full = read_mixdown(dir.path() / "full.wav");
+    CHECK(peak(full) == doctest::Approx(AudioEngine::kMasterGain).epsilon(0.001));
+}

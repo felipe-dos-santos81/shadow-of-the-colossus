@@ -53,7 +53,11 @@ void print_usage(FILE* out) {
                  "                    steps; print s42-status, exit\n"
                  "  --s42-stills DIR  with --s42-selftest: write the stomp telegraph\n"
                  "                    and impact, club, hurt, death and arm-weakpoint\n"
-                 "                    stills to DIR\n");
+                 "                    stills to DIR\n"
+                 "  --s5-selftest     run the same timeline with the curated audio on;\n"
+                 "                    print s5-event/s5-status and capture the mix\n"
+                 "                    (requires --audio-mixdown)\n"
+                 "  --audio-mixdown PATH  the --s5-selftest WAV capture destination\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -107,12 +111,17 @@ int main(int argc, char** argv) {
             opts.s42Selftest = true;
             continue;
         }
+        if (arg == "--s5-selftest") {
+            opts.s5Selftest = true;
+            continue;
+        }
 
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
                                  arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
                                  arg == "--entity-time" || arg == "--camera-target" ||
-                                 arg == "--s41-stills" || arg == "--s42-stills";
+                                 arg == "--s41-stills" || arg == "--s42-stills" ||
+                                 arg == "--audio-mixdown";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -163,6 +172,8 @@ int main(int argc, char** argv) {
             opts.s41StillsDir = value;
         } else if (arg == "--s42-stills") {
             opts.s42StillsDir = value;
+        } else if (arg == "--audio-mixdown") {
+            opts.audioMixdownPath = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -215,6 +226,28 @@ int main(int argc, char** argv) {
     }
     if (opts.s42Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s42-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s5Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s5Selftest && opts.s42Selftest) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s5-selftest and --s42-selftest run the same timeline; "
+                     "pass one\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s5Selftest && opts.audioMixdownPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --audio-mixdown PATH\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.audioMixdownPath.empty() && !opts.s5Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --audio-mixdown needs --s5-selftest\n");
         print_usage(stderr);
         return 2;
     }

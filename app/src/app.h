@@ -105,6 +105,15 @@ struct AppOptions {
     // the `s42-*` event lines and `s42-status`, and exits 0. Requires --manifest
     // (with an entity) and --model.
     bool s42Selftest = false;
+    // --s5-selftest: the same S4.2 timeline with the S5 audio observer enabled
+    // (design §7.4, ruling D11). Every played cue prints an `s5-event` line, the
+    // mix is captured to `audioMixdownPath` (required) as a 48 kHz float WAV,
+    // and `s5-status` closes the run. A missing cue clip or a silent mixdown is
+    // fatal (exit 1). The simulation is untouched: with audio off the `s42-*`
+    // lines are byte-identical.
+    bool s5Selftest = false;
+    // --audio-mixdown PATH: the --s5-selftest capture destination.
+    std::string audioMixdownPath;
     // --s41-stills DIR: with --s41-selftest, write one PNG per fight phase
     // (grab, mid-climb, strike, reaction) into DIR, plus the defeat still and
     // its two pixel controls under DIR/control/. The acceptance script creates
