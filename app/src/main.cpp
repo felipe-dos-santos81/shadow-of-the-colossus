@@ -51,8 +51,9 @@ void print_usage(FILE* out) {
                  "                    weakpoint, gate, arm-route, stomp, club, death,\n"
                  "                    reset and stamina timeline through fixed 1/60 s\n"
                  "                    steps; print s42-status, exit\n"
-                 "  --s42-stills DIR  with --s42-selftest: write the stomp, club, hurt,\n"
-                 "                    death and arm-weakpoint stills to DIR\n");
+                 "  --s42-stills DIR  with --s42-selftest: write the stomp telegraph\n"
+                 "                    and impact, club, hurt, death and arm-weakpoint\n"
+                 "                    stills to DIR\n");
 }
 
 bool parse_int(const char* text, int& out) {

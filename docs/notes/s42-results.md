@@ -109,6 +109,17 @@ s42-status proxy=2 gate_foot=0 gate_head=34 arm_band=right_arm arm_weakpoint=1 a
 The status line is one field per phase and agrees with every event line; the acceptance checks
 both the literals and the agreement, so a status schema drift cannot pass silently.
 
+**Whole-branch review follow-up.** `apply_valus_impact` used to build the closest point from the
+damage joint's own XZ, so the club and the stomp measured only vertical separation and ignored
+horizontal distance: every grounded player in the club's 14 m cone took 45, and the 2.5–6 m
+shockwave band was unreachable. The distance now comes from `player_capsule_distance`
+(`app/src/collision.cpp`), the same function the weakpoint gate uses, and the timeline's club/stomp
+phase adds two production-path probes: a club tip 4 m from the target (**0** damage) and a stomp
+foot 3 m away (**15**, the shockwave). The new literal is `s42-miss club=0 stomp=15`, printed
+between `s42-stomp` and `s42-club`; every line above is unchanged by the fix. The post-fix
+acceptance re-run is `PASS`; the details are in
+`.superpowers/sdd/2026-10-20-s4-2-he-fights-back/final-fix-report.md`.
+
 ## 3 · Provenance
 
 **Weakpoints — `derived-mesh`.** The strike spheres are computed from the converted glb's own
@@ -167,7 +178,7 @@ run.
 An out-of-band pixel count of the amber bar (design rect 240×8 at x=24, y=652, sampled at 2×)
 confirms the HUD numbers: **480** px wide (100 %) in the stomp telegraph, **312** (65 %) in the
 stomp impact, **96** (20 %) in the hurt still, and **0** in the death still (a zero-width bar at
-0 HP). The captures are observations: the run was repeated without `--s42-stills` and the ten
+0 HP). The captures are observations: the run was repeated without `--s42-stills` and the
 `s42-*` event/status lines were byte-identical. (The still capture selects the current mode clip
 one step earlier than the timeline would, so the log gains a few `s2-anim` lines; every playback
 clock is restored and no `s42-*` value changes.)
@@ -235,8 +246,8 @@ reaction moment. The S4.1 guards stayed green (they require ≥ 500 red/green pi
   The S4.2 death still is a grounded death (club), but the same state machine owns both paths.
 - **R10 — club bbox, HUD-free plain captures.** The S4 entity bbox unions the club's mesh range
   (the S4 status above) and plain `--screenshot` captures stay HUD-free; the `--s42-stills` path
-  (like `--s41-stills`) feeds `hud_state(true)` itself. R10 also retuned the head/neck bands; the
-  S4.1 regression still passes.
+  (like `--s41-stills`) feeds `hud_state(true)` itself. S4.1's R10 also retuned the head/neck
+  bands; the S4.1 regression still passes.
 - **R11 — the stills hook.** `--s42-stills DIR` mirrors `--s41-stills`: six named captures, a
   precondition on `--s42-selftest`, and no change to the timeline's assertions, damage numbers or
   windows. Each capture snapshots and restores the playback clocks.

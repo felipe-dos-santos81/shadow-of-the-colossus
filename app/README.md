@@ -104,7 +104,7 @@ is required. Escape or the close button quits.
 | `--s4-selftest` | compose the encounter `--manifest`, pin the entity at t=0, assert the spawn is clear and the entity's feet are on the ground, walk the player into the nearest leg capsule until the collision stops it, print the `s4-status`/`s4-spawn`/`s4-entity`/`s4-walk` lines, exit; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
 | `--s41-selftest` | compose the encounter `--manifest` and run the deterministic climb/fight timeline through fixed 1/60 s steps with no window input: S4's approach, grab, 240-frame climb, full-charge head strike, catch, missed catch, forced stamina fall, killing blow, and the post-kill settle to a landed player; prints the `s41-*` lines and `s41-status`, exits 1 on a failed invariant; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
 | `--s41-stills DIR` | with `--s41-selftest`, write `grab.png`, `mid-climb.png`, `strike.png` and `reaction.png` into `DIR`, plus the defeat still (to `--screenshot`, else `DIR/defeat.png`) and the pixel controls under `DIR/control/`; both `DIR` and `DIR/control/` must exist (the acceptance script creates them) |
-| `--s42-selftest` | compose the encounter `--manifest` and run the deterministic S4.2 fight timeline through fixed 1/60 s steps with no window input: both shell proxies, the foot/head damage gate, the chest→shoulder→arm route, a stomp and a club hit (with the i-frame gate), a lethal club with the pinned death clip, the R soft reset, and the teleport-free foot→head stamina climb; prints the `s42-*` lines and `s42-status`, exits 1 on a failed invariant; needs `--manifest` (with an entity) and `--model` |
+| `--s42-selftest` | compose the encounter `--manifest` and run the deterministic S4.2 fight timeline through fixed 1/60 s steps with no window input: both shell proxies, the foot/head damage gate, the chest→shoulder→arm route, a stomp and a club hit (with the i-frame gate), the 4 m club miss and the 3 m stomp shockwave, a lethal club with the pinned death clip, the R soft reset, and the teleport-free foot→head stamina climb; prints the `s42-*` lines and `s42-status`, exits 1 on a failed invariant; needs `--manifest` (with an entity) and `--model` |
 | `--s42-stills DIR` | with `--s42-selftest`, write six HUD-bearing stills into `DIR`: `stomp-telegraph.png`, `stomp-impact.png`, `club-swing.png`, `hurt.png`, `death.png`, `arm-weakpoint.png`; each capture restores the playback clocks, so the `s42-*` event lines are identical with and without stills; `DIR` must exist (the acceptance script creates it) |
 
 ## Manifests
@@ -236,9 +236,11 @@ strike that dealt the wrong damage, a death clip that did not freeze, …).
 `--s42-selftest` is the deterministic S4.2 timeline. It runs from the pinned stand
 pose through both shell proxies, a foot clang and a head strike (34), the
 chest→shoulder→arm route to the right-arm weakpoint (34), a stomp (35) with the
-i-frame gate, a club hit (45), a lethal club with the pinned player death clip,
-the full R soft reset, and finally the real teleport-free foot→head climb on the
-pinned stamina drains. The event lines, verbatim:
+i-frame gate, the range split (a club tip 4 m from the target deals 0, a stomp
+3 m from the foot deals the 15 shockwave), a club hit (45), a lethal club with
+the pinned player death clip, the full R soft reset, and finally the real
+teleport-free foot→head climb on the pinned stamina drains. The event lines,
+verbatim:
 
 ```text
 s42-proxy weakpoint=0 radius=1.955
@@ -246,6 +248,7 @@ s42-proxy weakpoint=1 radius=2.165
 s42-gate foot=0 head=34
 s42-arm band=right_arm weakpoint=1 damage=34
 s42-stomp damage=35 health=100->65 mode=hurt
+s42-miss club=0 stomp=15
 s42-club damage=45 health=65->20
 s42-death clip=player_a_fall_damage_to_death mode=dead
 s42-reset health=100 stamina=100 mode=grounded valus=100
@@ -272,9 +275,11 @@ clips (`minotaur_a_add_head_damage`, `minotaur_a_add_ude_r_damage`,
 `minotaur_a_add_mune_r_damage`, `minotaur_a_atk_leg_l`,
 `minotaur_a_atk_leg_r`, `minotaur_a_atk_weapon2_a`, `minotaur_a_death_front`)
 must all be in the loaded glbs; the club (`c01_minotaur_a_weapon.glb`) must be in
-the library and `OptBone_sword` in the entity rig. A missing name is a load error
-(exit 2) naming the glb and the clip — never a silent fallback to the first clip.
-The S3 arena has no entity and needs none of them.
+the library and `OptBone_sword` in the entity rig. A missing clip (or a missing
+club glb) is a load error (exit 2) naming the glb and the clip — never a silent
+fallback to the first clip. A rig without `OptBone_sword` degrades instead: one
+line on stderr and no club drawn, so the fight still loads without its prop. The
+S3 arena has no entity and needs none of them.
 
 ## Tests
 

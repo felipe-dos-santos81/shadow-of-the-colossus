@@ -779,13 +779,14 @@ bool finite_position(Vec3 p) {
 }
 
 // The combat clips the player's mode selector names, resolved once at load.
+// The heavy hurt pair (`player_a_damage_h_fly1` / `..._h_fly_end`) is not a
+// field: the mode selector plays it as one timed pair, and the load gate below
+// requires both by name through kHeavyHurtClip / kHeavyHurtEndClip.
 struct PlayerClips {
     int gripLoop = -1;
     int gripMove = -1;
     int strike = -1;
     int fall = -1;
-    int hurtHeavy = -1;
-    int hurtHeavyEnd = -1;
     int death = -1;
 };
 
@@ -807,8 +808,6 @@ PlayerClips resolve_player_clips(const Playback& playback) {
                        clip_index_named(playback, kGripMoveClip),
                        clip_index_named(playback, kGripAttackClip),
                        clip_index_named(playback, kFallClip),
-                       clip_index_named(playback, kHeavyHurtClip),
-                       clip_index_named(playback, kHeavyHurtEndClip),
                        clip_index_named(playback, kPlayerDeathClip)};
 }
 
@@ -1870,7 +1869,8 @@ int run_app(const AppOptions& opts) {
             const auto control_path = [&](const char* name) {
                 return still_dir() + "control/" + name + ".png";
             };
-            const auto render_still = [&](const std::string& path, bool hudVisible) {
+            const auto render_still = [&](const std::string& path, bool hudVisible,
+                                          bool includeClub = true) {
                 // Select the mode's clip before posing: the step's own clip
                 // selection runs before the step, so the grab frame still
                 // carries the locomotion clip (the one-frame lag Task 6
@@ -1878,7 +1878,11 @@ int run_app(const AppOptions& opts) {
                 // the mode clip at its current time (0 on entry).
                 const PlayerInput no_input;
                 update_combat_clips(playback, scene, combat, no_input, /*manualClip=*/false);
-                update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                // A control that has translated the club out of view passes
+                // includeClub=false: update_all_poses would otherwise re-place
+                // the club from the socket after that offset.
+                update_all_poses(renderer, scene, playbacks, 0.0f,
+                                 includeClub ? club : ClubAttachment{});
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
                 renderer.set_hud(hud_state(hudVisible));
@@ -1894,12 +1898,12 @@ int run_app(const AppOptions& opts) {
                 render_still(path, /*hudVisible=*/true);
             };
             const auto capture_control = [&](const char* phase, const std::string& path,
-                                             bool hudVisible) {
+                                             bool hudVisible, bool includeClub = true) {
                 if (opts.s41StillsDir.empty()) {
                     return;
                 }
                 std::printf("s41-control phase=%s path=%s\n", phase, path.c_str());
-                render_still(path, hudVisible);
+                render_still(path, hudVisible, includeClub);
             };
             // The player's own projected bounds for a still. The picture is the
             // authority, but a radius regression that hides the player inside
@@ -2592,7 +2596,9 @@ int run_app(const AppOptions& opts) {
                     std::min(entity_rig.meshEnd, scene.meshes.size());
                 // Hide the club with the body it is attached to: it is static
                 // geometry, so the entity mesh range alone would leave it
-                // floating in the control frame.
+                // floating in the control frame. The control's pose update
+                // skips the club too (includeClub=false), or update_club_model
+                // would re-place it from the socket after this offset.
                 std::vector<std::size_t> hidden;
                 for (std::size_t i = std::min(entity_rig.meshBegin, entity_mesh_end);
                      i < entity_mesh_end; ++i) {
@@ -2610,7 +2616,7 @@ int run_app(const AppOptions& opts) {
                     scene.meshes[i].model.m[12] += 100000.0f;
                 }
                 capture_control("defeat-noentity", control_path("defeat-noentity"),
-                                /*hudVisible=*/true);
+                                /*hudVisible=*/true, /*includeClub=*/false);
                 for (std::size_t slot = 0; slot < hidden.size(); ++slot) {
                     scene.meshes[hidden[slot]].model = saved_models[slot];
                 }
