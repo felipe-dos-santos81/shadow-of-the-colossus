@@ -1079,6 +1079,61 @@ TEST_CASE("lethal damage while falling sets pendingDeath and resolves to dead on
     CHECK_FALSE(combat.pendingDeath);
 }
 
+TEST_CASE("a lethal fall cannot be caught: the grab press is ignored and the landing kills") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    Heightmap ground = flat_heightmap();
+    PlayerState player{};
+    player.position = Vec3{0.0f, 8.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    const CombatTuning tuning{};
+
+    REQUIRE(player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep)
+                .grabbed);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+
+    // Force the grip break that opens the 0.6 s catch window.
+    combat.stamina = 0.0f;
+    const StepEvents broke =
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+    REQUIRE(broke.gripBroke);
+    REQUIRE(combat.mode == PlayerMode::Falling);
+    REQUIRE(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
+    combat.stamina = 100.0f;  // the forced-break scaffolding refills the pool
+
+    // R7: the lethal hit closes the window with the pending death.
+    combat.invulnSeconds = 0.0f;
+    combat.health = 30.0f;
+    REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning));
+    CHECK(combat.health == doctest::Approx(0.0f));
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.pendingDeath);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(0.0f));
+    CHECK_FALSE(combat.heavyHit);  // the landing never reads the heavy clip pair
+
+    // Release the held grab, then press fresh: no attach, no grab event.
+    input.grab = false;
+    player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+    REQUIRE(combat.mode == PlayerMode::Falling);
+    input.grab = true;
+    const StepEvents press =
+        player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+    CHECK_FALSE(press.grabbed);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.band == ClimbBandId::Count);
+
+    int frames = 0;
+    StepEvents last{};
+    while (combat.mode == PlayerMode::Falling && frames < 600) {
+        last = player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
+        ++frames;
+    }
+    CHECK(combat.mode == PlayerMode::Dead);
+    CHECK(last.landed);
+}
+
 TEST_CASE("damage while staggered cancels the stagger into hurt") {
     const CombatTuning tuning{};
     PlayerCombat combat{};

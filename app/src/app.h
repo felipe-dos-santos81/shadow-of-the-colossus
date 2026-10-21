@@ -6,8 +6,10 @@
 // plus the one reaction/death clip currently playing and how long it has run.
 // `reactionClip` is an index into the entity rig's Playback (-1 = none), never a
 // clip name: the app resolves the R3 names once at load.
+inline constexpr float kEncounterMaxHealth = 100.0f;
+
 struct Encounter {
-    float health = 100.0f;
+    float health = kEncounterMaxHealth;
     bool defeated = false;
     int reactionClip = -1;
     float reactionSeconds = 0.0f;
@@ -18,7 +20,7 @@ struct Encounter {
 // caller also returns the entity playback to its manifest stand clip; this
 // helper owns the state, not the clip.
 inline void reset_encounter(Encounter& encounter) {
-    encounter.health = 100.0f;
+    encounter.health = kEncounterMaxHealth;
     encounter.defeated = false;
     encounter.reactionClip = -1;
     encounter.reactionSeconds = 0.0f;

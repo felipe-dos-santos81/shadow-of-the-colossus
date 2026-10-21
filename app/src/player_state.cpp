@@ -181,13 +181,10 @@ bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& 
     return vec3_dot(delta, delta) <= radius * radius;
 }
 
-// Leaves every fight-bearing attachment/rumble field behind and enters the
-// ground damage reaction. `heavy` selects the long h_fly1 -> h_fly_end pair.
-void enter_hurt(PlayerCombat& combat, bool heavy) {
-    combat.mode = PlayerMode::Hurt;
-    combat.modeSeconds = 0.0f;
-    combat.heavyHit = heavy;
-    combat.pendingDeath = false;
+// Removes every field that only an attachment, charge or fall owns. Health,
+// mode and modeSeconds stay the caller's business, so Hurt, Dead and the R
+// reset share one sweep instead of three drifting copies.
+void clear_fight_attachment(PlayerCombat& combat) {
     combat.band = ClimbBandId::Count;
     combat.bandT = 0.5f;
     combat.weakpoint = -1;
@@ -197,6 +194,16 @@ void enter_hurt(PlayerCombat& combat, bool heavy) {
     combat.fallVelocity = 0.0f;
 }
 
+// Leaves every fight-bearing attachment/rumble field behind and enters the
+// ground damage reaction. `heavy` selects the long h_fly1 -> h_fly_end pair.
+void enter_hurt(PlayerCombat& combat, bool heavy) {
+    combat.mode = PlayerMode::Hurt;
+    combat.modeSeconds = 0.0f;
+    combat.heavyHit = heavy;
+    combat.pendingDeath = false;
+    clear_fight_attachment(combat);
+}
+
 // The terminal ground state: the app plays the death clip once and pins it.
 // A dead player has no attachment, charge or pending fall left.
 void enter_dead(PlayerCombat& combat) {
@@ -204,13 +211,7 @@ void enter_dead(PlayerCombat& combat) {
     combat.modeSeconds = 0.0f;
     combat.heavyHit = false;
     combat.pendingDeath = false;
-    combat.band = ClimbBandId::Count;
-    combat.bandT = 0.5f;
-    combat.weakpoint = -1;
-    combat.charge = 0.0f;
-    combat.strikeHit = false;
-    combat.catchSecondsLeft = 0.0f;
-    combat.fallVelocity = 0.0f;
+    clear_fight_attachment(combat);
 }
 
 }  // namespace
@@ -493,9 +494,11 @@ bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
 
     if (combat.mode == PlayerMode::Falling) {
         // The fall owns the transition: lethal damage only arms the landing.
-        combat.heavyHit = heavy;
+        // R7: a killing hit also closes the catch window, so a grab press
+        // cannot escape the death the landing owes.
         if (combat.health <= 0.0f) {
             combat.pendingDeath = true;
+            combat.catchSecondsLeft = 0.0f;
         }
         return true;
     }
@@ -518,15 +521,9 @@ void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPo
     combat.modeSeconds = 0.0f;
     combat.stamina = kMaxStamina;
     combat.regenDelay = 0.0f;
-    combat.band = ClimbBandId::Count;
-    combat.bandT = 0.5f;
-    combat.weakpoint = -1;
-    combat.strikeHit = false;
+    clear_fight_attachment(combat);
     combat.grabWasDown = false;
     combat.strikeWasDown = false;
-    combat.charge = 0.0f;
-    combat.catchSecondsLeft = 0.0f;
-    combat.fallVelocity = 0.0f;
     combat.health = std::isfinite(tuning.maxHealth) ? std::max(0.0f, tuning.maxHealth) : 0.0f;
     combat.invulnSeconds = 0.0f;
     combat.heavyHit = false;
