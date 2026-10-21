@@ -21,6 +21,17 @@ bool is_finite(Vec3 p) {
 
 }  // namespace
 
+float player_capsule_distance(Vec3 feet, Vec3 point) {
+    // The closest point on the player's own segment, not on the point's XZ:
+    // the horizontal offset is the reach that makes an attack miss.
+    const Vec3 closest{feet.x, std::clamp(point.y, feet.y, feet.y + kPlayerCapsuleHeight),
+                       feet.z};
+    const float dx = point.x - closest.x;
+    const float dy = point.y - closest.y;
+    const float dz = point.z - closest.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& capsules) {
     const float feet = player.position.y;
     const float head = feet + kPlayerCapsuleHeight;

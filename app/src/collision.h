@@ -33,6 +33,16 @@ struct Capsule {
 inline constexpr float kPlayerCapsuleRadius = 0.35f;
 inline constexpr float kPlayerCapsuleHeight = 1.7f;
 
+// The distance from `point` to the player's vertical capsule *axis* at `feet`:
+// the segment [feet, feet + kPlayerCapsuleHeight]. The closest point keeps the
+// horizontal offset and only clamps y, so a point beside the player is as far
+// away as it stands — not merely as high as it sits. The weakpoint strike gate
+// (`strike_reaches_shell`) and Valus's attack damage gate
+// (`apply_valus_impact`) both measure reach with this one function, so the two
+// gates cannot drift apart. A non-finite input answers a non-finite distance;
+// both callers already reject that.
+float player_capsule_distance(Vec3 feet, Vec3 point);
+
 // Pushes `player` out of every capsule that overlaps its vertical span, in two
 // iterations. A capsule is skipped when its y extent (expanded by its radius)
 // does not overlap [position.y, position.y + kPlayerCapsuleHeight] — walking

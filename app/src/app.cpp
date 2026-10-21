@@ -1128,10 +1128,11 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
 
 // Applies one attack's damage at the frame its window first opens (the caller
 // marks attackHit before calling, so it can never fire twice). The reach is the
-// distance from the posed damage joint to the player's capsule axis (feet to
-// feet + kPlayerCapsuleHeight), the same shape the weakpoint gate uses. An
-// attached player takes no damage (design §7.4); Dead and the i-frame window
-// are player_take_damage's own gates.
+// distance from the posed damage joint to the player's capsule segment (feet to
+// feet + kPlayerCapsuleHeight), measured by player_capsule_distance — the same
+// shape and the same function the weakpoint gate uses. An attached player takes
+// no damage (design §7.4); Dead and the i-frame window are player_take_damage's
+// own gates.
 void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
                         const PlayerFrame& frame, const CombatTuning& tuning,
                         ValusAttack attack) {
@@ -1143,12 +1144,7 @@ void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
     if (joint == nullptr || !frame.jointWorld || !frame.jointWorld(joint, point)) {
         return;
     }
-    const float top = player.position.y + kPlayerCapsuleHeight;
-    const Vec3 nearest{point.x, std::clamp(point.y, player.position.y, top), point.z};
-    const float dx = point.x - nearest.x;
-    const float dy = point.y - nearest.y;
-    const float dz = point.z - nearest.z;
-    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const float distance = player_capsule_distance(player.position, point);
     if (!std::isfinite(distance)) {
         return;
     }

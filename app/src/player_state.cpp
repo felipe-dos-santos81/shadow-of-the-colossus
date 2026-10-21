@@ -180,8 +180,9 @@ void drain_stamina(PlayerCombat& combat, float rate, float dt) {
 // to feet + kPlayerCapsuleHeight — to the shell centre; the hit lands when that
 // distance is within the shell radius. The segment, not the feet: the S4.1 head
 // strike's capsule top sits ~1.27 m from the shell centre while the feet sit
-// ~2.14 m away. A band with no weakpoint, an empty or failing lookup, or a
-// non-finite shell answers false.
+// ~2.14 m away. player_capsule_distance is shared with Valus's attack gate, so
+// the two reach tests cannot measure different shapes. A band with no
+// weakpoint, an empty or failing lookup, or a non-finite shell answers false.
 bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& lookup) {
     if (weakpoint < 0 || !lookup) {
         return false;
@@ -196,10 +197,7 @@ bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& 
         !std::isfinite(radius) || radius < 0.0f) {
         return false;
     }
-    const float closestY =
-        std::clamp(center.y, feet.y, feet.y + kPlayerCapsuleHeight);
-    const Vec3 delta{center.x - feet.x, center.y - closestY, center.z - feet.z};
-    return vec3_dot(delta, delta) <= radius * radius;
+    return player_capsule_distance(feet, center) <= radius;
 }
 
 // Removes every field that only an attachment, charge or fall owns. Health,
