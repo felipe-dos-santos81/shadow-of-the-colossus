@@ -424,8 +424,9 @@ Open (Task 2 must not assume otherwise):
 
 1. the exact NGS2 filter-5..7 coefficients (the fitted table is documented above);
 2. the name→wave resolution for banks whose `TONE` table is not the flat 12-byte form
-   used by boss01; the attribution note uses the boss01 request-order/TONE chain and
-   explicit audition indices for the other banks.
+   used by boss01; the attribution note uses the decoded `PLAY_TONE` chain for
+   `valus.impact` and explicit audition indices elsewhere (the boss01 voice bytecode is a
+   parameter envelope with complex/random `PLAY_TONE` operands, not a fixed tone).
 
 ## 8. Converter policy (from the measured facts)
 
@@ -451,3 +452,7 @@ the measurements that drive them:
   `s5_audition.py --check` proves each mapped wave is 48 kHz, non-silent and full length.
   The resident 0x21 clips are mono/stereo PS-ADPCM at 48 kHz; 0x42 clips are AT9 and follow
   the same ffmpeg path as the music.
+* **Layered cues are mixed with equal gain.** `valus.impact` is waves 26-30; the converter
+  default is to sum all layers with `1/N` gain (padded to the longest layer), as
+  `s5_audition.py` does for `out/s5/audition/boss01/valus.impact_mix.wav`. The map's
+  `layers` is the full set including the primary.

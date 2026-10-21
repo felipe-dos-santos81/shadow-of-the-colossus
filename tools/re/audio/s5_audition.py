@@ -6,14 +6,16 @@ loader-derived payload formula (`wave_record_offset + 0x24 + start`, see
 `docs/notes/s5-audio-recon.md` §7), writes WAVs under
 `out/s5/audition/<bank>/`, and with `--check` fails if:
 
-* any of the seven core events has no cue row with a valid wave (or is also
-  listed as deferred);
-* a `ghidra` row's `reqd` does not match the NAME hash, or its
+* any of the seven core events has no cue row with a valid wave, or is
+  `status=deferred`, or is also listed as deferred;
+* a `ghidra` row is missing `reqd`/`tone`, its `reqd` does not match the NAME
+  hash, the actual `SEQD`/`PLAY_TONE` walk does not return the mapped tone, or
   `TONE[tone].wave` does not equal the mapped wave;
 * an `audition` row does not set `verified_index` (identity is not claimed);
-* two cue rows share a name;
-* a mapped wave is missing, silent, not 48 kHz, or shorter/longer than the
-  record by more than 50 ms.
+* two cue rows share a name, or a row's `layers` is malformed;
+* any layer in a cue is missing, silent, not 48 kHz, or shorter/longer than the
+  record by more than 50 ms.  `layers` is the full set including the primary
+  (`layers[0] == wave`); a multi-layer cue also gets an equal-gain mix WAV.
 
 Usage
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
@@ -33,6 +35,7 @@ import os
 import struct
 import subprocess
 import sys
+import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import s5_decode_gate as gate  # noqa: E402
@@ -119,6 +122,121 @@ def tone_wave(buf, chunks, tone):
     if tone < 0 or off + 12 > to + 8 + ts:
         return None
     return struct.unpack_from("<6H", buf, off)[4]
+
+
+def reqd_sequence(buf, chunks, reqd):
+    """REQD[reqd] +0x0C: the SEQD byte offset the request plays."""
+    if "REQD" not in chunks or "SEQD" not in chunks:
+        return None
+    table = gate.table_records(buf, chunks["REQD"][0], "<audition>")
+    if not 0 <= reqd < len(table):
+        return None
+    return struct.unpack_from("<I", buf, table[reqd][0] + 0x0C)[0]
+
+
+def simple_operand(buf, pos):
+    """Decode a 0x00/0x10 (decimal) PLAY_TONE operand; None for complex types."""
+    if pos >= len(buf):
+        return None
+    b0 = buf[pos]
+    typ = b0 >> 4
+    n = b0 & 0x0F
+    if typ not in (0, 1) or n == 0 or pos + n >= len(buf):
+        return None
+    value = 0
+    for k in range(n):
+        x = buf[pos + 1 + k]
+        value = (x & 0x0F) + value * 100 + (x >> 4) * 10
+    return -value if typ == 1 else value
+
+
+def walk_play_tone(bank, reqd, scan=4096):
+    """Walk REQD -> SEQD timeline/sub-table -> first simple `a4` tone.
+
+    Timeline entry (20 B): u16 +0x04 == 0x4000, next offset u32 +0x0C.
+    Sub-table entry (24 B): u16 +0x0C == 0x4000, next offset u32 +0x14.
+    Offsets are 4-byte aligned before following.  Returns None when the
+    bytecode only has complex/random PLAY_TONE operands (e.g. the voice
+    envelopes), which is a hard failure for a `ghidra` row.
+    """
+    buf = bank["buf"]
+    seq = reqd_sequence(buf, bank["chunks"], reqd)
+    if seq is None:
+        return None
+    so, ss = bank["chunks"]["SEQD"]
+    for cand in (seq, seq & ~3, (seq + 3) & ~3):
+        p = so + cand
+        seen = set()
+        followed = False
+        for _ in range(8):
+            if p + 24 > len(buf):
+                break
+            if struct.unpack_from("<H", buf, p + 0x04)[0] == 0x4000:
+                nxt = struct.unpack_from("<I", buf, p + 0x0C)[0] & ~3
+                followed = True
+            elif struct.unpack_from("<H", buf, p + 0x0C)[0] == 0x4000:
+                nxt = struct.unpack_from("<I", buf, p + 0x14)[0] & ~3
+                followed = True
+            else:
+                break
+            if nxt in seen:
+                break
+            seen.add(nxt)
+            p = so + nxt
+        if not followed:
+            continue
+        for j in range(0, min(scan, len(buf) - p - 2)):
+            if buf[p + j] == 0xA4:
+                tone = simple_operand(buf, p + j + 1)
+                if tone is not None and 0 <= tone < 1000:
+                    return tone
+    return None
+
+
+def read_wav_pcm(path):
+    """Return (channels, rate, [channel sample lists]) from a pcm_s16le WAV."""
+    with wave.open(path, "rb") as fh:
+        channels = fh.getnchannels()
+        rate = fh.getframerate()
+        frames = fh.getnframes()
+        raw = fh.readframes(frames)
+    data = struct.unpack("<%dh" % (frames * channels), raw) if raw else ()
+    out = [[] for _ in range(channels)]
+    for i, value in enumerate(data):
+        out[i % channels].append(value)
+    return channels, rate, out
+
+
+def mix_layers(paths, out_path):
+    """Equal-gain mix of decoded layer WAVs; returns (channels, rate, frames)."""
+    layers = [read_wav_pcm(p) for p in paths]
+    channels, rate = layers[0][0], layers[0][1]
+    for c, r, _ in layers:
+        if c != channels or r != rate:
+            raise AuditionError(
+                f"layer format mismatch: {c}ch/{r}Hz vs {channels}ch/{rate}Hz")
+    frames = max(len(pcm[0]) for _, _, pcm in layers)
+    mix = [[0.0] * frames for _ in range(channels)]
+    # sum per channel, then divide by the number of layers (equal gain)
+    for _, _, pcm in layers:
+        for ch in range(channels):
+            src = pcm[ch]
+            dst = mix[ch]
+            for i, value in enumerate(src):
+                dst[i] += value
+    gain = 1.0 / len(layers)
+    with wave.open(out_path, "wb") as fh:
+        fh.setnchannels(channels)
+        fh.setsampwidth(2)
+        fh.setframerate(rate)
+        out = bytearray()
+        for i in range(frames):
+            for ch in range(channels):
+                value = int(round(mix[ch][i] * gain))
+                value = -32768 if value < -32768 else (32767 if value > 32767 else value)
+                out += struct.pack("<h", value)
+        fh.writeframes(bytes(out))
+    return channels, rate, frames
 
 
 def bank_names(buf, chunks):
@@ -263,7 +381,7 @@ def main(argv=None):
     problems = []
     decoded = 0
 
-    # --- map structure: every core event needs one cue row with a valid wave ---
+    # --- map structure: every core event needs one decoded cue row ---
     seen_events = {}
     seen_names = {}
     for cue in cues:
@@ -281,66 +399,130 @@ def main(argv=None):
         cue = seen_events.get(event)
         if cue is None:
             problems.append(f"{event}: core cue has no row in cues")
-        elif not isinstance(cue.get("wave"), int) or cue["wave"] < 0:
+            continue
+        if cue.get("status") == "deferred":
+            problems.append(f"{event}: core cue is status=deferred")
+        if not isinstance(cue.get("wave"), int) or cue["wave"] < 0:
             problems.append(f"{event}: core cue has no valid wave")
         if event in deferred_events:
             problems.append(f"{event}: core cue is also listed as deferred")
 
-    # --- identity: chain-verified rows must walk, audition rows must be explicit ---
+    rates_used = set()
+    # --- identity + decode, including every layer ---
     for cue in cues:
         event = cue.get("event", "?")
         if cue.get("status") == "deferred" or cue.get("wave") is None:
             print(f"  {event:<16} deferred: {cue.get('reason', 'no wave')}")
+            if event in CORE_EVENTS:
+                problems.append(f"{event}: core cue is deferred")
             continue
         bank = load_bank(args.root, cue["bank"])
         reqd = lookup_name_id(bank["buf"], bank["chunks"], cue.get("name", ""))
         if reqd is None:
             problems.append(f"{event}: name {cue.get('name')!r} is not in the NAME table")
-        elif cue.get("reqd") is not None and int(cue["reqd"]) != reqd:
+        elif cue.get("reqd") is None:
+            problems.append(f"{event}: row is missing reqd")
+        elif int(cue["reqd"]) != reqd:
             problems.append(f"{event}: reqd {cue['reqd']} != NAME lookup {reqd}")
         method = cue.get("method")
+        wave = int(cue["wave"])
+        layers = cue.get("layers") or [wave]
+        if not isinstance(layers, list) or wave not in layers:
+            problems.append(f"{event}: layers must be a list containing the primary wave")
+            layers = [wave]
+        if layers and layers[0] != wave:
+            problems.append(f"{event}: primary wave must be layers[0]")
+        if len(set(layers)) != len(layers):
+            problems.append(f"{event}: layers contains duplicates")
         if method == "ghidra":
             tone = cue.get("tone")
             if tone is None:
                 problems.append(f"{event}: ghidra row is missing tone")
+            elif cue.get("reqd") is None:
+                problems.append(f"{event}: ghidra row is missing reqd")
             else:
-                tw = tone_wave(bank["buf"], bank["chunks"], int(tone))
-                if tw != int(cue["wave"]):
+                walked = walk_play_tone(bank, int(cue["reqd"]))
+                if walked != int(tone):
                     problems.append(
-                        f"{event}: TONE[{tone}].wave={tw} != mapped wave {cue['wave']}")
-                else:
-                    print(f"  {event:<16} chain: reqd {reqd} -> tone {tone} -> wave {tw}")
+                        f"{event}: walked PLAY_TONE {walked} != mapped tone {tone}")
+                tw = tone_wave(bank["buf"], bank["chunks"], int(tone))
+                if tw != wave:
+                    problems.append(
+                        f"{event}: TONE[{tone}].wave={tw} != mapped wave {wave}")
+                if walked == int(tone) and tw == wave:
+                    print(f"  {event:<16} chain: reqd {reqd} -> PLAY_TONE {tone} "
+                          f"-> wave {tw}")
         elif method == "audition":
             if not cue.get("verified_index"):
                 problems.append(f"{event}: audition row must set verified_index")
             else:
-                print(f"  {event:<16} audition: wave {cue['wave']} "
+                print(f"  {event:<16} audition: wave {wave} "
                       "(identity not chain-proven)")
         else:
             problems.append(f"{event}: unknown method {method!r}")
 
         out_dir = os.path.join(args.out, cue["bank"].split(".")[0])
-        wav, stats = decode_wave(bank, int(cue["wave"]), out_dir,
-                                 label=cue.get("name"))
-        cue_problems = check_stats(stats)
+        layer_paths = []
+        primary_stats = None
+        for layer in layers:
+            label = cue.get("name") if len(layers) == 1 else f"{cue.get('name')}_layer{layer}"
+            try:
+                wav_path, stats = decode_wave(bank, int(layer), out_dir, label=label)
+            except (AuditionError, gate.GateError) as exc:
+                problems.append(f"{event}: layer {layer}: {exc}")
+                continue
+            layer_paths.append(wav_path)
+            rates_used.add(stats["rate"])
+            layer_problems = check_stats(stats)
+            if layer_problems:
+                problems.extend(f"{event} layer {layer}: {p}" for p in layer_problems)
+                print(f"  {event:<16} FAIL layer {layer}: {'; '.join(layer_problems)}")
+            else:
+                print(f"  {event:<16} {cue['bank']:<12} w{int(layer):03d} "
+                      f"{cue.get('name', ''):<28} "
+                      f"{stats['duration_s']:.3f} s  {stats['rate']} Hz  "
+                      f"RMS {stats['rms_dbfs']:.1f} dBFS")
+            if int(layer) == wave:
+                primary_stats = stats
+        if len(layers) > 1 and len(layer_paths) == len(layers):
+            mix_path = os.path.join(out_dir, safe(event) + "_mix.wav")
+            try:
+                ch, rate, frames = mix_layers(layer_paths, mix_path)
+                pcm = read_wav_pcm(mix_path)[2]
+                rms = 0.0
+                for c in pcm:
+                    rms += sum(v * v for v in c)
+                total = frames * ch
+                rms = math.sqrt(rms / total) / 32768.0 if total else 0.0
+                mix_problems = []
+                if rate != 48000:
+                    mix_problems.append(f"rate {rate} Hz != 48000")
+                if frames == 0:
+                    mix_problems.append("empty mix")
+                mix_db = 20.0 * math.log10(rms) if rms > 0 else -999.0
+                if mix_db <= RMS_FLOOR_DBFS:
+                    mix_problems.append("silent mix")
+                rates_used.add(rate)
+                if mix_problems:
+                    problems.extend(f"{event} mix: {p}" for p in mix_problems)
+                    print(f"  {event:<16} FAIL mix: {'; '.join(mix_problems)}")
+                else:
+                    print(f"  {event:<16} mixed {len(layers)} layers -> "
+                          f"{os.path.relpath(mix_path, args.out)}")
+            except (AuditionError, gate.GateError) as exc:
+                problems.append(f"{event}: mix failed: {exc}")
         decoded += 1
-        if cue_problems:
-            problems.extend(f"{event}: {p}" for p in cue_problems)
-            print(f"  {event:<16} FAIL {'; '.join(cue_problems)}")
-        else:
-            print(f"  {event:<16} {cue['bank']:<12} w{int(cue['wave']):03d} "
-                  f"{cue.get('name', ''):<28} "
-                  f"{stats['duration_s']:.3f} s  {stats['rate']} Hz  "
-                  f"RMS {stats['rms_dbfs']:.1f} dBFS")
     if args.check and problems:
         print(f"AUDITION FAILED: {len(problems)} problem(s)", file=sys.stderr)
         for p in problems:
             print(f"  {p}", file=sys.stderr)
         return 1
     if args.check:
-        print(f"AUDITION PASSED: {decoded} mapped wave(s), all 48000 Hz, non-silent")
+        rate_text = ", ".join(f"{r}" for r in sorted(rates_used)) or "none"
+        print(f"AUDITION PASSED: {decoded} cue(s), {len(rates_used)} rate(s) "
+              f"({rate_text} Hz), all layers non-silent")
     else:
-        print(f"decoded {decoded} mapped wave(s) (run with --check to gate)")
+        print(f"decoded {decoded} mapped cue(s) (run with --check to gate)")
     return 0
 
 

@@ -9,11 +9,16 @@ mapped wave with the loader-derived payload formula (`wave_record_offset + 0x24 
 caffeinate -dimsu python3 tools/re/audio/s5_audition.py \
     --root "$SOTC_GAME_ROOT" --map tools/re/audio/s5_map.json \
     --out out/s5/audition --check
-  valus.telegraph  chain: reqd 340 -> tone 20 -> wave 3
+  valus.telegraph  audition: wave 3 (identity not chain-proven)
   valus.telegraph  boss01  w003 boss01_vo_atk1            1.202 s  48000 Hz  RMS -15.6 dBFS
-  valus.impact     chain: reqd 303 -> tone 43 -> wave 26
+  valus.impact     chain: reqd 303 -> PLAY_TONE 43 -> wave 26
   valus.impact     boss01  w026 boss01_atk_hit_ground1    7.543 s  48000 Hz  RMS -13.3 dBFS
-  valus.hurt       chain: reqd 331 -> tone 23 -> wave 6
+  valus.impact     boss01  w027 boss01_atk_hit_ground1    3.701 s  48000 Hz  RMS -11.9 dBFS
+  valus.impact     boss01  w028 boss01_atk_hit_ground1    8.153 s  48000 Hz  RMS -10.3 dBFS
+  valus.impact     boss01  w029 boss01_atk_hit_ground1    1.801 s  48000 Hz  RMS  -9.4 dBFS
+  valus.impact     boss01  w030 boss01_atk_hit_ground1    1.785 s  48000 Hz  RMS -10.5 dBFS
+  valus.impact     mixed 5 layers -> boss01/valus.impact_mix.wav
+  valus.hurt       audition: wave 6 (identity not chain-proven)
   valus.hurt       boss01  w006 boss01_vo_dmg1            1.051 s  48000 Hz  RMS -12.4 dBFS
   player.swing     audition: wave 7 (identity not chain-proven)
   player.swing     com_obj w007 wnd_LifeSwd_swish_t1_01   0.465 s  48000 Hz  RMS -10.2 dBFS
@@ -23,55 +28,66 @@ caffeinate -dimsu python3 tools/re/audio/s5_audition.py \
   player.hurt      com_v   w040 bvo_dmg_m                 0.270 s  48000 Hz  RMS  -8.6 dBFS
   player.death     audition: wave 657 (identity not chain-proven)
   player.death     com_b_h w657 b_dead_by_boss            0.812 s  48000 Hz  RMS -15.4 dBFS
-AUDITION PASSED: 7 mapped wave(s), all 48000 Hz, non-silent
+AUDITION PASSED: 7 cue(s), 1 rate(s) (48000 Hz), all layers non-silent
 ```
 
 ## The map
 
 `name` is the **sound-request name** (the `NAME`/`REQD` namespace), not a per-wave label.
-`wave` is the WAVE index the request plays; `layers` lists the other layers of a layered
-sound. `reqd` is the `REQD` record index (NAME hash); `tone` is the `PLAY_TONE` operand
-where the chain is walked. `wave_pool_label` (in the JSON) is the pool string at that WAVE
-index — a label for the record, **not** an identity claim.
+`wave` is the WAVE index the request plays; `layers` is the **full set of waves in the
+sound, including the primary** (`layers[0] == wave`). `reqd` is the `REQD` record index
+(NAME hash); `tone` is the `PLAY_TONE` operand **only where the bytecode was actually
+walked**. `wave_pool_label` (in the JSON) is the pool string at that WAVE index — a label
+for the record, **not** an identity claim.
 
-| event | bank | request name | reqd | tone | wave | layers | method | confidence |
-|---|---|---|---|---|---|---|---|---|
-| `valus.telegraph` | boss01 | `boss01_vo_atk1` | 340 | 20 | 3 | — | ghidra | medium |
-| `valus.impact` | boss01 | `boss01_atk_hit_ground1` | 303 | 43 | 26 | 26-30 | ghidra | high |
-| `valus.hurt` | boss01 | `boss01_vo_dmg1` | 331 | 23 | 6 | — | ghidra | medium |
-| `player.swing` | com_obj | `wnd_LifeSwd_swish_t1_01` | 118 | — | 7 | — | audition | medium |
-| `player.hit` | com_obj | `wnd_swd_hit_gravel_t1_01` | 60 | — | 21 | — | audition | medium |
-| `player.hurt` | com_v | `bvo_dmg_m` | 172 | — | 40 | — | audition | medium |
-| `player.death` | com_b_h | `b_dead_by_boss` | 1573 | — | 657 | — | audition | medium |
+| event | bank | request name | reqd | tone | wave | layers | method | identity conf. | fidelity |
+|---|---|---|---|---|---|---|---|---|---|
+| `valus.telegraph` | boss01 | `boss01_vo_atk1` | 340 | — | 3 | [3] | audition | medium | medium |
+| `valus.impact` | boss01 | `boss01_atk_hit_ground1` | 303 | 43 | 26 | 26-30 | ghidra | high | medium |
+| `valus.hurt` | boss01 | `boss01_vo_dmg1` | 331 | — | 6 | [6] | audition | medium | medium |
+| `player.swing` | com_obj | `wnd_LifeSwd_swish_t1_01` | 118 | — | 7 | [7] | audition | medium | medium |
+| `player.hit` | com_obj | `wnd_swd_hit_gravel_t1_01` | 60 | — | 21 | [21] | audition | medium | medium |
+| `player.hurt` | com_v | `bvo_dmg_m` | 172 | — | 40 | [40] | audition | medium | medium |
+| `player.death` | com_b_h | `b_dead_by_boss` | 1573 | — | 657 | [657] | audition | medium | medium |
 
-**`ghidra`** = the row carries a walked chain. `NAME` hash → `REQD` id → `SEQD` offset →
-`PLAY_TONE` → `TONE[tone].wave`, and `s5_audition.py --check` re-runs the `NAME` hash and
-asserts `TONE[tone].wave == wave`. The boss01 `TONE` table is the flat 12-byte form at
-`TONE+0x20` (`key, key, flags, next, wave, 0`). For `valus.telegraph`/`valus.hurt` the
-tone→wave step is binary; the name→tone step is the request/play-list order
-(`TONE[18..24] → waves 1..7`), hence `medium`.
+**`ghidra`** = the row carries a **walked** chain: `NAME` hash → `REQD` id → `SEQD`
+timeline/sub-table → `PLAY_TONE` operand → `TONE[tone].wave`. `s5_audition.py --check`
+re-runs the NAME hash, **parses the SEQD bytecode and requires the walked tone to equal
+the map's `tone`**, and requires `TONE[tone].wave == wave`. Only `valus.impact` passes
+this. A `ghidra` row that cannot pass the bytecode walk is a hard failure.
 
-**`audition`** = no chain could be completed (the com_obj/com_v/com_b_h `TONE` tables are
-not the flat 12-byte form), so the row is explicitly re-scoped to a **verified index**:
-`verified_index: true` in the JSON, and the script prints "identity not chain-proven".
-The ear remains the final identity check. The scripted check verifies the requirement is
-present, the name is in the `NAME` table, the wave decodes at 48 kHz and is non-silent —
-it does **not** claim identity for these rows.
+**`audition`** = no fixed tone could be walked. The boss01 voice rows are in this class
+because their per-sound bytecode at `0x6ABC` is a **parameter envelope** (`a9`
+`SFX_SET_PARAM`) whose `PLAY_TONE` operands are complex/random (`a4 02 03 …`), not a
+fixed `a4 01 XX`. The com_obj/com_v/com_b_h `TONE` chunks are not the flat 12-byte form
+either. These rows are explicitly re-scoped to a **verified index**
+(`verified_index: true`), and the script prints "identity not chain-proven". The ear is
+the final identity check.
+
+## Layers and the converter decision
+
+`layers` is the full set, primary included. `valus.impact` is the only layered cue
+(waves 26-30); the script decodes **every** layer, fails if any is missing/silent/short,
+and writes an **equal-gain mix** (`1/N` per layer, padded to the longest) to
+`out/s5/audition/boss01/valus.impact_mix.wav`. The safe first-slice converter default is
+to mix all layers with equal gains for the cue; the per-layer WAVs remain available for a
+later per-layer tuning pass. Task 3 should implement that mix in the converter.
 
 ## Evidence per cue
 
 * **`valus.impact` — boss01 w026 (`boss01_atk_hit_ground1`).** `NAME` hash → `REQD` 303 →
   `SEQD` timeline `+0x13E4` → bytecode `+0x23BA` → `a4 01 43` (`PLAY_TONE 43`) →
   `TONE[43] = (key 57, wave 26)`. The sequence then plays tones 44-47 → waves 27-30, so the
-  request is a 5-layer ground impact and wave 26 is the first/longest layer (7.54 s, 2 ch).
-  The pool label at index 26 is `boss01_FS_far3_0`, **not** the request name — proof that
-  the pool is a request namespace, not a per-wave name list.
-* **`valus.telegraph` — boss01 w003 (`boss01_vo_atk1`).** `REQD` 340 (sequence `0x10B1`) →
-  request-order tone 20 → `TONE[20] = (key 34, wave 3)`. The `TONE[18..24] → waves 1..7`
-  range and the request order (ground2, ground3, vo_atk1, vo_atk2, vo_atk3, vo_dmg1,
-  vo_dmg2) put vo_atk1 on tone 20. Wave 3 is a 1.2 s broadband roar with formant bands.
-* **`valus.hurt` — boss01 w006 (`boss01_vo_dmg1`).** `REQD` 331 (sequence `0x11B6`) →
-  request-order tone 23 → `TONE[23] = (key 37, wave 6)`. Wave 6 is a 1.05 s roar.
+  request is a 5-layer ground impact; `layers = [26,27,28,29,30]`. The pool label at index
+  26 is `boss01_FS_far3_0`, **not** the request name — proof that the pool is a request
+  namespace, not a per-wave name list.
+* **`valus.telegraph` — boss01 w003 (`boss01_vo_atk1`).** `REQD` 340 (sequence `0x10B1`)
+  follows a parent timeline to a sub-table entry with sound id 340 and bytecode `0x6ABC`;
+  the bytecode is an envelope with `a4 02 03 …` complex/random PLAY_TONE operands, so no
+  fixed tone can be walked. Audition pick: wave 3 (1.202 s broadband roar with formant
+  bands). Not chain-verified.
+* **`valus.hurt` — boss01 w006 (`boss01_vo_dmg1`).** `REQD` 331 (sequence `0x11B6`); same
+  envelope class, no fixed tone. Audition pick: wave 6 (1.051 s roar). Not chain-verified.
 * **`player.swing` — com_obj w007 (`wnd_LifeSwd_swish_t1_01`).** `REQD` 118 (sequence
   `0x227A`) → `PLAY_TONE 16/17`; the com_obj `TONE` chunk is not flat, so no tone→wave
   proof. Audition pick: wave 7 is a 0.464 s 0x21 whoosh; the pool label at 7 is the same
@@ -105,8 +121,10 @@ per-cue distribution and boundary metric are in `s5-audio-recon.md` §7.2. In sh
 
 The gate proves existence, rate, length and non-silence — **not fidelity**. No PS-ADPCM
 coefficient table was found in `eboot.elf` (exact/approximate int16, int32×64 and float
-scans: 0 hits), so the true filters 5-7 live in the NGS2 firmware. The user's ear is the
-final fidelity check; the 0x21 map confidence is `medium` for this reason.
+scans: 0 hits), so the true filters 5-7 live in the NGS2 firmware. The map's `confidence`
+is **identity** confidence (`valus.impact` high, the six audition rows medium) and
+`fidelity` is **medium for every 0x21 row**; the user's ear is the final identity and
+fidelity check.
 
 ## Deferred (with reasons)
 

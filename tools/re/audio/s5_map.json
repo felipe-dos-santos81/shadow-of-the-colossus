@@ -1,21 +1,24 @@
 {
-  "version": 2,
+  "version": 3,
   "generated": "2026-10-21",
   "payload_formula": "wave_record_offset + 0x24 + start (length = bytes); see docs/notes/s5-audio-recon.md §7",
-  "identity_policy": "name is the sound-request name (NAME/REQD); wave is the verified WAVE index. ghidra rows carry reqd+tone and must satisfy TONE[tone].wave == wave. audition rows carry verified_index=true and are explicitly not chain-proven.",
+  "identity_policy": "name is the sound-request name (NAME/REQD); wave is the verified WAVE index; layers is the FULL set of waves in the sound, including the primary (layers[0] == wave). confidence is identity confidence only; 0x21 fidelity is a separate field and is medium for every row. ghidra rows require reqd+tone and must pass the actual SEQD/PLAY_TONE walk; audition rows require verified_index=true and are explicitly not chain-proven.",
   "cues": [
     {
       "event": "valus.telegraph",
       "bank": "boss01",
       "name": "boss01_vo_atk1",
       "reqd": 340,
-      "tone": 20,
+      "tone": null,
       "wave": 3,
-      "method": "ghidra",
+      "layers": [3],
+      "method": "audition",
       "confidence": "medium",
-      "chain": "NAME hash(boss01_vo_atk1) -> REQD 340 -> SEQD 0x10B1 -> request-order tone 20 -> TONE[20] = (key 34, wave 3); TONE[18..24] -> waves 1..7 and the request order after ground1 is ground2, ground3, vo_atk1, vo_atk2, vo_atk3, vo_dmg1, vo_dmg2",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 340 -> SEQD 0x10B1. The per-sound bytecode at 0x6ABC is a parameter envelope (a9 SET_PARAM) whose PLAY_TONE operands are complex/random (a4 02 03 ...), so no fixed tone can be walked. Audition pick: wave 3 (1.202 s vocal).",
       "wave_pool_label": "boss01_vo_atk1",
-      "note": "The tone->wave step is binary (flat boss01 TONE table); the name->tone step is the request/play-list order, hence medium confidence. The 0x42 pair 108/109 is a large roar alternative, not this row."
+      "note": "Not chain-verified. The 0x42 pair 108/109 is a large roar alternative."
     },
     {
       "event": "valus.impact",
@@ -27,22 +30,26 @@
       "layers": [26, 27, 28, 29, 30],
       "method": "ghidra",
       "confidence": "high",
+      "fidelity": "medium",
       "chain": "NAME hash(boss01_atk_hit_ground1) -> REQD 303 -> SEQD timeline 0x13E4 -> bytecode 0x23BA -> a4 01 43 -> TONE[43] = (key 57, wave 26); the sequence then plays tones 44-47 -> waves 27-30",
       "wave_pool_label": "boss01_FS_far3_0",
-      "note": "Layered sound: the request is the 5-layer ground impact; wave 26 is the first and longest layer. wave_pool_label is the pool string at index 26, which is not the request name."
+      "note": "Layered sound: layers is the full set 26-30 including the primary. wave_pool_label is the pool string at index 26, not the request name. Identity high; 0x21 fidelity medium."
     },
     {
       "event": "valus.hurt",
       "bank": "boss01",
       "name": "boss01_vo_dmg1",
       "reqd": 331,
-      "tone": 23,
+      "tone": null,
       "wave": 6,
-      "method": "ghidra",
+      "layers": [6],
+      "method": "audition",
       "confidence": "medium",
-      "chain": "NAME hash(boss01_vo_dmg1) -> REQD 331 -> SEQD 0x11B6 -> request-order tone 23 -> TONE[23] = (key 37, wave 6); TONE[18..24] -> waves 1..7",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 331 -> SEQD 0x11B6. The per-sound bytecode is a parameter envelope with complex/random PLAY_TONE operands; no fixed tone can be walked. Audition pick: wave 6 (1.051 s roar).",
       "wave_pool_label": "boss01_vo_dmg1",
-      "note": "The tone->wave step is binary; the name->tone step is the request/play-list order, hence medium confidence."
+      "note": "Not chain-verified."
     },
     {
       "event": "player.swing",
@@ -51,8 +58,10 @@
       "reqd": 118,
       "tone": null,
       "wave": 7,
+      "layers": [7],
       "method": "audition",
       "confidence": "medium",
+      "fidelity": "medium",
       "verified_index": true,
       "chain": "NAME hash -> REQD 118 -> SEQD 0x227A -> PLAY_TONE 16/17; com_obj TONE chunk is not the flat 12-byte form, so no tone->wave proof",
       "wave_pool_label": "wnd_LifeSwd_swish_t1_01",
@@ -65,8 +74,10 @@
       "reqd": 60,
       "tone": null,
       "wave": 21,
+      "layers": [21],
       "method": "audition",
       "confidence": "medium",
+      "fidelity": "medium",
       "verified_index": true,
       "chain": "NAME hash -> REQD 60 -> SEQD 0x2779; no PLAY_TONE op decoded in the first window; com_obj TONE table is not flat",
       "wave_pool_label": "wnd_swd_hit_gravel_t1_01",
@@ -79,10 +90,12 @@
       "reqd": 172,
       "tone": null,
       "wave": 40,
+      "layers": [40],
       "method": "audition",
       "confidence": "medium",
+      "fidelity": "medium",
       "verified_index": true,
-      "chain": "NAME hash -> REQD 172 -> SEQD 0xFD0; no PLAY_TONE op decoded; com_v TONE table is not flat",
+      "chain": "NAME hash -> REQD 172 -> SEQD 0x0FD0; no PLAY_TONE op decoded; com_v TONE table is not flat",
       "wave_pool_label": "bvo_dmg_m",
       "note": "Audition pick: wave 40 is a 0.270 s 0x21 grunt."
     },
@@ -93,12 +106,14 @@
       "reqd": 1573,
       "tone": null,
       "wave": 657,
+      "layers": [657],
       "method": "audition",
       "confidence": "medium",
+      "fidelity": "medium",
       "verified_index": true,
       "chain": "NAME hash -> REQD 1573 -> SEQD 0xD710; no PLAY_TONE op decoded; com_b_h TONE table is not flat",
       "wave_pool_label": "b_dead_by_boss",
-      "note": "Audition pick: wave 657 is a 0.811 s 0x21 vocal, between the water-landing and grass-walk sets. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
+      "note": "Audition pick: wave 657 is a 0.811 s 0x21 vocal. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
     }
   ],
   "deferred": [

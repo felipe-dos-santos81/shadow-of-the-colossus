@@ -900,6 +900,9 @@ def main(argv=None):
                          "accepted, printed gap")
     ap.add_argument("--probe-0x42", action="store_true", dest="probe42",
                     help="run the bounded 0x42 identification attempt and exit")
+    ap.add_argument("--allow-empty-resident", action="store_true",
+                    help="with --no-resident --check, explicitly accept that no resident "
+                         "variant is decoded (otherwise the run is BLOCKED, exit 3)")
     args = ap.parse_args(argv)
 
     if shutil.which("ffmpeg") is None:
@@ -921,9 +924,14 @@ def main(argv=None):
             log("GATE ERROR: --no-resident --check requires --allow-unresolved for every "
                 "resident variant: %s" % ", ".join(fmt_word(f) for f in unnamed))
             return 2
+        if not args.allow_empty_resident:
+            log("  BLOCKED: --no-resident --check needs --allow-empty-resident; the "
+                "resident half is the milestone's decode proof, so skipping it is not "
+                "a pass by default.")
+            return 3
         resident_skipped = True
-        log("  resident skipped: all %d variant(s) named in --allow-unresolved"
-            % len(variants))
+        log("  resident skipped: all %d variant(s) named in --allow-unresolved "
+            "(explicit --allow-empty-resident)" % len(variants))
 
     if args.probe42:
         probe_0x42(args.root, args.out, args.bank, log)
@@ -1033,7 +1041,7 @@ def main(argv=None):
     if args.check:
         if resident_skipped:
             log("GATE PASSED: music 48 kHz non-silent; resident skipped "
-                "(all variants allow-listed)")
+                "(explicit --allow-empty-resident)")
         else:
             log(f"GATE PASSED: music 48 kHz non-silent; resident variants decoded "
                 f"{', '.join(fmt_word(f) for f in decoded) or 'none'}"
