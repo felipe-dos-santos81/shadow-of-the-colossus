@@ -4,7 +4,8 @@ The native macOS viewer for the converted *Shadow of the Colossus* asset library
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb` + `.png`) — never the game tree or original containers.
 
-**Status (milestone S4.1): the first colossus — grab, climb, strike, defeat (user walk pending).**
+**Status (milestone S4.2): he fights back — shell weakpoints, Valus's stomp and club, Wander's
+health and death, the R reset (user walk pending).**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -32,17 +33,30 @@ title shows the fps readout. Escape or the window's close button quits.
 `--screenshot` writes the same frame to a PNG.
 
 In a composed scene with an `entity` the encounter is playable: hold `E` at
-Valus's body to grab the nearest climb band, climb with `W`/`S` (the grip camera
-follows the attach point), hold `J` to charge and release to strike. A landed
+Valus's body to grab the nearest climb band, climb with `W`/`S` and shimmy with
+`A`/`D` (the grip camera follows the attach point), hold `J` to charge and
+release to strike. Only the two shipped weakpoints take damage: the forehead
+(`weakpoint_03`) and the right upper arm (`weakpoint_04`), each a posed sphere
+read from the shell's own vertices — a strike anywhere else clangs, still costs
+the swing and still shakes the player off. `W+D` at the top of the chest takes
+the branch to the right shoulder, where `W` climbs to the arm. A landed weakpoint
 hit damages Valus, plays his body-part reaction and shakes the player off; a
 fresh `E` press inside the 0.6 s window catches the nearest band, otherwise the
 player lands and staggers. Stamina drains while gripping/climbing/charging and
-regenerates on the ground; at zero it forces the fall. The top health bar and
-the bottom-left stamina bar are drawn from `renderer.set_hud`. Valus dies at
-zero: the death clip plays once, freezes on its last frame, and the fight stops
-reacting. A gamepad is mapped the same way (left stick move, right stick camera,
-RT grip, X/square strike, Start pause) and hot-plugs without latching an input.
-`--s41-selftest` runs the deterministic acceptance timeline described below.
+regenerates on the ground; at zero it forces the fall. The top bar is Valus's
+health (shown after his first hit), the amber bar above the stamina bar is
+Wander's health, and both are drawn from `renderer.set_hud`. Valus turns toward a
+grounded player, stomps when a foot is within 4.5 m and swings the club he now
+carries (`c01_minotaur_a_weapon.glb`, attached to `OptBone_sword`) within 14 m;
+both attacks have the clip as telegraph and a pinned impact window. Wander takes
+35 (stomp) or 45 (club) damage, is invulnerable for 1.0 s after a hit, and dies
+at zero: the death clip plays once and freezes on its last frame. Valus dies the
+same way and the fight stops reacting. `R` soft-resets the whole encounter —
+player health, stamina, i-frames, mode, spawn and camera, and Valus's health,
+pose and cooldown — without reloading the scene. A gamepad is mapped the same
+way (left stick move, right stick camera, RT grip, west/X/square strike, Start
+pause) and hot-plugs without latching an input. `--s41-selftest` and
+`--s42-selftest` run the deterministic acceptance timelines described below.
 
 ## Build
 
@@ -51,8 +65,10 @@ cmake -S app -B app/build      # from the repo root
 cmake --build app/build -j
 ```
 
-Requires CMake ≥ 3.25 and SDL3 ≥ 3.4 via Homebrew (`brew install sdl3`). If CMake
-does not find SDL3 on its own, configure with `-DCMAKE_PREFIX_PATH="$(brew --prefix)"`.
+Requires CMake ≥ 3.25 and SDL3 ≥ 3.4 with SDL3_ttf via Homebrew
+(`brew install sdl3 sdl3_ttf`; the HUD uses SDL3_ttf for the stamina label). If
+CMake does not find them on its own, configure with
+`-DCMAKE_PREFIX_PATH="$(brew --prefix)"`.
 
 ## Run
 
@@ -88,6 +104,8 @@ is required. Escape or the close button quits.
 | `--s4-selftest` | compose the encounter `--manifest`, pin the entity at t=0, assert the spawn is clear and the entity's feet are on the ground, walk the player into the nearest leg capsule until the collision stops it, print the `s4-status`/`s4-spawn`/`s4-entity`/`s4-walk` lines, exit; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
 | `--s41-selftest` | compose the encounter `--manifest` and run the deterministic climb/fight timeline through fixed 1/60 s steps with no window input: S4's approach, grab, 240-frame climb, full-charge head strike, catch, missed catch, forced stamina fall, killing blow, and the post-kill settle to a landed player; prints the `s41-*` lines and `s41-status`, exits 1 on a failed invariant; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
 | `--s41-stills DIR` | with `--s41-selftest`, write `grab.png`, `mid-climb.png`, `strike.png` and `reaction.png` into `DIR`, plus the defeat still (to `--screenshot`, else `DIR/defeat.png`) and the pixel controls under `DIR/control/`; both `DIR` and `DIR/control/` must exist (the acceptance script creates them) |
+| `--s42-selftest` | compose the encounter `--manifest` and run the deterministic S4.2 fight timeline through fixed 1/60 s steps with no window input: both shell proxies, the foot/head damage gate, the chest→shoulder→arm route, a stomp and a club hit (with the i-frame gate), a lethal club with the pinned death clip, the R soft reset, and the teleport-free foot→head stamina climb; prints the `s42-*` lines and `s42-status`, exits 1 on a failed invariant; needs `--manifest` (with an entity) and `--model` |
+| `--s42-stills DIR` | with `--s42-selftest`, write six HUD-bearing stills into `DIR`: `stomp-telegraph.png`, `stomp-impact.png`, `club-swing.png`, `hurt.png`, `death.png`, `arm-weakpoint.png`; each capture restores the playback clocks, so the `s42-*` event lines are identical with and without stills; `DIR` must exist (the acceptance script creates it) |
 
 ## Manifests
 
@@ -123,7 +141,7 @@ Controls (no mouse capture: the cursor stays visible and free):
 
 | Gesture | Action |
 | --- | --- |
-| `W` / `A` / `S` / `D` | Move (camera-relative); Shift runs. While gripping: `W`/`S` climb up/down the band |
+| `W` / `A` / `S` / `D` | Move (camera-relative); Shift runs. While gripping: `W`/`S` climb up/down the band, `A`/`D` shimmy around it; `W+D` at the chest top takes the branch to the right shoulder |
 | `E` | Grab (held): attach to the nearest climb band, release to drop. While falling inside the 0.6 s catch window, a fresh press catches the nearest band |
 | `J` | Strike (held): charge over 0.9 s, release to plunge. One damage event per swing; a landed hit shakes the player off |
 | Left-drag | Orbit: yaw freely, pitch stops at ±89°; in entity target mode, orbit the entity's chest (pitch ±80°); while gripping, orbit the climb camera (pitch ±45°) |
@@ -132,17 +150,17 @@ Controls (no mouse capture: the cursor stays visible and free):
 | `T` | Toggle entity target framing: orbit the entity's chest; `T` again restores the follow view without a snap. Inert when the manifest has no entity (the S3 arena) |
 | `Space` | Play/pause the current clip |
 | `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
-| `R` | Restart the current clip |
+| `R` | Soft-reset the encounter (player HP/stamina/i-frames/mode/spawn/camera and Valus HP/pose/cooldown); without an encounter, restart the current clip |
 | Escape / close button | Quit |
 
 Gamepad (standard SDL3 mapping, polled once per frame, hot-plugged):
 
 | Gesture | Action |
 | --- | --- |
-| Left stick | Move (camera-relative); while gripping, up/down the band |
+| Left stick | Move (camera-relative); while gripping, up/down the band and lateral shimmy |
 | Right stick | Turn the camera (same drag channel as the mouse) |
 | RT (right trigger, past half) | Grab, held |
-| X / square (south face button) | Strike, held to charge |
+| West / X / square (west face button) | Strike, held to charge |
 | Start | Play/pause the current clip |
 
 A removed gamepad closes its handle and clears every input it owned, so an
@@ -215,14 +233,48 @@ Every failed invariant exits 1 with a `sotc-viewer: s41-selftest: …` stderr
 message naming the phase and the measured value (a climb that rose too little, a
 strike that dealt the wrong damage, a death clip that did not freeze, …).
 
+`--s42-selftest` is the deterministic S4.2 timeline. It runs from the pinned stand
+pose through both shell proxies, a foot clang and a head strike (34), the
+chest→shoulder→arm route to the right-arm weakpoint (34), a stomp (35) with the
+i-frame gate, a club hit (45), a lethal club with the pinned player death clip,
+the full R soft reset, and finally the real teleport-free foot→head climb on the
+pinned stamina drains. The event lines, verbatim:
+
+```text
+s42-proxy weakpoint=0 radius=1.955
+s42-proxy weakpoint=1 radius=2.165
+s42-gate foot=0 head=34
+s42-arm band=right_arm weakpoint=1 damage=34
+s42-stomp damage=35 health=100->65 mode=hurt
+s42-club damage=45 health=65->20
+s42-death clip=player_a_fall_damage_to_death mode=dead
+s42-reset health=100 stamina=100 mode=grounded valus=100
+s42-stamina from_y=28.425 to_y=43.484 remaining=39
+s42-status proxy=2 gate_foot=0 gate_head=34 arm_band=right_arm arm_weakpoint=1 arm_damage=34 stomp_damage=35 stomp_health=65 club_damage=45 club_health=20 death_clip=player_a_fall_damage_to_death reset_health=100 reset_stamina=100 reset_mode=grounded reset_valus=100 stamina_remaining=39 defeated=0
+```
+
+The full foot→head climb gains **15.059 m** and leaves **39** of the 100-point
+pool — the measured margin at the sigil, not an assertion against tuning. With
+`--s42-stills DIR` the run also writes six HUD-bearing captures
+(`stomp-telegraph`, `stomp-impact`, `club-swing`, `hurt`, `death`,
+`arm-weakpoint`); each capture snapshots and restores the playback clocks, so
+the timeline's `s42-*` values are byte-identical with and without stills. The
+acceptance script (`scripts/s42-acceptance.sh`) parses every line, guards the
+stills, measures the marginal frame cost and runs the S4.1 acceptance unchanged;
+`docs/notes/s42-results.md` records the measured values and the walk checklist.
+
 A manifest with an `entity` is an encounter: the player's combat clips
 (`player_a_grip_loop`, `player_a_grip_move_f1`,
-`player_a_grip_float_u_hi_attack`, `player_a_damage_m_fly2`) and the entity's
-reaction/death clips (`minotaur_a_add_head_damage`,
-`minotaur_a_add_ude_r_damage`, `minotaur_a_add_mune_r_damage`,
-`minotaur_a_death_front`) must all be in the loaded glbs. A missing name is a
-load error (exit 2) naming the glb and the clip — never a silent fallback to the
-first clip. The S3 arena has no entity and needs none of them.
+`player_a_grip_float_u_hi_attack`, `player_a_damage_m_fly2`,
+`player_a_damage_h_fly1`, `player_a_damage_h_fly_end`,
+`player_a_fall_damage_to_death`) and the entity's reaction, attack and death
+clips (`minotaur_a_add_head_damage`, `minotaur_a_add_ude_r_damage`,
+`minotaur_a_add_mune_r_damage`, `minotaur_a_atk_leg_l`,
+`minotaur_a_atk_leg_r`, `minotaur_a_atk_weapon2_a`, `minotaur_a_death_front`)
+must all be in the loaded glbs; the club (`c01_minotaur_a_weapon.glb`) must be in
+the library and `OptBone_sword` in the entity rig. A missing name is a load error
+(exit 2) naming the glb and the clip — never a silent fallback to the first clip.
+The S3 arena has no entity and needs none of them.
 
 ## Tests
 
