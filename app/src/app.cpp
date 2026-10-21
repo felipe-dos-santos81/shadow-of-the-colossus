@@ -379,6 +379,19 @@ constexpr float kS41Eps = 1e-4f;            // monotonic and ground-contact epsi
 constexpr float kS41StickDeadzone = 0.25f;  // gamepad axis deadzone
 constexpr float kS41StickPixelsPerSecond = 900.0f;  // right stick -> drag pixels
 
+// --- S4.2 acceptance timeline (--s42-selftest) ------------------------------
+
+constexpr int kS42ChargeFrames = 60;          // held J past the 0.9 s full charge
+constexpr int kS42MaxRouteFrames = 600;       // 10 s: chest -> shoulder -> arm
+constexpr int kS42MaxClimbFrames = 1800;      // 30 s: the full foot -> head climb
+constexpr int kS42MaxReactionFrames = 600;    // 10 s: wait out a reaction one-shot
+constexpr int kS42MaxAttackFrames = 900;      // 15 s: walk an attack past its window
+constexpr int kS42MaxDeathFrames = 600;       // 10 s: the player death clip
+constexpr float kS42StompStandoff = 1.0f;     // m from the impact foot (direct hit)
+constexpr float kS42ArmStrikeT = 1.0f;        // bandT on the right arm that reaches shell 1
+constexpr float kS42MinClimbRise = 10.0f;     // m the full foot -> head route must gain
+constexpr float kS42Eps = 1e-3f;              // shell, ground and contact epsilon
+
 // The R3 reaction names, plus the generic body reaction a strike on a band with
 // no weakpoint plays (the pinned bands without a weakpoint are not silent). The
 // player's combat clips are the binding's mode mapping. Every name is resolved
@@ -1704,7 +1717,7 @@ int run_app(const AppOptions& opts) {
         const bool valus_behavior = follow_mode && !manifest.entities.empty() &&
                                     entityRig < playbacks.size() && !opts.s3Selftest &&
                                     !opts.s4Selftest && !opts.s41Selftest &&
-                                    !opts.entityTimeSet;
+                                    !opts.s42Selftest && !opts.entityTimeSet;
 
         // The composed scene's initial placement: every entity's grounding lift
         // lands on its model transform once, and the player's transform follows
@@ -2613,6 +2626,863 @@ int run_app(const AppOptions& opts) {
                         climb_band_name(grabBand), climbRise, strikes,
                         static_cast<int>(std::lround(encounter.health)),
                         player_mode_name(combat.mode), encounter.defeated ? 1 : 0);
+            return 0;
+        }
+
+        if (opts.s42Selftest) {
+            // The S4.2 acceptance timeline: shell proxies, the foot/head damage
+            // gate, the chest->shoulder->arm branch, a stomp with its i-frame
+            // gate, a club hit, the player's lethal hit and pinned death clip,
+            // the full soft reset, and the real foot->head stamina climb. Fixed
+            // 1/60 s steps and no window input. The attack phases place the
+            // player (the target) and drive `advance_valus_attack` themselves:
+            // the autonomous selection is off for this run so nothing races the
+            // assertions. Only the stamina phase is teleport-free; the gate and
+            // route phases use the same attach scaffolding S4.1 established.
+            if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
+                entityRig >= playbacks.size()) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s42-selftest: the manifest has no entity\n");
+                return 2;
+            }
+            if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
+                entityClips.body < 0 || entityClips.death < 0 || entityClips.stompL < 0 ||
+                entityClips.stompR < 0 || entityClips.club < 0 || playerClips.gripLoop < 0 ||
+                playerClips.gripMove < 0 || playerClips.strike < 0 || playerClips.fall < 0 ||
+                playerClips.death < 0) {
+                // The load gate above already refused this case; keep the
+                // invariant explicit so no future path can reach a fallback.
+                throw std::runtime_error(
+                    "s42-selftest: a fight clip is missing despite the load gate");
+            }
+
+            Playback& entity_playback = playbacks[entityRig];
+            const Vec3 spawn = spawn_position(manifest, scene);
+            const float spawnYaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
+            const float stepSeconds = kFixedFrameSeconds;
+            const PlayerInput noInput;
+
+            // Every shell/route/climb phase samples one pinned stand frame, so
+            // the bands and the shells do not drift between steps. The attack
+            // phases replace the clip themselves; the reaction wait restores it.
+            const auto pin_stand = [&]() {
+                entity_playback.index = entityClips.stand;
+                entity_playback.time = 0.0f;
+                entity_playback.playing = false;
+                entity_playback.pinned = true;
+            };
+            pin_stand();
+
+            const auto palettes_now = [&]() {
+                return update_all_poses(renderer, scene, playbacks, 0.0f, club);
+            };
+            const auto frame_of = [&](const std::vector<std::vector<Mat4>>& palettes) {
+                return player_frame_of(scene, entityRig, palettes, heightmap,
+                                       camera_look_yaw(camera));
+            };
+
+            // One frame of the timeline: the entity's one-shot clock, the
+            // attack clip when `driveAttack` is set, the player's mode clip,
+            // this frame's poses, the player step, the encounter events, the
+            // pending attack impact, and the camera. A placed attack target does
+            // not collide: the phase is measuring the damage gate, not walking.
+            const auto step_frame = [&](const PlayerInput& input,
+                                        bool driveAttack) -> StepEvents {
+                advance_encounter_reaction(entity_playback, encounter, entityClips.stand,
+                                           stepSeconds);
+                if (driveAttack && encounter.attack != ValusAttack::None) {
+                    ValusAttackInput attackInput;
+                    attackInput.playerGrounded = combat.mode == PlayerMode::Grounded;
+                    attackInput.playerAttached = mode_is_attached(combat.mode);
+                    attackInput.defeated = encounter.defeated;
+                    attackInput.cooldownSeconds = encounter.cooldownSeconds;
+                    attackInput.playerPos = player.position;
+                    attackInput.entityPos = encounter.entityPosition;
+                    attackInput.entityYawDeg = encounter.entityYawDeg;
+                    advance_valus_attack(encounter, entity_playback, entityClips, attackInput,
+                                         stepSeconds);
+                }
+                update_combat_clips(playback, scene, combat, input, /*manualClip=*/false);
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, stepSeconds, club);
+                PlayerFrame frame = frame_of(palettes);
+                if (driveAttack) {
+                    frame.entityCapsules.clear();
+                }
+                const int weakpoint = combat.weakpoint;  // detach() clears it
+                const StepEvents events =
+                    player_step(player, combat, input, frame, tuning, stepSeconds);
+                apply_combat_events(encounter, entity_playback, entityClips, events, weakpoint);
+                // Valus's impact runs after the player's step, like the
+                // interactive loop: a landed strike cancels the attack first.
+                if (driveAttack && encounter.attack != ValusAttack::None &&
+                    attack_impact_due(encounter.attack, encounter.attackSeconds,
+                                      encounter.attackHit)) {
+                    encounter.attackHit = true;
+                    apply_valus_impact(combat, player, frame, tuning, encounter.attack);
+                }
+                if (mode_is_attached(combat.mode)) {
+                    update_climb_camera(camera, climbCamera, player, combat, frame, 0.0f, 0.0f,
+                                        0.0f, /*recenter=*/false, stepSeconds);
+                } else {
+                    if (climbCamera.active) {
+                        camera_climb_exit(camera, climbCamera);
+                    }
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                  0.0f,
+                                  input.forward || input.back || input.left || input.right,
+                                  stepSeconds);
+                }
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                return events;
+            };
+
+            // Waits out the entity one-shot a landed strike started and returns
+            // the body to one pinned stand frame (the next phase's bands must
+            // not animate under the route).
+            const auto wait_for_reaction = [&]() {
+                int frames = 0;
+                while (encounter.reactionClip >= 0 && frames < kS42MaxReactionFrames) {
+                    step_frame(noInput, /*driveAttack=*/false);
+                    ++frames;
+                }
+                if (encounter.reactionClip >= 0) {
+                    throw std::runtime_error(
+                        "s42-selftest: a reaction clip did not finish in " +
+                        std::to_string(kS42MaxReactionFrames) + " frames");
+                }
+                pin_stand();
+            };
+
+            // Puts the player on `band` at parameter `t` and enters Grabbing,
+            // the ruled attach scaffolding of the S4.1 strike phases.
+            const auto attach_band_at = [&](ClimbBandId band, float t, Vec3 hint,
+                                            const char* phase) {
+                const std::vector<std::vector<Mat4>> palettes = palettes_now();
+                const PlayerFrame frame = frame_of(palettes);
+                Vec3 point{};
+                Vec3 normal{};
+                if (!climb_surface_point(climb_band(band), frame.jointWorld, t, hint, point,
+                                         normal)) {
+                    throw std::runtime_error(std::string("s42-selftest: ") + phase +
+                                             ": no surface point on the " +
+                                             climb_band_name(band) + " band");
+                }
+                player.position = point;
+                player.yawDeg = std::atan2(-normal.x, -normal.z) / kDegToRad;
+                combat.mode = PlayerMode::Grabbing;
+                combat.modeSeconds = 0.0f;
+                combat.band = band;
+                combat.bandT = t;
+                combat.weakpoint = climb_band(band).weakpoint;
+                combat.charge = 0.0f;
+                combat.strikeHit = false;
+                combat.catchSecondsLeft = 0.0f;
+                combat.fallVelocity = 0.0f;
+            };
+
+            // Holds J to a full charge on the current band and releases. The
+            // swing always breaks the grip (ruling R7), so the caller samples
+            // the damage and the mode before this helper's release step.
+            const auto charge_and_release = [&](const char* phase) -> StepEvents {
+                PlayerInput holdGrab;
+                holdGrab.grab = true;
+                step_frame(holdGrab, /*driveAttack=*/false);
+                if (!mode_is_attached(combat.mode)) {
+                    throw std::runtime_error(std::string("s42-selftest: ") + phase +
+                                             ": the attach did not hold");
+                }
+                PlayerInput charge;
+                charge.grab = true;
+                charge.strike = true;
+                for (int frame = 0; frame < kS42ChargeFrames; ++frame) {
+                    const StepEvents events = step_frame(charge, /*driveAttack=*/false);
+                    if (events.damageDealt != 0) {
+                        throw std::runtime_error(
+                            std::string("s42-selftest: ") + phase +
+                            ": the strike dealt damage while still charging at frame " +
+                            std::to_string(frame));
+                    }
+                    if (combat.mode != PlayerMode::Striking) {
+                        throw std::runtime_error(
+                            std::string("s42-selftest: ") + phase +
+                            ": the charge left Striking at frame " + std::to_string(frame) +
+                            " (mode " + player_mode_name(combat.mode) + ")");
+                    }
+                }
+                if (combat.charge + 1e-4f < tuning.chargeSeconds) {
+                    throw std::runtime_error(
+                        std::string("s42-selftest: ") + phase + ": the charge reached only " +
+                        std::to_string(combat.charge) + " s (need " +
+                        std::to_string(tuning.chargeSeconds) + " s)");
+                }
+                PlayerInput release;
+                release.grab = true;
+                return step_frame(release, /*driveAttack=*/false);
+            };
+
+            const auto clear_attack = [&]() {
+                encounter.attack = ValusAttack::None;
+                encounter.attackSeconds = 0.0f;
+                encounter.attackHit = false;
+                encounter.cooldownSeconds = 0.0f;
+                encounter.pendingCooldownSeconds = 0.0f;
+                pin_stand();
+            };
+
+            // --- 1. Proxy: both shells on the pinned stand frame --------------
+            const std::vector<std::vector<Mat4>> standPalettes = palettes_now();
+            if (entityRig >= standPalettes.size()) {
+                throw std::runtime_error("s42-selftest: the entity rig has no stand pose");
+            }
+            std::vector<Vec3> shellCenters(2);
+            int proxyCount = 0;
+            for (int weakpoint = 0; weakpoint < 2; ++weakpoint) {
+                const char* material = weakpoint_material_name(weakpoint);
+                if (material == nullptr) {
+                    throw std::runtime_error("s42-selftest: weakpoint " +
+                                             std::to_string(weakpoint) +
+                                             " has no shell material");
+                }
+                Vec3 center{};
+                float radius = 0.0f;
+                if (!posed_weakpoint_proxy(scene, entityRig, standPalettes[entityRig],
+                                           material, center, radius)) {
+                    throw std::runtime_error("s42-selftest: weakpoint " +
+                                             std::to_string(weakpoint) + " (" + material +
+                                             ") did not resolve on the stand pose");
+                }
+                if (!finite_position(center) || !std::isfinite(radius) || !(radius > 0.0f)) {
+                    throw std::runtime_error("s42-selftest: weakpoint " +
+                                             std::to_string(weakpoint) +
+                                             " resolved a non-finite sphere");
+                }
+                shellCenters[weakpoint] = center;
+                ++proxyCount;
+                std::printf("s42-proxy weakpoint=%d radius=%.3f\n", weakpoint, radius);
+            }
+
+            // The head strike's front hint: the forehead faces the spawn (the
+            // side S4.1 proved); the arm route starts on the shell's side.
+            const Vec3 headHint = [&]() {
+                Vec3 hint = spawn;
+                const Vec3 entityPos = manifest.entities.front().placement.position;
+                const float fx = spawn.x - entityPos.x;
+                const float fz = spawn.z - entityPos.z;
+                const float length = std::sqrt(fx * fx + fz * fz);
+                Vec3 kubi{};
+                Vec3 kao{};
+                if (length > 1e-3f &&
+                    posed_joint_world_position(scene, entityRig, standPalettes[entityRig],
+                                               "Bone_KUBI", kubi) &&
+                    posed_joint_world_position(scene, entityRig, standPalettes[entityRig],
+                                               "Bone_KAO", kao)) {
+                    hint = Vec3{(kubi.x + kao.x) * 0.5f + fx / length * 6.0f,
+                                (kubi.y + kao.y) * 0.5f,
+                                (kubi.z + kao.z) * 0.5f + fz / length * 6.0f};
+                }
+                return hint;
+            }();
+
+            // --- 2. Gate: a foot strike is a clang, a head strike is 34 ------
+            attach_band_at(ClimbBandId::LeftFoot, 0.35f, spawn, "gate");
+            if (combat.band != ClimbBandId::LeftFoot || combat.weakpoint != -1) {
+                throw std::runtime_error(
+                    "s42-selftest: the foot attach did not hold the foot band");
+            }
+            const int healthBeforeFoot = static_cast<int>(std::lround(encounter.health));
+            const StepEvents footStrike = charge_and_release("gate");
+            if (footStrike.damageDealt != 0) {
+                throw std::runtime_error(
+                    "s42-selftest: the foot strike dealt " +
+                    std::to_string(footStrike.damageDealt) + " damage, not 0");
+            }
+            if (!footStrike.gripBroke || combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s42-selftest: the foot swing did not shake the player off");
+            }
+            if (static_cast<int>(std::lround(encounter.health)) != healthBeforeFoot) {
+                throw std::runtime_error(
+                    "s42-selftest: the foot strike moved Valus's health");
+            }
+
+            attach_band_at(ClimbBandId::Head, 0.5f, headHint, "gate");
+            if (combat.band != ClimbBandId::Head || combat.weakpoint != 0) {
+                throw std::runtime_error(
+                    "s42-selftest: the head attach did not hold weakpoint 0");
+            }
+            const int healthBeforeHead = static_cast<int>(std::lround(encounter.health));
+            const StepEvents headStrike = charge_and_release("gate");
+            if (!headStrike.gripBroke || combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s42-selftest: the head swing did not shake the player off");
+            }
+            if (headStrike.damageDealt != static_cast<int>(std::lround(tuning.damageFull))) {
+                throw std::runtime_error(
+                    "s42-selftest: the head strike dealt " +
+                    std::to_string(headStrike.damageDealt) + " damage, not " +
+                    std::to_string(static_cast<int>(std::lround(tuning.damageFull))));
+            }
+            if (static_cast<int>(std::lround(encounter.health)) !=
+                healthBeforeHead - static_cast<int>(std::lround(tuning.damageFull))) {
+                throw std::runtime_error(
+                    "s42-selftest: the head strike did not subtract 34 from Valus");
+            }
+            std::printf("s42-gate foot=%d head=%d\n", footStrike.damageDealt,
+                        headStrike.damageDealt);
+
+            // --- 3. Arm route: chest top -> shoulder -> arm, weakpoint 1 -----
+            wait_for_reaction();
+            attach_band_at(ClimbBandId::Chest, 1.0f, shellCenters[1], "arm");
+            if (combat.band != ClimbBandId::Chest || combat.bandT < 1.0f - kS42Eps) {
+                throw std::runtime_error(
+                    "s42-selftest: the arm route did not start at the chest top");
+            }
+            {
+                PlayerInput holdGrab;
+                holdGrab.grab = true;
+                step_frame(holdGrab, /*driveAttack=*/false);
+            }
+            PlayerInput branchInput;
+            branchInput.grab = true;
+            branchInput.forward = true;
+            branchInput.right = true;
+            PlayerInput armClimb;
+            armClimb.grab = true;
+            armClimb.forward = true;
+            bool sawShoulder = false;
+            int routeFrames = 0;
+            for (; routeFrames < kS42MaxRouteFrames; ++routeFrames) {
+                step_frame(sawShoulder ? armClimb : branchInput, /*driveAttack=*/false);
+                if (!mode_is_attached(combat.mode)) {
+                    throw std::runtime_error(
+                        "s42-selftest: the arm route left the body at frame " +
+                        std::to_string(routeFrames) + " (mode " +
+                        player_mode_name(combat.mode) + ")");
+                }
+                if (combat.band == ClimbBandId::RightShoulder) {
+                    sawShoulder = true;
+                }
+                if (combat.band == ClimbBandId::RightArm) {
+                    break;
+                }
+            }
+            if (routeFrames >= kS42MaxRouteFrames || !sawShoulder ||
+                combat.band != ClimbBandId::RightArm) {
+                throw std::runtime_error(
+                    "s42-selftest: the chest -> shoulder -> arm route did not reach the arm in " +
+                    std::to_string(kS42MaxRouteFrames) + " frames (band " +
+                    climb_band_name(combat.band) + ")");
+            }
+            for (int frame = 0; frame < kS42MaxRouteFrames &&
+                                combat.bandT < kS42ArmStrikeT - kS42Eps;
+                 ++frame) {
+                step_frame(armClimb, /*driveAttack=*/false);
+                if (combat.band != ClimbBandId::RightArm) {
+                    throw std::runtime_error(
+                        "s42-selftest: the arm climb left the right arm at frame " +
+                        std::to_string(frame) + " (band " + climb_band_name(combat.band) + ")");
+                }
+            }
+            if (combat.band != ClimbBandId::RightArm ||
+                combat.bandT < kS42ArmStrikeT - kS42Eps) {
+                throw std::runtime_error(
+                    "s42-selftest: the arm climb did not reach the shell's band position");
+            }
+            const int armWeakpoint = combat.weakpoint;
+            const ClimbBandId armBand = combat.band;
+            const int healthBeforeArm = static_cast<int>(std::lround(encounter.health));
+            const StepEvents armStrike = charge_and_release("arm");
+            if (armWeakpoint != 1) {
+                throw std::runtime_error(
+                    "s42-selftest: the right-arm band reports weakpoint " +
+                    std::to_string(armWeakpoint) + ", not 1");
+            }
+            if (!armStrike.gripBroke || combat.mode != PlayerMode::Falling) {
+                throw std::runtime_error(
+                    "s42-selftest: the arm swing did not shake the player off");
+            }
+            if (armStrike.damageDealt != static_cast<int>(std::lround(tuning.damageFull))) {
+                throw std::runtime_error(
+                    "s42-selftest: the arm strike dealt " +
+                    std::to_string(armStrike.damageDealt) + " damage, not " +
+                    std::to_string(static_cast<int>(std::lround(tuning.damageFull))));
+            }
+            if (static_cast<int>(std::lround(encounter.health)) !=
+                healthBeforeArm - static_cast<int>(std::lround(tuning.damageFull))) {
+                throw std::runtime_error(
+                    "s42-selftest: the arm strike did not subtract 34 from Valus");
+            }
+            std::printf("s42-arm band=%s weakpoint=%d damage=%d\n",
+                        climb_band_name(armBand), armWeakpoint, armStrike.damageDealt);
+            wait_for_reaction();
+
+            const auto clip_at = [&](int index, const char* phase) -> const AnimationCpu& {
+                if (index < 0 ||
+                    static_cast<std::size_t>(index) >= entity_playback.clips.size()) {
+                    throw std::runtime_error(std::string("s42-selftest: ") + phase +
+                                             ": the attack clip is missing");
+                }
+                return entity_playback.clips[static_cast<std::size_t>(index)];
+            };
+            const auto impact_pose_time = [&](float begin) {
+                return std::ceil(begin / stepSeconds) * stepSeconds;
+            };
+            const auto place_grounded = [&](float x, float z, const char* phase) {
+                const float ground = heightmap_sample(heightmap, Vec3{x, 0.0f, z});
+                if (!std::isfinite(ground)) {
+                    throw std::runtime_error(std::string("s42-selftest: ") + phase +
+                                             ": no ground under the placed target");
+                }
+                player.position = Vec3{x, ground, z};
+                player.yawDeg = 0.0f;
+            };
+
+            // --- 4. Stomp: 35 damage, Hurt, then i-frames block a second hit -
+            reset_player_combat(player, combat, spawn, spawnYaw, tuning);
+            const float stompPoseSeconds =
+                impact_pose_time(kValusStompImpactBegin);
+            std::vector<Mat4> stompPalette =
+                animation_pose(scene, entityRig, clip_at(entityClips.stompL, "stomp"),
+                               stompPoseSeconds);
+            Vec3 stompFoot{};
+            if (!posed_joint_world_position(scene, entityRig, stompPalette, "Bone_TUMASAKI_L",
+                                           stompFoot)) {
+                throw std::runtime_error(
+                    "s42-selftest: the stomp pose has no Bone_TUMASAKI_L");
+            }
+            float footDx = stompFoot.x - encounter.entityPosition.x;
+            float footDz = stompFoot.z - encounter.entityPosition.z;
+            const float footLength = std::sqrt(footDx * footDx + footDz * footDz);
+            if (!(footLength > 1e-3f)) {
+                footDx = 1.0f;
+                footDz = 0.0f;
+            } else {
+                footDx /= footLength;
+                footDz /= footLength;
+            }
+            place_grounded(stompFoot.x + footDx * kS42StompStandoff,
+                           stompFoot.z + footDz * kS42StompStandoff, "stomp");
+            const int healthBeforeStomp = static_cast<int>(std::lround(combat.health));
+            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::StompL);
+            if (encounter.attack != ValusAttack::StompL) {
+                throw std::runtime_error("s42-selftest: the stomp attack did not start");
+            }
+            bool stompLanded = false;
+            for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
+                step_frame(noInput, /*driveAttack=*/true);
+                if (static_cast<int>(std::lround(combat.health)) != healthBeforeStomp) {
+                    stompLanded = true;
+                    break;
+                }
+                if (encounter.attack == ValusAttack::None) {
+                    throw std::runtime_error(
+                        "s42-selftest: the stomp clip ended before its impact window");
+                }
+            }
+            if (!stompLanded) {
+                throw std::runtime_error(
+                    "s42-selftest: the stomp never landed in " +
+                    std::to_string(kS42MaxAttackFrames) + " frames");
+            }
+            const int stompDamage = healthBeforeStomp -
+                                    static_cast<int>(std::lround(combat.health));
+            if (stompDamage != static_cast<int>(std::lround(tuning.stompDamage))) {
+                throw std::runtime_error(
+                    "s42-selftest: the stomp dealt " + std::to_string(stompDamage) +
+                    " damage, not " + std::to_string(static_cast<int>(
+                                             std::lround(tuning.stompDamage))) +
+                    " (was the target inside the direct range?)");
+            }
+            if (combat.mode != PlayerMode::Hurt) {
+                throw std::runtime_error(
+                    "s42-selftest: the stomp did not leave the player Hurt (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            std::printf("s42-stomp damage=%d health=%d->%d mode=%s\n", stompDamage,
+                        healthBeforeStomp,
+                        static_cast<int>(std::lround(combat.health)),
+                        player_mode_name(combat.mode));
+
+            // A second immediate hit is the same attack's impact applied again
+            // on this frame: the i-frame window, not the once-only mark, is what
+            // must ignore it.
+            if (!(combat.invulnSeconds > 0.0f)) {
+                throw std::runtime_error(
+                    "s42-selftest: the stomp did not start the i-frame window");
+            }
+            {
+                const std::vector<std::vector<Mat4>> hitPalettes = palettes_now();
+                const PlayerFrame hitFrame = frame_of(hitPalettes);
+                const float healthBeforeBlocked = combat.health;
+                const PlayerMode modeBeforeBlocked = combat.mode;
+                apply_valus_impact(combat, player, hitFrame, tuning, ValusAttack::StompL);
+                if (combat.health != healthBeforeBlocked ||
+                    combat.mode != modeBeforeBlocked) {
+                    throw std::runtime_error(
+                        "s42-selftest: the i-frames did not block a second immediate hit "
+                        "(health " + std::to_string(healthBeforeBlocked) + " -> " +
+                        std::to_string(combat.health) + ")");
+                }
+            }
+            clear_attack();
+
+            // --- 5. Club: 45 damage ------------------------------------------
+            for (int frame = 0;
+                 frame < kS42MaxAttackFrames &&
+                 (combat.mode != PlayerMode::Grounded || combat.invulnSeconds > 0.0f);
+                 ++frame) {
+                step_frame(noInput, /*driveAttack=*/false);
+            }
+            if (combat.mode != PlayerMode::Grounded || combat.invulnSeconds > 0.0f) {
+                throw std::runtime_error(
+                    "s42-selftest: the player did not recover before the club phase (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            const float clubPoseSeconds = impact_pose_time(kValusClubImpactBegin);
+            std::vector<Mat4> clubPalette =
+                animation_pose(scene, entityRig, clip_at(entityClips.club, "club"),
+                               clubPoseSeconds);
+            Vec3 clubTip{};
+            if (!posed_joint_world_position(scene, entityRig, clubPalette, "OptBone_hit",
+                                           clubTip)) {
+                throw std::runtime_error("s42-selftest: the club pose has no OptBone_hit");
+            }
+            place_grounded(clubTip.x, clubTip.z, "club");
+            const int healthBeforeClub = static_cast<int>(std::lround(combat.health));
+            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club);
+            if (encounter.attack != ValusAttack::Club) {
+                throw std::runtime_error("s42-selftest: the club attack did not start");
+            }
+            bool clubLanded = false;
+            for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
+                step_frame(noInput, /*driveAttack=*/true);
+                if (static_cast<int>(std::lround(combat.health)) != healthBeforeClub) {
+                    clubLanded = true;
+                    break;
+                }
+                if (encounter.attack == ValusAttack::None) {
+                    throw std::runtime_error(
+                        "s42-selftest: the club clip ended before its impact window");
+                }
+            }
+            if (!clubLanded) {
+                throw std::runtime_error(
+                    "s42-selftest: the club never landed in " +
+                    std::to_string(kS42MaxAttackFrames) + " frames");
+            }
+            const int clubDamage =
+                healthBeforeClub - static_cast<int>(std::lround(combat.health));
+            if (clubDamage != static_cast<int>(std::lround(tuning.clubDamage))) {
+                throw std::runtime_error(
+                    "s42-selftest: the club dealt " + std::to_string(clubDamage) +
+                    " damage, not " +
+                    std::to_string(static_cast<int>(std::lround(tuning.clubDamage))));
+            }
+            if (combat.mode != PlayerMode::Hurt) {
+                throw std::runtime_error(
+                    "s42-selftest: the club did not leave the player Hurt (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            std::printf("s42-club damage=%d health=%d->%d\n", clubDamage,
+                        healthBeforeClub,
+                        static_cast<int>(std::lround(combat.health)));
+
+            // --- 6. Death: one more club at 45 HP ---------------------------
+            clear_attack();
+            for (int frame = 0;
+                 frame < kS42MaxAttackFrames &&
+                 (combat.mode != PlayerMode::Grounded || combat.invulnSeconds > 0.0f);
+                 ++frame) {
+                step_frame(noInput, /*driveAttack=*/false);
+            }
+            if (combat.mode != PlayerMode::Grounded || combat.invulnSeconds > 0.0f) {
+                throw std::runtime_error(
+                    "s42-selftest: the player did not recover before the death phase (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            combat.health = tuning.clubDamage;  // the pinned lethal setup
+            place_grounded(clubTip.x, clubTip.z, "death");
+            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club);
+            bool deathLanded = false;
+            for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
+                step_frame(noInput, /*driveAttack=*/true);
+                if (combat.mode == PlayerMode::Dead) {
+                    deathLanded = true;
+                    break;
+                }
+                if (encounter.attack == ValusAttack::None) {
+                    throw std::runtime_error(
+                        "s42-selftest: the lethal club ended before its impact window");
+                }
+            }
+            if (!deathLanded || combat.health > 0.0f) {
+                throw std::runtime_error(
+                    "s42-selftest: the lethal club did not kill the player (health " +
+                    std::to_string(combat.health) + ", mode " +
+                    player_mode_name(combat.mode) + ")");
+            }
+            update_combat_clips(playback, scene, combat, noInput, /*manualClip=*/false);
+            if (playback.index != playerClips.death || !playback.pinned) {
+                throw std::runtime_error(
+                    "s42-selftest: the player death clip is not pinned (index " +
+                    std::to_string(playback.index) + ", expected " +
+                    std::to_string(playerClips.death) + ")");
+            }
+            clear_attack();
+            // The death clip plays once and holds its last frame: step it to its
+            // end and prove the pin, so a later loop cannot restart it.
+            const float deathDuration =
+                playback.clips[static_cast<std::size_t>(playerClips.death)].duration;
+            for (int frame = 0; frame < kS42MaxDeathFrames; ++frame) {
+                step_frame(noInput, /*driveAttack=*/false);
+                if (playback_time(playback, deathDuration) >= deathDuration - kS42Eps) {
+                    break;
+                }
+            }
+            if (combat.mode != PlayerMode::Dead || !playback.pinned ||
+                std::fabs(playback_time(playback, deathDuration) - deathDuration) >
+                    kS42Eps) {
+                throw std::runtime_error(
+                    "s42-selftest: the death clip did not hold its pinned last frame");
+            }
+            std::printf("s42-death clip=%s mode=%s\n",
+                        playback.clips[static_cast<std::size_t>(playerClips.death)].name.c_str(),
+                        player_mode_name(combat.mode));
+
+            // --- 7. Full soft reset (the R key's own sequence) --------------
+            reset_player_combat(player, combat, spawn, spawnYaw, tuning);
+            reset_encounter(encounter);
+            entity_playback.index = entityClips.stand;
+            entity_playback.time = 0.0f;
+            entity_playback.pinned = false;
+            entity_playback.playing = true;
+            climbCamera.active = false;
+            targetCamera = CameraTarget{};
+            follow = CameraFollow{};
+            update_entity_transform(scene, encounter, entityRig);
+            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                          /*moving=*/false, /*dtSeconds=*/10.0f);
+            playback.pinned = false;
+            playback.playing = true;
+            playback.time = 0.0f;
+            const int resetHealth = static_cast<int>(std::lround(combat.health));
+            const int resetStamina = static_cast<int>(std::lround(combat.stamina));
+            const int resetValus = static_cast<int>(std::lround(encounter.health));
+            const char* resetMode = player_mode_name(combat.mode);
+            if (resetHealth != 100 || resetStamina != 100 ||
+                combat.mode != PlayerMode::Grounded || resetValus != 100 ||
+                encounter.defeated) {
+                throw std::runtime_error(
+                    "s42-selftest: the reset did not restore the opening state");
+            }
+            std::printf("s42-reset health=%d stamina=%d mode=%s valus=%d\n", resetHealth,
+                        resetStamina, resetMode, resetValus);
+            pin_stand();  // the climb needs one frozen body, like the S4.1 walk
+
+            // --- 8. Stamina: the real foot -> head climb, no teleport --------
+            auto walk_toward = [&](float aimYawDeg, int maxFrames) -> int {
+                PlayerInput input;
+                input.forward = true;
+                input.run = true;
+                int frames = 0;
+                int still = 0;
+                bool stopped = false;
+                while (frames < maxFrames) {
+                    const Vec3 previous = player.position;
+                    player_update(player, input, stepSeconds, heightmap, aimYawDeg);
+                    update_locomotion(playback, scene, input, /*manualClip=*/false);
+                    const std::vector<std::vector<Mat4>> palettes =
+                        update_all_poses(renderer, scene, playbacks, stepSeconds, club);
+                    resolve_player_collision(player, entity_capsules(scene, palettes),
+                                             heightmap);
+                    camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                  0.0f, /*moving=*/true, stepSeconds);
+                    const float dx = player.position.x - previous.x;
+                    const float dz = player.position.z - previous.z;
+                    ++frames;
+                    if (std::sqrt(dx * dx + dz * dz) < kS4StopEpsilon) {
+                        if (++still >= kS4StopFrames) {
+                            stopped = true;
+                            break;
+                        }
+                    } else {
+                        still = 0;
+                    }
+                }
+                if (!stopped) {
+                    throw std::runtime_error(
+                        "s42-selftest: the approach walked " + std::to_string(frames) +
+                        " frames without reaching a collision stop");
+                }
+                if (!finite_position(player.position)) {
+                    throw std::runtime_error(
+                        "s42-selftest: the approach left a non-finite player position");
+                }
+                const float ground = heightmap_sample(heightmap, player.position);
+                if (!std::isfinite(ground) ||
+                    std::fabs(player.position.y - ground) > kS4GroundTolerance) {
+                    throw std::runtime_error(
+                        "s42-selftest: the approach left the ground (y " +
+                        std::to_string(player.position.y) + ", ground " +
+                        std::to_string(ground) + ")");
+                }
+                return frames;
+            };
+
+            std::vector<std::vector<Mat4>> palettes = palettes_now();
+            const std::vector<Capsule> capsules =
+                entity_collision_capsules(scene, entityRig, palettes[entityRig]);
+            if (capsules.empty()) {
+                throw std::runtime_error(
+                    "s42-selftest: the entity rig has no collision capsules");
+            }
+            const float feet = player.position.y;
+            const float head = feet + kPlayerCapsuleHeight;
+            Vec3 aim{};
+            float aimDistance = std::numeric_limits<float>::infinity();
+            for (const Capsule& capsule : capsules) {
+                if (!capsule_overlaps_vertically(capsule, feet, head)) {
+                    continue;
+                }
+                Vec3 closest{};
+                const float distance =
+                    capsule_horizontal_distance(capsule, player.position, closest);
+                if (distance < aimDistance) {
+                    aimDistance = distance;
+                    aim = closest;
+                }
+            }
+            const float aimDx = aim.x - player.position.x;
+            const float aimDz = aim.z - player.position.z;
+            const float aimLength = std::sqrt(aimDx * aimDx + aimDz * aimDz);
+            if (!std::isfinite(aimDistance) || !(aimLength > 0.0f)) {
+                throw std::runtime_error(
+                    "s42-selftest: no reachable entity capsule to walk into");
+            }
+            const float aimYaw = std::atan2(aimDx, aimDz) / kDegToRad;
+            walk_toward(aimYaw, kS4MaxWalkFrames);
+
+            palettes = palettes_now();
+            PlayerFrame footFrame = frame_of(palettes);
+            const ClimbBandId approachBand =
+                nearest_climb_band(footFrame.jointWorld, player.position, 1000.0f);
+            Vec3 footPoint{};
+            Vec3 footNormal{};
+            if (approachBand == ClimbBandId::Count ||
+                !climb_surface_point(climb_band(approachBand), footFrame.jointWorld, 0.5f,
+                                     player.position, footPoint, footNormal)) {
+                throw std::runtime_error(
+                    "s42-selftest: the entity has no resolvable climb band");
+            }
+            const float footDx2 = footPoint.x - player.position.x;
+            const float footDz2 = footPoint.z - player.position.z;
+            if (!(std::sqrt(footDx2 * footDx2 + footDz2 * footDz2) > 1e-3f)) {
+                throw std::runtime_error(
+                    "s42-selftest: the foot band is under the player's first stop");
+            }
+            const float footYaw = std::atan2(footDx2, footDz2) / kDegToRad;
+            walk_toward(footYaw, kS41ApproachFrames);
+
+            palettes = palettes_now();
+            PlayerFrame reachFrame = frame_of(palettes);
+            if (nearest_climb_band(reachFrame.jointWorld, player.position, tuning.grabRange) ==
+                ClimbBandId::Count) {
+                throw std::runtime_error(
+                    "s42-selftest: the approach stopped out of grab range of every climb band");
+            }
+            PlayerInput grabInput;
+            grabInput.grab = true;
+            const StepEvents grabEvents = step_frame(grabInput, /*driveAttack=*/false);
+            if (!grabEvents.grabbed || combat.mode != PlayerMode::Grabbing) {
+                throw std::runtime_error(
+                    "s42-selftest: the foot grab did not attach (mode " +
+                    std::string(player_mode_name(combat.mode)) + ")");
+            }
+            if (combat.band != ClimbBandId::LeftFoot) {
+                throw std::runtime_error(
+                    "s42-selftest: the climb did not start at the foot (band " +
+                    std::string(climb_band_name(combat.band)) + ")");
+            }
+            const float climbFromY = player.position.y;
+            float previousY = climbFromY;
+            PlayerInput climbInput;
+            climbInput.grab = true;
+            climbInput.forward = true;
+            int climbFrames = 0;
+            bool reachedHead = false;
+            for (; climbFrames < kS42MaxClimbFrames; ++climbFrames) {
+                step_frame(climbInput, /*driveAttack=*/false);
+                if (combat.mode != PlayerMode::Climbing && combat.mode != PlayerMode::Grabbing) {
+                    throw std::runtime_error(
+                        "s42-selftest: the full climb left the climb modes at frame " +
+                        std::to_string(climbFrames) + " (mode " +
+                        player_mode_name(combat.mode) + ", band " +
+                        climb_band_name(combat.band) + ", stamina " +
+                        std::to_string(combat.stamina) + ")");
+                }
+                if (!finite_position(player.position)) {
+                    throw std::runtime_error(
+                        "s42-selftest: the full climb wrote a non-finite position at frame " +
+                        std::to_string(climbFrames));
+                }
+                if (player.position.y + kS42Eps < previousY) {
+                    throw std::runtime_error(
+                        "s42-selftest: the full climb went backwards at frame " +
+                        std::to_string(climbFrames) + " (" + std::to_string(previousY) +
+                        " -> " + std::to_string(player.position.y) + ")");
+                }
+                previousY = player.position.y;
+                if (combat.band == ClimbBandId::Head &&
+                    combat.bandT >= 1.0f - kS42Eps) {
+                    reachedHead = true;
+                    break;
+                }
+            }
+            if (!reachedHead) {
+                throw std::runtime_error(
+                    "s42-selftest: the full climb did not reach the top of the head in " +
+                    std::to_string(kS42MaxClimbFrames) + " frames (band " +
+                    climb_band_name(combat.band) + ", stamina " +
+                    std::to_string(combat.stamina) + ")");
+            }
+            const float climbToY = player.position.y;
+            const float climbRise = climbToY - climbFromY;
+            if (!std::isfinite(climbRise) || climbRise < kS42MinClimbRise) {
+                throw std::runtime_error(
+                    "s42-selftest: the full climb rose only " + std::to_string(climbRise) +
+                    " m (need " + std::to_string(kS42MinClimbRise) + " m)");
+            }
+            const int staminaRemaining = static_cast<int>(std::lround(combat.stamina));
+            if (staminaRemaining <= 0) {
+                throw std::runtime_error(
+                    "s42-selftest: the full climb emptied the stamina pool");
+            }
+            std::printf("s42-stamina from_y=%.3f to_y=%.3f remaining=%d\n", climbFromY,
+                        climbToY, staminaRemaining);
+
+            // --- 9. Status ---------------------------------------------------
+            if (encounter.defeated ||
+                static_cast<int>(std::lround(encounter.health)) != 100) {
+                throw std::runtime_error(
+                    "s42-selftest: the post-climb encounter is not the restored one");
+            }
+            renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                  /*acquire_swapchain=*/true);
+            print_status_line(opts, shell.win);
+            std::printf(
+                "s42-status proxy=%d gate_foot=%d gate_head=%d arm_band=%s arm_weakpoint=%d "
+                "arm_damage=%d stomp_damage=%d stomp_health=%d club_damage=%d club_health=%d "
+                "death_clip=%s reset_health=%d reset_stamina=%d reset_mode=%s reset_valus=%d "
+                "stamina_remaining=%d defeated=%d\n",
+                proxyCount, footStrike.damageDealt, headStrike.damageDealt,
+                climb_band_name(armBand), armWeakpoint,
+                armStrike.damageDealt, stompDamage,
+                healthBeforeStomp - stompDamage, clubDamage, healthBeforeClub - clubDamage,
+                playback.clips[static_cast<std::size_t>(playerClips.death)].name.c_str(),
+                resetHealth, resetStamina, resetMode, resetValus, staminaRemaining,
+                encounter.defeated ? 1 : 0);
             return 0;
         }
 

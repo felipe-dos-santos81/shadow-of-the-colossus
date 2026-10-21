@@ -97,6 +97,14 @@ struct AppOptions {
     // `s41-*` event lines and `s41-status`, and exits 0. Requires --manifest
     // (with an entity) and --model.
     bool s41Selftest = false;
+    // --s42-selftest: the S4.2 acceptance timeline. Compose the encounter
+    // manifest, resolve both weakpoint shells, test the foot/head damage gate,
+    // climb the chest->shoulder->arm branch, take a stomp and a club hit (with
+    // the i-frame gate), die to a lethal club, reset, and climb foot->head on
+    // the pinned stamina drains. Fixed 1/60 s steps and no window input. Prints
+    // the `s42-*` event lines and `s42-status`, and exits 0. Requires --manifest
+    // (with an entity) and --model.
+    bool s42Selftest = false;
     // --s41-stills DIR: with --s41-selftest, write one PNG per fight phase
     // (grab, mid-climb, strike, reaction) into DIR, plus the defeat still and
     // its two pixel controls under DIR/control/. The acceptance script creates

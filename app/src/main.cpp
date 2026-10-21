@@ -46,7 +46,11 @@ void print_usage(FILE* out) {
                  "                    the killing blow through fixed 1/60 s steps; print\n"
                  "                    s41-status, exit\n"
                  "  --s41-stills DIR  with --s41-selftest: write grab, mid-climb, strike,\n"
-                 "                    reaction and defeat stills (plus controls) to DIR\n");
+                 "                    reaction and defeat stills (plus controls) to DIR\n"
+                 "  --s42-selftest    compose the encounter --manifest, then run the\n"
+                 "                    weakpoint, gate, arm-route, stomp, club, death,\n"
+                 "                    reset and stamina timeline through fixed 1/60 s\n"
+                 "                    steps; print s42-status, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -94,6 +98,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--s41-selftest") {
             opts.s41Selftest = true;
+            continue;
+        }
+        if (arg == "--s42-selftest") {
+            opts.s42Selftest = true;
             continue;
         }
 
@@ -197,6 +205,11 @@ int main(int argc, char** argv) {
     }
     if (opts.s41Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s41-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s42Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s42-selftest needs --manifest\n");
         print_usage(stderr);
         return 2;
     }
