@@ -349,6 +349,9 @@ void frame_single_model(Camera& camera, const Scene& scene, const Playback& play
 
 constexpr float kHeightmapCellSize = 1.0f;        // metres between ground samples
 constexpr float kFixedFrameSeconds = 1.0f / 60.0f;  // the s3-selftest's fixed step
+// The player state machine clamps a frame to this; Valus's attack clock and yaw
+// use the same ceiling so one long frame cannot skip an impact window.
+constexpr float kMaxCombatStepSeconds = 0.05f;
 constexpr int kSelftestFrames = 240;                // 4 simulated seconds
 
 // --- S4 encounter self-test (Task 6) ---------------------------------------
@@ -390,6 +393,10 @@ constexpr const char* kFallClip = "player_a_damage_m_fly2";
 constexpr const char* kHeavyHurtClip = "player_a_damage_h_fly1";
 constexpr const char* kHeavyHurtEndClip = "player_a_damage_h_fly_end";
 constexpr const char* kPlayerDeathClip = "player_a_fall_damage_to_death";
+// The S4.2 Valus attack clips (design §7.4): the two stomps and the club.
+constexpr const char* kStompLeftClip = "minotaur_a_atk_leg_l";
+constexpr const char* kStompRightClip = "minotaur_a_atk_leg_r";
+constexpr const char* kClubSwingClip = "minotaur_a_atk_weapon2_a";
 
 // The world position of one vertex under a rig's palette: the shader's
 // skinning sum (worldJoint * inverseBind per influence), then the mesh's own
@@ -603,12 +610,15 @@ float active_player_lift(const Scene& scene, const Playback& playback, const Rig
 }
 
 // Applies every entity's grounding lift to its model transform, once for the
-// whole run (an entity's clock never changes which clip plays). compose_scene
-// baked the manifest TRS into each of the entity's mesh matrices; the manifest
-// y is the ground sample, so the rig's origin-to-feet lift raises the model's
-// origin to `y + lift` — 0 when the entity's clip already carries the root
-// series (the S2 rule, shared with the player). The player's meshes are not
-// touched here: its transform is rewritten from its own lift path each frame.
+// whole run. compose_scene baked the manifest TRS into each of the entity's
+// mesh matrices; the manifest y is the ground sample, so the rig's
+// origin-to-feet lift raises the model's origin to `y + lift` — 0 when the
+// entity's clip already carries the root series (the S2 rule, shared with the
+// player). The player's meshes are not touched here: its transform is rewritten
+// from its own lift path each frame. In an encounter the first entity's model is
+// immediately replaced by update_entity_transform (ruling R8), which recomposes
+// the same product from the stored transform; the lift it uses is the same one
+// computed here.
 void apply_entity_lifts(Scene& scene, const std::vector<Playback>& playbacks) {
     for (std::size_t rigIndex = 0; rigIndex < scene.rigs.size(); ++rigIndex) {
         if (rigIndex == scene.playerRig) {
@@ -621,6 +631,34 @@ void apply_entity_lifts(Scene& scene, const std::vector<Playback>& playbacks) {
                                       playback.clips[static_cast<size_t>(playback.index)]);
         }
         apply_rig_lift(scene, rigIndex, lift);
+    }
+}
+
+// Ruling R8: recompose an entity's mesh models from the transform captured in
+// Encounter and the live `entityYawDeg`. compose_scene baked T * R(yaw) * S
+// into every mesh, and apply_rig_lift appended the rig-local grounding lift;
+// this rebuilds that product with the current yaw, so the whole body — and the
+// club, which reads the live first-mesh model — turns. All meshes of one
+// entity share its placement model (compose_scene gives them the same TRS), so
+// one matrix covers the rig's range. A no-op until the encounter captured a
+// transform, and for a rig index the scene does not have.
+void update_entity_transform(Scene& scene, const Encounter& encounter,
+                             std::size_t rigIndex) {
+    if (!encounter.entityTransformSet || rigIndex >= scene.rigs.size()) {
+        return;
+    }
+    const RigCpu& rig = scene.rigs[rigIndex];
+    const std::size_t end = std::min(rig.meshEnd, scene.meshes.size());
+    const float half_angle = 0.5f * encounter.entityYawDeg * kDegToRad;
+    const Quat rotation{0.0f, std::sin(half_angle), 0.0f, std::cos(half_angle)};
+    const Mat4 base =
+        mat4_from_trs(encounter.entityPosition, rotation, encounter.entityScale);
+    const Mat4 lift =
+        mat4_from_trs(Vec3{0.0f, encounter.entityLift, 0.0f},
+                      Quat{0.0f, 0.0f, 0.0f, 1.0f}, Vec3{1.0f, 1.0f, 1.0f});
+    const Mat4 model = mat4_mul(base, lift);
+    for (std::size_t i = std::min(rig.meshBegin, end); i < end; ++i) {
+        scene.meshes[i].model = model;
     }
 }
 
@@ -694,6 +732,9 @@ struct EntityClips {
     int arm = -1;
     int body = -1;
     int death = -1;
+    int stompL = -1;
+    int stompR = -1;
+    int club = -1;
 };
 
 PlayerClips resolve_player_clips(const Playback& playback) {
@@ -711,7 +752,10 @@ EntityClips resolve_entity_clips(const Playback& playback, const std::string& st
                        clip_index_named(playback, kHeadReactionClip),
                        clip_index_named(playback, kArmReactionClip),
                        clip_index_named(playback, kBodyReactionClip),
-                       clip_index_named(playback, kDeathClip)};
+                       clip_index_named(playback, kDeathClip),
+                       clip_index_named(playback, kStompLeftClip),
+                       clip_index_named(playback, kStompRightClip),
+                       clip_index_named(playback, kClubSwingClip)};
 }
 
 // Prints one load error when `name` is absent from `playback`; false means the
@@ -851,12 +895,14 @@ void advance_encounter_reaction(Playback& playback, Encounter& encounter, int st
         return;
     }
     if (encounter.defeated) {
-        // Death: play once, then hold the final frame.
+        // Death: play once, then hold the final frame. No cooldown survives a
+        // defeat: there is no next attack.
         playback.time = duration;
         playback.pinned = true;
         playback.playing = false;
         encounter.reactionClip = -1;
         encounter.reactionSeconds = duration;
+        encounter.pendingCooldownSeconds = 0.0f;
         return;
     }
     // Reaction over: back to the entity's own loop from its first frame.
@@ -866,24 +912,265 @@ void advance_encounter_reaction(Playback& playback, Encounter& encounter, int st
         playback.pinned = false;
         playback.playing = true;
     }
+    // An attack this reaction interrupted starts its cooldown now, after the
+    // reaction, not when the strike cut the clip short (design §7.4).
+    if (encounter.pendingCooldownSeconds > 0.0f) {
+        encounter.cooldownSeconds = encounter.pendingCooldownSeconds;
+        encounter.pendingCooldownSeconds = 0.0f;
+    }
     encounter.reactionClip = -1;
     encounter.reactionSeconds = 0.0f;
+}
+
+// --- S4.2 Valus attacks -----------------------------------------------------
+
+// The clip an attack plays, or -1 when the resolved table lacks it. The load
+// gate below refuses a fight manifest without all three, so -1 is defensive.
+int valus_attack_clip(ValusAttack attack, const EntityClips& clips) {
+    switch (attack) {
+        case ValusAttack::StompL:
+            return clips.stompL;
+        case ValusAttack::StompR:
+            return clips.stompR;
+        case ValusAttack::Club:
+            return clips.club;
+        case ValusAttack::None:
+            break;
+    }
+    return -1;
+}
+
+// The posed joint the attack's damage is measured from: the attacking foot for
+// a stomp, the club's tip for the swing (design §7.4).
+const char* valus_attack_damage_joint(ValusAttack attack) {
+    switch (attack) {
+        case ValusAttack::StompL:
+            return "Bone_TUMASAKI_L";
+        case ValusAttack::StompR:
+            return "Bone_TUMASAKI_R";
+        case ValusAttack::Club:
+            return "OptBone_hit";
+        case ValusAttack::None:
+            break;
+    }
+    return nullptr;
+}
+
+// Cuts an in-progress attack short. The cooldown it would have started is
+// parked in pendingCooldownSeconds: design §7.4 starts it after the reaction,
+// not at the interruption. The caller owns the playback (the reaction clip
+// replaces the attack clip in the same step).
+void cancel_valus_attack(Encounter& encounter) {
+    if (encounter.attack == ValusAttack::None) {
+        return;
+    }
+    encounter.pendingCooldownSeconds = valus_attack_cooldown_seconds(encounter.attack);
+    encounter.attack = ValusAttack::None;
+    encounter.attackSeconds = 0.0f;
+    encounter.attackHit = false;
+}
+
+// Starts one attack at its first frame. The attack clock is owned by
+// encounter.attackSeconds, exactly like the reaction clock: update_pose only
+// advances a playing clip, so the playback flag stays false and the app writes
+// the sampled time each frame. That keeps the drawn pose and the impact window
+// on one clock — a playing flag plus a second clock would drift a frame apart.
+void start_valus_attack(Encounter& encounter, Playback& playback, const EntityClips& clips,
+                        ValusAttack attack) {
+    const int clip = valus_attack_clip(attack, clips);
+    if (clip < 0 || static_cast<std::size_t>(clip) >= playback.clips.size()) {
+        return;
+    }
+    encounter.attack = attack;
+    encounter.attackSeconds = 0.0f;
+    encounter.attackHit = false;
+    playback.index = clip;
+    playback.time = 0.0f;
+    playback.pinned = false;
+    playback.playing = false;  // encounter.attackSeconds advances this clip
+}
+
+// One frame of Valus's attack state: tick the cooldown, start the selected
+// attack, advance the active clip and return to stand when it ends. The impact
+// is deliberately not applied here — the caller checks attack_impact_due after
+// the player's step, so a strike that lands this frame cancels the attack and
+// its pending impact first. A reaction clip owns the body while it plays: no
+// new attack starts until it has returned to stand.
+void advance_valus_attack(Encounter& encounter, Playback& playback,
+                          const EntityClips& clips, const ValusAttackInput& input,
+                          float dtSeconds) {
+    if (encounter.defeated) {
+        // Defeat drops a pending swing without a cooldown: there is no next
+        // attack, and the death clip owns the playback.
+        encounter.attack = ValusAttack::None;
+        encounter.attackSeconds = 0.0f;
+        encounter.attackHit = false;
+        encounter.pendingCooldownSeconds = 0.0f;
+        return;
+    }
+
+    if (std::isfinite(dtSeconds) && dtSeconds > 0.0f) {
+        encounter.cooldownSeconds = std::max(0.0f, encounter.cooldownSeconds - dtSeconds);
+    } else if (!std::isfinite(encounter.cooldownSeconds)) {
+        encounter.cooldownSeconds = 0.0f;
+    }
+
+    if (encounter.attack == ValusAttack::None) {
+        if (encounter.reactionClip >= 0) {
+            return;
+        }
+        const ValusAttack chosen = select_valus_attack(input);
+        if (chosen == ValusAttack::None) {
+            return;
+        }
+        const int clip = valus_attack_clip(chosen, clips);
+        if (clip < 0 || static_cast<std::size_t>(clip) >= playback.clips.size() ||
+            !(playback.clips[static_cast<std::size_t>(clip)].duration > 0.0f)) {
+            return;  // nothing to play: never start a zero-length telegraph
+        }
+        start_valus_attack(encounter, playback, clips, chosen);
+        if (chosen == ValusAttack::StompL || chosen == ValusAttack::StompR) {
+            encounter.stompLeftNext = chosen == ValusAttack::StompR;
+        }
+        return;  // t = 0 is outside both impact windows
+    }
+
+    const int clip = valus_attack_clip(encounter.attack, clips);
+    if (clip < 0 || static_cast<std::size_t>(clip) >= playback.clips.size()) {
+        encounter.attack = ValusAttack::None;
+        encounter.attackSeconds = 0.0f;
+        encounter.attackHit = false;
+        return;
+    }
+    const float duration = playback.clips[static_cast<std::size_t>(clip)].duration;
+    if (std::isfinite(dtSeconds) && dtSeconds > 0.0f) {
+        encounter.attackSeconds += dtSeconds;
+    }
+    if (encounter.attackSeconds >= duration) {
+        // Clip over: back to the entity's own loop, then the cooldown starts.
+        encounter.cooldownSeconds = valus_attack_cooldown_seconds(encounter.attack);
+        encounter.attack = ValusAttack::None;
+        encounter.attackSeconds = 0.0f;
+        encounter.attackHit = false;
+        if (clips.stand >= 0) {
+            playback.index = clips.stand;
+            playback.time = 0.0f;
+            playback.pinned = false;
+            playback.playing = true;
+        }
+        return;
+    }
+    playback.time = encounter.attackSeconds;  // the drawn pose and the window agree
+}
+
+// Applies one attack's damage at the frame its window first opens (the caller
+// marks attackHit before calling, so it can never fire twice). The reach is the
+// distance from the posed damage joint to the player's capsule axis (feet to
+// feet + kPlayerCapsuleHeight), the same shape the weakpoint gate uses. An
+// attached player takes no damage (design §7.4); Dead and the i-frame window
+// are player_take_damage's own gates.
+void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
+                        const PlayerFrame& frame, const CombatTuning& tuning,
+                        ValusAttack attack) {
+    if (attack == ValusAttack::None || mode_is_attached(combat.mode)) {
+        return;
+    }
+    const char* joint = valus_attack_damage_joint(attack);
+    Vec3 point{};
+    if (joint == nullptr || !frame.jointWorld || !frame.jointWorld(joint, point)) {
+        return;
+    }
+    const float top = player.position.y + kPlayerCapsuleHeight;
+    const Vec3 nearest{point.x, std::clamp(point.y, player.position.y, top), point.z};
+    const float dx = point.x - nearest.x;
+    const float dy = point.y - nearest.y;
+    const float dz = point.z - nearest.z;
+    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!std::isfinite(distance)) {
+        return;
+    }
+
+    float damage = 0.0f;
+    bool heavy = false;
+    switch (attack) {
+        case ValusAttack::StompL:
+        case ValusAttack::StompR:
+            if (distance <= kValusStompDirectRangeMeters) {
+                damage = tuning.stompDamage;
+            } else if (distance <= kValusStompWaveRangeMeters) {
+                damage = tuning.stompWaveDamage;
+            }
+            break;
+        case ValusAttack::Club:
+            if (distance <= kValusClubHitRangeMeters) {
+                damage = tuning.clubDamage;
+                heavy = true;
+            }
+            break;
+        case ValusAttack::None:
+            break;
+    }
+    if (!(damage > 0.0f)) {
+        return;
+    }
+    player_take_damage(combat, damage, heavy, tuning);
+}
+
+// The per-frame attack decision input: the posed feet from the last palette
+// (posed_joint_world_position reads the live mesh model, so a yaw step taken
+// earlier this frame is already included), the planar player/entity transform,
+// and the mode gate. A foot that cannot resolve is pushed to infinity, which
+// reads as out of range rather than as a stomp at the world origin.
+ValusAttackInput valus_attack_input(const Scene& scene, std::size_t entityRig,
+                                    const std::vector<std::vector<Mat4>>& palettes,
+                                    const PlayerState& player, const PlayerCombat& combat,
+                                    const Encounter& encounter) {
+    ValusAttackInput input;
+    input.playerGrounded = combat.mode == PlayerMode::Grounded;
+    input.playerAttached = mode_is_attached(combat.mode);
+    input.defeated = encounter.defeated;
+    input.cooldownSeconds = encounter.cooldownSeconds;
+    input.playerPos = player.position;
+    input.entityPos = encounter.entityPosition;
+    input.entityYawDeg = encounter.entityYawDeg;
+    input.stompLeftNext = encounter.stompLeftNext;
+    const float far = std::numeric_limits<float>::infinity();
+    input.footL = Vec3{far, far, far};
+    input.footR = Vec3{far, far, far};
+    if (entityRig < palettes.size()) {
+        Vec3 foot{};
+        if (posed_joint_world_position(scene, entityRig, palettes[entityRig],
+                                       "Bone_TUMASAKI_L", foot)) {
+            input.footL = foot;
+        }
+        if (posed_joint_world_position(scene, entityRig, palettes[entityRig],
+                                       "Bone_TUMASAKI_R", foot)) {
+            input.footR = foot;
+        }
+    }
+    return input;
 }
 
 // Applies one step's damage to the encounter and routes the entity's reaction:
 // weakpoint 0 (forehead) -> the head reaction, 1 (right arm) -> the arm
 // reaction, any other band -> the generic body reaction. A killing blow
 // supersedes the reaction and starts the death clip. A defeated entity takes
-// no further damage and no second death.
+// no further damage and no second death. A landed strike also cancels Valus's
+// in-progress attack and its pending impact (design §7.4); a whiff never has
+// damageDealt > 0, so it reaches none of this.
 void apply_combat_events(Encounter& encounter, Playback& entityPlayback,
                          const EntityClips& clips, const StepEvents& events, int weakpoint) {
     if (events.damageDealt <= 0 || encounter.defeated) {
         return;
     }
+    if (valus_attack_cancelled(/*landedStrike=*/true, encounter.attack)) {
+        cancel_valus_attack(encounter);
+    }
     encounter.health =
         std::max(0.0f, encounter.health - static_cast<float>(events.damageDealt));
     if (encounter.health <= 0.0f) {
         encounter.defeated = true;
+        encounter.pendingCooldownSeconds = 0.0f;
         start_encounter_one_shot(entityPlayback, encounter, clips.death);
         return;
     }
@@ -1321,7 +1608,10 @@ int run_app(const AppOptions& opts) {
                     !require_named_clip(playbacks[entityRig], entityModel, kHeadReactionClip) ||
                     !require_named_clip(playbacks[entityRig], entityModel, kArmReactionClip) ||
                     !require_named_clip(playbacks[entityRig], entityModel, kBodyReactionClip) ||
-                    !require_named_clip(playbacks[entityRig], entityModel, kDeathClip)) {
+                    !require_named_clip(playbacks[entityRig], entityModel, kDeathClip) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kStompLeftClip) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kStompRightClip) ||
+                    !require_named_clip(playbacks[entityRig], entityModel, kClubSwingClip)) {
                     return 2;
                 }
             }
@@ -1341,11 +1631,46 @@ int run_app(const AppOptions& opts) {
         // manual too: a selection must not reset its time.
         const bool manual_clip = !opts.animClip.empty() || opts.animTimeSet;
 
+        // Ruling R8's autonomous fight (turn, stomp, club) runs in free
+        // interactive play. The scripted S3/S4/S4.1 acceptance timelines pin the
+        // entity and own every step — a stomp would race their assertions — and
+        // --entity-time pins the clip for a capture, so behavior is off there.
+        // Task 9's s42 timeline opts in with its own fixed steps.
+        const bool valus_behavior = follow_mode && !manifest.entities.empty() &&
+                                    entityRig < playbacks.size() && !opts.s3Selftest &&
+                                    !opts.s4Selftest && !opts.s41Selftest &&
+                                    !opts.entityTimeSet;
+
         // The composed scene's initial placement: every entity's grounding lift
-        // lands on its model transform once (which clip plays never changes),
-        // and the player's transform follows its controller every frame.
-        // A single-model load has no entity rig, so nothing moves here.
+        // lands on its model transform once, and the player's transform follows
+        // its controller every frame. A single-model load has no entity rig, so
+        // nothing moves here.
         apply_entity_lifts(scene, playbacks);
+
+        // Ruling R8: capture the encounter entity's manifest transform and
+        // recompose its mesh models from `entityYawDeg` (the manifest yaw for
+        // now). The lift is the same rig-local grounding offset apply_entity_lifts
+        // just applied, measured for the stand clip the entity opens on. All
+        // later frames rebuild the same product with the slewed yaw, so the body
+        // turns and the club (which reads the live model) follows.
+        if (follow_mode && !manifest.entities.empty() && entityRig < scene.rigs.size()) {
+            const ManifestEntity& entity = manifest.entities.front();
+            encounter.entityPosition = entity.placement.position;
+            encounter.entityScale = entity.placement.scale;
+            encounter.entityBaseYawDeg = entity_yaw_deg(entity.placement.rotation);
+            encounter.entityYawDeg = encounter.entityBaseYawDeg;
+            encounter.entityLift = 0.0f;
+            if (entityClips.stand >= 0 &&
+                static_cast<std::size_t>(entityClips.stand) <
+                    playbacks[entityRig].clips.size()) {
+                encounter.entityLift = effective_rig_lift(
+                    scene, entityRig,
+                    playbacks[entityRig]
+                        .clips[static_cast<std::size_t>(entityClips.stand)]);
+            }
+            encounter.entityTransformSet = true;
+            update_entity_transform(scene, encounter, entityRig);
+        }
 
         // The target-framing capture starts here: sample the entity's chest at
         // the initial playback time (before the first frame advances it) so the
@@ -2615,6 +2940,10 @@ int run_app(const AppOptions& opts) {
         GamepadInput gamepad;
         open_first_gamepad(gamepad);
         const CombatTuning tuning{};
+        // This frame's rig poses. Hoisted so Valus's attack decision can read
+        // the previous frame's posed feet before this frame's clip is chosen.
+        std::vector<std::vector<Mat4>> palettes =
+            update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f, club);
         std::deque<Uint64> frame_ticks;  // frame arrival times within the last second
         Uint64 last_title_update = SDL_GetTicks();
         Uint64 last_ticks = SDL_GetTicks();
@@ -2700,6 +3029,10 @@ int run_app(const AppOptions& opts) {
                                 climbCamera.active = false;
                                 targetCamera = CameraTarget{};
                                 follow = CameraFollow{};
+                                // R8: snap the body back to the manifest's
+                                // opening yaw (reset_encounter restored the
+                                // state; the model is composed from it).
+                                update_entity_transform(scene, encounter, entityRig);
                                 camera_follow(camera, follow, player.position,
                                               player.yawDeg, 0.0f, 0.0f, 0.0f,
                                               /*moving=*/false, /*dtSeconds=*/10.0f);
@@ -2779,17 +3112,35 @@ int run_app(const AppOptions& opts) {
                 drag_dx += deadzoned(gamepad.rightX) * kS41StickPixelsPerSecond * stick_dt;
                 drag_dy += deadzoned(gamepad.rightY) * kS41StickPixelsPerSecond * stick_dt;
 
-                // The encounter's one-shot clock, then the clip choice (from the
-                // mode the previous step left) and this frame's poses: the
-                // target camera, the collision proxy and the climb attach point
-                // all read the palettes drawn today.
+                // The encounter's one-shot clock, then Valus's own fight state
+                // (R8), then the clip choice (from the mode the previous step
+                // left) and this frame's poses: the target camera, the collision
+                // proxy and the climb attach point all read the palettes drawn
+                // today. Valus reads the previous palette's posed feet; the
+                // model transform is already this frame's, because the yaw step
+                // below runs before the joint query.
                 if (entityRig < playbacks.size()) {
                     advance_encounter_reaction(playbacks[entityRig], encounter,
                                                entityClips.stand, dt);
                 }
+                if (valus_behavior) {
+                    const float valus_dt = std::clamp(dt, 0.0f, kMaxCombatStepSeconds);
+                    // He turns only for an exactly grounded, living target: while
+                    // the player is on him the body holds still, or the climber
+                    // would slide around the band and the route would move.
+                    if (combat.mode == PlayerMode::Grounded && !encounter.defeated) {
+                        encounter.entityYawDeg = valus_yaw_slew(
+                            encounter.entityYawDeg, encounter.entityPosition,
+                            player.position, kValusYawSlewDegPerSecond, valus_dt);
+                    }
+                    update_entity_transform(scene, encounter, entityRig);
+                    const ValusAttackInput attack_input = valus_attack_input(
+                        scene, entityRig, palettes, player, combat, encounter);
+                    advance_valus_attack(encounter, playbacks[entityRig], entityClips,
+                                         attack_input, valus_dt);
+                }
                 update_combat_clips(playback, scene, combat, input, manual_clip);
-                const std::vector<std::vector<Mat4>> palettes =
-                    update_all_poses(renderer, scene, playbacks, dt, club);
+                palettes = update_all_poses(renderer, scene, playbacks, dt, club);
                 if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
                     haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
                                                            entityChest);
@@ -2828,6 +3179,16 @@ int run_app(const AppOptions& opts) {
                 if (events.damageDealt > 0 && entityRig < playbacks.size()) {
                     apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
                                         weakpoint);
+                }
+                // Valus's impact runs after the player's step: a strike that
+                // landed this frame has already cancelled the attack above, so
+                // its pending impact cannot fire. The first frame inside the
+                // window consumes it, even when the hit is then ignored.
+                if (valus_behavior && encounter.attack != ValusAttack::None &&
+                    attack_impact_due(encounter.attack, encounter.attackSeconds,
+                                      encounter.attackHit)) {
+                    encounter.attackHit = true;
+                    apply_valus_impact(combat, player, frame, tuning, encounter.attack);
                 }
 
                 if (mode_is_attached(combat.mode)) {

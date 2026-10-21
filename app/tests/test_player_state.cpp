@@ -1242,11 +1242,26 @@ TEST_CASE("the R soft reset restores the player and Valus") {
     encounter.defeated = true;
     encounter.reactionClip = 3;
     encounter.reactionSeconds = 0.5f;
+    encounter.attack = ValusAttack::Club;
+    encounter.attackSeconds = 0.58f;
+    encounter.cooldownSeconds = 3.0f;
+    encounter.attackHit = true;
+    encounter.pendingCooldownSeconds = 5.0f;
+    encounter.stompLeftNext = false;
+    encounter.entityBaseYawDeg = -130.8f;
+    encounter.entityYawDeg = 10.0f;
     reset_encounter(encounter);
     CHECK(encounter.health == doctest::Approx(100.0f));
     CHECK_FALSE(encounter.defeated);
     CHECK(encounter.reactionClip == -1);
     CHECK(encounter.reactionSeconds == doctest::Approx(0.0f));
+    CHECK(encounter.attack == ValusAttack::None);
+    CHECK(encounter.attackSeconds == doctest::Approx(0.0f));
+    CHECK(encounter.cooldownSeconds == doctest::Approx(0.0f));
+    CHECK_FALSE(encounter.attackHit);
+    CHECK(encounter.pendingCooldownSeconds == doctest::Approx(0.0f));
+    CHECK(encounter.stompLeftNext);
+    CHECK(encounter.entityYawDeg == doctest::Approx(encounter.entityBaseYawDeg));
 }
 
 TEST_CASE("stamina regenerates on the ground only after the delay") {

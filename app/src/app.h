@@ -2,8 +2,11 @@
 
 #include <string>
 
+#include "valus.h"
+
 // The encounter's own state (ruling R5): Valus's health and whether he is down,
-// plus the one reaction/death clip currently playing and how long it has run.
+// the one reaction/death clip currently playing and how long it has run, and —
+// since S4.2 — the attack in progress, its pinned clock and cooldown.
 // `reactionClip` is an index into the entity rig's Playback (-1 = none), never a
 // clip name: the app resolves the R3 names once at load.
 inline constexpr float kEncounterMaxHealth = 100.0f;
@@ -13,17 +16,48 @@ struct Encounter {
     bool defeated = false;
     int reactionClip = -1;
     float reactionSeconds = 0.0f;
+
+    // S4.2 attacks (design §7.4): the active attack, its clip time (owned here,
+    // like reactionSeconds), the cooldown that starts when the clip ends, and
+    // the once-only impact mark. `pendingCooldownSeconds` carries the cooldown
+    // of an attack a landed strike interrupted: the design starts it after the
+    // reaction clip, not when the attack was cut short.
+    ValusAttack attack = ValusAttack::None;
+    float attackSeconds = 0.0f;
+    float cooldownSeconds = 0.0f;
+    bool attackHit = false;
+    float pendingCooldownSeconds = 0.0f;
+    bool stompLeftNext = true;  // alternation seed (ruling R8's testable input)
+
+    // Ruling R8: the manifest entity transform, recomposed each frame from
+    // entityYawDeg so Valus can turn (and the club, which reads the live mesh
+    // model, turns with him). The scale is the manifest's; the lift is the
+    // rig-local grounding offset apply_rig_lift once baked in.
+    bool entityTransformSet = false;
+    Vec3 entityPosition{};
+    Vec3 entityScale{1.0f, 1.0f, 1.0f};
+    float entityBaseYawDeg = 0.0f;  // the manifest yaw; the soft reset returns here
+    float entityYawDeg = 0.0f;      // the slewed facing
+    float entityLift = 0.0f;
 };
 
 // The encounter half of the R soft reset (design §7.5): Valus back to full
-// health, undefeated, with no reaction or death one-shot left to advance. The
-// caller also returns the entity playback to its manifest stand clip; this
-// helper owns the state, not the clip.
+// health, undefeated, with no reaction or death one-shot left to advance, no
+// attack or cooldown, and — since R8 owns the body transform — his opening
+// facing. The caller also returns the entity playback to its manifest stand
+// clip and recomposes the model; this helper owns the state, not the clip.
 inline void reset_encounter(Encounter& encounter) {
     encounter.health = kEncounterMaxHealth;
     encounter.defeated = false;
     encounter.reactionClip = -1;
     encounter.reactionSeconds = 0.0f;
+    encounter.attack = ValusAttack::None;
+    encounter.attackSeconds = 0.0f;
+    encounter.cooldownSeconds = 0.0f;
+    encounter.attackHit = false;
+    encounter.pendingCooldownSeconds = 0.0f;
+    encounter.stompLeftNext = true;
+    encounter.entityYawDeg = encounter.entityBaseYawDeg;
 }
 
 // One viewer run's parameters, filled by the argument parser in main.cpp.
