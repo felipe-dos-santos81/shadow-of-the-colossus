@@ -1,22 +1,24 @@
 # S5 audio — the SXDF/AT9 decode
 
-Status: **music proven; resident banks blocked** (2026-10-21). The music path decodes:
-**33/33 tracks**, 48 kHz, 5.1, 63.84 min, every one non-silent and within 24 ms of its
-declared duration. The **resident** `boss*.sxd` payload is a different problem: `0x21` is
-16 B/28-sample PS-ADPCM *geometry* but its heap offsets are disproved (§7), and `0x42` is
-ATRAC9 by its own config word but does not decode to spec (§5.0). The gate therefore
-**fails by default** and only a `--allow-unresolved` covering every resident variant can
-pass it — which prints `BLOCKED` and stops the milestone at Task 1 (§5.1).
+Status: **music and resident banks both decode** (2026-10-21, Task 1). The music path
+decodes **33/33 tracks**, 48 kHz, 5.1, 63.84 min, every one non-silent and within 24 ms of its
+declared duration. The **resident** banks decode too: the loader puts a wave's payload at
+`wave_record_offset + 0x24 + start`, and that formula tiles the `DATA` payload exactly on
+`boss01`, `com_obj` and `com_v` (§7). The gate therefore passes with all four boss01 variants:
+`0x21` as 16 B / 28-sample PS-ADPCM (8-filter table, §7.3) and `0x42` as ATRAC9 at
+96 kbps/channel (§5.0).
 
 Tool: `tools/re/audio/s5_decode_gate.py` (read-only on the game tree; artifacts land in
-`out/s5/gate/`, gitignored). Everything below was measured by that script or by the probes
-recorded in §7.
+`out/s5/gate/`, gitignored). The cue attribution built on top is
+`tools/re/audio/s5_audition.py` + `tools/re/audio/s5_map.json`, documented in
+`docs/notes/s5-audio-attribution.md`.
 
 ```bash
 export SOTC_GAME_ROOT=…/SOTC-extract/extracted/game
 caffeinate -dimsu python3 tools/re/audio/s5_decode_gate.py \
     --root "$SOTC_GAME_ROOT" --out out/s5/gate --check
-# -> GATE FAILED: 4 problem(s)    (all four resident variants are unresolved, §7)
+# -> GATE PASSED: music 48 kHz non-silent; resident variants decoded
+#    0x00FF0121, 0x00FF0142, 0x00FF0221, 0x00FF0242
 ```
 
 ---
@@ -117,18 +119,18 @@ Sweeping the `WAVE` table of all 25 resident banks gives the full format-word se
 boss12/edp01). So `0x0642` is **not** music-only — some resident SFX are 6-channel too —
 and the plan's "curated set" for boss01 listed a fifth word that belongs to other banks.
 
-**Payload mapping: disproved.** The `DATA` chunk is `8 + 24` bytes of header then a heap of
-`size − 24 = 15 881 904` bytes. The obvious reading —
+**Payload mapping (loader-derived, §7).** `start` is relative to the **WAVE record**, not
+to the DATA heap:
 
 ```
-heap_base   = DATA_chunk_offset + 0x20
-record_data = heap_base + (start − min(start))        # min(start) = 0xE404 on boss01
+payload = wave_record_offset + 0x24 + start        # length = bytes
 ```
 
-— is what the gate used, and it is **wrong**: `Σ bytes` is 18 407 584 over a 15 874 512-byte
-span and all 137 consecutive `(start, bytes)` pairs *overlap* (total overlap = exactly
-`Σ bytes − span`), so the fields cannot describe a sequential heap. §7 has the full evidence
-and what is still open.
+`FUN_00983220` in `eboot.elf` computes exactly this for a non-streaming wave; the DATA
+chunk's payload begins at `DATA + 0x10`. The formula tiles the DATA payload with **zero
+gaps** on boss01 (payload 15 881 920 B), com_obj and com_v; the duplicate records that
+made the old heap mapping overlap share a range instead of drifting. §7 has the full
+proof.
 
 ---
 
@@ -204,58 +206,40 @@ Nothing else is needed: no `-ss`, no per-frame headers, no byte swapping.
 | ATRAC9 for the resident `0x21` family | **ruled out**: `bytes/samples` is exactly 16/28 (`boss01` 31 120 B / 54 432 samples), i.e. 16-byte blocks of 28 samples; the record carries no `0xFE` config word |
 | the music `+0x0C` / `+0x28` words as the AT9 config | reject: neither has `0xFE` in its top byte, which the engine's validator requires |
 
-### 5.0 The resident `0x42` family — identified as ATRAC9, still a gap
+### 5.0 The resident `0x42` family — ATRAC9, now decoded
 
-The `0x42` records are 56 bytes and carry a **second** codec word at `+0x2C` (the `0x21`
-records stop at `+0x28`). Decoded with the same bit split as §4.1:
+The `0x42` records are 56 or 76 bytes and carry a **second** codec word: at `+0x2C` on
+56-byte records, at `+0x40` on 76-byte records. The gate finds it by scanning the record
+from `+0x28` for the first dword with top byte `0xFE`. Decoded with the same bit split as
+§4.1:
 
-| fmt | record `+0x2C` | sri | block config | frame bytes | superframe |
+| fmt | record word | sri | block config | frame bytes | superframe |
 |---|---|---|---|---|---|
 | `0x00FF0142` (1 ch) | `0xFE7007E0` | 7 (48 kHz) | 0 (mono) | **64** | 0 (1 frame) |
 | `0x00FF0242` (2 ch) | `0xFE740FE0` | 7 (48 kHz) | 2 (stereo) | **128** | 0 (1 frame) |
 
-That word matches the family's geometry exactly (`0x00FF0142`: 58 304 B / 232 800 samples
-= 64 B per 256 samples), so the engine stores these waves as **ATRAC9 at 96 kbps/channel**,
-not as a 2-bit ADPCM.
+The word matches the family's geometry exactly (`0x00FF0142`: 58 304 B / 232 800 samples
+= 64 B per 256 samples), so the engine stores these waves as **ATRAC9 at 96 kbps/channel**.
 
-The payload does not decode to spec, though. At the heap offset the record's `start`
-implies (see §7):
-
-* mono (`0x0142`): ffmpeg accepts the record's own config and decodes **200 448 frames
-  (4.18 s of 4.85 s)**, RMS −16.5 dBFS, peak 0.60, with one concealed
-  `Invalid extension band 13!` — i.e. real audio, 86 % of the declared length;
-* stereo (`0x0242`): rejects at frame 0.
-
-The bounded ADPCM attempt (`--probe-0x42`, mono record, 58 304 B, declared 4.85 s) found
-nothing that reaches the declared duration at 16 B / 64 samples:
-
-| decoder | invocation | result |
-|---|---|---|
-| `adpcm_psx` | `.vag` wrapper, 16 B blocks | rc 0, 31 668 frames = **0.66 s**, `Error submitting packet to decoder` |
-| `adpcm_ms` | WAV tag `0x0002`, block 64 | rc 69, `ERROR: block_predictor[0] = 55` (out of range), 0 frames |
-| `adpcm_ima_wav` | WAV tag `0x0011`, block 64 | rc 0, 6 534 frames = **0.14 s** |
-| `adpcm_ct` | WAV tag `0x0020`, block 64 | rc 0, 116 608 frames = **2.43 s** (exactly half: 2 samples/byte) |
-
-The binary shows no 2-bit ADPCM variant either: the ADPCM path in `eboot.elf` is the
-streaming manager (`adpcmManager.cpp`, `B_adpcmOpenReq`, `Sg2ExStAdpcmOpen`,
-`Show ADPCM Streams`) and there is no `2bit`/`4bit` string anywhere in the image.
-
-**Verdict:** `0x42` = ATRAC9 (proven by the record's own config word and by 86 % of a mono
-record decoding to audio), but its per-record payload offset is not derivable from the
-record, so it stays an **accepted gap**. The gate prints it as such and refuses to pass
-unless the gap is named on the command line (§5.1).
+With the loader payload formula (§7) the family decodes **to spec**: all 30 `0x42` records
+of boss01 decode at the record's own config, within 9.3 ms of the declared duration
+(e.g. record 108 stereo and record 109 mono both 233 216 frames = 4.8587 s of 4.85 s,
+RMS −17.1 dBFS, no decoder errors). The earlier "86 % of the mono record" result was an
+artifact of the old, wrong heap offset; the extra bytes before the true payload were
+misread as AT9 frames. The bounded ADPCM attempt in the previous version of this note is
+superseded: `0x42` is not a 2-bit ADPCM and the ADPCM matrix no longer applies.
 
 ### 5.1 What the gate checks, and the variant honesty rules
 
 Per carved WAV (hard, non-zero exit on failure):
 
 * the delivered `pcm_s16le` WAV's header is the record's channel count and rate;
-* frame count within **50 ms** of `samples/rate` (measured 6.4 … 24.0 ms on all 33 tracks —
-  encoder padding, always in the same direction);
+* frame count within **50 ms** of `samples/rate` (music: 6.4 … 24.0 ms; resident 0x42:
+  8.0 … 9.3 ms; resident 0x21: ≤ 1 ms);
 * RMS > **−60 dBFS**, samples finite, s16 peak ≤ 1.0 (float peak > 8.0 is treated as a
   broken decode);
 * the AT9 config word derived from `(rate, channels, bytes/samples)` equals the word stored
-  in the record at `WAVE+0x40` (it does on all 33: `FE761DF0`).
+  in the record at `WAVE+0x40` (it does on all 33 music records: `FE761DF0`).
 
 Warnings (recorded in `out/s5/gate/manifest.json`, not fatal): float peak > 1.0, s16 clamp
 fraction > 0.5 %.
@@ -264,11 +248,8 @@ fraction > 0.5 %.
 decode; a variant that is skipped fails the gate unless it is named on the command line:
 
 ```bash
-# default: require all four boss01 variants -> exit 1 today (§7 says why)
+# default: all four boss01 variants must decode -> exit 0 now
 python3 tools/re/audio/s5_decode_gate.py --root "$SOTC_GAME_ROOT" --out out/s5/gate --check
-
-# accept the two 0x42 gaps explicitly
-python3 tools/re/audio/s5_decode_gate.py --root "$SOTC_GAME_ROOT" --out out/s5/gate --check     --allow-unresolved 0x0142,0x0242
 
 # narrow the requirement (e.g. one bank's subset)
 ... --check --require 0x0121,0x0221
@@ -279,20 +260,17 @@ python3 tools/re/audio/s5_decode_gate.py --root "$SOTC_GAME_ROOT" --out out/s5/g
 * **Exit codes:** 0 = every required variant decoded; 1 = a required variant is missing or
   a skipped variant is not allow-listed; 2 = configuration/error; 3 = every variant is an
   accepted gap, i.e. **no decodable family for Task 1 to attribute cues to → the milestone
-  stops at Task 1**.
-* On a passing run the gate prints `ALLOWED GAPS: …` and
-  `POLICY: the curated cues must come from the decoded families (…); if Task 1 attributes a
-  core cue to <gap> the milestone stops at Task 1.`
+  stops at Task 1**. With the loader formula in place exit 3 is unreachable for boss01
+  unless the decoders are removed.
 
 Negative tests run against the final script:
 
 * an all-zero `music.sxd2` of the right size → `GATE ERROR … ffmpeg failed` , exit 2;
 * synthetic stats for silence, a 60 ms duration error, NaN, a runaway peak and an s16 peak
   > 1.0 → all rejected by `check_analysis` (each rule fires on its own case);
-* default run (all four resident variants required) → exit 1;
-* `--allow-unresolved 0x0121,0x0142,0x0221,0x0242` → exit 3 (`BLOCKED: no resident family
-  is validated`);
-* `--allow-unresolved 0x0142,0x0242` → exit 1 (the `0x21` pair is still required).
+* `--require 0x0121 --allow-unresolved 0x0121` → exit 2 (configuration overlap);
+* a record whose payload escapes `DATA`, or a bank whose payload does not tile, → exit 2
+  (the formula is asserted, not assumed).
 
 ---
 
@@ -338,49 +316,55 @@ Negative tests run against the final script:
 
 Total 3830.38 s = **63.84 min**; 33/33 pass.
 
-## 7. Resident banks — geometry fits PS-ADPCM, the offsets do not
+## 7. Resident banks — the loader formula, PS-ADPCM, and ATRAC9
 
 `boss01.sxd` has 138 `WAVE` records; the `offsets[]` steps are 44 (94×), 52 (13×),
 64 (14×) and 72 (16×), i.e. real record sizes of **48 / 56 / 68 / 76 bytes** (the `+4*i`
 rule absorbs the difference). Field slots are the same as §2: `+0x04` fmt, `+0x08` rate,
-`+0x14` samples, `+0x20` bytes, `+0x24` start; records ≥ 56 B add the AT9 config word at
-`+0x2C` (§5.0).
+`+0x14` samples, `+0x18/+0x1C` loop points (−1 = no loop; `com_obj` has real loops),
+`+0x20` bytes, `+0x24` start.
 
-The `0x21` family's ratio is exactly **16 bytes per 28 samples**, i.e. classic PS-ADPCM
-(16-byte blocks: 1 header byte, 1 flags byte, 14 nibble bytes). The gate can decode it —
-`ps_adpcm_decode()` in the script, 28 samples per block, low nibble first, predictors
-`{0,0},{60,0},{115,-52},{98,-55},{122,-60}`, `(s1·c1 + s2·c2) >> 6`, clamped to int16,
-channels block-interleaved for 2 ch:
+### 7.1 The formula (loader-derived)
 
-```bash
-# exploratory only (no --check): writes boss01_fmt00FF0121_*.wav for inspection
-python3 tools/re/audio/s5_decode_gate.py --root "$SOTC_GAME_ROOT" --out out/s5/gate
-```
+Three functions in `eboot.elf` give the address arithmetic:
 
-**The offsets are the problem, and they are disproved, not merely unproven.** The
-`start`/`bytes` fields cannot be a partition of `DATA`:
+| vaddr | what it does |
+|---|---|
+| `0x00987990` | `record = WAVE_base + index*4 + *(int*)(WAVE_base + index*4)` — the `+4*i` table rule, with `WAVE_base = chunk+0x10`; count at `chunk+0x0C`. |
+| `0x00983220` | copies the record fields; for a non-streaming wave: `payload = record + start + 0x24`. |
+| `0x00983ea0` | the format switch (low byte of `+0x04`): `0x20/0x21` sets 16-byte blocks of 28 samples (`0x594 = channels<<4`, `0x590 = 0x1C`); `0x42` validates the AT9 config word. |
 
-* `Σ bytes = 18 407 584` over a span of `15 874 512` (heap = 15 881 904);
-* **all 137 consecutive `(start, bytes)` pairs overlap**, and the total overlap is
-  `2 533 072` bytes = `Σ bytes − span` **exactly**, with zero gaps;
-* at the implied offsets (`heap + (start − min(start))`, `min(start) = 0xE404`) the 16-byte
-  block headers are *uniform* — filter nibble 0-7 at 14-24 % each, shift 0-15 at 5-10 % —
-  where a real PS-ADPCM stream would show shift/filter values only in the legal ranges.
-
-So `heap + (start − min(start))` is **not** the resident layout: the first record happens to
-land on the heap head (which is why the first `0c 00 00…` blocks looked like VAG silence) and
-every later record drifts. The `0x21` WAVs the gate writes are therefore **exploratory
-artifacts, not validated decodes**, and the variant is reported unresolved.
-
-The exact PS-ADPCM invocation that produces them (kept so Task 2 does not have to re-derive
-the algorithm, and so anyone can compare it against a future mapping):
+So the payload address is **relative to the WAVE record**, not to the DATA heap:
 
 ```
-blocks   = bytes // 16                 # 1 945 blocks for a 31 120-byte record
-for each block at  p = heap_offset + 16*k:
-    h        = data[p]                 # shift = h & 0x0F, filter = (h >> 4) & 7
-    shift, filter = h & 0xF, (h >> 4) & 7
-    c1, c2   = ((0,0),(60,0),(115,-52),(98,-55),(122,-60))[filter]
+payload = wave_record_offset + 0x24 + start        # length = bytes
+```
+
+and the DATA chunk's payload starts at `DATA + 0x10` (8-byte chunk header + 8 zero
+bytes). On `boss01` the 138 ranges tile `[DATA+0x10, DATA+8+size)` with **zero gaps**;
+`com_obj` (241 records) and `com_v` (63) tile their payloads exactly too. The 17
+duplicate groups (e.g. records 21/24, 22/25) share a range instead of drifting. `edp01`
+is the exception: 11 merged segments with 70 bytes of gaps, so its bank has unlisted or
+streamed data — the gate does not carve it.
+
+Why the raw `start` values overlap: the old `heap + (start − min(start))` reading ignored
+the per-record `+0x24 + record_offset` term. Since the records have different addresses in
+the WAVE table, the same payload can be addressed from two records; `Σ bytes` (18 407 584)
+exceeds the span (15 874 512) because the duplicates count twice and because `bytes` is the
+payload length, not a distance between `start`s. The old block-header "uniformity" was the
+same arithmetic error: the headers were being read at the wrong offsets.
+
+### 7.2 `0x21` — PS-ADPCM, 16 B / 28 samples, 8 filters
+
+The `0x21` family's ratio is exactly **16 bytes per 28 samples**, i.e. PS-ADPCM
+(16-byte blocks: 1 header byte `shift|filter<<4`, 1 flags byte, 14 nibble bytes). The
+format switch sets the geometry to 28 samples per block. Decode:
+
+```
+for each 16-byte block:
+    shift  = data[p] & 0x0F
+    filter = (data[p] >> 4) & 7
+    c1, c2 = COEF[filter]
     for each nibble in data[p+2 .. p+16] (low nibble first):
         v = sign_extend(nibble << 12) >> shift
         s = clamp16(v + ((s1*c1 + s2*c2) >> 6)); s2, s1 = s1, s
@@ -388,18 +372,42 @@ for each block at  p = heap_offset + 16*k:
 # its own s1/s2; the declared sample count is per channel.
 ```
 
-Cross-check: ffmpeg's strict `adpcm_psx` on the same bytes (a 48-byte `VAGp` wrapper) stops
-after ~63 % of the blocks with `Error submitting packet to decoder`, because the uniform
-header bytes are not legal PS-ADPCM shifts/filters. That is the same evidence from the other
-side.
+`COEF[0..4]` is the standard VAG table `{0,0}, {60,0}, {115,-52}, {98,-55}, {122,-60}`.
+Filters 5-7 are **not** in eboot.elf (no coefficient table anywhere in the image — the
+decoder lives in the NGS2 firmware), so they were fitted from block-boundary continuity
+on records 1-99:
 
-Open (Task 1/2 must not assume otherwise):
+```
+COEF[5] = (126, -62)   COEF[6] = (128, -64)   COEF[7] = (126, -63)
+```
 
-1. the resident heap mapping — what `start` indexes (record headers? a de-duplicated pool?
-   stale metadata from a rebuild?) is unknown; every resident carve today is a guess;
-2. the `0x21` block header layout, once the mapping is fixed;
-3. whether `0x42`'s AT9 payload is interleaved differently from `0x21`'s (the mono record
-   decodes 86 % of its frames at the same offset, the stereo one 0 %).
+Evidence: with filters 5-7 treated as 0 the boundary jump (`|x[28k] − x[28k−1]|`) is
+2.5-4.8× the mean sample step; with the fitted table it drops to 1.0-2.8× on records not
+used in the fit (7, 10, 20, 30). The gate uses the fitted table. The exact firmware table
+is still open, but the duration and envelope are unaffected.
+
+### 7.3 `0x42` — ATRAC9 at 96 kbps/channel
+
+The record's own config word is the first dword with top byte `0xFE` at/after `+0x28`
+(56-byte records: `+0x2C`; 76-byte: `+0x40`). All 30 boss01 `0x42` records decode with
+`at9_riff_with_config()` at that word, within 9.3 ms of the declared duration, RMS
+−17.1 dBFS, no decoder errors. The stereo/mono pairs (108/109, 110/111, …) are the same
+performance in both layouts, which is why they share a duration.
+
+### 7.4 Exact invocation (for the converter)
+
+```bash
+# resident 0x21: the gate writes a 48 kHz pcm_s16le WAV itself (ps_adpcm_decode)
+# resident 0x42: AT9 with the record's config word, exactly like the music path
+ffmpeg -hide_banner -v error -y -i boss01_fmt00FF0142.at9.wav -c:a pcm_s16le out.wav
+```
+
+Open (Task 2 must not assume otherwise):
+
+1. the exact NGS2 filter-5..7 coefficients (the fitted table is documented above);
+2. the name→wave resolution for banks whose `TONE` table is not the flat 12-byte form
+   used by boss01; the attribution note uses the name-pool/WAVE order plus audition for
+   those.
 
 ## 8. Converter policy (from the measured facts)
 
@@ -420,5 +428,8 @@ the measurements that drive them:
 
   Implied gains from the sweep: −0.1 dB (Ending 1, peak 0.50) to −12.5 dB (Boss 1, peak
   4.22).
-* **No resident clip exists yet** — §7 keeps every resident family unresolved, so the
-  manifest carries music only until a family maps.
+* **Resident clips now exist.** The loader formula (§7.1) decodes every boss01 `0x21`/`0x42`
+  record; the curated cue map (`s5_map.json`) picks the first seven core cues and
+  `s5_audition.py --check` proves each mapped wave is 48 kHz, non-silent and full length.
+  The resident 0x21 clips are mono/stereo PS-ADPCM at 48 kHz; 0x42 clips are AT9 and follow
+  the same ffmpeg path as the music.

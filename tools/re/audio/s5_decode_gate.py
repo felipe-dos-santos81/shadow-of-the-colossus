@@ -41,10 +41,18 @@ Codec
   that word as extradata: LE32 version 0 + the 4 config bytes + 4 pad bytes,
   inside a WAVEFORMATEXTENSIBLE `fmt ` chunk whose GUID is the AT9 one.
 
-  Resident banks are NOT ATRAC9: their byte/sample ratio is exactly 16/28, i.e.
-  PS-ADPCM (VAG) 16-byte blocks of 28 samples.  This gate decodes the 0x21
-  family as PS-ADPCM and reports the 0x42 family as unresolved (2 bits/sample,
-  16 B per 64 samples).
+  Resident payload addressing (loader-derived, 2026-10-21): a WAVE record's
+  data is at `record_offset + 0x24 + start` and is exactly `bytes` long.  The
+  `start` field is relative to the record, not to the DATA heap; this is why
+  the raw `start` values overlap.  The formula tiles the DATA payload exactly
+  on boss01, com_obj and com_v.
+
+  Resident codecs: the 0x21 family is 16-byte / 28-sample PS-ADPCM (the
+  format switch in eboot.elf sets 0x594 = channels<<4 and 0x590 = 0x1c), with
+  an 8-entry predictor table (filters 0-4 are the standard VAG table; 5-7 are
+  fitted from block-boundary continuity because the real table lives in the
+  NGS2 firmware).  The 0x42 family is ATRAC9 at 96 kbps/channel; the record's
+  config word is the first 0xFE-prefixed dword at/after +0x28.
 
 Usage
   python3 tools/re/audio/s5_decode_gate.py --root "$SOTC_GAME_ROOT" \
@@ -76,8 +84,11 @@ SAMPLE_RATE_INDEX = {48000: 7}
 # channels -> AT9 substream layout index (at9_block_layout)
 BLOCK_CONFIG = {1: 0, 2: 2, 4: 5, 6: 3, 8: 4}
 
-# PS-ADPCM predictor coefficients (the five standard VAG filters).
-VAG_COEF = ((0, 0), (60, 0), (115, -52), (98, -55), (122, -60))
+# PS-ADPCM predictor coefficients.  Filters 0-4 are the standard VAG table;
+# filters 5-7 were fitted from block-boundary continuity (the engine's table
+# lives in the NGS2 firmware, not in eboot.elf).  Rounded to integers.
+VAG_COEF = ((0, 0), (60, 0), (115, -52), (98, -55), (122, -60),
+            (126, -62), (128, -64), (126, -63))
 
 RMS_FLOOR_DBFS = -60.0
 DURATION_TOLERANCE_S = 0.050
@@ -174,10 +185,8 @@ def read_wave_record(buf, rec, path):
     """Read the fixed 0x28-byte prefix shared by the 76 B and 44/48 B records."""
     if rec + 0x28 > len(buf):
         raise GateError(f"{path}: WAVE record at {rec:#x} truncated")
-    tag, fmt, rate, codec_word, zero, samples, minus1a, minus1b, nbytes, start = \
+    tag, fmt, rate, codec_word, zero, samples, loop_start, loop_end, nbytes, start = \
         struct.unpack_from("<10I", buf, rec)
-    if minus1a != 0xFFFFFFFF or minus1b != 0xFFFFFFFF:
-        raise GateError(f"{path}: WAVE record at {rec:#x} field layout changed")
     channels = (fmt >> 8) & 0xFF
     return {
         "offset": rec,
@@ -187,6 +196,9 @@ def read_wave_record(buf, rec, path):
         "rate": rate,
         "codec_word": codec_word,
         "samples": samples,
+        # -1 = no loop; otherwise a (start, end) sample pair.
+        "loop_start": loop_start,
+        "loop_end": loop_end,
         "bytes": nbytes,
         "start": start,
     }
@@ -542,11 +554,13 @@ def carve_resident(root, out_dir, bank, log):
     for need in ("WAVE", "DATA"):
         if need not in chunks:
             raise GateError(f"{path}: no {need} chunk")
-    wave_off, _ = chunks["WAVE"]
+    wave_off, wave_size = chunks["WAVE"]
     data_off, data_size = chunks["DATA"]
-    # DATA: 8-byte chunk header + 24 zero bytes, then the wave heap.
-    data_heap = data_off + 0x20
-    heap_bytes = data_size - 24
+    # DATA: 8-byte chunk header + 8 zero bytes, then the wave payload.  A
+    # record's payload is at `record + 0x24 + start` (loader-derived; see the
+    # FUN_00983220 decompilation in the S5 task-1 report).
+    payload_base = data_off + 0x10
+    payload_end = data_off + 8 + data_size
 
     table = table_records(buf, wave_off, path)
     records = [read_wave_record(buf, rec, path) for rec, _tag in table]
@@ -554,25 +568,44 @@ def carve_resident(root, out_dir, bank, log):
         raise GateError(f"{path}: empty WAVE table")
     # Record stride comes from the next record (variable 48/56/68/76 B in boss01).
     for k, r in enumerate(records):
-        nxt = table[k + 1][0] if k + 1 < len(table) else len(buf)
+        nxt = table[k + 1][0] if k + 1 < len(table) else wave_off + 8 + wave_size
         r["stride"] = nxt - r["offset"]
-        # Records 56 B and longer carry an ATRAC9 config word at +0x2C; the 0x42
-        # family's value matches its own geometry exactly (see note §5).
-        r["at9_hint"] = (struct.unpack_from("<I", buf, r["offset"] + 0x2C)[0]
-                         if r["stride"] >= 0x30 else None)
+        # The 0x42 family carries an ATRAC9 config word somewhere at/after
+        # +0x28 (56-byte records: +0x2C; 76-byte records: +0x40).  Find the
+        # first 0xFE-prefixed dword rather than assuming a layout.
+        r["at9_hint"] = None
+        r["at9_hint_off"] = None
+        for off in range(0x28, max(0x28, r["stride"] - 3), 4):
+            value = struct.unpack_from("<I", buf, r["offset"] + off)[0]
+            if value >> 24 == 0xFE:
+                r["at9_hint"] = value
+                r["at9_hint_off"] = off
+                break
+        # Loader formula: payload is relative to the WAVE record itself.
+        r["payload"] = r["offset"] + 0x24 + r["start"]
+        r["length"] = r["bytes"]
+        if r["payload"] < payload_base or r["payload"] + r["length"] > payload_end:
+            raise GateError(
+                f"{path}: record at {r['offset']:#x} payload "
+                f"{r['payload']:#x}+{r['length']} escapes DATA "
+                f"[{payload_base:#x},{payload_end:#x})")
     if min(r["start"] for r in records) == 0:
         raise GateError(f"{path}: resident starts unexpectedly begin at 0")
 
-    # Empirical layout: the heap holds the records back-to-back in `start`
-    # order, so record i sits at heap + (start_i - min_start).  Verified by
-    # the fit (no record overruns the payload) and by the decode below.
-    min_start = min(r["start"] for r in records)
-    for r in records:
-        r["heap_offset"] = r["start"] - min_start
-        if r["heap_offset"] + r["bytes"] > heap_bytes:
-            raise GateError(
-                f"{path}: record at {r['offset']:#x} overruns the heap "
-                f"({r['heap_offset'] + r['bytes']} > {heap_bytes})")
+    # The formula must tile the DATA payload.  Duplicate records may share a
+    # range (boss01 has 17 duplicate groups); the merged union must be exactly
+    # [payload_base, payload_end) with no gaps.
+    spans = sorted(set((r["payload"], r["payload"] + r["length"]) for r in records))
+    merged = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    if merged != [(payload_base, payload_end)]:
+        raise GateError(
+            f"{path}: record+0x24+start does not tile DATA: merged={[(hex(a), hex(b)) for a, b in merged[:4]]}"
+            f"… ({len(merged)} segment(s))")
 
     by_fmt = {}
     for r in records:
@@ -580,10 +613,11 @@ def carve_resident(root, out_dir, bank, log):
     variants = []
     carved = []
     for fmt, rec in sorted(by_fmt.items()):
-        kind = "ps_adpcm" if rec["channels"] in (1, 2) and fmt & 0xFF == 0x21 else None
-        base = data_heap + rec["heap_offset"]
-        blob = buf[base:base + rec["bytes"]]
-        name = "%s_fmt%08X_%dch_rec%04d" % (bank.split(".")[0], fmt, rec["channels"],
+        codec = fmt & 0xFF
+        channels = rec["channels"]
+        base = rec["payload"]
+        blob = buf[base:base + rec["length"]]
+        name = "%s_fmt%08X_%dch_rec%04d" % (bank.split(".")[0], fmt, channels,
                                             rec["offset"])
         hint = rec["at9_hint"]
         record = {
@@ -592,76 +626,106 @@ def carve_resident(root, out_dir, bank, log):
             "name": name,
             "fmt": fmt_word(fmt),
             "fmt_value": fmt,
-            "channels": rec["channels"],
+            "channels": channels,
             "rate": rec["rate"],
             "start": rec["start"],
-            "heap_offset": rec["heap_offset"],
-            "bytes": rec["bytes"],
+            "start_origin": "wave_record",
+            "payload": base,
+            "bytes": rec["length"],
             "samples": rec["samples"],
             "stride": rec["stride"],
-            "at9_config_record": ("%08x" % hint) if hint and hint >> 24 == 0xFE else None,
-            "codec": kind or "unresolved",
+            "at9_config_record": ("%08x" % hint) if hint else None,
+            "at9_config_offset": rec["at9_hint_off"],
+            "mapping": "wave_record_offset + 0x24 + start",
         }
-        if kind is None:
-            record["status"] = "skipped: codec unresolved"
-            record["reason"] = (
-                "0x42 family: record carries an ATRAC9 config word (see "
-                "at9_config_record) but its payload is not in the resident heap at "
-                "the declared offsets; no ffmpeg ADPCM decoder matches 16 B / 64 samples")
+        if codec == 0x21:
+            record["codec"] = "ps_adpcm"
+            pcm = ps_adpcm_decode(blob, channels)
+            wav_path = os.path.join(out_dir, name + ".wav")
+            write_wav_s16(wav_path, channels, rec["rate"], pcm)
+            frames = min(len(c) for c in pcm)
+            rms = 0.0
+            peak = 0
+            for c in pcm:
+                for v in c:
+                    rms += v * v
+                    peak = max(peak, abs(v))
+            total = frames * channels
+            rms = math.sqrt(rms / total) / 32768.0 if total else 0.0
+            stats = {
+                "frames": frames,
+                "duration_s": frames / rec["rate"],
+                "expected_frames": rec["samples"],
+                "expected_duration_s": rec["samples"] / rec["rate"],
+                "duration_error_ms": abs(frames - rec["samples"]) / rec["rate"] * 1e3,
+                "rms_dbfs": 20.0 * math.log10(rms) if rms > 0 else -999.0,
+                "peak_float": peak / 32768.0,
+                "peak_s16": peak / 32768.0,
+                "clipped_fraction": 0.0,
+                "finite": True,
+                "per_channel_rms_dbfs": [],
+            }
+            record["stats"] = stats
+            record["wav"] = os.path.relpath(wav_path, out_dir)
+            record["status"] = "decoded"
             carved.append(record)
-            log(f"  resident {fmt_word(fmt)} {rec['channels']}ch {rec['bytes']} B: "
-                f"skipped (codec unresolved; record config "
-                f"{record['at9_config_record'] or 'n/a'})")
+            log(f"  resident {fmt_word(fmt)} {channels}ch {rec['length']} B -> "
+                f"{stats['duration_s']:.3f} s  RMS {stats['rms_dbfs']:.1f} dBFS")
             continue
-        channels = rec["channels"]
-        pcm = ps_adpcm_decode(blob, channels)
-        wav_path = os.path.join(out_dir, name + ".wav")
-        write_wav_s16(wav_path, channels, rec["rate"], pcm)
-        frames = min(len(c) for c in pcm)
-        rms = 0.0
-        peak = 0
-        for c in pcm:
-            for v in c:
-                rms += v * v
-                peak = max(peak, abs(v))
-        total = frames * channels
-        rms = math.sqrt(rms / total) / 32768.0 if total else 0.0
-        stats = {
-            "frames": frames,
-            "duration_s": frames / rec["rate"],
-            "expected_frames": rec["samples"],
-            "expected_duration_s": rec["samples"] / rec["rate"],
-            "duration_error_ms": abs(frames - rec["samples"]) / rec["rate"] * 1e3,
-            "rms_dbfs": 20.0 * math.log10(rms) if rms > 0 else -999.0,
-            "peak_float": peak / 32768.0,
-            "peak_s16": peak / 32768.0,
-            "clipped_fraction": 0.0,
-            "finite": True,
-            "per_channel_rms_dbfs": [],
-        }
-        record["stats"] = stats
-        record["wav"] = os.path.relpath(wav_path, out_dir)
-        # Exploratory only: 16 B / 28 samples matches PS-ADPCM, but the heap
-        # offset is NOT proven - `start` values overlap (137/137 pairs, 2.5 MB
-        # total excess), so the carve position is a guess.  Never gate on this.
-        record["status"] = "exploratory"
-        record["mapping"] = "heap + (start - min(start)) - UNVERIFIED"
-        record["reason"] = (
-            "16 B / 28-sample PS-ADPCM geometry fits, but the resident (start, "
-            "bytes) fields overlap for all 137 consecutive pairs, so the heap "
-            "offset cannot be derived from them; the WAV is an exploratory "
-            "artifact, not a validated decode")
+        if codec == 0x42:
+            if not hint:
+                raise GateError(
+                    f"{path}: 0x42 record at {rec['offset']:#x} has no ATRAC9 config word")
+            bci = (hint >> 17) & 7
+            frame_bytes = ((hint >> 5) & 0x7FF) + 1
+            superframe = (hint >> 3) & 3
+            expected_channels = {0: 1, 1: 2, 2: 2, 3: 6, 4: 8, 5: 4}.get(bci)
+            if expected_channels != channels:
+                raise GateError(
+                    f"{path}: 0x42 record {rec['offset']:#x} config says {expected_channels}ch "
+                    f"but the record says {channels}ch")
+            record["codec"] = "atrac9"
+            record["at9_frame_bytes"] = frame_bytes
+            record["at9_superframe"] = superframe
+            riff = at9_riff_with_config(blob, channels, rec["rate"],
+                                        frame_bytes << superframe,
+                                        hint.to_bytes(4, "big"))
+            at9_path = os.path.join(out_dir, name + ".at9.wav")
+            with open(at9_path, "wb") as fh:
+                fh.write(riff)
+            raw_path = os.path.join(out_dir, name + ".f32")
+            wav_path = os.path.join(out_dir, name + ".wav")
+            cmd = ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", at9_path,
+                   "-map", "0:a", "-c:a", "pcm_f32le", "-f", "f32le", raw_path,
+                   "-c:a", "pcm_s16le", wav_path]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise GateError(f"ffmpeg failed for {name}: {proc.stderr.strip()}")
+            stats = analyze_f32(raw_path, wav_path, channels, rec["rate"], rec["samples"])
+            record["stats"] = stats
+            record["wav"] = os.path.relpath(wav_path, out_dir)
+            record["status"] = "decoded"
+            carved.append(record)
+            log(f"  resident {fmt_word(fmt)} {channels}ch {rec['length']} B -> "
+                f"{stats['duration_s']:.3f} s  RMS {stats['rms_dbfs']:.1f} dBFS "
+                f"(AT9 {frame_bytes}B/frame)")
+            continue
+        record["codec"] = "unresolved"
+        record["status"] = "skipped: codec unresolved"
+        record["reason"] = f"format 0x{codec:02X} has no decoder in this gate"
         carved.append(record)
-        log(f"  resident {fmt_word(fmt)} {channels}ch {rec['bytes']} B -> "
-            f"{stats['duration_s']:.3f} s  RMS {stats['rms_dbfs']:.1f} dBFS")
+        log(f"  resident {fmt_word(fmt)} {channels}ch {rec['length']} B: "
+            f"skipped (format 0x{codec:02X})")
     for rec in carved:
         variants.append({"fmt": rec["fmt"], "fmt_value": rec["fmt_value"],
                          "status": rec["status"],
                          "channels": rec["channels"], "bytes": rec["bytes"],
                          "samples": rec["samples"],
                          "at9_config_record": rec.get("at9_config_record")})
-    return {"header": header, "heap_bytes": heap_bytes, "heap_base": data_heap,
-            "min_start": min_start, "record_count": len(records),
+    return {"header": header, "data_payload": payload_base, "data_end": payload_end,
+            "payload_bytes": payload_end - payload_base,
+            "mapping": "wave_record_offset + 0x24 + start",
+            "record_count": len(records),
             "fmt_words": [fmt_word(f) for f in sorted(by_fmt)],
             "variants": variants, "records": carved}
 
@@ -686,26 +750,31 @@ def probe_0x42(root, out_dir, bank, log):
     """Bounded identification attempt for the 0x42 family (note §5).
 
     Three hypotheses are tried against the first 0x42 record of each channel
-    count, all with the record's declared byte range at the measured heap
-    offset: (a) ATRAC9 with the config word the record itself carries at +0x2C,
-    (b) PS-ADPCM at 16 B / 64 samples through ffmpeg's adpcm_psx, (c) the other
-    ADPCM decoders whose block geometry can express 64 samples per 16 bytes.
-    Nothing is written as a WAV: the probe reports and exits.
+    count, all with the record's declared byte range at the loader payload
+    (`record + 0x24 + start`): (a) ATRAC9 with the config word the record
+    itself carries, (b) PS-ADPCM at 16 B / 64 samples through ffmpeg's
+    adpcm_psx, (c) the other ADPCM decoders whose block geometry can express
+    64 samples per 16 bytes.  Nothing is written as a WAV: the probe reports
+    and exits.
     """
     path = os.path.join(root, "sound", "shadow", bank)
     buf = read_bytes(path)
     chunks = chunk_map(buf, path)
     wave_off = chunks["WAVE"][0]
     data_off, data_size = chunks["DATA"]
-    heap = data_off + 0x20
+    payload_base = data_off + 0x10
     table = table_records(buf, wave_off, path)
     records = [read_wave_record(buf, rec, path) for rec, _ in table]
     for k, r in enumerate(records):
         nxt = table[k + 1][0] if k + 1 < len(table) else len(buf)
         r["stride"] = nxt - r["offset"]
-        r["at9_hint"] = (struct.unpack_from("<I", buf, r["offset"] + 0x2C)[0]
-                         if r["stride"] >= 0x30 else None)
-    min_start = min(r["start"] for r in records)
+        r["at9_hint"] = None
+        for off in range(0x28, max(0x28, r["stride"] - 3), 4):
+            value = struct.unpack_from("<I", buf, r["offset"] + off)[0]
+            if value >> 24 == 0xFE:
+                r["at9_hint"] = value
+                break
+        r["payload"] = r["offset"] + 0x24 + r["start"]
     probe_dir = os.path.join(out_dir, "probe_0x42")
     os.makedirs(probe_dir, exist_ok=True)
 
@@ -714,11 +783,11 @@ def probe_0x42(root, out_dir, bank, log):
         if (r["fmt"] & 0xFF) != 0x42 or r["channels"] in seen:
             continue
         seen.add(r["channels"])
-        base = heap + (r["start"] - min_start)
+        base = r["payload"]
         blob = buf[base:base + r["bytes"]]
         hint = r["at9_hint"]
         log(f"0x42 {fmt_word(r['fmt'])} {r['channels']}ch: {r['bytes']} B, "
-            f"{r['samples']} samples, heap offset {r['start'] - min_start:#x}, "
+            f"{r['samples']} samples, payload {base:#x}, "
             f"record config {('%08x' % hint) if hint else 'none'}")
         if not hint or hint >> 24 != 0xFE:
             log("  no ATRAC9 config word in the record; skipping the AT9 probe")
@@ -736,7 +805,7 @@ def probe_0x42(root, out_dir, bank, log):
         with open(p, "wb") as fh:
             fh.write(riff)
         rc, frames, err = _ffmpeg_decode(p, [], channels)
-        log(f"  (a) ATRAC9 @ heap {r['start'] - min_start:#x}: rc {rc}, "
+        log(f"  (a) ATRAC9 @ payload {base:#x}: rc {rc}, "
             f"{frames} frames ({frames / rate:.2f} s of {r['samples'] / rate:.2f} s)"
             f" {err}")
 
@@ -760,9 +829,9 @@ def probe_0x42(root, out_dir, bank, log):
             rc, frames, err = _ffmpeg_decode(p, [], 1)
             log(f"  (c) {name} (tag {tag:#06x}, block 64): rc {rc}, {frames} frames "
                 f"({frames / rate:.2f} s of {r['samples'] / rate:.2f} s) {err}")
-        log("  verdict: ATRAC9 is the only hypothesis that decodes this family's "
-            "bytes at all; it does not reach the declared length at the mapped base, "
-            "so the variant stays an accepted gap (note 5)")
+        log("  verdict: ATRAC9 with the record's own config decodes the whole declared "
+            "length at the loader payload (wave_record_offset + 0x24 + start); the "
+            "ADPCM hypotheses only decode prefixes.  The family is resolved.")
 
 
 def _adpcm_wav(tag, channels, rate, block_align, data):
@@ -841,7 +910,8 @@ def main(argv=None):
         manifest["resident"] = resident
         log(f"  {args.bank}: {resident['record_count']} WAVE records, "
             f"{len(resident['fmt_words'])} distinct format words, "
-            f"heap {resident['heap_bytes']} B")
+            f"payload {resident['payload_bytes']} B "
+            f"(mapping: {resident['mapping']})")
 
     failures = 0
     skipped = 0
