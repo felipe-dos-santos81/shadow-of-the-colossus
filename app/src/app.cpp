@@ -388,6 +388,8 @@ constexpr int kS42MaxReactionFrames = 600;    // 10 s: wait out a reaction one-s
 constexpr int kS42MaxAttackFrames = 900;      // 15 s: walk an attack past its window
 constexpr int kS42MaxDeathFrames = 600;       // 10 s: the player death clip
 constexpr float kS42StompStandoff = 1.0f;     // m from the impact foot (direct hit)
+constexpr float kS42ClubMissStandoff = 4.0f;   // m from OptBone_hit: outside the 2.5 m hit
+constexpr float kS42StompWaveStandoff = 3.0f;  // m from the foot: 2.5 < d <= the 6 m wave
 constexpr float kS42ArmStrikeT = 1.0f;        // bandT on the right arm that reaches shell 1
 constexpr float kS42MinClimbRise = 10.0f;     // m the full foot -> head route must gain
 constexpr float kS42Eps = 1e-3f;              // shell, ground and contact epsilon
@@ -3218,6 +3220,89 @@ int run_app(const AppOptions& opts) {
                                            clubTip)) {
                 throw std::runtime_error("s42-selftest: the club pose has no OptBone_hit");
             }
+
+            // --- 4b. The attack range split --------------------------------
+            // The gates above prove the damage numbers; these probes prove the
+            // distances those numbers live at, through the production
+            // apply_valus_impact. A club tip 4 m to the side of a grounded
+            // player is beyond its 2.5 m hit radius (0 damage), and a stomp
+            // 3 m from the foot is inside the 6 m shockwave (15). The probes
+            // place the player and fix the post-stomp HP/mode/i-frames by
+            // hand: scaffolding, not the production gate.
+            const auto probe_baseline = [&]() {
+                combat.mode = PlayerMode::Grounded;
+                combat.modeSeconds = 0.0f;
+                combat.invulnSeconds = 0.0f;
+                combat.heavyHit = false;
+                combat.health = static_cast<float>(healthBeforeStomp) - tuning.stompDamage;
+            };
+            float clubLateralX = clubTip.x - encounter.entityPosition.x;
+            float clubLateralZ = clubTip.z - encounter.entityPosition.z;
+            const float clubLateral =
+                std::sqrt(clubLateralX * clubLateralX + clubLateralZ * clubLateralZ);
+            if (!(clubLateral > 1e-3f)) {
+                clubLateralX = 1.0f;
+                clubLateralZ = 0.0f;
+            } else {
+                clubLateralX /= clubLateral;
+                clubLateralZ /= clubLateral;
+            }
+            int clubMissDamage = 0;
+            {
+                std::vector<std::vector<Mat4>> missPalettes = palettes_now();
+                if (entityRig < missPalettes.size()) {
+                    missPalettes[entityRig] = clubPalette;
+                }
+                const PlayerFrame missFrame = frame_of(missPalettes);
+                place_grounded(clubTip.x + clubLateralX * kS42ClubMissStandoff,
+                               clubTip.z + clubLateralZ * kS42ClubMissStandoff,
+                               "club-miss");
+                probe_baseline();
+                const float healthBeforeMiss = combat.health;
+                apply_valus_impact(combat, player, missFrame, tuning, ValusAttack::Club);
+                clubMissDamage =
+                    static_cast<int>(std::lround(healthBeforeMiss - combat.health));
+                if (clubMissDamage != 0 || combat.mode != PlayerMode::Grounded) {
+                    throw std::runtime_error(
+                        "s42-selftest: the club hit a target " +
+                        std::to_string(kS42ClubMissStandoff) + " m from its tip (damage " +
+                        std::to_string(clubMissDamage) + ", mode " +
+                        std::string(player_mode_name(combat.mode)) + ")");
+                }
+            }
+            int stompWaveDamage = 0;
+            {
+                std::vector<std::vector<Mat4>> wavePalettes = palettes_now();
+                if (entityRig < wavePalettes.size()) {
+                    wavePalettes[entityRig] = stompPalette;
+                }
+                const PlayerFrame waveFrame = frame_of(wavePalettes);
+                place_grounded(stompFoot.x + footDx * kS42StompWaveStandoff,
+                               stompFoot.z + footDz * kS42StompWaveStandoff,
+                               "stomp-wave");
+                probe_baseline();
+                const float healthBeforeWave = combat.health;
+                apply_valus_impact(combat, player, waveFrame, tuning, ValusAttack::StompL);
+                stompWaveDamage =
+                    static_cast<int>(std::lround(healthBeforeWave - combat.health));
+                const int expectedWave =
+                    static_cast<int>(std::lround(tuning.stompWaveDamage));
+                if (stompWaveDamage != expectedWave) {
+                    throw std::runtime_error(
+                        "s42-selftest: the stomp dealt " + std::to_string(stompWaveDamage) +
+                        " damage " + std::to_string(kS42StompWaveStandoff) +
+                        " m from the foot, not the " + std::to_string(expectedWave) +
+                        " shockwave");
+                }
+                if (combat.mode != PlayerMode::Hurt) {
+                    throw std::runtime_error(
+                        "s42-selftest: the stomp shockwave did not leave the player Hurt (mode " +
+                        std::string(player_mode_name(combat.mode)) + ")");
+                }
+            }
+            std::printf("s42-miss club=%d stomp=%d\n", clubMissDamage, stompWaveDamage);
+            probe_baseline();  // the club phase resumes from the 65 HP post-stomp state
+
             place_grounded(clubTip.x, clubTip.z, "club");
             const int healthBeforeClub = static_cast<int>(std::lround(combat.health));
             start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club);

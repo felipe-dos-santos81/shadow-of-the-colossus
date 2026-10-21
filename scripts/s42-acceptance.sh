@@ -14,11 +14,12 @@
 #   3. the deterministic fight timeline — `--s42-selftest --s42-stills` against
 #      the S4.0 encounter manifest: both shell proxies, the foot/head damage
 #      gate, the chest -> shoulder -> arm route, the stomp and club with their
-#      pinned windows and the i-frame gate, the lethal club with the pinned
-#      death clip, the R soft reset, and the real teleport-free foot -> head
-#      stamina climb. Every `s42-*` line is parsed field by field and pinned to
-#      literals; the timeline is also run once without stills and its event
-#      lines must be byte-identical (a still is an observation, not a step);
+#      pinned windows and the i-frame gate, the range split (a 4 m club miss and
+#      a 3 m stomp shockwave), the lethal club with the pinned death clip, the R
+#      soft reset, and the real teleport-free foot -> head stamina climb. Every
+#      `s42-*` line is parsed field by field and pinned to literals; the
+#      timeline is also run once without stills and its event lines must be
+#      byte-identical (a still is an observation, not a step);
 #   4. six stills under out/s42/ (stale PNGs deleted first): stomp telegraph,
 #      stomp impact, club swing, hurt, death, arm weakpoint — each with PNG
 #      magic, > 5000 B, 2560x1440 and the viewer's own non-uniformity span;
@@ -184,6 +185,9 @@ if ! stomp_line="$(one_line '^s42-stomp damage=35 health=100->65 mode=hurt$' "s4
   exit 1
 fi
 if ! club_line="$(one_line '^s42-club damage=45 health=65->20$' "s42-club")"; then
+  exit 1
+fi
+if ! miss_line="$(one_line '^s42-miss club=0 stomp=15$' "s42-miss")"; then
   exit 1
 fi
 if ! death_line="$(one_line '^s42-death clip=player_a_fall_damage_to_death mode=dead$' "s42-death")"; then
@@ -419,6 +423,7 @@ printf 's42-acceptance: gate         %s\n' "$gate_line"
 printf 's42-acceptance: arm          %s\n' "$arm_line"
 printf 's42-acceptance: stomp        %s\n' "$stomp_line"
 printf 's42-acceptance: club hit     %s\n' "$club_line"
+printf 's42-acceptance: range split  %s\n' "$miss_line"
 printf 's42-acceptance: death        %s\n' "$death_line"
 printf 's42-acceptance: reset        %s\n' "$reset_line"
 printf 's42-acceptance: stamina      %s\n' "$stamina_line"
@@ -429,5 +434,5 @@ printf 's42-acceptance: perf         load %s s, 240 frames %s s, marginal %s ms 
 printf 's42-acceptance: s41 status   %s\n' "$s41_status_line"
 printf 's42-acceptance: s4 status    %s\n' "$s4_status_line"
 printf 's42-acceptance: s3 status    %s\n' "$s3_status_line"
-printf 's42-acceptance: PASS — build, both suites, s42 timeline (weakpoint proxies %s m and %s m, gate foot 0 / head 34, arm weakpoint 1 damage 34, stomp 35 health 100->65 hurt, club 45 health 65->20 hurt, death player_a_fall_damage_to_death, reset 100/100/grounded/Valus 100, stamina 28.425 -> 43.484 m leaving %s of 100), six stills (2560x1440, span >= 30, > 5000 B), marginal %s ms/frame (~%s fps), S4.1+S4+S3 regressions green\n' \
+printf 's42-acceptance: PASS — build, both suites, s42 timeline (weakpoint proxies %s m and %s m, gate foot 0 / head 34, arm weakpoint 1 damage 34, stomp 35 health 100->65 hurt, club 45 health 65->20 hurt, range split club 0 at 4 m / stomp 15 at 3 m, death player_a_fall_damage_to_death, reset 100/100/grounded/Valus 100, stamina 28.425 -> 43.484 m leaving %s of 100), six stills (2560x1440, span >= 30, > 5000 B), marginal %s ms/frame (~%s fps), S4.1+S4+S3 regressions green\n' \
   "$proxy0_radius" "$proxy1_radius" "$stamina_remaining" "$marginal_ms" "$marginal_fps"

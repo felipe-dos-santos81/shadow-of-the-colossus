@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 
+#include "collision.h"
 #include "math3d.h"
 #include "valus.h"
 
@@ -233,4 +234,66 @@ TEST_CASE("the yaw slew turns at 30 deg/s on the shortest path") {
     CHECK(valus_yaw_slew(170.0f, entity, west, 30.0f,
                          std::numeric_limits<float>::quiet_NaN()) ==
           doctest::Approx(170.0f));
+}
+
+// --- the attack reach gates (whole-branch review) ---------------------------
+//
+// Valus's attacks measure from the posed damage joint to the player's vertical
+// capsule *segment* (feet to feet + 1.7 m), the same shape the weakpoint strike
+// gate uses. The horizontal offset is what makes a swing miss: a club tip at
+// chest height beside a standing player is metres away, not zero.
+
+TEST_CASE("attack range is measured to the player's capsule, not to its height") {
+    const Vec3 feet{0.0f, 0.0f, 0.0f};
+
+    // Foot height, 3 m to the side of a grounded player: the club's 2.5 m hit
+    // is a miss and the stomp's 6 m shockwave still reaches.
+    const Vec3 beside{3.0f, 0.0f, 0.0f};
+    CHECK(player_capsule_distance(feet, beside) == doctest::Approx(3.0f));
+    CHECK_FALSE(player_capsule_distance(feet, beside) <= kValusClubHitRangeMeters);
+    CHECK(player_capsule_distance(feet, beside) <= kValusStompWaveRangeMeters);
+}
+
+TEST_CASE("the club hit radius and the stomp cuts are capsule distances") {
+    const Vec3 feet{0.0f, 0.0f, 0.0f};
+
+    // The club's 2.5 m hit: 2.49 lands, 2.51 misses.
+    CHECK(player_capsule_distance(feet, Vec3{2.49f, 0.0f, 0.0f}) <=
+          kValusClubHitRangeMeters);
+    CHECK_FALSE(player_capsule_distance(feet, Vec3{2.51f, 0.0f, 0.0f}) <=
+                kValusClubHitRangeMeters);
+
+    // The stomp's direct 2.5 m and shockwave 6 m cuts use the same distance.
+    CHECK(player_capsule_distance(feet, Vec3{2.49f, 0.0f, 0.0f}) <=
+          kValusStompDirectRangeMeters);
+    CHECK_FALSE(player_capsule_distance(feet, Vec3{2.51f, 0.0f, 0.0f}) <=
+                kValusStompDirectRangeMeters);
+    CHECK(player_capsule_distance(feet, Vec3{5.99f, 0.0f, 0.0f}) <=
+          kValusStompWaveRangeMeters);
+    CHECK_FALSE(player_capsule_distance(feet, Vec3{6.01f, 0.0f, 0.0f}) <=
+                kValusStompWaveRangeMeters);
+}
+
+TEST_CASE("a point above the feet is measured to the capsule top") {
+    const Vec3 feet{0.0f, 0.0f, 0.0f};
+
+    // 2.5 m up and 3 m to the side: the closest point is the capsule top
+    // (1.7 m), so dy is 0.8 and the distance is sqrt(3^2 + 0.8^2) — not 3 and
+    // not 0.8.
+    const Vec3 high{3.0f, 2.5f, 0.0f};
+    const float expected = std::sqrt(3.0f * 3.0f + 0.8f * 0.8f);
+    CHECK(player_capsule_distance(feet, high) == doctest::Approx(expected));
+    CHECK(player_capsule_distance(feet, high) > 3.0f);
+    CHECK(player_capsule_distance(feet, high) > 0.8f);
+}
+
+TEST_CASE("a club tip directly above a grounded player is a hit at 0.2 m") {
+    const Vec3 feet{0.0f, 0.0f, 0.0f};
+
+    // The club's OptBone_hit sits ~1.9 m up at the impact pose: directly over a
+    // grounded player it is 0.2 m above the capsule top and inside the 2.5 m
+    // hit radius, so the accepted club hit cannot start missing.
+    const float distance = player_capsule_distance(feet, Vec3{0.0f, 1.9f, 0.0f});
+    CHECK(distance == doctest::Approx(0.2f));
+    CHECK(distance <= kValusClubHitRangeMeters);
 }
