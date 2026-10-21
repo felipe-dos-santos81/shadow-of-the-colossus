@@ -86,6 +86,66 @@ def load_bank(root, bank):
             "names": names, "payload_base": payload_base}
 
 
+def load_music_index(root):
+    """Return the streamed music index: WAVE records plus their REQD track names.
+
+    The music index has no DATA chunk: `start` is absolute in `music.sxd2` (recon §2), so no
+    payload is carved here. This reader exists only to check a music cue's identity/config; the
+    converter decodes the track.
+    """
+    path = os.path.join(root, "sound", "shadow", "music.sxd1")
+    buf = gate.read_bytes(path)
+    chunks = gate.chunk_map(buf, path)
+    for need in ("WAVE", "REQD"):
+        if need not in chunks:
+            raise AuditionError(f"{path}: no {need} chunk")
+    tracks = []
+    for rec, _tag in gate.table_records(buf, chunks["REQD"][0], path):
+        tracks.append(buf[rec + 0x20:rec + 0x60].split(b"\0")[0].decode("latin1"))
+    records = [gate.read_wave_record(buf, rec, path)
+               for rec, _tag in gate.table_records(buf, chunks["WAVE"][0], path)]
+    return {"path": path, "buf": buf, "chunks": chunks, "records": records,
+            "tracks": tracks}
+
+
+def check_music_cue(root, cue, problems):
+    """Check one streamed-music cue: wave exists, REQD name matches, 5.1 AT9 config present.
+
+    Returns the cue's rate so `--check` still reports it. The full decode is the converter's
+    job (Task 3); this keeps the map's music row honest without a 126 s audition pass.
+    """
+    event = cue.get("event", "?")
+    try:
+        bank = load_music_index(root)
+    except (AuditionError, gate.GateError) as exc:
+        problems.append(f"{event}: {exc}")
+        return None
+    wave = cue.get("wave")
+    if not isinstance(wave, int) or not 0 <= wave < len(bank["records"]):
+        problems.append(
+            f"{event}: wave {wave} is not in music.sxd1 (0..{len(bank['records']) - 1})")
+        return None
+    record = bank["records"][wave]
+    track = bank["tracks"][wave] if wave < len(bank["tracks"]) else ""
+    if track != cue.get("name"):
+        problems.append(
+            f"{event}: wave {wave} is the track {track!r}, not {cue.get('name')!r}")
+    if cue.get("method") != "table":
+        problems.append(f"{event}: a music row must use method 'table'")
+    if record["channels"] != 6:
+        problems.append(f"{event}: wave {wave} is {record['channels']}ch, not 5.1")
+    layers = cue.get("layers") or [wave]
+    if not isinstance(layers, list) or not layers or layers[0] != wave or wave not in layers:
+        problems.append(f"{event}: layers must start with the primary wave")
+    hint = struct.unpack_from("<I", bank["buf"], record["offset"] + 0x40)[0]
+    if hint >> 24 != 0xFE:
+        problems.append(f"{event}: wave {wave} has no AT9 config at +0x40")
+    print(f"  {event:<16} music: track {track!r} wave {wave} "
+          f"{record['samples'] / record['rate']:.3f} s {record['channels']}ch "
+          f"{record['rate']} Hz (identity/config; decoded by bp-convert)")
+    return record["rate"]
+
+
 def name_hash(name):
     """The engine's name hash (`FUN_00987a80`): u = c + u*0x83."""
     u = 0
@@ -416,6 +476,12 @@ def main(argv=None):
             if event in CORE_EVENTS:
                 problems.append(f"{event}: core cue is deferred")
             continue
+        if cue.get("bank") == "music":
+            rate = check_music_cue(args.root, cue, problems)
+            if rate:
+                rates_used.add(rate)
+            decoded += 1
+            continue
         bank = load_bank(args.root, cue["bank"])
         reqd = lookup_name_id(bank["buf"], bank["chunks"], cue.get("name", ""))
         if reqd is None:
@@ -520,7 +586,7 @@ def main(argv=None):
     if args.check:
         rate_text = ", ".join(f"{r}" for r in sorted(rates_used)) or "none"
         print(f"AUDITION PASSED: {decoded} cue(s), {len(rates_used)} rate(s) "
-              f"({rate_text} Hz), all layers non-silent")
+              f"({rate_text} Hz), resident layers non-silent; music rows identity/config-checked")
     else:
         print(f"decoded {decoded} mapped cue(s) (run with --check to gate)")
     return 0

@@ -114,6 +114,18 @@
       "chain": "NAME hash -> REQD 1573 -> SEQD 0xD710; no PLAY_TONE op decoded; com_b_h TONE table is not flat",
       "wave_pool_label": "b_dead_by_boss",
       "note": "Audition pick: wave 657 is a 0.811 s 0x21 vocal. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
+    },
+    {
+      "event": "music.boss",
+      "bank": "music",
+      "name": "Boss 1",
+      "wave": 6,
+      "layers": [6],
+      "method": "table",
+      "confidence": "high",
+      "fidelity": "high",
+      "chain": "music.sxd1 REQD track 6 is \"Boss 1\"; the 76-byte WAVE record 6 is 5.1 ATRAC9 (config FE761DF0 at +0x40) with start 0x22C6860 absolute in music.sxd2 (recon §2/§4)",
+      "note": "Streamed music, not a resident SFX: 5.1 downmixed to stereo at conversion time (R6), looped by the runtime. Selected with --music \"Boss 1\"."
     }
   ],
   "deferred": [

@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using BpConvert.Core;
+using BpConvert.Core.Audio;
 using BpConvert.Core.Pipeline;
 
 if (args.Length == 0)
@@ -14,6 +15,8 @@ switch (args[0])
         return InspectCommand(args);
     case "convert":
         return ConvertCommand(args);
+    case "audio":
+        return AudioCommand(args);
     case "report":
         return ReportCommand(args);
     default:
@@ -34,6 +37,10 @@ static void PrintUsage()
     Console.Error.WriteLine("                               non-matching sources. Recorded-ok sources need --force to rebake.");
     Console.Error.WriteLine("  bp-convert report --out <lib> [--top N]");
     Console.Error.WriteLine("                               print catalog counts and the top-N failure reasons");
+    Console.Error.WriteLine("  bp-convert audio --root <game> --out <lib> --map <map.json> [--events a,b] [--music <track>] [--force]");
+    Console.Error.WriteLine("                               decode the curated cues to <lib>/audio/<bank>/<event>.wav and");
+    Console.Error.WriteLine("                               write <lib>/audio/audio.manifest; no selector = the whole map;");
+    Console.Error.WriteLine("                               --music \"Boss 1\" selects the streamed music cue");
 }
 
 static int InspectCommand(string[] args)
@@ -191,6 +198,112 @@ static int ConvertCommand(string[] args)
     {
         var cause = (e as AggregateException)?.InnerException ?? e;
         Console.Error.WriteLine($"bp-convert convert: {cause.GetType().Name}: {cause.Message}");
+        return 1;
+    }
+}
+
+/// <summary>
+/// <c>audio --root &lt;game&gt; --out &lt;lib&gt; --map &lt;map.json&gt; [--events a,b] [--music &lt;track&gt;] [--force]</c>.
+/// Decodes the curated cue map into <c>&lt;lib&gt;/audio/&lt;bank&gt;/&lt;event&gt;.wav</c> and merges the R1
+/// <c>&lt;lib&gt;/audio/audio.manifest</c>. Exit codes: 0 = ok, 1 = decode/IO/map failure (the message
+/// names the event), 2 = bad invocation.
+/// </summary>
+static int AudioCommand(string[] args)
+{
+    string? root = null, outLib = null, map = null, eventsText = null, music = null;
+    var force = false;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--root":
+                if (!TryValue(args, ref i, out root)) return MissingValue("--root");
+                break;
+            case "--out":
+                if (!TryValue(args, ref i, out outLib)) return MissingValue("--out");
+                break;
+            case "--map":
+                if (!TryValue(args, ref i, out map)) return MissingValue("--map");
+                break;
+            case "--events":
+                if (!TryValue(args, ref i, out eventsText)) return MissingValue("--events");
+                break;
+            case "--music":
+                if (!TryValue(args, ref i, out music)) return MissingValue("--music");
+                break;
+            case "--force":
+                force = true;
+                break;
+            default:
+                Console.Error.WriteLine($"bp-convert audio: unknown argument '{args[i]}'");
+                PrintUsage();
+                return 2;
+        }
+    }
+
+    if (root is null)
+    {
+        Console.Error.WriteLine("bp-convert audio: --root <game> is required");
+        PrintUsage();
+        return 2;
+    }
+    if (outLib is null)
+    {
+        Console.Error.WriteLine("bp-convert audio: --out <lib> is required");
+        PrintUsage();
+        return 2;
+    }
+    if (map is null)
+    {
+        Console.Error.WriteLine("bp-convert audio: --map <map.json> is required");
+        PrintUsage();
+        return 2;
+    }
+    if (!File.Exists(map))
+    {
+        Console.Error.WriteLine($"bp-convert audio: map not found: {map}");
+        return 2;
+    }
+
+    var events = Array.Empty<string>();
+    if (eventsText is not null)
+    {
+        events = eventsText.Split(',', StringSplitOptions.TrimEntries);
+        if (events.Any(name => name.Length == 0))
+        {
+            Console.Error.WriteLine(
+                $"bp-convert audio: --events contains an empty name (got '{eventsText}')");
+            return 2;
+        }
+    }
+
+    Console.WriteLine($"audio: root={root} out={outLib} map={map} "
+        + $"events=[{string.Join(",", events)}] music={(music ?? "[all]")} "
+        + $"force={force.ToString().ToLowerInvariant()}");
+
+    try
+    {
+        var result = AudioConverter.Run(
+            new AudioConvertOptions(root, outLib, map, events, music, force), Console.WriteLine);
+        Console.WriteLine();
+        Console.WriteLine($"audio: {result.Written.Count} written, {result.Reused.Count} reused, "
+            + $"{result.Entries.Count} manifest entries");
+        return 0;
+    }
+    catch (ArgumentException e)
+    {
+        Console.Error.WriteLine($"bp-convert audio: {e.Message}");
+        return 2;
+    }
+    catch (InvalidDataException e)
+    {
+        Console.Error.WriteLine($"bp-convert audio: {e.Message}");
+        return 1;
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+    {
+        Console.Error.WriteLine($"bp-convert audio: {e.GetType().Name}: {e.Message}");
         return 1;
     }
 }

@@ -25,9 +25,15 @@ namespace BpConvert.Core.Audio;
 /// <see cref="ByteLength"/> bytes (the loader formula, <c>FUN_00983220</c>, recon §7.1).
 /// </param>
 /// <param name="ByteLength">The <c>+0x20</c> payload length in bytes.</param>
+/// <param name="CodecConfig">
+/// The ATRAC9 config word for the <c>0x42</c> codec family, or 0 for PS-ADPCM (<c>0x21</c>).
+/// Music/76-byte records carry it at <c>+0x40</c> (<c>0xFE761DF0</c> on all 33 tracks); resident
+/// <c>0x42</c> records carry it at <c>+0x2C</c> on the 56-byte form and <c>+0x40</c> on the
+/// 76-byte form (recon §5.0/§7.3). The AT9 decoder re-emits it big-endian as extradata.
+/// </param>
 public sealed record WaveRecord(
     int Index, long RecordOffset, int RecordSize, uint FormatWord, uint SampleRate, uint Frames,
-    long Start, int ByteLength);
+    long Start, int ByteLength, uint CodecConfig);
 
 /// <summary>
 /// One <c>NAME</c> table entry: the request name in table (and string-pool) order.
@@ -78,8 +84,12 @@ public static class SxdTables
     private const int WaveFramesOffset = 0x14;
     private const int WaveByteLengthOffset = 0x20;
     private const int WaveStartOffset = 0x24;
+    private const int WaveAt9ConfigOffsetShort = 0x2C;
+    private const int WaveAt9ConfigOffsetLong = 0x40;
     private const int NameEntryLength = 12;
     private const int NameReqdIdOffset = 8;
+    private const int TrackNameOffset = 0x20;
+    private const int TrackNameLength = 0x40;
     private const uint NameHashMultiplier = 0x83;
 
     /// <summary>Reads the <c>WAVE</c> table in table order.</summary>
@@ -122,19 +132,89 @@ public static class SxdTables
         {
             var record = offsets[i];
             var size = (int)((i + 1 < count ? offsets[i + 1] : chunkEnd) - record);
+            var formatWord = ReadU32(path, data, record + WaveFormatOffset);
             var byteLength = ReadU32(path, data, record + WaveByteLengthOffset);
             if (byteLength > int.MaxValue)
                 throw Invalid(path, $"WAVE record {i} byte length {byteLength} exceeds int.MaxValue");
             waves.Add(new WaveRecord(
                 i, record, size,
-                ReadU32(path, data, record + WaveFormatOffset),
+                formatWord,
                 ReadU32(path, data, record + WaveRateOffset),
                 ReadU32(path, data, record + WaveFramesOffset),
                 ReadU32(path, data, record + WaveStartOffset),
-                (int)byteLength));
+                (int)byteLength,
+                ReadCodecConfig(path, data, record, size, formatWord, chunkEnd)));
         }
 
         return waves;
+    }
+
+    /// <summary>
+    /// Reads the ATRAC9 config word of a <c>0x42</c> record: <c>+0x2C</c> on the 56-byte
+    /// (and shorter) resident form, <c>+0x40</c> on the 76-byte music/resident form; 0 for
+    /// every other codec and for a record too short to carry the field.
+    /// </summary>
+    /// <remarks>
+    /// The position is the record's own layout, not a scan: the gate's "first <c>0xFE</c> dword
+    /// at/after <c>+0x28</c>" search lands on exactly these offsets on every shipped record
+    /// (recon §5.0/§7.3) and a scan would also accept an accidental byte pattern.
+    /// </remarks>
+    private static uint ReadCodecConfig(
+        string path, byte[] data, long record, int recordSize, uint formatWord, long chunkEnd)
+    {
+        if ((formatWord & 0xFF) != 0x42)
+            return 0;
+
+        var offset = recordSize >= 0x44 ? WaveAt9ConfigOffsetLong : WaveAt9ConfigOffsetShort;
+        if (offset + 4 > recordSize || record + offset + 4 > chunkEnd)
+            return 0; // Decode rejects a 0x42 payload without a config word.
+        return ReadU32(path, data, record + offset);
+    }
+
+    /// <summary>
+    /// Reads the <c>0x40</c>-byte track-name slot at <c>+0x20</c> of every <c>REQD</c> record, in
+    /// table order. Music index banks name their 33 tracks there ("Prologue", "Boss 1", …; recon
+    /// §2/§6); resident banks use the <c>NAME</c> table instead and usually leave these slots
+    /// empty.
+    /// </summary>
+    /// <param name="bank">A bank from <see cref="SxdContainer.Read"/>; <see cref="SxdBank.Path"/> is re-read.</param>
+    /// <returns>The slots in table order, or an empty list when the bank has no <c>REQD</c> chunk.</returns>
+    /// <exception cref="InvalidDataException">The table or a name slot is out of bounds.</exception>
+    public static IReadOnlyList<string> TrackNames(SxdBank bank)
+    {
+        ArgumentNullException.ThrowIfNull(bank);
+
+        var chunk = FindChunk(bank, "REQD");
+        if (chunk is null)
+            return Array.Empty<string>();
+
+        var path = bank.Path;
+        var data = File.ReadAllBytes(path);
+        var count = ReadCount(path, data, chunk);
+        var body = chunk.Offset + TableBodyOffset;
+        var chunkEnd = chunk.Offset + ChunkLength(chunk);
+        if (body + 4L * count > chunkEnd)
+            throw Invalid(path, $"REQD count {count} overruns the chunk");
+
+        var names = new List<string>((int)count);
+        for (var i = 0L; i < count; i++)
+        {
+            var relative = BinaryPrimitives.ReadUInt32LittleEndian(
+                data.AsSpan((int)(body + 4L * i)));
+            var record = body + relative + 4L * i;
+            // The 0x40-byte slot is not inside the chunk on every record (music record 31
+            // reaches 8 bytes into the following NAME header), so bound it by the file, exactly
+            // like the gate's `buf[rec+0x20:rec+0x60].split(b"\0")[0]`.
+            var start = record + TrackNameOffset;
+            if (start >= data.Length)
+                throw Invalid(path, $"REQD record {i} name slot is beyond EOF");
+            var length = (int)Math.Min(TrackNameLength, data.Length - start);
+            var slot = data.AsSpan((int)start, length);
+            var nul = slot.IndexOf((byte)0);
+            names.Add(Encoding.Latin1.GetString(nul < 0 ? slot : slot[..nul]));
+        }
+
+        return names;
     }
 
     /// <summary>Reads the <c>NAME</c> table (request-name namespace) in table order.</summary>
