@@ -84,6 +84,27 @@ void select_band(PlayerCombat& combat, ClimbBandId band, float t) {
     combat.weakpoint = climb_band(band).weakpoint;
 }
 
+// The band reachable from `band` in the chain direction whose segment this
+// frame can form. A rig may collapse a chain segment to a point — Valus's
+// `Bone_KOSI` and `Bone_HARA` share one position, so the Waist band between
+// them is zero-length — and a zero-length band has no surface to hold. Skipping
+// it keeps the foot -> head route continuous instead of detaching the climber
+// on a segment the table happens to contain; a band with two distinct posed
+// joints is returned unchanged. Count terminates a chain with no such band.
+ClimbBandId next_climbable_band(const PlayerFrame& frame, ClimbBandId band, bool ascending) {
+    int guard = 0;
+    while (band != ClimbBandId::Count && guard < static_cast<int>(ClimbBandId::Count)) {
+        Vec3 a{};
+        Vec3 b{};
+        if (climb_band_segment(climb_band(band), frame.jointWorld, a, b)) {
+            return band;
+        }
+        band = ascending ? climb_band(band).up : climb_band(band).down;
+        ++guard;
+    }
+    return ClimbBandId::Count;
+}
+
 void attach_band(PlayerCombat& combat, ClimbBandId band, float t) {
     combat.mode = PlayerMode::Grabbing;
     combat.modeSeconds = 0.0f;
@@ -332,13 +353,15 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                             if (lateral != 0.0f && band.branch != ClimbBandId::Count) {
                                 next = band.branch;
                             }
+                            next = next_climbable_band(frame, next, /*ascending=*/true);
                             if (next != ClimbBandId::Count) {
                                 select_band(combat, next, 0.0f);
                             } else {
                                 combat.bandT = 1.0f;
                             }
                         } else if (t <= 0.0f) {
-                            const ClimbBandId down = band.down;
+                            const ClimbBandId down = next_climbable_band(
+                                frame, band.down, /*ascending=*/false);
                             if (down != ClimbBandId::Count) {
                                 select_band(combat, down, 1.0f);
                             } else {
