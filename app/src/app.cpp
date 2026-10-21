@@ -479,6 +479,39 @@ struct ScreenBox {
     int y1 = -1;
 };
 
+// Projects one world point into `box`, growing it. Points behind the camera or
+// with a non-finite clip position are skipped, exactly like the draw path.
+void project_box_point(const Mat4& viewProj, int width, int height, const Vec3& world,
+                       ScreenBox& box) {
+    const Mat4& m = viewProj;
+    const float clip_x = m.m[0] * world.x + m.m[4] * world.y + m.m[8] * world.z + m.m[12];
+    const float clip_y = m.m[1] * world.x + m.m[5] * world.y + m.m[9] * world.z + m.m[13];
+    const float clip_w = m.m[3] * world.x + m.m[7] * world.y + m.m[11] * world.z + m.m[15];
+    if (!(clip_w > 1e-6f) || !std::isfinite(clip_x) || !std::isfinite(clip_y) ||
+        !std::isfinite(clip_w)) {
+        return;
+    }
+    const float ndc_x = clip_x / clip_w;
+    const float ndc_y = clip_y / clip_w;
+    if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
+        return;
+    }
+    int x = static_cast<int>((ndc_x * 0.5f + 0.5f) * static_cast<float>(width));
+    int y = static_cast<int>((0.5f - ndc_y * 0.5f) * static_cast<float>(height));
+    x = std::clamp(x, 0, width - 1);
+    y = std::clamp(y, 0, height - 1);
+    if (!box.any) {
+        box.x0 = box.x1 = x;
+        box.y0 = box.y1 = y;
+        box.any = true;
+        return;
+    }
+    box.x0 = std::min(box.x0, x);
+    box.y0 = std::min(box.y0, y);
+    box.x1 = std::max(box.x1, x);
+    box.y1 = std::max(box.y1, y);
+}
+
 ScreenBox project_rig_bounds(const Scene& scene, std::size_t rigIndex,
                              const std::vector<Mat4>& palette, const Mat4& viewProj, int width,
                              int height) {
@@ -494,36 +527,51 @@ ScreenBox project_rig_bounds(const Scene& scene, std::size_t rigIndex,
             if (!posed_vertex_world(palette, scene.meshes[i], vertex, world)) {
                 continue;
             }
-            const Mat4& m = viewProj;
-            const float clip_x = m.m[0] * world.x + m.m[4] * world.y + m.m[8] * world.z + m.m[12];
-            const float clip_y = m.m[1] * world.x + m.m[5] * world.y + m.m[9] * world.z + m.m[13];
-            const float clip_w = m.m[3] * world.x + m.m[7] * world.y + m.m[11] * world.z + m.m[15];
-            if (!(clip_w > 1e-6f) || !std::isfinite(clip_x) || !std::isfinite(clip_y) ||
-                !std::isfinite(clip_w)) {
-                continue;
-            }
-            const float ndc_x = clip_x / clip_w;
-            const float ndc_y = clip_y / clip_w;
-            if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
-                continue;
-            }
-            int x = static_cast<int>((ndc_x * 0.5f + 0.5f) * static_cast<float>(width));
-            int y = static_cast<int>((0.5f - ndc_y * 0.5f) * static_cast<float>(height));
-            x = std::clamp(x, 0, width - 1);
-            y = std::clamp(y, 0, height - 1);
-            if (!box.any) {
-                box.x0 = box.x1 = x;
-                box.y0 = box.y1 = y;
-                box.any = true;
-                continue;
-            }
-            box.x0 = std::min(box.x0, x);
-            box.y0 = std::min(box.y0, y);
-            box.x1 = std::max(box.x1, x);
-            box.y1 = std::max(box.y1, y);
+            project_box_point(viewProj, width, height, world, box);
         }
     }
     return box;
+}
+
+// The club's projected screen region. The club is unskinned static geometry:
+// its live placement is one model matrix (the posed socket frame composed with
+// its authored bind frame), so every vertex is that matrix applied to the bind
+// position. It is a separate mesh range outside the skinned bbox — the S4
+// entity bounds union it so the guards cover what the entity actually draws.
+ScreenBox project_club_bounds(const Scene& scene, const ClubAttachment& club,
+                              const Mat4& model, const Mat4& viewProj, int width, int height) {
+    ScreenBox box;
+    if (!club.loaded || width <= 0 || height <= 0) {
+        return box;
+    }
+    const std::size_t end = std::min(club.meshEnd, scene.meshes.size());
+    for (std::size_t i = std::min(club.meshBegin, end); i < end; ++i) {
+        for (const Vertex& vertex : scene.meshes[i].vertices) {
+            const Vec3 bind{vertex.px, vertex.py, vertex.pz};
+            const Vec3 world{
+                model.m[0] * bind.x + model.m[4] * bind.y + model.m[8] * bind.z + model.m[12],
+                model.m[1] * bind.x + model.m[5] * bind.y + model.m[9] * bind.z + model.m[13],
+                model.m[2] * bind.x + model.m[6] * bind.y + model.m[10] * bind.z + model.m[14]};
+            if (!std::isfinite(world.x) || !std::isfinite(world.y) ||
+                !std::isfinite(world.z)) {
+                continue;
+            }
+            project_box_point(viewProj, width, height, world, box);
+        }
+    }
+    return box;
+}
+
+// The smallest box containing both inputs (an empty input is the identity).
+ScreenBox union_screen_boxes(const ScreenBox& a, const ScreenBox& b) {
+    if (!a.any) {
+        return b;
+    }
+    if (!b.any) {
+        return a;
+    }
+    return ScreenBox{true, std::min(a.x0, b.x0), std::min(a.y0, b.y0),
+                     std::max(a.x1, b.x1), std::max(a.y1, b.y1)};
 }
 
 // A `key=value` token in the manifest's comment header (the S4 provenance
@@ -1715,11 +1763,10 @@ int run_app(const AppOptions& opts) {
         if (follow_mode) {
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
-            // The HUD is a manifest-mode overlay (S4.1): the player pool starts
-            // full and Valus's bar stays hidden until the first hit.
-            // The interactive loop refreshes it every frame; the scripted paths
-            // render their final frame with these starting values.
-            renderer.set_hud(hud_state(/*visible=*/true));
+            // No HUD here: a plain --screenshot capture (the S3/S4 acceptance
+            // stills) shows the scene alone. The paths that want the overlay —
+            // the interactive loop and the --s41-stills renders — feed
+            // hud_state() themselves immediately before rendering.
         }
 
         if (opts.s41Selftest) {
@@ -2645,9 +2692,23 @@ int run_app(const AppOptions& opts) {
                 static_cast<float>(pixel_width) / static_cast<float>(std::max(pixel_height, 1));
             const Mat4 idle_view_proj =
                 mat4_mul(camera_proj(idle_camera, pixel_aspect), camera_view(idle_camera));
-            const ScreenBox entity_bbox = project_rig_bounds(scene, entityRig, entity_palette,
-                                                             idle_view_proj, pixel_width,
-                                                             pixel_height);
+            // The entity's *drawn* region is the skinned rig plus the club it
+            // holds. The club is a separate static mesh range outside the rig's
+            // bbox, and it is what the entity-less presence control removes, so
+            // leaving it out would put its pixels outside the guard's region.
+            // Place it from the same pinned pose the captures draw.
+            ScreenBox entity_bbox = project_rig_bounds(scene, entityRig, entity_palette,
+                                                       idle_view_proj, pixel_width,
+                                                       pixel_height);
+            const RigCpu& entity_rig_record = rig_at(scene, entityRig);
+            if (club.loaded && entity_rig_record.meshBegin < scene.meshes.size()) {
+                const Mat4 club_placement =
+                    club_model(scene, entity_palette, club.swordJoint,
+                               scene.meshes[entity_rig_record.meshBegin].model);
+                entity_bbox = union_screen_boxes(
+                    entity_bbox, project_club_bounds(scene, club, club_placement, idle_view_proj,
+                                                     pixel_width, pixel_height));
+            }
 
             // The walk's aim: the closest point on the nearest vertically
             // reachable capsule axis. Approaching it head-on makes the capsule

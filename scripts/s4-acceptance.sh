@@ -326,7 +326,7 @@ def read_png(path):
     return width, height, out
 
 
-def diff(first, second, box, margin, ignore=()):
+def diff(first, second, box, margin):
     width, height, a = first
     b = second[2]
     if first[:2] != second[:2]:
@@ -337,17 +337,13 @@ def diff(first, second, box, margin, ignore=()):
     count = outside = 0
     min_x = min_y = 1 << 30
     max_x = max_y = -1
-
-    def ignored(x, y):
-        return any(band[0] <= x <= band[2] and band[1] <= y <= band[3] for band in ignore)
-
     for y in range(height):
         row = y * width * 4
         for x in range(width):
             i = row + x * 4
             if a[i:i + 4] != b[i:i + 4]:
                 count += 1
-                if not (bx0 <= x <= bx1 and by0 <= y <= by1) and not ignored(x, y):
+                if not (bx0 <= x <= bx1 and by0 <= y <= by1):
                     outside += 1
                 if x < min_x: min_x = x
                 if x > max_x: max_x = x
@@ -356,13 +352,6 @@ def diff(first, second, box, margin, ignore=()):
     if count == 0:
         min_x = min_y = max_x = max_y = -1
     return count, outside, (min_x, min_y, max_x, max_y)
-
-
-def design_box(img, x0, y0, x1, y1):
-    """A 1280x720 design-space rectangle in this image's pixel coordinates."""
-    width = img[0]
-    scale = width / 1280.0
-    return (int(x0 * scale), int(y0 * scale), int(x1 * scale), int(y1 * scale))
 
 
 wide = read_png(sys.argv[1])
@@ -393,25 +382,8 @@ for c in range(3):
     span[c] = high[c] - low[c]
 largest_span = max(span)
 
-# S4.2 gates the HUD to an encounter (a manifest with an entity), so the
-# entity-less presence control carries no overlay while the wide still does.
-# The two HUD bands — Valus's top bar and the bottom-left stamina/player-health
-# stack — are the only pixels the overlay can add; ignore them in the presence
-# diff so the guard still measures the entity and the world around it. Neither
-# band overlaps the entity's reported screen region.
-hud_bands = [design_box(wide, 316, 8, 964, 48), design_box(wide, 8, 644, 280, 704)]
-
-# The entity's reported region is its *skinned* bounds; the club it holds is a
-# separate static mesh (S4.2 T6) that overhangs the body by ~130 px in this
-# spawn view and moves with his hand, so it shifts outside the skinned box
-# between the idle pair too. Allow that overhang in both entity-region diffs;
-# everything farther from Valus still must be pixel-identical. Scaled from the
-# 2560 px capture so a different window still works.
-entity_margin = max(margin, int(round(width * 160.0 / 2560.0)))
-
-presence, presence_outside, presence_bbox = diff(wide, noentity, box, entity_margin,
-                                                 hud_bands)
-idle, idle_outside, idle_bbox = diff(idle0, idle8, box, entity_margin)
+presence, presence_outside, presence_bbox = diff(wide, noentity, box, margin)
+idle, idle_outside, idle_bbox = diff(idle0, idle8, box, margin)
 total = width * height
 
 print(f"s4-region pixels={region_pixels} span={largest_span} "
@@ -419,7 +391,7 @@ print(f"s4-region pixels={region_pixels} span={largest_span} "
       f"outside={presence_outside} bbox={presence_bbox[0]},{presence_bbox[1]},"
       f"{presence_bbox[2]},{presence_bbox[3]}")
 print(f"s4-idle-pixels differing={idle} total={total} "
-      f"pct={100.0 * idle / total:.3f} outside={idle_outside} margin={entity_margin} "
+      f"pct={100.0 * idle / total:.3f} outside={idle_outside} margin={margin} "
       f"bbox={idle_bbox[0]},{idle_bbox[1]},{idle_bbox[2]},{idle_bbox[3]}")
 PY
 if ! pixels_out="$(python3 "$pixel_py" "$out_dir/s4-wide.png" "$noentity_png" \
@@ -451,14 +423,14 @@ region_min_changed=$((region_pixels / 20))  # 5 %: measured 66.2 %
 [[ "$region_changed" -ge "$region_min_changed" ]] ||
   fail "entity region is background: only $region_changed of $region_pixels pixels differ from the no-entity control (< 5 %)"
 [[ "$region_outside" -eq 0 ]] ||
-  fail "the entity presence changed $region_outside pixels outside its screen region (plus the club's overhang and the HUD bands)"
+  fail "the entity presence changed $region_outside pixels outside its screen region (+16 px)"
 [[ "$idle_differing" -gt 0 ]] ||
   fail "the idle pair rendered identical frames — Valus's pose did not advance"
 idle_max=$((idle_total / 10))  # 10 %: measured 3.595 %
 [[ "$idle_differing" -lt "$idle_max" ]] ||
   fail "the idle pair differs in $idle_differing of $idle_total pixels (>= 10 %: the world or camera moved with the entity)"
 [[ "$idle_outside" -eq 0 ]] ||
-  fail "the idle pair changed $idle_outside pixels outside the entity region (plus the club's overhang): the player/world must not move"
+  fail "the idle pair changed $idle_outside pixels outside the entity region (+16 px): the player/world must not move"
 
 # --- Step 8: performance (load + marginal frame cost) -------------------------
 
