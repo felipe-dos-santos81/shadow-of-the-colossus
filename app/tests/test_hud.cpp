@@ -4,6 +4,7 @@
 // acceptance screenshot is measured against.
 #include <doctest.h>
 
+#include <cmath>
 #include <string>
 
 #include "hud.h"
@@ -39,6 +40,30 @@ TEST_CASE("hud bars pin their reference corners") {
     const HudRect half = hud_health_rect(0.5f);
     REQUIRE(half.x == doctest::Approx(340.0f));
     REQUIRE(half.w == doctest::Approx(300.0f));
+}
+
+TEST_CASE("hud player health bar clamps and scales above stamina") {
+    // Player health: bottom-left as well, 240x8, one bar height plus the 24 px
+    // gap above the stamina bar's top edge (684 - 8 - 24 = 652 at 1280x720).
+    const HudRect full = hud_player_health_rect(1.0f);
+    REQUIRE(full.x == doctest::Approx(24.0f));
+    REQUIRE(full.y == doctest::Approx(652.0f));
+    REQUIRE(full.w == doctest::Approx(240.0f));
+    REQUIRE(full.h == doctest::Approx(8.0f));
+    REQUIRE(full.y + full.h <= hud_stamina_rect(1.0f).y);
+
+    // Only the width scales; the origin and height stay pinned.
+    const HudRect half = hud_player_health_rect(0.5f);
+    REQUIRE(half.x == doctest::Approx(24.0f));
+    REQUIRE(half.y == doctest::Approx(652.0f));
+    REQUIRE(half.w == doctest::Approx(120.0f));
+    REQUIRE(half.h == doctest::Approx(8.0f));
+
+    REQUIRE(hud_player_health_rect(0.0f).w == 0.0f);
+    REQUIRE(hud_player_health_rect(-1.0f).w == 0.0f);
+    REQUIRE(hud_player_health_rect(2.0f).w == doctest::Approx(240.0f));
+    // A non-finite fraction never becomes a NaN bar.
+    REQUIRE(hud_player_health_rect(std::nanf("")).w == 0.0f);
 }
 
 TEST_CASE("hud stamina label rounds and clamps") {

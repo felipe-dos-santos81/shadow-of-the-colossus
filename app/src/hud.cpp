@@ -18,8 +18,14 @@ constexpr float kInset = 24.0f;
 // Bar sizes at the reference resolution.
 constexpr float kStaminaWidth = 240.0f;
 constexpr float kStaminaHeight = 12.0f;
+constexpr float kPlayerHealthWidth = 240.0f;
+constexpr float kPlayerHealthHeight = 8.0f;
 constexpr float kHealthWidth = 600.0f;
 constexpr float kHealthHeight = 8.0f;
+
+// Vertical gap between the player-health bar's bottom edge and the stamina
+// bar's top edge (y = 684 - 24 - 8 = 652 at the reference resolution).
+constexpr float kPlayerHealthGap = 24.0f;
 
 float clamp_fraction(float fraction) {
     if (!std::isfinite(fraction)) {
@@ -40,6 +46,14 @@ HudRect hud_health_rect(float fraction) {
     const float clamped = clamp_fraction(fraction);
     return HudRect{(kDesignWidth - kHealthWidth) * 0.5f, kInset, kHealthWidth * clamped,
                    kHealthHeight};
+}
+
+HudRect hud_player_health_rect(float fraction) {
+    const float clamped = clamp_fraction(fraction);
+    return HudRect{kInset,
+                   kDesignHeight - kInset - kStaminaHeight - kPlayerHealthGap -
+                       kPlayerHealthHeight,
+                   kPlayerHealthWidth * clamped, kPlayerHealthHeight};
 }
 
 void hud_format_stamina(char (&out)[32], float fraction) {

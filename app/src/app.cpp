@@ -4,6 +4,7 @@
 #include "asset_io.h"
 #include "camera.h"
 #include "collision.h"
+#include "gamepad_map.h"
 #include "grab.h"
 #include "heightmap.h"
 #include "manifest.h"
@@ -1231,7 +1232,7 @@ struct GamepadInput {
         rightX = axis(SDL_GAMEPAD_AXIS_RIGHTX);
         rightY = axis(SDL_GAMEPAD_AXIS_RIGHTY);
         grab = SDL_GetGamepadAxis(handle, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16384;
-        strike = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_SOUTH);
+        strike = SDL_GetGamepadButton(handle, kStrikeGamepadButton);
         const bool pauseNow = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_START);
         pausePressed = pauseNow && !pauseWasDown;
         pauseWasDown = pauseNow;
@@ -1491,6 +1492,22 @@ int run_app(const AppOptions& opts) {
         // the whole run; the climb camera is entered/left by the mode.
         PlayerCombat combat{};
         Encounter encounter{};
+        // One tuning table for every step path — the scripted timelines and the
+        // interactive loop — and for the HUD's health fractions.
+        const CombatTuning tuning{};
+        // One HUD view of the run for every set_hud site (design §7.7). The
+        // overlay belongs to an encounter, so a manifest with no entity draws
+        // none; Valus's bar is zero-width until the first landed hit, so its
+        // appearance is itself the feedback that he can be hurt.
+        const auto hud_state = [&](bool visible) {
+            const float playerHealth =
+                tuning.maxHealth > 0.0f ? combat.health / tuning.maxHealth : 0.0f;
+            const float valusHealth = encounter.health < kEncounterMaxHealth
+                                          ? encounter.health / kEncounterMaxHealth
+                                          : 0.0f;
+            return HudState{visible && !manifest.entities.empty(), combat.stamina / 100.0f,
+                            valusHealth, playerHealth};
+        };
         CameraClimb climbCamera{};
         CameraFollow follow;
         if (follow_mode) {
@@ -1698,11 +1715,11 @@ int run_app(const AppOptions& opts) {
         if (follow_mode) {
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
-            // The HUD is a manifest-mode overlay (S4.1): both pools start full.
+            // The HUD is a manifest-mode overlay (S4.1): the player pool starts
+            // full and Valus's bar stays hidden until the first hit.
             // The interactive loop refreshes it every frame; the scripted paths
             // render their final frame with these starting values.
-            renderer.set_hud(HudState{true, combat.stamina / 100.0f,
-                                      encounter.health / 100.0f});
+            renderer.set_hud(hud_state(/*visible=*/true));
         }
 
         if (opts.s41Selftest) {
@@ -1735,7 +1752,6 @@ int run_app(const AppOptions& opts) {
             entity_playback.playing = false;
             entity_playback.pinned = true;  // one known idle pose for the approach
 
-            const CombatTuning tuning{};
             const float stepSeconds = kFixedFrameSeconds;
             int strikes = 0;
             ClimbBandId grabBand = ClimbBandId::Count;
@@ -1806,8 +1822,7 @@ int run_app(const AppOptions& opts) {
                 update_all_poses(renderer, scene, playbacks, 0.0f, club);
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
-                renderer.set_hud(HudState{hudVisible, combat.stamina / 100.0f,
-                                          encounter.health / 100.0f});
+                renderer.set_hud(hud_state(hudVisible));
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                       /*acquire_swapchain=*/true);
                 write_screenshot(renderer, shell.win, path);
@@ -2474,8 +2489,7 @@ int run_app(const AppOptions& opts) {
                 update_all_poses(renderer, scene, playbacks, 0.0f, club);
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback, player_rig_record));
-            renderer.set_hud(HudState{true, combat.stamina / 100.0f,
-                                      encounter.health / 100.0f});
+            renderer.set_hud(hud_state(/*visible=*/true));
             // The defeat still pulls the follow camera out to its 12 m wheel
             // ceiling so the landed player and the fallen body share the
             // frame; the arm's-length follow view points into the corpse. The
@@ -2544,8 +2558,7 @@ int run_app(const AppOptions& opts) {
                 // The HUD control: the same frame with the overlay hidden.
                 capture_control("defeat-nohud", control_path("defeat-nohud"),
                                 /*hudVisible=*/false);
-                renderer.set_hud(HudState{true, combat.stamina / 100.0f,
-                                          encounter.health / 100.0f});
+                renderer.set_hud(hud_state(/*visible=*/true));
             }
             print_status_line(opts, shell.win);
             std::printf("s41-status grab=%s climb=%.2f strikes=%d entity_health=%d mode=%s "
@@ -2939,7 +2952,6 @@ int run_app(const AppOptions& opts) {
         bool climb_recenter = false;
         GamepadInput gamepad;
         open_first_gamepad(gamepad);
-        const CombatTuning tuning{};
         // This frame's rig poses. Hoisted so Valus's attack decision can read
         // the previous frame's posed feet before this frame's clip is chosen.
         std::vector<std::vector<Mat4>> palettes =
@@ -3215,8 +3227,7 @@ int run_app(const AppOptions& opts) {
 
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
-                renderer.set_hud(HudState{true, combat.stamina / 100.0f,
-                                          encounter.health / 100.0f});
+                renderer.set_hud(hud_state(/*visible=*/true));
             } else {
                 update_all_poses(renderer, scene, playbacks, dt, club);
             }

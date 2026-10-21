@@ -82,6 +82,9 @@ constexpr float kHudLabelGap = 4.0f;
 // encodes its output to sRGB itself, so no decode happens there either).
 constexpr float kStaminaBarColor[4] = {0.30f, 0.85f, 0.35f, 0.85f};
 constexpr float kHealthBarColor[4] = {0.85f, 0.20f, 0.16f, 0.90f};
+// Wander's health: amber, above the stamina bar, so it reads as the player's
+// own pool rather than Valus's red top-edge bar.
+constexpr float kPlayerHealthBarColor[4] = {1.00f, 0.65f, 0.10f, 0.90f};
 constexpr float kHudTextColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
 // Unit quad vertex: position in [0,1]^2 with y down, plus matching UVs.
@@ -916,6 +919,10 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
                       kStaminaBarColor);
         draw_hud_quad(cmd, hud_pass, hud_health_rect(hud_.health), white_texture_, hud_sampler_,
                       kHealthBarColor);
+        // The player's own pool, amber, above the stamina bar. A zero fraction
+        // (a state no run has fed yet) draws nothing.
+        draw_hud_quad(cmd, hud_pass, hud_player_health_rect(hud_.playerHealth), white_texture_,
+                      hud_sampler_, kPlayerHealthBarColor);
 
         if (hud_text_texture_ != nullptr && hud_text_width_ > 0.0f) {
             const HudRect stamina = hud_stamina_rect(hud_.stamina);

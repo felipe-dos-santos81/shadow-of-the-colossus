@@ -21,7 +21,7 @@
 #   5. the pixel guards (stdlib Python): the defeat still against a no-entity
 #      control (presence + `s41-defeat` bbox localization), the HUD against
 #      no-HUD controls (both bars present; the zero-health bar is absent), and
-#      the bar colours at the grab/strike moments;
+#      the bar colours at the grab/reaction moments;
 #   6. measured load + marginal frame cost (`--frames 1` vs `--frames 240`,
 #      the S3/S4 pattern): the marginal cost must stay inside the 60 fps budget;
 #   7. the S4 regression: `scripts/s4-acceptance.sh` runs unchanged (it already
@@ -550,13 +550,15 @@ def main():
     print(f"s41-reaction-hud changed={hud_changed} outside={hud_outside} "
           f"stamina_changed={hud_per[1]} health_changed={hud_per[0]}")
 
-    # The bars' own colours at the grab (stamina 100) and strike (health 100)
-    # moments: green in the bottom-left bar, red in the top bar.
+    # The bars' own colours at the grab (stamina 100) and reaction (health 66
+    # after the first hit) moments: green in the bottom-left bar, red in the top
+    # bar. Valus's bar is hidden until the first hit, so the red sample cannot
+    # come from the pre-hit strike still (ruling R9).
     stamina_bar = design_box(grab, 24, 684, 264, 696)
-    health_bar = design_box(strike, 340, 24, 940, 32)
+    health_bar = design_box(reaction, 340, 24, 940, 32)
     stamina_green = count_color(grab, stamina_bar,
                                 lambda r, g, b: g > r + 30 and g > b + 30 and g > 120)
-    health_red = count_color(strike, health_bar,
+    health_red = count_color(reaction, health_bar,
                              lambda r, g, b: r > g + 50 and r > b + 50 and r > 120)
     print(f"s41-hud-bars stamina_green={stamina_green} health_red={health_red} "
           f"stamina_pixels={(stamina_bar[2] - stamina_bar[0] + 1) * (stamina_bar[3] - stamina_bar[1] + 1)} "

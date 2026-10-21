@@ -14,12 +14,19 @@ struct HudState {
     bool visible = false;
     float stamina = 1.0f;
     float health = 1.0f;
+    float playerHealth = 1.0f;
 };
 
 // Bottom-left bar: 240x12 at 1280x720, 24 px inset from the left and bottom
 // edges. The width scales with the fraction, clamped to [0, 1]; the origin and
 // height do not move.
 HudRect hud_stamina_rect(float fraction);
+
+// Player-health bar: 240x8 at 1280x720, at the stamina bar's 24 px left inset
+// and one bar height plus a 24 px gap above its top edge — the STAMINA label
+// occupies that gap (y = 652). The width scales with the fraction, clamped to
+// [0, 1]; zero draws nothing.
+HudRect hud_player_health_rect(float fraction);
 
 // Top-edge bar: 600x8 at 1280x720, horizontally centred, 24 px inset from the
 // top edge. The width scales with the fraction, clamped to [0, 1].
