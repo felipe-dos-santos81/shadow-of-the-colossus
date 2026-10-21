@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Text;
 using BpConvert.Core.Audio;
 
 /// <summary>
@@ -81,6 +83,11 @@ public class AudioTests
             Assert.InRange(waves[i].RecordSize, 0x28, 0x100);
         }
 
+        // The fixed field slots: 48 kHz and the four codec/channel words of the bank.
+        Assert.All(waves, wave => Assert.Equal(48000u, wave.SampleRate));
+        Assert.Equal(new[] { 0x00FF0121u, 0x00FF0142u, 0x00FF0221u, 0x00FF0242u },
+            waves.Select(wave => wave.FormatWord).Distinct().OrderBy(word => word).ToArray());
+
         // The loader formula (recon §7.1): payload = record + 0x24 + start, length = bytes.
         var payloadStart = bank.DataOffset + 0x10;
         var payloadEnd = bank.DataOffset + 8 + bank.DataSize;
@@ -102,6 +109,7 @@ public class AudioTests
 
         Assert.Equal(33, waves.Count);
         Assert.All(waves, wave => Assert.Equal(76, wave.RecordSize));
+        Assert.All(waves, wave => Assert.Equal(48000u, wave.SampleRate));
 
         // `start` is an absolute byte offset in music.sxd2, not relative to the payload base.
         var ordered = waves.OrderBy(wave => wave.Start).ToList();
@@ -133,6 +141,21 @@ public class AudioTests
     }
 
     [Fact]
+    public void Waves_ComObj_PartitionTheDataPayload()
+    {
+        // The curated player bank (swing/hit cues), 241 records with 80/264-byte tail records:
+        // the same loader formula must tile it with zero gaps, duplicates and all.
+        var bank = SxdContainer.Read(Bank("com_obj.sxd"));
+        var waves = SxdTables.Waves(bank);
+
+        Assert.Equal(241, waves.Count);
+        var payloadStart = bank.DataOffset + 0x10;
+        var payloadEnd = bank.DataOffset + 8 + bank.DataSize;
+        Assert.Equal((payloadStart, payloadEnd), MergedUnion(waves
+            .Select(wave => (Offset: wave.RecordOffset + 0x24 + wave.Start, End: wave.RecordOffset + 0x24 + wave.Start + wave.ByteLength))));
+    }
+
+    [Fact]
     public void Names_Boss01_AreReadableAndUnique()
     {
         var names = SxdTables.Names(SxdContainer.Read(Bank("boss01.sxd")));
@@ -147,8 +170,11 @@ public class AudioTests
 
         Assert.Equal(names.Count, names.Select(name => name.Name).Distinct(StringComparer.Ordinal).Count());
         Assert.Contains("boss01", names[0].Name);
-        // The table resolves to the engine hash: NAME 0 is REQD 303 (recon attribution §1).
+        // Entry 0 is boss01_atk_hit_ground1; its third word is the REQD key (303), not the entry
+        // index and not a WAVE index (attribution: REQD 303 -> tone 43 -> wave 26).
         Assert.Equal("boss01_atk_hit_ground1", names[0].Name);
+        Assert.Equal(0, names[0].Index);
+        Assert.Equal(303u, names[0].ReqdId);
     }
 
     [Fact]
@@ -169,6 +195,27 @@ public class AudioTests
     }
 
     [Fact]
+    public void Read_ChunkBodyOverrun_Throws()
+    {
+        // Patch the +0x08 own-size field to the truncated length so that guard passes: the chunk
+        // walk itself must catch the TONE body running past EOF.
+        var path = Path.Combine(Path.GetTempPath(), $"bpconvert-sxd-{Guid.NewGuid():N}.sxd");
+        try
+        {
+            var bytes = File.ReadAllBytes(Bank("boss01.sxd"))[..0x80];
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(0x08), (uint)bytes.Length);
+            File.WriteAllBytes(path, bytes);
+
+            var error = Assert.Throws<InvalidDataException>(() => SxdContainer.Read(path));
+            Assert.Contains("overruns the file", error.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Read_Bridge_AcceptsToneOnly()
     {
         var bank = SxdContainer.Read(Bank("bridge.sxd"));
@@ -177,8 +224,65 @@ public class AudioTests
         Assert.Equal("TONE", chunk.Magic);
         Assert.Equal(0x60, chunk.Offset);
         Assert.False(bank.HasData);
+        Assert.Equal(0, bank.DataOffset);
         Assert.Equal(0, bank.DataSize);
         Assert.Empty(SxdTables.Waves(bank)); // no WAVE table in this bank
+    }
+
+    [Fact]
+    public void Names_FallBackToThePool_WhenTheEntryStrideDoesNotResolve()
+    {
+        // A synthetic NAME table whose 12-byte entries carry a zero string offset: the entry
+        // layout cannot resolve (the "name" would start on its own offset word), so the reader
+        // must read the NUL-terminated pool after the entries and keep the entry order.
+        var path = Path.Combine(Path.GetTempPath(), $"bpconvert-name-{Guid.NewGuid():N}.sxd");
+        try
+        {
+            File.WriteAllBytes(path, BuildNameOnlyBank("alpha\0beta\0", new uint[] { 7, 9 }));
+
+            var names = SxdTables.Names(SxdContainer.Read(path));
+
+            Assert.Equal(2, names.Count);
+            Assert.Equal("alpha", names[0].Name);
+            Assert.Equal(7u, names[0].ReqdId);
+            Assert.Equal("beta", names[1].Name);
+            Assert.Equal(9u, names[1].ReqdId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// Builds a minimal SXDF with one NAME chunk: count entries at +0x0C whose 12-byte records
+    /// all carry a zero string offset, followed by <paramref name="pool"/>. The REQD key is the
+    /// entry's third word, so it survives the pool fallback.
+    /// </summary>
+    private static byte[] BuildNameOnlyBank(string pool, uint[] reqdIds)
+    {
+        var poolBytes = Encoding.Latin1.GetBytes(pool);
+        var body = new byte[0x08 + 12 * reqdIds.Length + poolBytes.Length]; // body = chunk + 8
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(0x04), (uint)reqdIds.Length); // chunk + 0x0C
+        for (var i = 0; i < reqdIds.Length; i++)
+        {
+            var entry = 0x08 + 12 * i; // chunk + 0x10
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(entry), 0); // unresolvable offset
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(entry + 4), 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(entry + 8), reqdIds[i]);
+        }
+
+        poolBytes.CopyTo(body, 0x08 + 12 * reqdIds.Length);
+
+        var file = new byte[0x60 + 8 + body.Length];
+        Encoding.ASCII.GetBytes("SXDF").CopyTo(file, 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(0x04), 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(0x08), (uint)file.Length);
+        Encoding.ASCII.GetBytes("test").CopyTo(file, 0x20);
+        Encoding.ASCII.GetBytes("NAME").CopyTo(file, 0x60);
+        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(0x64), (uint)body.Length);
+        body.CopyTo(file, 0x68);
+        return file;
     }
 
     /// <summary>Merges the ranges and returns them as one tuple (the tiling assertion shape).</summary>

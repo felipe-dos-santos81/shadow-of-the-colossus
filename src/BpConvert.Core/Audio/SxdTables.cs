@@ -11,8 +11,9 @@ namespace BpConvert.Core.Audio;
 /// <param name="Index">Record index in the table.</param>
 /// <param name="RecordOffset">File offset of the record itself (needed by the resident payload formula).</param>
 /// <param name="RecordSize">
-/// Bytes from this record to the next one (or to the end of the <c>WAVE</c> chunk): the stride is
-/// variable (48/56/68/76 on the resident banks, 76 for music).
+/// Bytes from this record to the next one (or to the end of the <c>WAVE</c> chunk). The stride is
+/// variable per bank: 48/56/68/76 on <c>boss01</c> (com_obj 80/264, com_v 80, com_b_h 160) and
+/// 76 on every music record.
 /// </param>
 /// <param name="FormatWord">The <c>+0x04</c> word; byte 1 is the channel count, the low byte the codec id.</param>
 /// <param name="SampleRate">The <c>+0x08</c> rate (48 000 on every shipped record).</param>
@@ -28,10 +29,21 @@ public sealed record WaveRecord(
     int Index, long RecordOffset, int RecordSize, uint FormatWord, uint SampleRate, uint Frames,
     long Start, int ByteLength);
 
-/// <summary>One <c>NAME</c> table entry: the request name in table (and string-pool) order.</summary>
-/// <param name="Index">Entry index; also the request id the <c>REQD</c> table is keyed by.</param>
+/// <summary>
+/// One <c>NAME</c> table entry: the request name in table (and string-pool) order.
+/// </summary>
+/// <param name="Index">
+/// The NAME entry index (0-based). This is <b>not</b> the <c>REQD</c> key and <b>not</b> a
+/// <c>WAVE</c> index: entry 0 of <c>boss01</c> is <c>boss01_atk_hit_ground1</c> (REQD 303,
+/// wave 26). Use <see cref="ReqdId"/> for the request chain.
+/// </param>
 /// <param name="Name">The NUL-terminated request name, decoded one byte per char (Latin-1).</param>
-public sealed record NameRecord(int Index, string Name);
+/// <param name="ReqdId">
+/// The third u32 of the 12-byte entry: the <c>REQD</c> table key the engine looks up by name hash
+/// (<c>FUN_00987a80</c>). The pool fallback keeps the entry order, so the id stays paired with
+/// <paramref name="Name"/> on the shipped banks.
+/// </param>
+public sealed record NameRecord(int Index, string Name, uint ReqdId);
 
 /// <summary>
 /// Reader for the <c>WAVE</c> and <c>NAME</c> index tables (recon §1-§3; the C# counterpart of
@@ -67,6 +79,7 @@ public static class SxdTables
     private const int WaveByteLengthOffset = 0x20;
     private const int WaveStartOffset = 0x24;
     private const int NameEntryLength = 12;
+    private const int NameReqdIdOffset = 8;
     private const uint NameHashMultiplier = 0x83;
 
     /// <summary>Reads the <c>WAVE</c> table in table order.</summary>
@@ -129,7 +142,7 @@ public static class SxdTables
     /// <returns>All entries, or an empty list when the bank has no <c>NAME</c> chunk.</returns>
     /// <exception cref="InvalidDataException">
     /// The entry array is out of bounds, neither the 12-byte entries nor the string pool resolve,
-    /// or a name is empty, non-printable or duplicated inside the bank.
+    /// or a name is empty, contains a C0/DEL byte, or is duplicated inside the bank.
     /// </exception>
     public static IReadOnlyList<NameRecord> Names(SxdBank bank)
     {
@@ -147,6 +160,12 @@ public static class SxdTables
         if (body + NameEntryLength * (long)count > chunkEnd)
             throw Invalid(path, $"NAME count {count} overruns the chunk");
 
+        // The third word of each 12-byte entry is the REQD key; it is read from the entry array on
+        // both paths because the pool keeps the entry order.
+        var reqdIds = new uint[count];
+        for (var i = 0L; i < count; i++)
+            reqdIds[i] = ReadU32(path, data, body + NameEntryLength * i + NameReqdIdOffset);
+
         var names = TryReadEntryTable(data, body, count, chunkEnd);
         if (names is null)
         {
@@ -162,12 +181,14 @@ public static class SxdTables
         {
             if (names[i].Length == 0)
                 throw Invalid(path, $"NAME entry {i} is empty");
+            // C0 controls and DEL are impossible in a request name; C1 bytes (0x80..0x9F) pass on
+            // purpose because they are the Shift-JIS lead bytes of the Japanese placeholders.
             foreach (var c in names[i])
                 if (c is < ' ' or '\x7F')
-                    throw Invalid(path, $"NAME entry {i} is not printable");
+                    throw Invalid(path, $"NAME entry {i} contains a C0/DEL byte");
             if (!seen.Add(names[i]))
                 throw Invalid(path, $"NAME entry {i} duplicates \"{names[i]}\"");
-            records.Add(new NameRecord(i, names[i]));
+            records.Add(new NameRecord(i, names[i], reqdIds[i]));
         }
 
         return records;

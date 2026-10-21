@@ -27,7 +27,8 @@ public sealed record SxdChunk(string Magic, long Offset, int Size);
 /// <param name="DataOffset">
 /// The <c>DATA</c> chunk header offset on an <c>SXDF</c> (the payload starts at
 /// <c>DataOffset + 0x10</c>: 8 header + 8 zero bytes, recon §7.1), or 0x60 on an
-/// <c>SXDS</c>, where the body itself is the payload.
+/// <c>SXDS</c>, where the body itself is the payload. Zero when <paramref name="HasData"/> is
+/// false (no <c>DATA</c> chunk).
 /// </param>
 /// <param name="DataSize">
 /// The <c>DATA</c> chunk body size on an <c>SXDF</c>, or the <c>SXDS</c> payload size from +0x0C.
@@ -66,7 +67,8 @@ public static class SxdContainer
     private const int NameOffset = 0x20;
     private const int NameLength = 32;
 
-    // The gate's tag rule: every byte of a four-character tag is in 0x30..0x5A ([0-9A-Z]).
+    // The gate's tag rule: every byte of a four-character tag is in its 0x30..0x5A range (which
+    // also admits the punctuation between '9' and 'A'; the shipped tags are all letters).
     private const byte TagMin = 0x30;
     private const byte TagMax = 0x5A;
 
@@ -110,9 +112,10 @@ public static class SxdContainer
         else
         {
             // An SXDS has no chunk chain: +0x08 is a stream count and +0x0C the payload size,
-            // with the payload starting at the end of the header.
-            if (HeaderLength + (long)companionSize > data.Length)
-                throw Invalid(path, $"payload size @0x0C = {companionSize} overruns the file ({data.Length} B)");
+            // with the payload starting at the end of the header and running to EOF.
+            if (HeaderLength + (long)companionSize != data.Length)
+                throw Invalid(path,
+                    $"payload size @0x0C = {companionSize} does not match the file ({data.Length - HeaderLength} B after the header)");
             dataOffset = HeaderLength;
             dataSize = (int)companionSize;
             hasData = true;
@@ -162,7 +165,7 @@ public static class SxdContainer
         var tag = data.AsSpan((int)offset, 4);
         foreach (var b in tag)
             if (b is < TagMin or > TagMax)
-                throw Invalid(path, $"chunk tag at 0x{offset:X} is not [0-9A-Z]");
+                throw Invalid(path, $"chunk tag at 0x{offset:X} is outside 0x30..0x5A");
         return Encoding.ASCII.GetString(tag);
     }
 
