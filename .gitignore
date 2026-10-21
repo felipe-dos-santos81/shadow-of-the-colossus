@@ -19,5 +19,8 @@ app/build/
 out
 scratch/
 
+# Python
+__pycache__/
+
 # SDD workspace
 .superpowers/

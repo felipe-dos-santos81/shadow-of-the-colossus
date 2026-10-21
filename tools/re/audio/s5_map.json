@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "generated": "2026-10-21",
+  "payload_formula": "wave_record_offset + 0x24 + start (length = bytes); see docs/notes/s5-audio-recon.md §7",
+  "cues": [
+    {
+      "event": "valus.telegraph",
+      "bank": "boss01",
+      "name": "boss01_vo_atk1",
+      "wave": 3,
+      "method": "table",
+      "confidence": "medium",
+      "note": "WAVE table order matches the name-pool order for the first 108 records; wave 3 is a 1.201 s 0x21 vocal. The 0x42 pair 108/109 is the alternative (AT9, 4.85 s) if the name order breaks."
+    },
+    {
+      "event": "valus.impact",
+      "bank": "boss01",
+      "name": "boss01_atk_hit_ground1",
+      "wave": 26,
+      "method": "ghidra",
+      "confidence": "high",
+      "note": "REQD 303 -> SEQD timeline -> PLAY_TONE 43 -> TONE[43].wave = 26 (FUN_00983220 payload formula). The cue is a 5-layer sequence (tones 43-47 -> waves 26-30); wave 26 is the first and longest layer."
+    },
+    {
+      "event": "valus.hurt",
+      "bank": "boss01",
+      "name": "boss01_vo_dmg1",
+      "wave": 6,
+      "method": "table",
+      "confidence": "medium",
+      "note": "Name-pool order; wave 6 is a 1.051 s 0x21 vocal, the first damage roar."
+    },
+    {
+      "event": "player.swing",
+      "bank": "com_obj",
+      "name": "wnd_LifeSwd_swish_t1_01",
+      "wave": 7,
+      "method": "table",
+      "confidence": "high",
+      "note": "Name-pool order; wave 7 is a 0.464 s 0x21 whoosh. PLAY_TONE for this name resolves to tone 16/17, but the com_obj TONE table layout is not the flat 12-byte form used by boss01."
+    },
+    {
+      "event": "player.hit",
+      "bank": "com_obj",
+      "name": "wnd_swd_hit_gravel_t1_01",
+      "wave": 21,
+      "method": "table",
+      "confidence": "medium",
+      "note": "Name-pool order; wave 21 is a 0.708 s 0x21 impact, first gravel hit variant."
+    },
+    {
+      "event": "player.hurt",
+      "bank": "com_v",
+      "name": "bvo_dmg_m",
+      "wave": 40,
+      "method": "table",
+      "confidence": "medium",
+      "note": "Name-pool order; wave 40 is a 0.270 s 0x21 grunt. The com_v WAVE table holds the first 63 names only; the bvo_dmg1..9 names are later and not resident."
+    },
+    {
+      "event": "player.death",
+      "bank": "com_b_h",
+      "name": "b_dead_by_boss",
+      "wave": 657,
+      "method": "table",
+      "confidence": "medium",
+      "note": "Name-pool order; wave 657 is a 0.811 s 0x21 vocal. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
+    }
+  ],
+  "deferred": [
+    {"event": "valus.death", "bank": "boss01", "reason": "mavo_death resolves to TONE tones 97-99 -> waves 75-77 (0x21) but the death roar is not one of the seven core cues and the sequence layering is unresolved."},
+    {"event": "valus.grab", "bank": "boss01", "reason": "grab/body-movement cues are layered 0x21 sequences; not required by the core set."},
+    {"event": "valus.fall", "bank": "boss01", "reason": "fall/rise cues are layered 0x21 sequences; not required by the core set."},
+    {"event": "valus.breath", "bank": "boss01", "reason": "breath/ambience cues are layered 0x21 sequences; not required by the core set."},
+    {"event": "valus.ambience", "bank": "boss01", "reason": "boss01_FS_* / mammo_* ambience beds are layered 0x21 sequences; not required by the core set."},
+    {"event": "player.grab", "bank": "com_obj", "reason": "grab/hand cues are in com_b_h and are layered; not required by the core set."},
+    {"event": "player.fall", "bank": "com_v", "reason": "bvo_fall* names are beyond the 63 resident com_v waves; streamed or layered."},
+    {"event": "player.breath", "bank": "com_v", "reason": "bvo_breath/run_breath names are beyond the 63 resident com_v waves; streamed or layered."}
+  ]
+}
