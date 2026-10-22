@@ -129,6 +129,28 @@ SceneManifest parse_manifest(const std::filesystem::path& path) {
             parse_placement_tokens(path, line_number, tokens, 2, "entity", entity.placement);
             entity.clip = tokens[12];
             manifest.entities.push_back(std::move(entity));
+        } else if (directive == "posed") {
+            if (tokens.size() != 14) {
+                fail(path, line_number,
+                     "posed expects 14 tokens (glb path + 10 numbers + clip + seconds), got " +
+                         std::to_string(tokens.size()));
+            }
+            ManifestInstance placement{};
+            parse_placement_tokens(path, line_number, tokens, 2, "posed", placement);
+            ManifestPosed posed{};
+            posed.glb = tokens[1];
+            posed.position = placement.position;
+            posed.rotation = placement.rotation;
+            posed.scale = placement.scale;
+            posed.clip = tokens[12];
+            if (!parse_float_token(tokens[13], posed.seconds)) {
+                fail(path, line_number,
+                     "posed: invalid number '" + tokens[13] + "' for seconds");
+            }
+            if (posed.seconds < 0.0f) {
+                fail(path, line_number, "posed: seconds must be >= 0, got '" + tokens[13] + "'");
+            }
+            manifest.posed.push_back(std::move(posed));
         } else if (directive == "spawn") {
             if (tokens.size() != 5) {
                 fail(path, line_number, "spawn expects 5 tokens (3 position + yaw), got " +

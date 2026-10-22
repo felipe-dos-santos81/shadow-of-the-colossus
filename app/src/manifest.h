@@ -24,6 +24,18 @@ struct ManifestEntity {
     std::string clip;
 };
 
+// One placed, posed static prop: a skinned glb sampled once at `seconds` of
+// `clip` (clamped into the clip, like a pinned clock) and CPU-skinned at compose
+// time into static meshes — no rig, no playback. Mono's lying pose is one.
+struct ManifestPosed {
+    std::string glb;
+    Vec3 position;
+    Quat rotation;
+    Vec3 scale;
+    std::string clip;
+    float seconds;
+};
+
 // A parsed scene manifest — the W1↔W2 interface documented in
 // `docs/notes/scene-manifest.md`. `hasSpawn` is false when the file carries no
 // `spawn` directive; `spawnPosition` is then the zero vector (and
@@ -31,6 +43,7 @@ struct ManifestEntity {
 struct SceneManifest {
     std::vector<ManifestInstance> instances;
     std::vector<ManifestEntity> entities;
+    std::vector<ManifestPosed> posed;
     Vec3 spawnPosition;
     float spawnYawDeg;
     bool hasSpawn;
@@ -41,11 +54,13 @@ struct SceneManifest {
 // Directives (tokens separated by whitespace):
 //   instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 //   entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
+//   posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
 //   spawn <px> <py> <pz> <yawDeg>
 // Every number must be a strict, full-string finite float: the whole token has
 // to parse and be finite ("nan", "inf", "1.5x" and "1e999" are refused). The
 // entity's clip is a non-numeric token: it names the clip exactly, and the
-// loader is what decides whether the model carries it.
+// loader is what decides whether the model carries it. A posed `seconds` is a
+// finite float >= 0.
 //
 // Throws std::runtime_error formatted `<file>:<line>: <reason>` for a
 // malformed line (wrong token count, invalid number, unknown directive), and

@@ -19,6 +19,7 @@ line. The directives, verbatim:
 ```text
 instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
+posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
 spawn <px> <py> <pz> <yawDeg>
 ```
 
@@ -34,10 +35,20 @@ spawn <px> <py> <pz> <yawDeg>
   1, 2, ... in manifest order, the player's are rig 0), and a clip the model does not
   carry (or a model with no clips) is a load error naming the glb path and the clip —
   never a silent rest pose.
+- `posed` — one placed **static** prop frozen in a pose (the S7 addition; Mono lying down).
+  Placement as an `instance`'s, then the exact clip name and a time in seconds
+  (finite, `>= 0`). At compose time the glb's clip is sampled once at `seconds`
+  (clamped into the clip, like a pinned clock), every vertex's position and normal is
+  CPU-skinned with the shader's weighted palette sum, and the result is appended as static
+  meshes (`rig = -1`, no rig record, no playback, never an encounter entity). The TRS
+  stays in each mesh's `model`; `localMin/localMax` and the scene bounds are of the
+  posed vertices. A missing glb or a clip the glb lacks is a load error naming the path
+  (and the clip). Posed props are appended after the entities, so rig and mesh ranges
+  of the player and entities are unchanged.
 - `spawn` — where the player starts: position and facing yaw in degrees. Optional; without
   it `hasSpawn` is false and the app falls back to the scene bounds' centre.
 
-Token counts are exact (12 for `instance`, 13 for `entity`, 5 for `spawn`), and unknown
+Token counts are exact (12 for `instance`, 13 for `entity`, 14 for `posed`, 5 for `spawn`), and unknown
 directives fail loudly. A malformed line throws `std::runtime_error` formatted
 `<file>:<line>: <reason>`.
 

@@ -304,3 +304,61 @@ TEST_CASE("a manifest that cannot be opened throws") {
     CHECK_THROWS_AS(parse_manifest(dir.path() / "no_such.manifest"), std::runtime_error);
     CHECK_THROWS_AS(parse_manifest(dir.path()), std::runtime_error);  // a directory, not a file
 }
+
+TEST_CASE("a posed line parses its placement, clip and seconds") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parse_manifest(write_manifest(
+        dir, "posed models/shadow/characters/mono/_cmn/mono.glb 1 2 3 0 0.5 0 0.866 2 2 2 "
+             "girl_a_death_loop 0.25\n"));
+    CHECK(manifest.instances.empty());
+    CHECK(manifest.entities.empty());
+    REQUIRE(manifest.posed.size() == 1);
+    const ManifestPosed& posed = manifest.posed[0];
+    CHECK(posed.glb == "models/shadow/characters/mono/_cmn/mono.glb");
+    CHECK(posed.position.x == doctest::Approx(1.0f));
+    CHECK(posed.position.y == doctest::Approx(2.0f));
+    CHECK(posed.position.z == doctest::Approx(3.0f));
+    CHECK(posed.rotation.y == doctest::Approx(0.5f));
+    CHECK(posed.rotation.w == doctest::Approx(0.866f));
+    CHECK(posed.scale.z == doctest::Approx(2.0f));
+    CHECK(posed.clip == "girl_a_death_loop");
+    CHECK(posed.seconds == doctest::Approx(0.25f));
+}
+
+TEST_CASE("a malformed posed line fails with its line number") {
+    TempFixtureDir dir;
+    const std::vector<std::string> tokens = {"posed", "models/x.glb", "0", "0", "0", "0", "0",
+                                             "0",     "1",            "1", "1", "1", "clip", "0"};
+    REQUIRE(tokens.size() == 14);
+    CHECK(parse_manifest(write_manifest(dir, join_tokens(tokens) + "\n")).posed.size() == 1);
+
+    // 13 tokens (no seconds) and 15 tokens (extra) are refused.
+    std::vector<std::string> shorter(tokens.begin(), tokens.end() - 1);
+    const std::filesystem::path short_path = write_manifest(dir, "# h\n" + join_tokens(shorter) + "\n");
+    CHECK(manifest_error(short_path).starts_with(short_path.string() + ":2:"));
+    CHECK(manifest_error(short_path).find("posed") != std::string::npos);
+    std::vector<std::string> longer = tokens;
+    longer.push_back("9");
+    CHECK(manifest_error(write_manifest(dir, join_tokens(longer) + "\n")).find("posed") !=
+          std::string::npos);
+
+    // A non-finite number in any numeric slot (the ten TRS numbers and seconds).
+    for (const std::string& bad : {std::string("nan"), std::string("inf"), std::string("1.5x")}) {
+        for (const int slot : {2, 5, 11, 13}) {
+            std::vector<std::string> t = tokens;
+            t[static_cast<std::size_t>(slot)] = bad;
+            const std::filesystem::path path = write_manifest(dir, "# h\n" + join_tokens(t) + "\n");
+            CAPTURE(bad);
+            CAPTURE(slot);
+            CHECK(manifest_error(path).starts_with(path.string() + ":2:"));
+            CHECK(manifest_error(path).find("'" + bad + "'") != std::string::npos);
+        }
+    }
+
+    // A negative seconds is refused, naming the field.
+    std::vector<std::string> negative = tokens;
+    negative[13] = "-0.5";
+    const std::filesystem::path neg_path = write_manifest(dir, join_tokens(negative) + "\n");
+    CHECK(manifest_error(neg_path).starts_with(neg_path.string() + ":1:"));
+    CHECK(manifest_error(neg_path).find("seconds") != std::string::npos);
+}

@@ -1297,3 +1297,95 @@ TEST_CASE("OptBone_sword resolves in the Valus rig and carries the club") {
     CHECK(maxY > minY);
     CHECK(minY > 28.369f + 1.0f);
 }
+
+// --- `posed` static props (S7 task 5) ----------------------------------------
+
+TEST_CASE("compose_scene skins a posed prop on the CPU into static meshes") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+    const SceneManifest manifest = parsed_manifest(
+        dir, "posed skin.gltf 10 0 0 0 0 0 1 1 1 1 turn 1\n");
+
+    // The fixture doubles as the player so the scene has its usual rig 0.
+    const Scene scene = compose_scene(dir.path(), manifest, "skin.gltf");
+
+    // The player's rig is the only rig: the posed prop keeps none and is static.
+    REQUIRE(scene.rigs.size() == 1);
+    REQUIRE(scene.meshes.size() == 2);
+    const MeshCpu& posed = scene.meshes[1];
+    CHECK(posed.rig == -1);
+    REQUIRE(posed.vertices.size() == 3);
+
+    // At t = 1 JointA is turned 90 degrees about Z around (0, 1, 0), so joint B
+    // (weight 1 for every vertex) sits at (-1, 1, 0): the bind positions
+    // (0,2,0) (1,2,0) (0,1,0) land at (-1,1,0) (-1,2,0) (0,1,0).
+    const float expected[3][3] = {{-1.0f, 1.0f, 0.0f}, {-1.0f, 2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+    for (int v = 0; v < 3; ++v) {
+        CAPTURE(v);
+        CHECK(posed.vertices[v].px == doctest::Approx(expected[v][0]).epsilon(1e-4));
+        CHECK(posed.vertices[v].py == doctest::Approx(expected[v][1]).epsilon(1e-4));
+        CHECK(posed.vertices[v].pz == doctest::Approx(expected[v][2]).epsilon(1e-4));
+        // The default +Y normal turns with the joint to -X.
+        CHECK(posed.vertices[v].nx == doctest::Approx(-1.0f).epsilon(1e-4));
+        CHECK(posed.vertices[v].ny == doctest::Approx(0.0f).epsilon(1e-4));
+    }
+    // The cull box is of the posed vertices; the TRS lives in `model`.
+    CHECK(posed.localMin.x == doctest::Approx(-1.0f).epsilon(1e-4));
+    CHECK(posed.localMin.y == doctest::Approx(1.0f).epsilon(1e-4));
+    CHECK(posed.localMax.x == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(posed.localMax.y == doctest::Approx(2.0f).epsilon(1e-4));
+    CHECK(posed.model.m[12] == doctest::Approx(10.0f));
+    // The scene bounds cover the posed, placed prop (x in [9, 10]).
+    CHECK(scene.boundsMin.x <= 9.0f + 1e-4f);
+    CHECK(scene.boundsMax.x >= 10.0f - 1e-4f);
+
+    // Clamped like a pinned clock: t = 99 samples the last key, same as t = 1.
+    const SceneManifest late = parsed_manifest(
+        dir, "posed skin.gltf 10 0 0 0 0 0 1 1 1 1 turn 99\n");
+    const Scene late_scene = compose_scene(dir.path(), late, "skin.gltf");
+    CHECK(late_scene.meshes[1].vertices[0].px == doctest::Approx(-1.0f).epsilon(1e-4));
+}
+
+TEST_CASE("compose_scene names the glb and clip of a posed prop it cannot pose") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+
+    const auto message_for = [&](const std::string& line) {
+        try {
+            compose_scene(dir.path(), parsed_manifest(dir, line), "skin.gltf");
+        } catch (const std::runtime_error& error) {
+            return std::string(error.what());
+        }
+        return std::string();
+    };
+
+    const std::string missing_clip =
+        message_for("posed skin.gltf 0 0 0 0 0 0 1 1 1 1 no_such_clip 0\n");
+    CHECK(missing_clip.find("posed") != std::string::npos);
+    CHECK(missing_clip.find("skin.gltf") != std::string::npos);
+    CHECK(missing_clip.find("no_such_clip") != std::string::npos);
+
+    const std::string missing_glb =
+        message_for("posed no_such_prop.glb 0 0 0 0 0 0 1 1 1 1 turn 0\n");
+    CHECK(missing_glb.find("posed") != std::string::npos);
+    CHECK(missing_glb.find("no_such_prop.glb") != std::string::npos);
+}
+
+TEST_CASE("mono's posed death loop composes to finite static vertices") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parsed_manifest(
+        dir, "posed models/shadow/characters/mono/_cmn/mono.glb 0 0 0 0 0 0 1 1 1 1 "
+             "girl_a_death_loop 0\n");
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+    std::size_t posed_meshes = 0;
+    for (const MeshCpu& mesh : scene.meshes) {
+        if (mesh.rig != -1) continue;
+        ++posed_meshes;
+        for (const Vertex& vertex : mesh.vertices) {
+            REQUIRE(std::isfinite(vertex.px + vertex.py + vertex.pz));
+            REQUIRE(std::isfinite(vertex.nx + vertex.ny + vertex.nz));
+        }
+    }
+    CHECK(posed_meshes > 0);
+    CHECK(scene.rigs.size() == 1);
+}

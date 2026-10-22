@@ -1,5 +1,7 @@
 #include "asset_io.h"
 
+#include "anim.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -740,6 +742,107 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             }
             throw std::runtime_error(message);
         }
+    }
+
+    // Posed props: load like an entity (so the glb's skeleton and clips are
+    // available), sample the named clip once, CPU-skin every vertex with the
+    // shader's weighted palette sum, then drop the rig — the meshes stay static
+    // (rig = -1) with the TRS in `model` and the cull box of the posed vertices.
+    // The load's bind-pose bounds are discarded and replaced by the posed ones.
+    for (const ManifestPosed& posed : manifest.posed) {
+        const Vec3 saved_min = scene.boundsMin;
+        const Vec3 saved_max = scene.boundsMax;
+        const bool saved_have = have_bounds;
+        const std::size_t mesh_begin = scene.meshes.size();
+        const GlbPlacement placement{
+            .model = mat4_from_trs(posed.position, posed.rotation, posed.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+            .includeRig = true,
+        };
+        try {
+            load_glb_into(scene, libraryDir, posed.glb, placement, have_bounds);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error("compose_scene: posed \"" + posed.glb + "\": " + error.what());
+        }
+
+        const std::size_t rig_index = scene.rigs.size() - 1;
+        const AnimationCpu* clip = nullptr;
+        for (const AnimationCpu& candidate : scene.rigs[rig_index].animations) {
+            if (candidate.name == posed.clip) {
+                clip = &candidate;
+                break;
+            }
+        }
+        if (clip == nullptr) {
+            throw std::runtime_error("compose_scene: posed \"" + posed.glb + "\": clip \"" +
+                                     posed.clip + "\" not found");
+        }
+        const std::vector<Mat4> palette = animation_pose(
+            scene, rig_index, *clip, animation_clamp_time(posed.seconds, clip->duration));
+
+        scene.boundsMin = saved_min;
+        scene.boundsMax = saved_max;
+        have_bounds = saved_have;
+        for (std::size_t m = mesh_begin; m < scene.meshes.size(); ++m) {
+            MeshCpu& mesh = scene.meshes[m];
+            mesh.rig = -1;
+            for (Vertex& vertex : mesh.vertices) {
+                Vec3 point{0.0f, 0.0f, 0.0f};
+                Vec3 normal{0.0f, 0.0f, 0.0f};
+                float total_weight = 0.0f;
+                for (int i = 0; i < 4; ++i) {
+                    const float weight = vertex.w[i];
+                    if (weight == 0.0f || vertex.j[i] >= palette.size()) {
+                        continue;
+                    }
+                    const Mat4& skin = palette[vertex.j[i]];
+                    const Vec3 p = transform_point(skin, Vec3{vertex.px, vertex.py, vertex.pz});
+                    point = Vec3{point.x + weight * p.x, point.y + weight * p.y,
+                                 point.z + weight * p.z};
+                    // The palette is rigid-ish: its upper 3x3 turns the normal.
+                    const Vec3 n{skin.m[0] * vertex.nx + skin.m[4] * vertex.ny + skin.m[8] * vertex.nz,
+                                 skin.m[1] * vertex.nx + skin.m[5] * vertex.ny + skin.m[9] * vertex.nz,
+                                 skin.m[2] * vertex.nx + skin.m[6] * vertex.ny + skin.m[10] * vertex.nz};
+                    normal = Vec3{normal.x + weight * n.x, normal.y + weight * n.y,
+                                  normal.z + weight * n.z};
+                    total_weight += weight;
+                }
+                if (total_weight > 0.0f) {  // zero weights pass through, like the shader
+                    vertex.px = point.x;
+                    vertex.py = point.y;
+                    vertex.pz = point.z;
+                    const Vec3 unit = vec3_normalize(normal);
+                    vertex.nx = unit.x;
+                    vertex.ny = unit.y;
+                    vertex.nz = unit.z;
+                }
+            }
+            if (!mesh.vertices.empty()) {
+                mesh.localMin = mesh.localMax =
+                    Vec3{mesh.vertices[0].px, mesh.vertices[0].py, mesh.vertices[0].pz};
+            }
+            for (const Vertex& vertex : mesh.vertices) {
+                mesh.localMin = Vec3{std::min(mesh.localMin.x, vertex.px),
+                                     std::min(mesh.localMin.y, vertex.py),
+                                     std::min(mesh.localMin.z, vertex.pz)};
+                mesh.localMax = Vec3{std::max(mesh.localMax.x, vertex.px),
+                                     std::max(mesh.localMax.y, vertex.py),
+                                     std::max(mesh.localMax.z, vertex.pz)};
+                const Vec3 world = transform_point(mesh.model, Vec3{vertex.px, vertex.py, vertex.pz});
+                if (!have_bounds) {
+                    scene.boundsMin = scene.boundsMax = world;
+                    have_bounds = true;
+                } else {
+                    scene.boundsMin = Vec3{std::min(scene.boundsMin.x, world.x),
+                                           std::min(scene.boundsMin.y, world.y),
+                                           std::min(scene.boundsMin.z, world.z)};
+                    scene.boundsMax = Vec3{std::max(scene.boundsMax.x, world.x),
+                                           std::max(scene.boundsMax.y, world.y),
+                                           std::max(scene.boundsMax.z, world.z)};
+                }
+            }
+        }
+        scene.rigs.pop_back();  // static: no rig, no playback
     }
 
     if (!have_bounds) {
