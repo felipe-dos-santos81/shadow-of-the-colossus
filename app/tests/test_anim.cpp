@@ -786,7 +786,10 @@ TEST_CASE("wander's baked clips carry the root series and skip the S3 lift") {
     const float offset = rig_ground_offset(scene, rig);
     CHECK(offset == doctest::Approx(0.7596f).epsilon(1e-4));
 
-    for (const AnimationCpu& clip : rig.animations) {
+    // Only the S2-S6 set (the first fifteen) carries a root series; clips a later
+    // milestone appends (the S7 wake clips have none) are not held to it.
+    for (std::size_t i = 0; i < 15; ++i) {
+        const AnimationCpu& clip = rig.animations[i];
         CAPTURE(clip.name);
         CHECK(clip_has_root_translation(scene, 0, clip));
         CHECK(effective_player_lift(scene, clip, rig.meshBegin, rig.meshEnd) == 0.0f);
