@@ -67,6 +67,22 @@ spawn 300 28.5 305 90
 The arena glbs are already world-positioned, so W2's instances carry identity transforms;
 the manifest is still where a transform would go — it is not special-cased.
 
+## Example (the shrine, S7)
+
+`out/re/stage/shrine.manifest` (gitignored; `probe.py compose --stage shrine`) carries the
+34 cathedral `instance` lines in workspace pool-list order (identity transforms), 17 statue
+`instance` lines (slot 1 the broken glb + its skirt, slots 2-16 intact; yaw about +Y written as
+the glTF-order quaternion), one `posed` Mono and the `spawn`; the values come from
+`tools/re/s7/shrine_placements.json`, the header holds no absolute path, and its sha256 is
+pinned in `STAGES["shrine"]`:
+
+```text
+instance models/shadow/levels/cathedral/_cmn/cathedral_interior.glb 0 0 0 0 0 0 1 1 1 1
+instance models/shadow/objects/actors/statues/_cmn/mammoth_statue.glb -14.159 9.5917 -3.0661 0 0.70715 0 0.707064 1 1 1
+posed models/shadow/characters/mono/_cmn/mono.glb 0 11.4023 23 0 0 0 1 1 1 1 girl_a_death_loop 0
+spawn 0 8.998 1 0
+```
+
 ## Output path
 
 W2's `compose` step writes the arena manifest to **`out/re/stage/valus.manifest`**
