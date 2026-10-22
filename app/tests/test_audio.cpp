@@ -626,7 +626,23 @@ TEST_CASE("the shipped audio manifest loads every entry") {
     AudioEngine engine;
     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
                     engine.last_error());
-    CHECK(engine.clip_count() == 8);
+    // The entry count is the library's slice (8 after S5, 10 after S6), so the
+    // check derives it from the manifest itself: the frozen S5 acceptance runs
+    // ctest before it regenerates its own eight, so a pinned count would fail
+    // depending on which milestone converted last.
+    std::size_t entries = 0;
+    {
+        std::ifstream in(manifest);
+        REQUIRE_MESSAGE(in.good(), ("cannot read " + manifest.string()).c_str());
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.rfind("name=", 0) == 0) {
+                ++entries;
+            }
+        }
+    }
+    REQUIRE(entries >= 8);
+    CHECK(engine.clip_count() == static_cast<int>(entries));
     for (const char* name : {"valus.hurt", "valus.impact", "valus.telegraph", "player.death",
                              "player.hit", "player.swing", "player.hurt", "music.boss"}) {
         CHECK_MESSAGE(engine.has(name), name);

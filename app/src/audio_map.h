@@ -5,10 +5,11 @@
 #include "audio_events.h"
 
 // The S5 cue table: the curated `Sfx` -> shipped manifest clip mapping (design
-// §7.3/§7.4, ruling R15). The table is deliberately narrow — the first slice is
-// the attribution gate's seven cues plus the fight music. A null cue is a
-// deferred event, not a missing one: grabbing, the grip break, landing, the
-// club cancel, Valus's defeat, footsteps and the reset are silent in S5.
+// §7.3/§7.4, ruling R15). The table is deliberately narrow — the attribution
+// gate's seven cues plus the fight music in S5, extended in S6 by Valus's
+// defeat and the club swing (design §8.4). A null cue is a deferred event, not
+// a missing one: grabbing, the grip break, landing, the club cancel, footsteps
+// and the reset are silent.
 //
 // The names are the R1 manifest's `name=` values, loaded once at start. Every
 // non-null clip must exist in the loaded manifest: `missing_cue` names the
@@ -46,10 +47,11 @@ inline constexpr SoundCue kCues[] = {
     {"valus.impact", 0.50f, false},     // ClubImpact
     {nullptr, 1.00f, false},            // ClubCancel: deferred
     {"valus.hurt", 0.60f, false},       // ValusReaction
-    {nullptr, 1.00f, false},            // ValusDefeat: deferred
+    {"valus.death", 0.80f, false},      // ValusDefeat: the S6 death roar
     {nullptr, 1.00f, false},            // FootLeft: deferred
     {nullptr, 1.00f, false},            // FootRight: deferred
     {nullptr, 1.00f, false},            // Reset: deferred
+    {"valus.club_swing", 0.70f, false}, // ClubSwing: the S6 club whoosh
 };
 
 static_assert(sizeof(kCues) / sizeof(kCues[0]) == static_cast<std::size_t>(Sfx::Count),
@@ -108,6 +110,8 @@ inline const char* sfx_name(Sfx id) {
             return "foot_right";
         case Sfx::Reset:
             return "reset";
+        case Sfx::ClubSwing:
+            return "club_swing";
         case Sfx::Count:
             break;
     }

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""S5 audition — decode the curated cue map to WAV and gate it.
+"""S5/S6 audition — decode the curated cue map to WAV and gate it.
 
-Reads `tools/re/audio/s5_map.json`, decodes each mapped `(bank, wave)` with the
-loader-derived payload formula (`wave_record_offset + 0x24 + start`, see
-`docs/notes/s5-audio-recon.md` §7), writes WAVs under
+Reads a curated cue map (`tools/re/audio/s5_map.json` by default,
+`tools/re/audio/s6_map.json` for the S6 slice), decodes each mapped
+`(bank, wave)` with the loader-derived payload formula (`wave_record_offset +
+0x24 + start`, see `docs/notes/s5-audio-recon.md` §7), writes WAVs under
 `out/s5/audition/<bank>/`, and with `--check` fails if:
 
-* any of the seven core events has no cue row with a valid wave, or is
-  `status=deferred`, or is also listed as deferred;
+* any core event (every cue except the streamed music) has no cue row with a
+  valid wave, or is `status=deferred`, or is also listed as deferred;
 * a `ghidra` row is missing `reqd`/`tone`, its `reqd` does not match the NAME
   hash, the actual `SEQD`/`PLAY_TONE` walk does not return the mapped tone, or
   `TONE[tone].wave` does not equal the mapped wave;
@@ -41,8 +42,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import s5_decode_gate as gate  # noqa: E402
 
 RMS_FLOOR_DBFS = -60.0
-CORE_EVENTS = ("valus.telegraph", "valus.impact", "valus.hurt",
-               "player.swing", "player.hit", "player.hurt", "player.death")
+
+
+def core_events(cue_map):
+    """The events `--check` requires: every cue except the streamed music.
+
+    Derived from the map so the S5 slice still requires its seven and the S6
+    slice requires all nine; `music.boss` is the fight score, identity/config
+    checked but not a resident core cue.
+    """
+    return tuple(cue["event"] for cue in cue_map.get("cues", [])
+                 if cue.get("event") and cue.get("bank") != "music")
 
 
 class AuditionError(RuntimeError):
@@ -438,6 +448,7 @@ def main(argv=None):
         cue_map = json.load(fh)
     cues = cue_map.get("cues", [])
     deferred = cue_map.get("deferred", [])
+    required = core_events(cue_map)
     problems = []
     decoded = 0
 
@@ -455,7 +466,7 @@ def main(argv=None):
                 problems.append(f"duplicate cue name {name!r}")
             seen_names[name] = event
     deferred_events = {d.get("event") for d in deferred}
-    for event in CORE_EVENTS:
+    for event in required:
         cue = seen_events.get(event)
         if cue is None:
             problems.append(f"{event}: core cue has no row in cues")
@@ -473,7 +484,7 @@ def main(argv=None):
         event = cue.get("event", "?")
         if cue.get("status") == "deferred" or cue.get("wave") is None:
             print(f"  {event:<16} deferred: {cue.get('reason', 'no wave')}")
-            if event in CORE_EVENTS:
+            if event in required:
                 problems.append(f"{event}: core cue is deferred")
             continue
         if cue.get("bank") == "music":

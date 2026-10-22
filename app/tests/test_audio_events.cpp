@@ -216,10 +216,11 @@ TEST_CASE("the cue table maps the shipped slice and defers the rest") {
         {Sfx::ClubImpact, "club_impact", "valus.impact", 0.50f},
         {Sfx::ClubCancel, "club_cancel", nullptr, 1.0f},
         {Sfx::ValusReaction, "valus_reaction", "valus.hurt", 0.60f},
-        {Sfx::ValusDefeat, "valus_defeat", nullptr, 1.0f},
+        {Sfx::ValusDefeat, "valus_defeat", "valus.death", 0.80f},
         {Sfx::FootLeft, "foot_left", nullptr, 1.0f},
         {Sfx::FootRight, "foot_right", nullptr, 1.0f},
         {Sfx::Reset, "reset", nullptr, 1.0f},
+        {Sfx::ClubSwing, "club_swing", "valus.club_swing", 0.70f},
     };
     REQUIRE(static_cast<int>(Sfx::Count) ==
             static_cast<int>(sizeof(expected) / sizeof(expected[0])));
@@ -241,6 +242,11 @@ TEST_CASE("the cue table maps the shipped slice and defers the rest") {
     // Every id has a distinct name; Count is not a cue.
     CHECK(std::string(sfx_name(Sfx::Count)) == "unknown");
     CHECK(cue_for(Sfx::Count) == nullptr);
+}
+
+TEST_CASE("the death and the club swing resolve to the S6 slice") {
+    CHECK(std::string(cue_for(Sfx::ValusDefeat)->clip) == "valus.death");
+    CHECK(std::string(cue_for(Sfx::ClubSwing)->clip) == "valus.club_swing");
 }
 
 TEST_CASE("every mapped cue resolves in the shipped audio manifest") {

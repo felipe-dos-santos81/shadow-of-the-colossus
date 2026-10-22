@@ -38,6 +38,7 @@ enum class Sfx : std::uint16_t {
     FootLeft,
     FootRight,
     Reset,
+    ClubSwing,
     Count
 };
 
