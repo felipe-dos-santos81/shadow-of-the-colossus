@@ -665,6 +665,10 @@ constexpr int kS42TelegraphLeadFrames = 5;    // stills: capture this many steps
 constexpr int kS6MaxSwingFrames = 240;  // 4 s: walk the club clip to its swing phase
 constexpr int kS6MaxDeathFrames = 600;  // 10 s: the death machine to Done
 constexpr float kS6Eps = 1e-4f;         // the stills' phase-time epsilon
+// The effect pass's price at the tendril phase (Task 6's perf gate): the same
+// 240-frame pair the S4.1/S4.2 render gates use, once with the pass drawing
+// and once with it suppressed from the same pose and camera.
+constexpr int kS6PerfFrames = 240;
 
 // The R3 reaction names, plus the generic body reaction a strike on a band with
 // no weakpoint plays (the pinned bands without a weakpoint are not silent). The
@@ -4556,15 +4560,24 @@ int run_app(const AppOptions& opts) {
             struct StillDue {
                 const char* name;
                 float total;
+                // The tendril still also prices the effect pass (Task 6): the
+                // timed 240-frame pair and the control frame (the same frame
+                // with the pass suppressed) are taken here, at the burst's
+                // peak visibility.
+                bool perf;
             };
             // The stills sit on the cinematic's keys: the motion's first beat,
-            // the pull-back key (12 m / 4 m up), the fully grown burst, and the
-            // corpse wide just after Collapse.
+            // the pull-back key (12 m / 4 m up), the burst, and the corpse wide
+            // just after Collapse. The burst still is at 1.200 s: inside the
+            // 0.4-3.0 s window, two thirds grown, with both roots and both
+            // tendrils still in frame (the camera has not yet closed on the
+            // body). That is where the burst reads, and where the effect pass
+            // is measured.
             const StillDue stills[4] = {
-                {"motion", 0.200f},
-                {"camera", kDeathPullSeconds},
-                {"tendrils", 1.600f},
-                {"corpse", 6.200f},
+                {"motion", 0.200f, false},
+                {"camera", kDeathPullSeconds, false},
+                {"tendrils", 1.200f, true},
+                {"corpse", 6.200f, false},
             };
             int stillIndex = 0;
             int effectRoots = 0;
@@ -4588,6 +4601,21 @@ int run_app(const AppOptions& opts) {
             };
             const auto still_path = [&](const char* name) {
                 return still_dir() + name + ".png";
+            };
+            // One frame of the death scene, rendered with or without the
+            // effect pass: the same pose, the same camera, the same HUD, so
+            // the two differ in exactly the effect's pixels.
+            const auto render_death_frame = [&](bool withEffect) {
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                const EffectFrame frame =
+                    build_effect_frame(scene, entityRig, palettes, encounter, death);
+                renderer.set_hud(hud_state(/*visible=*/true));
+                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                      /*acquire_swapchain=*/true,
+                                      (withEffect && frame.active) ? &frame : nullptr);
             };
             const auto capture_still = [&](const char* name) {
                 if (opts.s6StillsPath.empty()) {
@@ -4643,6 +4671,54 @@ int run_app(const AppOptions& opts) {
                 while (stillIndex < 4 &&
                        death.total + kS6Eps >= stills[stillIndex].total) {
                     capture_still(stills[stillIndex].name);
+                    if (stills[stillIndex].perf) {
+                        // --- the effect pass's price, and its control frame ---
+                        // The burst is the milestone's first per-frame dynamic
+                        // geometry: two 402-vertex ribbons and 40 billboards,
+                        // rebuilt and uploaded every frame. The gate times the
+                        // frame at the burst: 240 frames with the pass drawing
+                        // and 240 with it suppressed from the same pose and
+                        // camera, so the marginal is the pass's own cost. The
+                        // suppressed frame is written as the control still: its
+                        // difference with the tendrils still is exactly the
+                        // effect's pixels (design §8.5).
+                        render_death_frame(/*withEffect=*/true);  // warm-up
+                        const Uint64 effectStart = SDL_GetTicksNS();
+                        for (int i = 0; i < kS6PerfFrames; ++i) {
+                            render_death_frame(/*withEffect=*/true);
+                        }
+                        const Uint64 baseStart = SDL_GetTicksNS();
+                        for (int i = 0; i < kS6PerfFrames; ++i) {
+                            render_death_frame(/*withEffect=*/false);
+                        }
+                        const Uint64 end = SDL_GetTicksNS();
+                        // The control frame: the last base render is the frame
+                        // on screen, so the capture is the pass-less twin of
+                        // the tendrils still.
+                        if (!opts.s6StillsPath.empty()) {
+                            render_death_frame(/*withEffect=*/false);
+                            write_screenshot(renderer, shell.win,
+                                             still_path("tendrils-control"));
+                        }
+                        const double effectMs =
+                            static_cast<double>(baseStart - effectStart) / 1e6;
+                        const double baseMs =
+                            static_cast<double>(end - baseStart) / 1e6;
+                        const double marginalMs =
+                            (effectMs - baseMs) / static_cast<double>(kS6PerfFrames);
+                        const double frameMs = effectMs / static_cast<double>(kS6PerfFrames);
+                        std::printf(
+                            "s6-perf frames=%d effect_ms=%.3f base_ms=%.3f marginal_ms=%.3f "
+                            "frame_ms=%.3f\n",
+                            kS6PerfFrames, effectMs, baseMs, marginalMs, frameMs);
+                        if (!(frameMs > 0.0) || !(marginalMs < 1000.0)) {
+                            std::fprintf(stderr,
+                                         "sotc-viewer: --s6-selftest: the effect pass's timing "
+                                         "is degenerate (effect %.3f ms, base %.3f ms)\n",
+                                         effectMs, baseMs);
+                            return 1;
+                        }
+                    }
                     ++stillIndex;
                 }
                 if (death.phase == DeathPhase::Done) {
