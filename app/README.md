@@ -67,9 +67,10 @@ shipped dead body and its dirtmound at the collapse (6.166877 s). The player's
 input is locked through the motion and the collapse — `R`, `M` and `Escape` stay
 live — and the control returns at 8.0 s, with the corpse still on the arena
 floor and Valus's health bar gone from the HUD. The cinematic camera is
-reconstructed: the follow pose, a 12 m pull-back 4 m up that looks up at the
-body, a low angle on the tendrils at 3.0 s, a wide on the corpse at 6.2 s, and
-the follow pose again at 8.0 s. The tendrils are a **labeled reconstruction**
+reconstructed: the follow pose, a **12 m close, low angle on the body** (the key is a distance *from Valus*, not a
+pull-back from the follow pose — the follow camera sits ≈94 m away, so the 0.4 s key cuts *in*; see
+`docs/notes/s6-results.md` §10), a low angle on the tendrils at 3.0 s, a wide on the corpse at 6.2 s,
+and the follow pose again at 8.0 s. The tendrils are a **labeled reconstruction**
 built from the game's own assets — the `death_tentacle_veins` mask and the three
 `.cptx` smoke atlases, 201 stations 0.25 m apart per root — but the `.csdr`
 particle simulator is **not** ported, so the motion is authored, not the game's
@@ -91,6 +92,9 @@ since S6, `valus.death` (the tendril-burst roar) and `valus.club_swing` (the clu
 The player's fall, ambience, grab/climb and footsteps are
 **deferred** — none is in the cue map's `cues` array, so they are silent rather than
 placeholders (seven of them are listed under the map's `deferred` array with a reason each).
+An **S5-only manifest** (eight entries) still loads and plays in the interactive game: the two
+S6-only cues warn once and stay silent when they are reached, and the rest of the mix is
+unaffected — `--s6-selftest` demands the ten-entry slice and treats a missing S6 cue as fatal.
 `--s5-selftest --audio-mixdown PATH` runs the S4.2
 timeline with the audio observer on and writes the proof.
 
@@ -377,7 +381,7 @@ With `--s6-stills DIR` the run also writes the four stills and the control frame
 effect pass's price:
 
 ```text
-s6-perf frames=240 effect_ms=2134.684 base_ms=2107.470 marginal_ms=0.113 frame_ms=8.895
+s6-perf frames=240 effect_ms=2185.257 base_ms=2145.842 marginal_ms=0.164 frame_ms=9.105
 ```
 
 The acceptance script (`scripts/s6-acceptance.sh`) parses every line, differences the burst
@@ -462,6 +466,9 @@ S6 slice's ten entries.
 - **The vein mask is anisotropic.** The ribbon samples the `death_tentacle_veins` mask with
   `u` across the width and `v` along the path (about 100:1), so the veins read as fine
   cross-ribs rather than the game's own stretch.
+- **The effect's vertex buffer is not cycled.** One persistent dynamic buffer plus a fence wait
+  per copy, where the design asked for a ring; the measured cost (≈0.1 ms/frame) says it does
+  not matter yet, so it is recorded rather than paid for.
 - **The burst is subtle in the wide framing.** The scripted still measures the effect's
   footprint at 14 599 changed pixels against its control; the shape and the colour are the
   user's eye check, not the script's.

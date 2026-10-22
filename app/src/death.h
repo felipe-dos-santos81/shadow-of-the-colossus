@@ -24,8 +24,9 @@
 // deliberately starts `total` at 0 and does not accumulate that frame's `dt`.
 // The glb sampler max (6.1668767929077 s) and the constant are the same float,
 // but the exact quotient is 6.16687727 s, so compare a loaded clip's duration
-// with at least a 1e-5 relative tolerance instead of equality. The recon note's
-// `6.166933 s` is a typo; R8's `6.166877` is the pinned value.
+// with at least a 1e-5 relative tolerance instead of equality. The recon note
+// printed `6.166933 s` in an earlier revision; that was a typo and it is
+// corrected — R8's `6.166877` is the pinned value.
 //
 // `DeathPhase::Tendrils` is part of the interface but the machine never enters
 // it: the burst *overlaps* Motion (it is an effect window, not a playback

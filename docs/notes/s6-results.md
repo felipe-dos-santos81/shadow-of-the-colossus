@@ -19,9 +19,9 @@ eye and ear (§11).
 
 | | |
 |---|---|
-| Date | 2026-10-22 (local −03; the recorded run is stamped `2026-10-22T19:38:02Z`–`19:49:57Z`) |
+| Date | 2026-10-22 (local −03; the recorded run is stamped `2026-10-22T20:32:15Z`–`20:42:34Z`) |
 | Machine | Apple M3 Max, macOS 27.0.1 (26A434), arm64; 1280×720 points → 2560×1440 px captures |
-| Repo / branch | `sotc-native`, worktree `s6-the-fall`; base `e4e04d6`, this note after it |
+| Repo / branch | `sotc-native`, worktree `s6-the-fall`; the code base is `21118fc` (the perf pair and the control still), this note after it |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
 | Library (gitignored) | `SOTC_LIB=<worktree>/out/library` (symlinked 12 GB library) |
 | Cue map | `tools/re/audio/s6_map.json` (the S5 eight + `valus.death` + `valus.club_swing`) |
@@ -42,16 +42,22 @@ caffeinate -dimsu ./scripts/s6-acceptance.sh   # exit 0; everything below is fro
 ```
 
 The script's steps (the viewer and acceptance runs under `caffeinate -dimsu`; the builds and the
-suites are plain commands). The recorded run took **11 min 55 s** end to end, of which the
-frozen S5 acceptance (with its nested S4.2 → S4.1 → S4 → S3 chain) is 9 min 32 s:
+suites are plain commands). The recorded run took **10 min 19 s** end to end, of which the
+frozen S5 acceptance (with its nested S4.2 → S4.1 → S4 → S3 chain) is 8 min 42 s:
 
 - **Builds.** `dotnet build BpConvert.sln -v q`, `dotnet publish src/BpConvert.Cli -c Release -o
   out/bin`, and the app `cmake -DCMAKE_BUILD_TYPE=Release` + `cmake --build` (both targets).
-- **Suites.** `dotnet test` **146 passed, 0 failed** (1 m 31 s); `ctest` **2/2** (13.55 s unit,
-  0.26 s windowed; 13.81 s total). §8.
+- **Suites.** `dotnet test` **146 passed, 0 failed** (51 s); `ctest` **2/2** (11.06 s unit,
+  0.65 s windowed; 11.71 s total). §8.
+- **The S6 asset gate.** `tools/re/s6/s6_asset_gate.py --root … --out … --check` → **PASSED**
+  (14 required assets: the death bundle's bytes, the baked clip's 94 keys, the dead body's six
+  materials with the veins veil on all six and on none of the living colossus's 12, the `.cprt`'s
+  three emitters, and the four tendril atlases pinned by SHA-256; the four source warnings are the
+  known game-tree clobber, §2.1 of `docs/notes/s6-recon.md`).
 - **The frozen S5 acceptance first** (design D8 / ruling R4): `scripts/s5-acceptance.sh` ran
   unchanged and printed its own `PASS —`; it regenerates the eight-entry manifest, asserts its
-  20 `s5-event`s and runs the S4.2 → S4.1 → S4 → S3 regressions. §7.- **The S6 decode.** `bp-convert audio … --map tools/re/audio/s6_map.json --force` wrote
+  20 `s5-event`s and runs the S4.2 → S4.1 → S4 → S3 regressions. §7.
+- **The S6 decode.** `bp-convert audio … --map tools/re/audio/s6_map.json --force` wrote
   **10/10** cues and the manifest: `audio: 10 written, 0 reused, 10 manifest entries`. Every file
   is 48 kHz; the manifest's names are exactly the map's `cues`; the channel count and the
   duration match ffprobe; and every cue passes its own `astats` band (RMS −20.9…−8.7 dBFS, peak
@@ -69,7 +75,7 @@ frozen S5 acceptance (with its nested S4.2 → S4.1 → S4 → S3 chain) is 9 mi
 ### 1.1 The summary line
 
 ```text
-s6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at 9.15 ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at 6.183 s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst 14599 changed pixels against its control, 1766 violet and 258 strong, inside (600,0)-(1800,1150); the corpse 15449 vein pixels on 32527 bright sand pixels; the pull-back 101960 floor pixels and 27286 body pixels at the top edge; the motion 698840 floor pixels, 0 at the top edge and 500826 body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the effect pass at 8.895 ms/frame (marginal 0.113 ms) and the windowed, cursor-free status
+s6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at 8.48 ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at 6.183 s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst 14599 changed pixels against its control, 1766 violet and 258 strong, inside (600,0)-(1800,1150); the corpse 15449 vein pixels on 32527 bright sand pixels; the pull-back 101960 floor pixels and 27286 body pixels at the top edge; the motion 698840 floor pixels, 0 at the top edge and 500826 body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the frame at the tendril phase 9.105 ms/frame (the marginal of the effect pass 0.164 ms, at the +-0.2 ms measurement noise) and the windowed, cursor-free status
 ```
 
 The individual steps, for reproduction (the script is the source of truth):
@@ -80,6 +86,7 @@ dotnet publish src/BpConvert.Cli -c Release -o out/bin
 cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release && cmake --build app/build -j
 dotnet test tests/BpConvert.Tests -v q
 ctest --test-dir app/build --output-on-failure
+python3 tools/re/s6/s6_asset_gate.py --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" --check
 caffeinate -dimsu ./scripts/s5-acceptance.sh    # the frozen S5 + S4.2 + S4.1 + S4 + S3
 caffeinate -dimsu dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" \
     --out "$SOTC_LIB" --map tools/re/audio/s6_map.json --force
@@ -119,7 +126,7 @@ s6-reset phase=Idle corpse=0 lock=0 valus=100 player=100
 plus the perf line (§5):
 
 ```text
-s6-perf frames=240 effect_ms=2134.684 base_ms=2107.470 marginal_ms=0.113 frame_ms=8.895
+s6-perf frames=240 effect_ms=2185.257 base_ms=2145.842 marginal_ms=0.164 frame_ms=9.105
 ```
 
 What the acceptance pins, beyond the count:
@@ -142,7 +149,11 @@ What the acceptance pins, beyond the count:
   (`kValusClubSwingSeconds = 0.30 s`), playing `valus.club_swing` at gain 0.70 — the swing
   phase, not the telegraph (the telegraph keeps `valus.telegraph`).
 - **The score starts and stops on the same step** (the defeat is the downbeat, and the defeat
-  stops the score). The acceptance requires the two timestamps to be equal.
+  stops the score). The acceptance requires the two timestamps to be equal — but that equality is
+  true **by construction** in the scripted timeline (the defeat starts and stops the score back to
+  back), so it is a consistency check, not the proof. The proof that the score stops on a *real*
+  defeat is the frozen **S5** acceptance's R18 defeat phase, which asserts a second
+  `music_stop` after a reset (§7).
 - **Every `clip=` is a manifest name** (R16): the five clips are checked against the ten-entry
   manifest, and a `bank/name` form is rejected.
 - **`s6-death`** names the clip (`minotaur_a_death_front`), the total (8.000), the corpse (1),
@@ -170,19 +181,27 @@ What the acceptance pins, beyond the count:
 | textures | **4** — `8x8_wispysmoke02_1024_white_pfx`, `8x8_smoke_wispy_sharp_1024_pfx`, `2x2_smoke_tendrils_01_pfx`, `death_tentacle_veins` | the library's converted PNGs |
 | roots | 2 — the hit weakpoint first (the forehead by default, the right arm on an arm hit), then the other weakpoint shell | the binary's one-tendril-per-hit-point list, the weakpoint shells as the fallback |
 
-**What is authored, and labelled as such.** The `.csdr` GCN particle evaluator is **not**
+**What is authored, and labelled as such.** The `.csdr` GCN particle simulator is **not**
 ported (design D1): the curl, the turbulence and the growth are the builder's reconstruction,
 and the note says so. The same is true of the camera (D2): the shipped
 `camera_minoa_death_front_camera_01/02.anb` clips are **type 36** (undecoded) and are not
-played; the five-key path (follow → 12 m pull-back 4 m up → low angle at 3.0 s → wide on the
-corpse at 6.2 s → follow at 8.0 s) is authored.
+played; the five-key path (follow → a 12 m close low angle on the body at 0.4 s → the low angle
+on the tendrils at 3.0 s → the wide on the corpse at 6.2 s → the follow pose at 8.0 s) is
+authored. Note that the 0.4 s key is a distance **from Valus**, not a pull-back from the follow
+pose: the follow camera sits ≈94 m away, so the shot cuts *in* (§10).
 
 **Known deviations, recorded.** The vein mask is sampled with `u` across the ribbon's width and
 `v` along its path, which is about **100:1 anisotropic** — the veins read as fine cross-ribs
 rather than the game's own stretch. There is **no per-segment stagger**: the growth is a single
 front over 1.2 s (the design's per-segment stagger is a builder deviation). The dead body's
 veins are a black **alpha veil** (ruling R10), not a glow: the glTF `emissiveTexture` carries
-it and the mesh shader applies it as a multiplicative dark veil.
+it and the mesh shader applies it as a multiplicative dark veil. The effect pass's **vertex
+buffer is not cycled**: the design §8.2/D4 asks for a ring of dynamic buffers so the per-frame
+copy never waits, and the implementation uses one persistent buffer plus a
+`SDL_WaitForGPUFences` after every copy (`app/src/effect.cpp`, `upload_vertices`). The
+measured cost says it does not matter yet (the pass's marginal is ≈0.2 ms/frame, §5), so the
+deviation is recorded rather than paid for; a ring is the change to make if the profiling ever
+asks for it.
 
 ## 4 · The stills and the pixel guards
 
@@ -190,6 +209,11 @@ All five captures are 2560×1440, written by `--s6-stills` with the HUD visible,
 guarded by the PNG magic, > 5000 B, the exact size and the viewer's own non-uniformity span
 (the largest channel span from its `s1-pixels` line). Stale PNGs are deleted with
 `out/s6/stills/` before the run.
+
+The times below are the stills' **targets**: the trigger is
+`death.total + 1e-4 >= target`, so a still fires on the first frame at or past its target — up
+to one frame (16.7 ms) *earlier* than the name claims. The capture itself is a frame, not a
+timestamp, so the discrepancy is invisible in the image.
 
 | file (`out/s6/stills/`) | bytes | span | what it shows |
 |---|---:|---:|---|
@@ -205,9 +229,11 @@ measured values with a wide margin; the script asserts the measured truth, not a
 
 ### 4.1 The burst against its control
 
-`tendrils.png` and `tendrils-control.png` are the same frame (the same pose, the same camera,
-the same HUD) with and without the effect pass, so their difference is **exactly** the tendrils'
-own pixels:
+`tendrils.png` and `tendrils-control.png` are the same frame with and without the effect pass,
+so their difference is **exactly** the tendrils' own pixels. Both go through **one** render
+helper (`render_death_frame`, the same function the four stills use), so the pair cannot drift
+apart: a future edit to the HUD, the camera or the player transform moves both captures
+together.
 
 | measurement | measured | gate |
 |---|---:|---:|
@@ -269,28 +295,38 @@ player's two bars are present — so the HUD is drawn and only Valus's bar is go
 
 The burst is the milestone's first per-frame dynamic geometry: two 402-vertex ribbons and 40
 billboards are rebuilt and uploaded every frame. The `s6-perf` line times the frame at the burst
-with a 240-frame pair — the same shape as the S4.1/S4.2 render gates: 240 frames with the pass
-drawing and 240 with it suppressed from the same pose and camera.
+with a 240-frame pair: 240 frames with the pass drawing and 240 with it suppressed from the same
+pose and camera.
+
+**The two numbers measure different things.** `frame_ms` is the **whole frame** at the tendril
+phase (the opaque meshes, the effect and the HUD together); the effect pass's *own* cost is the
+`marginal_ms`, measured against the same 240 frames with the pass suppressed. The headline claim
+is therefore the frame (9.1 ms against the 16.7 ms budget) and the effect pass's share of it is
+the marginal (≈0.2 ms, at the measurement's noise floor).
 
 | run | measured |
 |---|---:|
-| 240 frames with the pass (`effect_ms`) | **2 134.684 ms** |
-| 240 frames without it (`base_ms`) | **2 107.470 ms** |
-| the frame at the tendril phase (`frame_ms`) | **8.895 ms/frame** (≈ 112 fps) |
-| the pass's marginal (`marginal_ms`) | **+0.113 ms/frame** |
+| 240 frames with the pass (`effect_ms`) | **2 185.257 ms** |
+| 240 frames without it (`base_ms`) | **2 145.842 ms** |
+| the **whole frame** at the tendril phase (`frame_ms`) | **9.105 ms/frame** (≈ 110 fps) |
+| the **effect pass's own** cost (`marginal_ms`) | **+0.164 ms/frame** |
 
 The gate is **≤ 16.7 ms** (60 fps) on both the frame and the marginal. The marginal is at the
 measurement's noise floor (two 240-frame runs differ by ±50 ms, i.e. ±0.2 ms/frame — an earlier
 iteration of the same pair measured −0.218 ms), so the
 honest reading is that **the tendril pass is free inside the frame budget** — it is a few
 hundred vertices and forty billboards over a 2560×1440 target. The absolute frame cost is the
-number to watch: 8.9 ms against the 16.7 ms budget, with the scene's own render (the 30-glb
+number to watch: 9.1 ms against the 16.7 ms budget, with the scene's own render (the 30-glb
 arena, 165 textures and the 38 MB Valus glb) inside it.
 
 The timed loop **renders only** — it does not advance the mixer — so the number is the render
-path's, not an audio-on frame (the S5 note's open item). The frozen **silent** render path is
-still the render regression: the S5 acceptance's nested
-S4.2 pair measured **9.15 ms/frame (~109.3 fps)** in the same session (§7).
+path's, not an audio-on frame (the S5 note's open item).
+
+**Not comparable with the frozen S4.2 pair.** The S4.2 acceptance's number (8.48 ms/frame in the
+same session, §7) is a **marginal** — the load-dominated difference between a 1-frame and a
+240-frame run — while the S6 pair measures a **total** (the frame's own cost). The two are
+different quantities and are not compared here; the S4.2 number stays the render regression it
+has always been.
 
 ## 6 · The audio
 
@@ -327,7 +363,7 @@ ruling R4) and only then overwrites the manifest with the ten entries.
 (log `out/s6-s5-regression.log`), which is also the S4.2 → S4.1 → S4 → S3 chain. Its final line:
 
 ```text
-s5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present, every cue non-silent at peak <= 0.99), 20 ordered s5-events (music on the first landed hit at 2.050 s, telegraph before each of the two stomp/club cycles, hurt light/heavy at their impacts, death at 19.367 s, music stop at the reset 20.483 s, R18 defeat stop after the reset), mixdown 2140000 frames / 44.583333 s pcm_f32le 2 ch (rms 0.0514, peak 0.9022, window_rms 0.1520; stomp window -15.408139 dBFS is 15.1 dB above the music-only window -30.509470 dBFS; astats peak -0.894302 dBFS, RMS -25.779484 dBFS, no NaN/Inf), s42-* identical with no audio manifest loaded, marginal 9.15 ms/frame on the unchanged S4.2 render path (the audio-on frame cost is not measured), S4.2+S4.1+S4+S3 regressions green
+s5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present, every cue non-silent at peak <= 0.99), 20 ordered s5-events (music on the first landed hit at 2.050 s, telegraph before each of the two stomp/club cycles, hurt light/heavy at their impacts, death at 19.367 s, music stop at the reset 20.483 s, R18 defeat stop after the reset), mixdown 2140000 frames / 44.583333 s pcm_f32le 2 ch (rms 0.0514, peak 0.9022, window_rms 0.1520; stomp window -15.408139 dBFS is 15.1 dB above the music-only window -30.509470 dBFS; astats peak -0.894302 dBFS, RMS -25.779484 dBFS, no NaN/Inf), s42-* identical with no audio manifest loaded, marginal 8.48 ms/frame on the unchanged S4.2 render path (the audio-on frame cost is not measured), S4.2+S4.1+S4+S3 regressions green
 ```
 
 The nested statuses, unchanged:
@@ -348,9 +384,9 @@ move; the identity was checked directly as well: `--s42-selftest` (audio off) pr
 
 - `dotnet build BpConvert.sln -v q`: clean.
 - `dotnet publish src/BpConvert.Cli -c Release -o out/bin`: clean.
-- `dotnet test tests/BpConvert.Tests -v q`: **146 passed**, 0 failed (1 m 31 s).
-- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 13.55 s, windowed
-  0.26 s; total 13.81 s). The app's suite is **275 cases / 135 027 assertions**.
+- `dotnet test tests/BpConvert.Tests -v q`: **146 passed**, 0 failed (51 s).
+- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 11.06 s, windowed
+  0.65 s; total 11.71 s). The app's suite is **275 cases / 135 027 assertions**.
 
 ## 9 · Provenance and rulings
 
@@ -380,11 +416,21 @@ move; the identity was checked directly as well: `--s42-selftest` (audio off) pr
 - **The burst is subtle at the scripted framing.** The measured footprint is 14 599 changed
   pixels (the violet ribbon 1 766); the shape and the colour are the eye check.
 - **The interactive death path is not driven by an automated run** — a real defeat through
-  gameplay is needed. Every helper the interactive loop calls (`step_death`,
+  gameplay is needed. The `R` reset is now **one shared helper** that both the interactive key
+  and the selftest call (`soft_reset_encounter`), so the reset the player presses is the reset
+  the acceptance proves; what remains unproven is the **input lock itself**: the `lock=` field
+  on the `s6-phase` lines is the machine's state (`death_locks_input`), while the app's own
+  zeroing of the player's input (`input = PlayerInput{}`) is reached by no automated run — the
+  user's walk item 6 covers it. Every other helper the interactive loop calls (`step_death`,
   `camera_death_pose`, `apply_death_visibility`, `build_effect_frame`, `death_cue_due`,
   `maybe_club_swing`) is driven by `--s6-selftest`, and the loop's call sites were reviewed and
-  smoke-run, but the *interactive* path is the user's walk.
-- **The death camera's pull-back is a push-in in practice.** The design's key is 12 m from the
+  smoke-run.
+- **The tendrils erupt from the wounds; only the screen-space crop was wrong.** The
+  *world-space* claim is proven: the selftest asserts the burst's roots sit on the weakpoint
+  shells (the hit weakpoint first, the other second). What the hand-over got wrong was the
+  *screen-space* estimate of where those pixels land in the burst's still (§4.1) — the gate
+  covers the measured region instead.
+- **The death camera's "pull-back" is a push-in in practice.** The design's key is 12 m from the
   entity, while the follow camera sits ≈94 m away (the player's spawn to the entity), so at
   0.4 s the camera moves *closer* to Valus than the follow pose was, not further. The framing
   reads (the low angle, the body cut off at the top) and the pixel guards measure it.

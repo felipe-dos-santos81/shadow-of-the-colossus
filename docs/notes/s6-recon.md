@@ -96,11 +96,15 @@ The frame/track counts were re-read from the recovered originals with `tools/re/
 front **94 frames / 58 tracks** and loop **1 frame / 58 tracks**, both flag-clear (version word
 `0xc`); the object animation is flag-set (version word `0x0001000C`) with track type 29.
 
-**Timing detail for S6.** The runtime clip's duration is its maximum input time, **6.166933 s**
-(93/15.08056640625); `94/15.0806 = 6.2332 s` is the frame-count figure (94 frames as intervals).
-The clip's `duration` is the source of truth: Task 2 reads it from the loaded animation and should
-not hardcode either number. The design's "94 f / 6.233 s" is descriptive, one frame interval longer
-than the clip's last key.
+**Timing detail for S6.** The runtime clip's duration is its maximum input time, **6.166877 s**
+(93/15.08056640625 = 6.16687727 s); `94/15.0806 = 6.2332 s` is the frame-count figure (94 frames
+as intervals). Task 2 **pinned** that value as `kMotionSeconds = 6.166877f`
+(`app/src/death.h`), and the app cross-checks the *loaded* clip's duration against the constant
+with a 1e-5 relative tolerance before the S6 timeline runs — so a re-baked clip that moved fails
+the selftest loudly instead of shifting the phase boundaries. The design's "94 f / 6.233 s" is
+descriptive, one frame interval longer than the clip's last key. (An earlier revision of this
+note printed "6.166933 s" in front of the quotient above; the quotient was always right and the
+number in front of it was a typo — it is 56 ms off the pinned constant.)
 
 ### 2.1 The four corrupted game-tree `.anb` copies (source warning)
 

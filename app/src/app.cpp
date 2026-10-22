@@ -22,6 +22,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -1731,6 +1732,14 @@ struct AudioSeam {
     float clock = 0.0f;         // simulated seconds since the capture began
     int eventCount = 0;         // s5-event lines emitted
 
+    // The S6 slice's two rows are optional for the interactive game: an
+    // S5-only manifest still loads and plays, and a missing S6-only clip warns
+    // **once** and stays silent with the mixer running. The S6 selftest
+    // demands the rows, so there the same condition is the fatal error it has
+    // always been (`requireS6`).
+    bool requireS6 = false;
+    std::array<bool, static_cast<std::size_t>(Sfx::Count)> warnedMissing{};
+
     // Loads `libraryDir/audio/audio.manifest` and validates the cue table. The
     // engine names its own manifest failure; a rejected cue names its `Sfx` and
     // the clip. The caller picks the policy (fatal in --s5-selftest, one warning
@@ -1776,6 +1785,22 @@ struct AudioSeam {
             return;  // deferred, or audio off: deliberately silent
         }
         if (!engine.has(cue->clip)) {
+            if (cue->s6Only && !requireS6) {
+                // The interactive game with an S5-only manifest: the S6 rows
+                // are optional there, so the cue warns ONCE and stays silent
+                // (the mixer keeps running; the game is otherwise intact).
+                // The S6 selftest demands the row, so there the same condition
+                // is the fatal error below.
+                const std::size_t index = static_cast<std::size_t>(event.id);
+                if (index < warnedMissing.size() && !warnedMissing[index]) {
+                    warnedMissing[index] = true;
+                    std::fprintf(stderr,
+                                 "sotc-viewer: audio: cue %s names missing clip '%s' — the cue "
+                                 "stays silent\n",
+                                 sfx_name(event.id), cue->clip);
+                }
+                return;
+            }
             std::fprintf(stderr, "sotc-viewer: audio: cue %s names missing clip '%s'\n",
                          sfx_name(event.id), cue->clip);
             failed = true;
@@ -2266,6 +2291,9 @@ int run_app(const AppOptions& opts) {
             audio.log = opts.s5Selftest || opts.s6Selftest;
             if (opts.s6Selftest) {
                 audio.logPrefix = "s6-event";
+                // The S6 slice's rows are mandatory in this run: a missing one
+                // at play time is the fatal error it has always been.
+                audio.requireS6 = true;
             }
         }
         if ((opts.s5Selftest || opts.s6Selftest) && !audio.enabled) {
@@ -4413,6 +4441,48 @@ int run_app(const AppOptions& opts) {
             return 0;
         }
 
+        // The one soft reset (design §7.5 and S6): the player's and Valus's
+        // opening state, the death machine back to Idle, the corpse hidden and
+        // the live body shown, the cameras back to the follow pose. The
+        // interactive `R` handler and the S6 selftest **both call this**, so
+        // the acceptance proves the reset the player actually presses
+        // (anti-goal A2) instead of a copy of it. `cameraBaseSet` is the
+        // interactive path's cinematic-camera latch (the selftest has no such
+        // latch and passes nullptr).
+        const auto soft_reset_encounter = [&](DeathState& deathState, bool& cueFired,
+                                              bool* cameraBaseSet) {
+            reset_player_combat(player, combat, spawn_position(manifest, scene),
+                                manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f, tuning);
+            reset_encounter(encounter);
+            audio.reset();  // R stops every voice, music too
+            deathState = reset_death();
+            cueFired = false;
+            if (cameraBaseSet != nullptr) {
+                *cameraBaseSet = false;
+            }
+            apply_death_visibility(scene, corpse, club, entityRig, /*corpseVisible=*/false);
+            if (entityRig < playbacks.size() && entityClips.stand >= 0) {
+                Playback& entityPlayback = playbacks[entityRig];
+                entityPlayback.index = entityClips.stand;
+                entityPlayback.time = 0.0f;
+                entityPlayback.pinned = false;
+                entityPlayback.playing = true;
+            }
+            climbCamera.active = false;
+            targetCamera = CameraTarget{};
+            follow = CameraFollow{};
+            // R8: snap the body back to the manifest's opening yaw (the state
+            // was restored; the model is composed from it).
+            update_entity_transform(scene, encounter, entityRig);
+            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                          /*moving=*/false, /*dtSeconds=*/10.0f);
+            if (!manual_clip) {
+                playback.pinned = false;
+                playback.playing = true;
+            }
+            playback.time = 0.0f;
+        };
+
         if (opts.s6Selftest) {
             // The S6 acceptance timeline (design §8.5): a club swing (so the
             // whoosh fires on the production path), a scripted lethal event
@@ -4443,8 +4513,6 @@ int run_app(const AppOptions& opts) {
 
             Playback& entity_playback = playbacks[entityRig];
             const float stepSeconds = kFixedFrameSeconds;
-            const Vec3 spawn = spawn_position(manifest, scene);
-            const float spawnYaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
 
             // The death clip must be the baked motion the machine pins: a
             // re-baked clip that moved would silently shift every phase
@@ -4604,7 +4672,11 @@ int run_app(const AppOptions& opts) {
             };
             // One frame of the death scene, rendered with or without the
             // effect pass: the same pose, the same camera, the same HUD, so
-            // the two differ in exactly the effect's pixels.
+            // the two differ in exactly the effect's pixels. **Every** capture
+            // in this timeline goes through it — the stills and the control
+            // alike — so the burst's still and its control are provably the
+            // same frame, not two copies of a render sequence that happen to
+            // agree today.
             const auto render_death_frame = [&](bool withEffect) {
                 const std::vector<std::vector<Mat4>> palettes =
                     update_all_poses(renderer, scene, playbacks, 0.0f, club);
@@ -4626,16 +4698,7 @@ int run_app(const AppOptions& opts) {
                 for (const Playback& p : playbacks) {
                     saved.push_back(PlaybackClockState{p.index, p.time, p.playing, p.pinned});
                 }
-                const std::vector<std::vector<Mat4>> stillPalettes =
-                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
-                apply_player_transform(scene, player_rig_record, player,
-                                       active_player_lift(scene, playback, player_rig_record));
-                const EffectFrame stillFrame =
-                    build_effect_frame(scene, entityRig, stillPalettes, encounter, death);
-                renderer.set_hud(hud_state(/*visible=*/true));
-                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                      /*acquire_swapchain=*/true,
-                                      stillFrame.active ? &stillFrame : nullptr);
+                render_death_frame(/*withEffect=*/true);
                 write_screenshot(renderer, shell.win, still_path(name));
                 for (std::size_t i = 0; i < saved.size() && i < playbacks.size(); ++i) {
                     playbacks[i].index = saved[i].index;
@@ -4803,26 +4866,10 @@ int run_app(const AppOptions& opts) {
                         encounter.defeated ? 1 : 0, death_corpse_visible(death) ? 1 : 0,
                         death.roots, combat.mode == PlayerMode::Dead ? 1 : 0);
 
-            // --- 4. The R soft reset (the interactive handler's own sequence) --
-            reset_player_combat(player, combat, spawn, spawnYaw, tuning);
-            reset_encounter(encounter);
-            audio.reset();  // every voice; the music already stopped at the defeat
-            death = reset_death();
-            deathCueFired = false;
-            apply_death_visibility(scene, corpse, club, entityRig, /*corpseVisible=*/false);
-            entity_playback.index = entityClips.stand;
-            entity_playback.time = 0.0f;
-            entity_playback.pinned = false;
-            entity_playback.playing = true;
-            climbCamera.active = false;
-            targetCamera = CameraTarget{};
-            follow = CameraFollow{};
-            update_entity_transform(scene, encounter, entityRig);
-            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
-                          /*moving=*/false, /*dtSeconds=*/10.0f);
-            playback.pinned = false;
-            playback.playing = true;
-            playback.time = 0.0f;
+            // --- 4. The R soft reset (the interactive handler's own helper) --
+            // The *same* helper the interactive `R` key calls, so the proof and
+            // the behaviour cannot drift apart (anti-goal A2).
+            soft_reset_encounter(death, deathCueFired, /*cameraBaseSet=*/nullptr);
             // The reset must restore the actual draw gate, not just the flags:
             // the live entity and its club visible, the corpse hidden.
             const bool entityRestored =
@@ -5395,46 +5442,10 @@ int run_app(const AppOptions& opts) {
                                 // The full soft reset (design §7.5): the player
                                 // and Valus go back to their opening state, the
                                 // death pin/hurt one-shot is left behind, and
-                                // the follow camera snaps behind the spawn.
-                                reset_player_combat(player, combat,
-                                                    spawn_position(manifest, scene),
-                                                    manifest.hasSpawn
-                                                        ? manifest.spawnYawDeg
-                                                        : 0.0f,
-                                                    tuning);
-                                reset_encounter(encounter);
-                                audio.reset();  // R stops every voice, music too
-                                // S6: the death machine, its cue latch and the
-                                // cinematic camera all return to Idle; the
-                                // corpse is hidden and the live body shown.
-                                death = reset_death();
-                                deathCueFired = false;
-                                deathCameraSet = false;
-                                apply_death_visibility(scene, corpse, club, entityRig,
-                                                       /*corpseVisible=*/false);
-                                if (entityRig < playbacks.size() &&
-                                    entityClips.stand >= 0) {
-                                    Playback& entityPlayback = playbacks[entityRig];
-                                    entityPlayback.index = entityClips.stand;
-                                    entityPlayback.time = 0.0f;
-                                    entityPlayback.pinned = false;
-                                    entityPlayback.playing = true;
-                                }
-                                climbCamera.active = false;
-                                targetCamera = CameraTarget{};
-                                follow = CameraFollow{};
-                                // R8: snap the body back to the manifest's
-                                // opening yaw (reset_encounter restored the
-                                // state; the model is composed from it).
-                                update_entity_transform(scene, encounter, entityRig);
-                                camera_follow(camera, follow, player.position,
-                                              player.yawDeg, 0.0f, 0.0f, 0.0f,
-                                              /*moving=*/false, /*dtSeconds=*/10.0f);
-                                if (!manual_clip) {
-                                    playback.pinned = false;
-                                    playback.playing = true;
-                                }
-                                playback.time = 0.0f;
+                                // the follow camera snaps behind the spawn. The
+                                // shared helper is the one the S6 selftest
+                                // calls, so the acceptance proves this path.
+                                soft_reset_encounter(death, deathCueFired, &deathCameraSet);
                             } else {
                                 playback.time = 0.0f;
                             }

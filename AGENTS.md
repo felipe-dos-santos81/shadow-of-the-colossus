@@ -95,9 +95,11 @@ charge), `W`/`S` climb, `A`/`D` shimmy, `W+D` at the chest top branches to the r
 left stick move, right stick camera, RT grip, west/X/square strike, Start pause.
 
 When Valus's health reaches 0 the death sequence takes over: his fall plays once, the black tendrils
-erupt from the two weakpoint shells, the camera pulls back and looks up, the live rig becomes the
-shipped dead body on its dirtmound, and the control returns at 8 s. The input is locked through the
-motion and the collapse; `R`, `M` and `Escape` stay live throughout.
+erupt from the two weakpoint shells, the camera cuts to a **12 m close, low angle on the body** (the
+key is a distance *from Valus*, not a pull-back from the follow pose — the follow camera sits ≈94 m
+away, so this cuts in; `docs/notes/s6-results.md` §10), the live rig becomes the shipped dead body
+on its dirtmound, and the control returns at 8 s. The input is locked through the motion and the
+collapse; `R`, `M` and `Escape` stay live throughout.
 
 The fight's audio loads from `<SOTC_LIB>/audio/audio.manifest` (convert it with the `bp-convert
 audio` command above); without it the interactive game warns once and runs silent, and an

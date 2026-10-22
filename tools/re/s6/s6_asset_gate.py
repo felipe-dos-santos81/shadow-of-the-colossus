@@ -95,7 +95,7 @@ CLIP_NAME = "minotaur_a_death_front"
 CLIP_FRAMES = 94
 CLIP_FPS = 15.08056640625
 CLIP_TRACKS = 58
-CLIP_SECONDS = (CLIP_FRAMES - 1) / CLIP_FPS  # 6.166933 s: 94 keys span 93 intervals
+CLIP_SECONDS = (CLIP_FRAMES - 1) / CLIP_FPS  # 6.166877 s: 94 keys span 93 intervals
 
 DEAD_BODY = "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_body.glb"
 DEAD_BODY_MESHES = 6

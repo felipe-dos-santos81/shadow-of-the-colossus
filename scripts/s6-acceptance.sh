@@ -37,8 +37,10 @@
 #      the vein ribbon), the corpse's black veins on the bright sand, the
 #      pull-back's low framing, the death motion's follow framing, and the HUD
 #      on every still (Valus's bar gone, the player's bars present);
-#   8. the effect pass's frame cost: the `s6-perf` line's own frame cost and
-#      its marginal against the pass-less frame, both inside the 60 fps budget;
+#   8. the effect pass's frame cost: the `s6-perf` line's own frame cost (the
+#      whole frame at the tendril phase: the opaque meshes, the effect and the
+#      HUD) and its marginal against the pass-less frame (the effect pass's own
+#      cost), both inside the 60 fps budget;
 #      the frozen S4.2 silent 240-frame pair remains the render regression;
 #   9. a summary block with every measured number.
 #
@@ -145,6 +147,20 @@ dotnet test "$repo_root/tests/BpConvert.Tests" -v q
 
 stamp "ctest: $build_dir"
 ctest --test-dir "$build_dir" --output-on-failure
+
+# --- Step 2b: the S6 asset gate ----------------------------------------------
+
+# The gate pins the four tendril atlases by SHA-256, the death bundle's bytes
+# and the corpse's six-material binding set (docs/notes/s6-recon.md). It is
+# read-only on both trees and needs the game root the script already requires.
+gate_script="$repo_root/tools/re/s6/s6_asset_gate.py"
+[[ -f "$gate_script" ]] || fail "the S6 asset gate is missing: $gate_script"
+stamp "S6 asset gate: the death bundle, the corpse and the four tendril atlases"
+if ! gate_out="$(python3 "$gate_script" --root "$game_root" --out "$lib" --check 2>&1)"; then
+  printf '%s\n' "$gate_out" >&2
+  fail "the S6 asset gate failed (the death bundle, the corpse or the tendril atlases)"
+fi
+printf '%s\n' "$gate_out"
 
 # --- Step 3: the frozen S5 acceptance (which runs S4.2 -> S4.1 -> S4 -> S3) ---
 
@@ -385,7 +401,12 @@ event_field() {
 [[ "$(event_field valus_defeat t)" = "0.400" ]] ||
   fail "valus_defeat is at t=$(event_field valus_defeat t) (expected 0.400, the tendril burst)"
 
-# The music stops at the defeat (the death clock's 0.000), not later.
+# The score stops at the defeat (the death clock's 0.000), not later. This is
+# true by construction in the selftest (the scripted defeat starts and stops
+# the score back to back), so it is a *consistency* check, not the proof that
+# the score stops on a real defeat: that proof is the frozen S5 acceptance's
+# R18 defeat phase (a second music_stop after a reset), which the S5 run above
+# asserts.
 [[ "$(event_field music_start t)" = "$(event_field music_stop t)" ]] ||
   fail "the score's start ($(event_field music_start t)) and its stop ($(event_field music_stop t)) are not the same step"
 
@@ -743,6 +764,12 @@ done <<<"$(printf '%s\n' "$pixels_out" | grep -E '^s6-hud ')"
 
 # --- Step 8: the effect pass's frame cost -------------------------------------
 
+# `frame_ms` is the **whole frame** at the tendril phase (the opaque meshes,
+# the effect and the HUD together); the effect pass's own cost is the
+# `marginal_ms`, measured against the same 240 frames with the pass
+# suppressed. Both are gated: the frame inside the 60 fps budget and the
+# marginal under it (the marginal is noise-dominated at +-0.2 ms/frame, so it
+# is a ceiling, not a measurement).
 perf_line="$(one_line '^s6-perf ' "s6-perf")"
 perf_frames="$(field "$perf_line" frames)"
 perf_effect="$(field "$perf_line" effect_ms)"
@@ -784,7 +811,7 @@ done <<<"$(printf '%s\n' "$pixels_out" | grep -E '^s6-hud ')"
 printf 's6-acceptance: perf         %s\n' "$perf_line"
 printf 's6-acceptance: s5 status    %s\n' "$s5_status_line"
 printf 's6-acceptance: s42 perf     %s\n' "$s5_perf_line"
-printf 's6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at %s ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at %s s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst %s changed pixels against its control, %s violet and %s strong, inside (600,0)-(1800,1150); the corpse %s vein pixels on %s bright sand pixels; the pull-back %s floor pixels and %s body pixels at the top edge; the motion %s floor pixels, %s at the top edge and %s body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the effect pass at %s ms/frame (marginal %s ms) and the windowed, cursor-free status\n' \
+printf 's6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at %s ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at %s s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst %s changed pixels against its control, %s violet and %s strong, inside (600,0)-(1800,1150); the corpse %s vein pixels on %s bright sand pixels; the pull-back %s floor pixels and %s body pixels at the top edge; the motion %s floor pixels, %s at the top edge and %s body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the frame at the tendril phase %s ms/frame (the marginal of the effect pass %s ms, at the +-0.2 ms measurement noise) and the windowed, cursor-free status\n' \
   "$s5_marginal" "$collapse_total" "$tendrils_changed" "$tendrils_violet" "$tendrils_strong" \
   "$corpse_veins" "$corpse_sand" "$camera_floor" "$camera_top" "$motion_floor" "$motion_top" \
   "$motion_body" "$perf_frame" "$perf_marginal"
