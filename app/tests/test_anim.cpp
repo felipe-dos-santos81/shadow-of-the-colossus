@@ -779,7 +779,7 @@ TEST_CASE("the ground lift is skipped when the clip carries the root series") {
 TEST_CASE("wander's baked clips carry the root series and skip the S3 lift") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     const RigCpu& rig = player_rig(scene);
-    REQUIRE(rig.animations.size() == 15);
+    REQUIRE(rig.animations.size() >= 15);  // S2-S6 set first; later milestones append
 
     // The lift the S3 arena applies to a root-less model: Wander's origin sits
     // 0.7596 m above his feet.
