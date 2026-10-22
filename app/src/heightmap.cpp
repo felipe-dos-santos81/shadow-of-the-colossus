@@ -163,7 +163,14 @@ void flag_walls_near(Heightmap& hm, float x, float z, float y_lo, float y_hi) {
             for (int k = 0; k < hm.maxLayers && !std::isnan(hm.layers[base + k]); ++k) {
                 const float y = hm.layers[base + k];
                 if (y_hi >= y + kBodyBandLow && y_lo <= y + kBodyBandHigh) {
-                    hm.blocked[base + k] = 1;
+                    // Non-zero = blocked; the value is higher the nearer the wall
+                    // (100 on it, falling to 1 a cell away), which is what lets
+                    // heightmap_walkable tell a step out of the strip from one in.
+                    const float du = static_cast<float>(i) - u;
+                    const float dv = static_cast<float>(j) - v;
+                    const int depth = 100 - static_cast<int>(100.0f * std::sqrt(du * du + dv * dv));
+                    hm.blocked[base + k] = std::max<uint8_t>(
+                        hm.blocked[base + k], static_cast<uint8_t>(std::max(1, depth)));
                 }
             }
         }
@@ -478,13 +485,18 @@ bool heightmap_walkable(const Heightmap& heightmap, Vec3 from, Vec3 to) {
         return src < 0;  // no floor ahead: only a body already over a hole may move
     }
     const std::size_t dst_at = layer_base(heightmap, ti, tj) + dst;
-    if (heightmap.blocked[dst_at] != 0) {
+    // A body already inside a wall's strip (a spawn, a landing or a push put it
+    // there) must be able to leave: a blocked target is refused unless the
+    // source is blocked too and the target is no nearer the wall than it.
+    const std::size_t src_at = src < 0 ? 0 : layer_base(heightmap, si, sj) + src;
+    if (heightmap.blocked[dst_at] != 0 &&
+        (src < 0 || heightmap.blocked[dst_at] > heightmap.blocked[src_at])) {
         return false;
     }
     if (src < 0) {
         return true;
     }
-    const float rise = heightmap.layers[dst_at] - heightmap.layers[layer_base(heightmap, si, sj) + src];
+    const float rise = heightmap.layers[dst_at] - heightmap.layers[src_at];
     // A hair of slack: a 0.6 m stair is a step, not a wall.
     return rise <= kFloorStep + 1e-4f && -rise <= kFloorDrop + 1e-4f;
 }

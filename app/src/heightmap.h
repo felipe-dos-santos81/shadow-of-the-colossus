@@ -38,7 +38,7 @@ struct Heightmap {
     Vec3 boundsMin, boundsMax;
     int maxLayers = 0;                  // 0 = unlayered
     std::vector<float> layers;          // node-major, maxLayers per node, ascending, NaN-padded
-    std::vector<uint8_t> blocked;       // same layout: 1 = a wall in that layer's body band
+    std::vector<uint8_t> blocked;       // same layout: non-zero = a wall in that layer's body band (higher = nearer it)
 };
 
 // Rasterizes the scene's static meshes (`mesh.rig < 0` — the manifest's

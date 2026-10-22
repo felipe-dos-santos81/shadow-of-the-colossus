@@ -460,3 +460,35 @@ TEST_CASE("player_update slides along a wall and stays on its floor") {
     CHECK(state.position.z > 5.0f);  // and slid along it
     CHECK(state.position.y == doctest::Approx(9.0f));
 }
+
+TEST_CASE("a body inside a wall's strip can walk out but not deeper in") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 8, -4, 4, 9.0f);
+    add_wall_x(tris, 3.0f, -4, 4, 9.0f, 13.0f);
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+
+    // Standing on the wall's own node: stepping out either side is allowed.
+    CHECK(heightmap_walkable(hm, {3.4f, 9, 0}, {4.4f, 9, 0}));
+    CHECK(heightmap_walkable(hm, {3.4f, 9, 0}, {2.4f, 9, 0}));
+    // Standing in the outer ring (node x = 4): out is fine, back in is not.
+    CHECK(heightmap_walkable(hm, {4.2f, 9, 0}, {4.8f, 9, 0}));
+    CHECK_FALSE(heightmap_walkable(hm, {4.2f, 9, 0}, {3.4f, 9, 0}));
+    // Walked out in small steps, the body ends up in free ground.
+    Vec3 p{3.4f, 9, 0};
+    for (int i = 0; i < 20; ++i) {
+        const Vec3 next{p.x + 0.1f, p.y, p.z};
+        if (heightmap_walkable(hm, p, next)) {
+            p = next;
+        }
+    }
+    CHECK(p.x > 5.0f);
+}
+
+TEST_CASE("an unlayered build leaves layers and blocked empty") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 4, 0, 4, 1.0f);
+    add_wall_x(tris, 2.0f, 0, 4, 1.0f, 3.0f);
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    CHECK(hm.layers.empty());
+    CHECK(hm.blocked.empty());
+}
