@@ -24,8 +24,9 @@ Death bundle — `cp3shadow/anim/`
   asset, is a hard failure.
 
 Dead body — `models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/`
-  `c01_minotaur_a_dead_body.glb` 11,924,836 B, 6 meshes / 6 materials / 0 skins, the six
-  materials exactly `colossus_01_{waist,back,face,arms,chest,legs}_dead`;
+  `c01_minotaur_a_dead_body.glb` 11,925,120 B, 6 meshes / 6 materials / 0 skins, the six
+  materials exactly `colossus_01_{waist,back,face,arms,chest,legs}_dead`, each carrying
+  `death_tentacle_veins.png` as its `emissiveTexture` (the S6 corpse's black-vein veil, D9);
   `c01_minotaur_a_dead_dirtmound.glb` 254,948 B.
 
 Tendril textures — `out/library/textures/`
@@ -169,6 +170,19 @@ def glb_summary(path):
         raise ValueError("first GLB chunk is %r, not JSON" % chunk_type)
     doc = json.loads(data[20:20 + chunk_len])
     accessors = doc.get("accessors", [])
+    textures = doc.get("textures", [])
+    images = doc.get("images", [])
+
+    def texture_uri(reference):
+        """A texture view's image uri ("" when the view/reference is absent or dangling)."""
+        if not isinstance(reference, dict) or "index" not in reference:
+            return ""
+        try:
+            source = textures[reference["index"]].get("source")
+            return images[source].get("uri", "")
+        except (KeyError, IndexError, TypeError):
+            return ""
+
     animations = {}
     for anim in doc.get("animations", []):
         counts, ends = [], []
@@ -187,6 +201,12 @@ def glb_summary(path):
     return {
         "meshes": len(doc.get("meshes", [])),
         "materials": [m.get("name", "") for m in doc.get("materials", [])],
+        # Material name -> emissive image uri ("" when absent or dangling). S6 carries the
+        # corpse's veins layer through this standard slot; the gate proves the binding.
+        "material_emissive": {
+            m.get("name", ""): texture_uri(m.get("emissiveTexture"))
+            for m in doc.get("materials", [])
+        },
         "skins": len(doc.get("skins", [])),
         "animations": animations,
         "images": [i.get("uri", "") for i in doc.get("images", [])],
@@ -369,6 +389,9 @@ def check_corpse(out, report):
             if summary["skins"] != 0:
                 problems.append("%d skins, expected 0 (static corpse)" % summary["skins"])
             materials = set(summary["materials"])
+            if len(summary["materials"]) != len(DEAD_BODY_MATERIALS):
+                problems.append("%d materials, expected %d" % (len(summary["materials"]),
+                                                                len(DEAD_BODY_MATERIALS)))
             if materials != DEAD_BODY_MATERIALS:
                 missing = sorted(DEAD_BODY_MATERIALS - materials)
                 extra = sorted(materials - DEAD_BODY_MATERIALS)
@@ -376,10 +399,18 @@ def check_corpse(out, report):
                     problems.append("missing material(s): %s" % ", ".join(missing))
                 if extra:
                     problems.append("unexpected material(s): %s" % ", ".join(extra))
+            # The veins layer (S6 D9): every dead material must carry the converted veins PNG as
+            # its emissiveTexture. A dangling index or a different image fails by name.
+            veins = os.path.basename(VEINS_PNG[0])
+            for name in sorted(DEAD_BODY_MATERIALS):
+                binding = summary["material_emissive"].get(name, "")
+                if os.path.basename(binding) != veins:
+                    problems.append("%s: emissiveTexture %r, expected %s"
+                                    % (name, binding or "<none>", veins))
             if problems:
                 raise ValueError("; ".join(problems))
             report.good("corpse", os.path.basename(DEAD_BODY),
-                        "%d meshes, 6 materials (%s), 0 skins"
+                        "%d meshes, 6 materials (%s), 0 skins, veins emissive on all 6"
                         % (summary["meshes"], ", ".join(sorted(materials))))
         except (ValueError, struct.error) as exc:
             report.bad("corpse", os.path.basename(DEAD_BODY), str(exc))

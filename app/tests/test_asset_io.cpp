@@ -88,8 +88,10 @@ std::string base64_encode(const uint8_t* data, std::size_t size) {
 
 // A minimal glTF: one triangle in a data-URI buffer (POSITION only — no NORMAL,
 // no TEXCOORD_0, no indices) and one material whose base-color PNG is `image_uri`,
-// relative to the model's directory.
-std::string fixture_gltf_json(const std::string& image_uri = "missing.png") {
+// relative to the model's directory. A non-empty `emissive_uri` adds a second
+// image/texture and the material's `emissiveTexture` (the veins carrier).
+std::string fixture_gltf_json(const std::string& image_uri = "missing.png",
+                              const std::string& emissive_uri = "") {
     const float positions[3][3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
     const std::string buffer_uri =
         "data:application/octet-stream;base64," +
@@ -101,9 +103,10 @@ std::string fixture_gltf_json(const std::string& image_uri = "missing.png") {
   "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
   "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
                  "min": [0, 0, 0], "max": [1, 1, 0]}],
-  "images": [{"uri": "%%IMAGE_URI%%"}],
-  "textures": [{"source": 0}],
-  "materials": [{"name": "fixture", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+  "images": [{"uri": "%%IMAGE_URI%%"}%%IMAGES_MORE%%],
+  "textures": [{"source": 0}%%TEXTURES_MORE%%],
+  "materials": [{"name": "fixture",
+                 "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}%%MATERIAL_MORE%%}],
   "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
   "nodes": [{"mesh": 0}],
   "scenes": [{"nodes": [0]}],
@@ -113,6 +116,19 @@ std::string fixture_gltf_json(const std::string& image_uri = "missing.png") {
     json.replace(json.find(buffer_placeholder), buffer_placeholder.size(), buffer_uri);
     const std::string image_placeholder = "%%IMAGE_URI%%";
     json.replace(json.find(image_placeholder), image_placeholder.size(), image_uri);
+
+    // The optional second slot: image 1 + texture 1, bound as `emissiveTexture`.
+    const std::string images_more = emissive_uri.empty()
+                                        ? ""
+                                        : R"(, {"uri": ")" + emissive_uri + R"("})";
+    const std::string textures_more = emissive_uri.empty() ? "" : R"(, {"source": 1})";
+    const std::string material_more =
+        emissive_uri.empty() ? "" : R"(, "emissiveTexture": {"index": 1})";
+    json.replace(json.find("%%IMAGES_MORE%%"), std::string("%%IMAGES_MORE%%").size(), images_more);
+    json.replace(json.find("%%TEXTURES_MORE%%"), std::string("%%TEXTURES_MORE%%").size(),
+                 textures_more);
+    json.replace(json.find("%%MATERIAL_MORE%%"), std::string("%%MATERIAL_MORE%%").size(),
+                 material_more);
     return json;
 }
 
@@ -389,6 +405,35 @@ TEST_CASE("image URIs that escape the library are rejected") {
         REQUIRE(scene.materials.size() == 1);
         CHECK(scene.materials[0].baseColorTexture == -1);
     }
+}
+
+TEST_CASE("an emissive texture resolves to a scene texture") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "base.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_binary(dir.path() / "veins.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "fixture.gltf", fixture_gltf_json("base.png", "veins.png"));
+
+    auto scene = load_scene(dir.path(), "fixture.gltf");
+
+    REQUIRE(scene.materials.size() == 1);
+    REQUIRE(!scene.textures.empty());
+    const MaterialCpu& material = scene.materials[0];
+    REQUIRE(material.emissiveTexture >= 0);
+    REQUIRE(static_cast<std::size_t>(material.emissiveTexture) < scene.textures.size());
+    CHECK(scene.textures[static_cast<std::size_t>(material.emissiveTexture)].sourceRelPath ==
+          "veins.png");
+    // It is a separate slot from the base color (image 1, not image 0).
+    CHECK(material.baseColorTexture != material.emissiveTexture);
+}
+
+TEST_CASE("a material without an emissive texture has no emissive slot") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "fixture.gltf", fixture_gltf_json());
+
+    auto scene = load_scene(dir.path(), "fixture.gltf");
+
+    REQUIRE(scene.materials.size() == 1);
+    CHECK(scene.materials[0].emissiveTexture == -1);
 }
 
 TEST_CASE("wander carries its 348-joint skeleton") {

@@ -403,6 +403,7 @@ public sealed class AquaModelAdapter
         string? baseColor = null;
         string? normal = null;
         string? tangentNormal = null;
+        string? emissive = null;
         if (chained && chain.TryGetValue(matName!, out var cmat) && cmat is not null)
         {
             foreach (var texName in cmat.texNames)
@@ -410,6 +411,7 @@ public sealed class AquaModelAdapter
                 var resolved = ResolveTexture(texName, cmshPath, texturePaths, knownTextures, note);
                 if (resolved is null) continue;
                 if (baseColor is null && IsBaseColorTexture(texName)) baseColor = resolved;
+                if (emissive is null && IsVeinsTexture(texName)) emissive = resolved;
                 switch (ClassifyNormal(texName))
                 {
                     case NormalKind.Plain when normal is null:
@@ -427,7 +429,7 @@ public sealed class AquaModelAdapter
                 baseColor = ResolveTexture(cmat.texNames[0], cmshPath, texturePaths, knownTextures, note);
         }
 
-        materials.Add(new MaterialData(key, baseColor, normal, null, White, Black));
+        materials.Add(new MaterialData(key, baseColor, normal, null, White, Black, emissive));
         indexByName[key] = materials.Count - 1;
         return materials.Count - 1;
     }
@@ -448,6 +450,18 @@ public sealed class AquaModelAdapter
         if (known.Add(resolved)) texturePaths.Add(resolved);
         return resolved;
     }
+
+    /// <summary>
+    /// The corpse's veins layer (<c>death_tentacle_veins</c>, the sixth slot of every dead-body
+    /// material): the S6 black-vein veil. It is carried through glTF's <c>emissiveTexture</c> —
+    /// the only standard extra-texture slot — because the texture is black RGB plus an alpha
+    /// mask; the app samples its alpha as the overlay weight (S6 design D9, corrected by Task 3
+    /// evidence). Matched by texture name, not by slot index: that is the layer's identity.
+    /// </summary>
+    private const string VeinsTextureStem = "death_tentacle_veins";
+
+    private static bool IsVeinsTexture(string texName) =>
+        Path.GetFileNameWithoutExtension(texName).Equals(VeinsTextureStem, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The albedo heuristic of the reference implementation (<c>BluePointConvert.cs:987-1001</c>:

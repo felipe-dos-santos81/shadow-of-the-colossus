@@ -104,7 +104,8 @@ public static class GlbWriter
                 var textures = new MaterialTextures(
                     ResolveTexture(material.BaseColorTexture),
                     ResolveTexture(material.NormalTexture),
-                    ResolveTexture(material.SpecularTexture));
+                    ResolveTexture(material.SpecularTexture),
+                    ResolveTexture(material.EmissiveTexture));
                 if (textures.Specular >= 0) _usesSpecularExtension = true;
                 _materialTextures.Add(textures);
             }
@@ -668,6 +669,10 @@ public static class GlbWriter
             else if (material.EmissiveFactor.Length != 0)
                 throw new InvalidOperationException($"Material '{material.Name}': emissive factor must have 3 components.");
 
+            // The veins carrier (S6 D9): a standard emissiveTexture slot. The factor above stays as
+            // the caller set it (black for the corpse), so a conformant viewer sees no new glow.
+            if (textures.Emissive >= 0) WriteTextureRef(w, "emissiveTexture", textures.Emissive);
+
             if (textures.Normal >= 0) WriteTextureRef(w, "normalTexture", textures.Normal);
 
             if (textures.Specular >= 0)
@@ -789,7 +794,7 @@ public static class GlbWriter
         private readonly record struct AccessorInfo(int View, int ComponentType, int Count, string Type, float[]? Min, float[]? Max);
         private sealed record PrimitiveInfo(string Name, List<(string Semantic, int Accessor)> Attributes, int IndicesAccessor,
             int MaterialIndex, bool Skinned);
-        private readonly record struct MaterialTextures(int BaseColor, int Normal, int Specular);
+        private readonly record struct MaterialTextures(int BaseColor, int Normal, int Specular, int Emissive);
         private sealed record AnimationInfo(string Name, List<ChannelInfo> Channels, List<SamplerInfo> Samplers);
         private readonly record struct ChannelInfo(int Node, string Path, int Sampler);
         private readonly record struct SamplerInfo(int Input, int Output);

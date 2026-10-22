@@ -597,6 +597,7 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
         out.baseColorTexture =
             resolve_texture(material.pbr_metallic_roughness.base_color_texture.texture);
         out.normalTexture = resolve_texture(material.normal_texture.texture);
+        out.emissiveTexture = resolve_texture(material.emissive_texture.texture);
 
         scene.materials.push_back(std::move(out));
     }

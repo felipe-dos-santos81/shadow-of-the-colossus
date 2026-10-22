@@ -202,10 +202,10 @@ void Renderer::create_pipeline() {
 
     // Vertex stage: uniforms 0 (viewProj) and 1 (model) plus the palette
     // storage buffer. Fragment stage: slot 0 (material) plus the base-color
-    // texture and its sampler.
+    // texture/sampler and the emissive slot (the veins carrier, or white).
     vertex_shader_ = create_shader(SDL_GPU_SHADERSTAGE_VERTEX, "mesh_vertex", 2, 1, 0,
                                    source.data(), source.size());
-    fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "mesh_fragment", 1, 0, 1,
+    fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "mesh_fragment", 1, 0, 2,
                                      source.data(), source.size());
 
     SDL_GPUVertexBufferDescription vertex_buffer{};
@@ -871,6 +871,18 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
             albedo = textures_[static_cast<size_t>(texture_index)];
         }
 
+        // Emissive/veins slot (S6 D9): the white fallback is the no-op — the shader's
+        // `mix(1, rgb, alpha)` is exactly 1 for white/opaque, so materials without the
+        // texture render as before. The dead body's black-with-alpha veil is the only
+        // material that binds a real one.
+        SDL_GPUTexture* emissive_texture = white_texture_;
+        const int emissive_index =
+            has_material ? scene.materials[static_cast<size_t>(material_index)].emissiveTexture : -1;
+        if (emissive_index >= 0 && static_cast<size_t>(emissive_index) < textures_.size() &&
+            textures_[static_cast<size_t>(emissive_index)] != nullptr) {
+            emissive_texture = textures_[static_cast<size_t>(emissive_index)];
+        }
+
         // Vertex storage buffer 0: this mesh's own rig palette — never another
         // rig's. A static mesh (rig < 0) binds slot 0, whose zero-weight
         // vertices the shader passes through without reading it.
@@ -884,8 +896,11 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         SDL_BindGPUVertexBuffers(pass, 0, &vertex_binding, 1);
         const SDL_GPUBufferBinding index_binding{mesh.index_buffer, 0};
         SDL_BindGPUIndexBuffer(pass, &index_binding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        const SDL_GPUTextureSamplerBinding texture_binding{albedo, sampler_};
-        SDL_BindGPUFragmentSamplers(pass, 0, &texture_binding, 1);
+        const SDL_GPUTextureSamplerBinding texture_bindings[2] = {
+            {albedo, sampler_},
+            {emissive_texture, sampler_},
+        };
+        SDL_BindGPUFragmentSamplers(pass, 0, texture_bindings, 2);
 
         SDL_DrawGPUIndexedPrimitives(pass, mesh.index_count, 1, 0, 0, 0);
     }

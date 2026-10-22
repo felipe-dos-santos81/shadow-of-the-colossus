@@ -82,7 +82,9 @@ vertex VSOut mesh_vertex(VertexIn in [[stage_in]],
 fragment float4 mesh_fragment(VSOut in [[stage_in]],
                               constant Material& m [[buffer(0)]],
                               texture2d<float> albedo [[texture(0)]],
-                              sampler albedo_sampler [[sampler(0)]]) {
+                              texture2d<float> emissive [[texture(1)]],
+                              sampler albedo_sampler [[sampler(0)]],
+                              sampler emissive_sampler [[sampler(1)]]) {
     // glTF base color PNGs are sRGB-encoded: un-gamma before lighting.
     float3 albedo_linear = pow(albedo.sample(albedo_sampler, in.uv).rgb, float3(2.2));
 
@@ -96,6 +98,16 @@ fragment float4 mesh_fragment(VSOut in [[stage_in]],
     float n_dot_l = max(dot(n, key_light), 0.0);
 
     float3 lit = albedo_linear * (n_dot_l + ambient) * m.baseColor.rgb + m.emissive.rgb;
+
+    // The emissive slot is the corpse's veins carrier (S6 D9). The shipped
+    // death_tentacle_veins texture is black RGB (max 2/1/8) with the vein mask
+    // in alpha, so it cannot add light: it is a translucent black veil. Mixing
+    // the sampled RGB in by alpha gives 1 - alpha for black — the shipped
+    // black-vein look at the authored coverage. Materials without the texture
+    // bind the 1x1 white fallback (alpha 1), for which this is exactly 1.0:
+    // their look is unchanged. The sample is linearised like the albedo.
+    float4 veil = emissive.sample(emissive_sampler, in.uv);
+    lit *= mix(float3(1.0), pow(veil.rgb, float3(2.2)), veil.a);
 
     // The offscreen target has the swapchain's format, which the SDR swapchain
     // composition makes an 8-bit UNORM: encode to sRGB here. If the swapchain

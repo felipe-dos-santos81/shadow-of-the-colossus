@@ -49,6 +49,10 @@ struct MaterialCpu {
     float emissiveFactor[3];
     int baseColorTexture;  // index into Scene::textures, -1 = none
     int normalTexture;     // index into Scene::textures, -1 = none
+    // The glTF emissive slot, used as the corpse's veins carrier: index into Scene::textures,
+    // -1 = none. The shipped veins texture is black RGB with the vein mask in alpha, so the mesh
+    // shader applies it as a dark veil (`mix(1, rgb, alpha)`), not as light.
+    int emissiveTexture = -1;
 };
 
 // One skeleton joint, in the skin's own order: `parent` is resolved against

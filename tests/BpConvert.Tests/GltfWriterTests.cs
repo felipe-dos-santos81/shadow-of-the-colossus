@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Numerics;
+using System.Text.Json;
 using BpConvert.Core.Gltf;
 using BpConvert.Core.Model;
 using SharpGLTF.Schema2;
@@ -226,6 +228,56 @@ public class GltfWriterTests : IDisposable
         // A texture whose source path is not in the map is omitted (no dangling uri in the output).
         Assert.Empty(gltf.LogicalImages);
         Assert.Null(gltf.LogicalMaterials[0].FindChannel("BaseColor")!.Value.Texture);
+    }
+
+    // The veins layer is carried as `emissiveTexture`: the task requires the material JSON to hold
+    // the index (and the image), not just a SharpGLTF channel that a factor could synthesize.
+    [Fact]
+    public void Write_EmissiveTexture_EmitsEmissiveTextureIndex()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "tex"));
+        File.WriteAllBytes(Path.Combine(_dir, "tex", "t_veins.png"), Convert.FromBase64String(OnePixelPngBase64));
+
+        var material = new MaterialData("mat", null, null, null,
+            new float[] { 1, 1, 1, 1 }, Array.Empty<float>(), "textures/t_veins.ctxr");
+        var m = new ModelData("x.cmsh", new() { new MeshData("m", Positions, Normals, new[] { Uv0 }, Indices,
+            Array.Empty<int>(), Array.Empty<float>(), 0) }, new() { material }, null, new());
+        var map = new Dictionary<string, string> { ["textures/t_veins.ctxr"] = "tex/t_veins.png" };
+
+        using var json = ReadGlbJson(GlbWriter.Write(m, _dir, "emissive", map).GlbPath);
+        var written = json.RootElement.GetProperty("materials")[0];
+
+        Assert.True(written.GetProperty("emissiveTexture").GetProperty("index").GetInt32() >= 0);
+        Assert.Equal("tex/t_veins.png", json.RootElement.GetProperty("images")[0].GetProperty("uri").GetString());
+
+        // SharpGLTF (the acceptance checker's loader) reads the same binding as the Emissive channel.
+        var gltf = ModelRoot.Load(Path.Combine(_dir, "emissive.glb"));
+        var emissive = gltf.LogicalMaterials[0].FindChannel("Emissive");
+        Assert.NotNull(emissive);
+        Assert.Equal("tex/t_veins.png", emissive!.Value.Texture!.PrimaryImage.Content.SourcePath);
+    }
+
+    [Fact]
+    public void Write_NullEmissiveTexture_OmitsEmissiveTexture()
+    {
+        var material = new MaterialData("mat", null, null, null,
+            new float[] { 1, 1, 1, 1 }, Array.Empty<float>());
+        var m = new ModelData("x.cmsh", new() { new MeshData("m", Positions, Normals, new[] { Uv0 }, Indices,
+            Array.Empty<int>(), Array.Empty<float>(), 0) }, new() { material }, null, new());
+
+        using var json = ReadGlbJson(GlbWriter.Write(m, _dir, "plain", new Dictionary<string, string>()).GlbPath);
+        var written = json.RootElement.GetProperty("materials")[0];
+
+        Assert.False(written.TryGetProperty("emissiveTexture", out _));
+        Assert.False(json.RootElement.TryGetProperty("images", out _));
+    }
+
+    /// <summary>The JSON chunk of a .glb (header 12 B, then a chunk length/type pair).</summary>
+    private static JsonDocument ReadGlbJson(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        int jsonLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(12));
+        return JsonDocument.Parse(bytes.AsMemory(20, jsonLength));
     }
 
     [Fact]
