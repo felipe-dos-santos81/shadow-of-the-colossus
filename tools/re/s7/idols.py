@@ -149,7 +149,14 @@ def idols(game, lib):
                 'source': 'data', 'record': r['name'], 'offset': '%#x' % r['offset']}
         print('idol slot=%(slot)d %(record)s @%(offset)s p=%(p)s yaw=%(yaw_deg)s %(glb)s' % item)
         if not out:  # slot 1 (Valus) is the broken idol: the next two records, Broke + skirt
-            parts = [(recs[j], record_refs(body, recs, j)[-1]) for j in (i + 1, i + 2)]
+            parts = []
+            for j, want in ((i + 1, 'broke'), (i + 2, 'skirt')):
+                q = recs[j] if j < len(recs) else None
+                refs_j = record_refs(body, recs, j) if q else []
+                if not q or want not in q['name'].lower() or not refs_j or want not in refs_j[-1].lower():
+                    sys.exit('slot 1: record %d after %s is not the %s model (got %s, refs %s)' % (
+                        j - i, r['name'], want, q and q['name'], refs_j))
+                parts.append((q, refs_j[-1]))
             broken = {'slot': 1, 'glbs': [model_glb(lib, ref) for _, ref in parts],
                       'ps': [[round(v, 4) for v in q['transform']['translation']] for q, _ in parts],
                       'yaw_deg': round(yaw_of(parts[0][0]['transform']['rows']), 3), 'source': 'data',
@@ -170,8 +177,8 @@ def spawn(game, lib):
     x, z = world[0] - origin[0], world[2] - origin[2]
     y_rec = world[1] - origin[1]
     below = [y for y in floors(sp.glb_triangles(os.path.join(lib, INTERIOR)), x, z) if y <= y_rec]
-    if not below or not 8.99 <= below[-1] <= 11.0:  # the 9-11 m band, 1 cm rounding
-        sys.exit('spawn floor out of the 9-11 m band: %s' % below)
+    if not below or not 8.5 <= below[-1] <= 12.5:  # ruling R6: the S7 acceptance's spawn band
+        sys.exit('spawn floor out of the [8.5, 12.5] m band: %s' % below)
     print('spawn world=%s level_setup=%s -> (%.3f, %.3f, %.3f) floor=%.3f' % (
         world, [round(v, 3) for v in origin], x, y_rec, z, below[-1]))
     return {'p': [round(x, 3) + 0.0, round(below[-1], 3), round(z, 3)], 'yaw_deg': SPAWN_YAW,

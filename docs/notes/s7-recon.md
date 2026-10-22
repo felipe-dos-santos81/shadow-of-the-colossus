@@ -22,13 +22,13 @@ python3 -I tools/re/s7/idols.py place                           # writes shrine_
 Validate the JSON (16 idols, slot 1 broken, Mono, spawn, wake, flow, probes; exit 0 + `OK`):
 
 ```bash
-python3 -I -c "import json;d=json.load(open('tools/re/s7/shrine_placements.json'));I=d['idols'];assert [i['slot'] for i in I]==list(range(1,17)) and all(len(i['p'])==3 for i in I);assert d['broken']['slot']==1 and len(d['broken']['glbs'])==2;assert d['mono']['clip']=='girl_a_death_loop' and d['mono']['glb'].endswith('mono.glb');assert 9<=round(d['spawn']['p'][1],2)<=11;assert d['wake']['clips'] and d['wake']['seconds']>0;assert set(d['flow'])>={'hold_s','fade_out_s','fade_in_s','colour','source'};P=d['probes'];assert all(len(P[k])==2 for k in ('altar_step','hall','stair')) and set(P['wall'])=={'from','to'};print('OK idols=16 broken=1 mono spawn wake flow probes')"
+python3 -I -c "import json;d=json.load(open('tools/re/s7/shrine_placements.json'));I=d['idols'];assert [i['slot'] for i in I]==list(range(1,17)) and all(len(i['p'])==3 for i in I);assert d['broken']['slot']==1 and len(d['broken']['glbs'])==2;assert d['mono']['clip']=='girl_a_death_loop' and d['mono']['glb'].endswith('mono.glb');assert 8.5<=d['spawn']['p'][1]<=12.5;assert d['wake']['clips'] and d['wake']['seconds']>0;assert set(d['flow'])>={'hold_s','fade_out_s','fade_in_s','colour','source'};P=d['probes'];assert all(len(P[k])==2 for k in ('altar_step','hall','stair')) and set(P['wall'])=={'from','to'};print('OK idols=16 broken=1 mono spawn wake flow probes')"
 ```
 
 **Conventions of the JSON.** Positions are metres in the cathedral glbs' frame. `yaw_deg` is the
 app's +Y yaw (0 faces +Z, 90 faces +X; quaternion `(0, sin(y/2), 0, cos(y/2))` — `probe.py
-yaw_quaternion`). `source` is `data` (read from shipped data), `binary` (none here) or `authored`
-(a builder value). Keys beyond the brief's schema are additive provenance: `idols[].record/offset`,
+yaw_quaternion`). `source` is `data` (read from shipped data records — a value added to the brief's
+`binary|authored`; the idols use it), `binary` (none here) or `authored` (a builder value). Keys beyond the brief's schema are additive provenance: `idols[].record/offset`,
 `broken.ps/yaw_deg/records`, `spawn.yaw_source/record`, `wake.root_series/pelvis_m/end_heading_deg`.
 
 ---
@@ -153,7 +153,7 @@ Lying = 0.10 m (≤ 0.4), standing = 0.72 m (the stand loop: 0.67 m). The wake e
 facing +Z (2.5°; the stand loop 0.7°), so the spawn yaw applies unrotated. While lying (cut01) the
 body lies along the clip's Z axis, head toward +Z (`Bone_KAO` z +0.36, `Bone_TOE_L` z −0.69).
 The rates are the converter's reading of the rate field (cut08/11 play at 1.3–1.4 fps); they are
-what a bake will play. `wake.json`: `clips [cut04, cut05]`, `seconds 15.456`, `source: data`.
+what a bake will play. The JSON's `wake` object: `clips [cut04, cut05]`, `seconds 15.456`, `source: data`.
 
 ### 3.2 The spawn: the `cathedral_int.sgpr` start — PASS (position data, yaw authored)
 
@@ -166,8 +166,8 @@ frame). `home.cgpr` (16,935 B → 58,513 B, 86 records) has `level_setup` @0xda5
 | `cathedral_int.sgpr` | (300, 10, −299) | (0, 9.93, 1) | floor 8.998 (`cathedral_interior.glb`) | 0.93 m above the floor |
 | `cathedral_garden.sgpr` | (310, 95, −340) | (10, 94.93, −40) | 92.70 (`cathedral_garden_ground.glb`) | 2.2 m above the ground |
 
-Spawn = **(0.000, 8.998, 1.000)**, the floor under the start (in the 9–11 band at 1 cm), `source:
-data`. It is the hall's centre line, 21.4 m in front of the altar's face (z 22.41), under the
+Spawn = **(0.000, 8.998, 1.000)**, the floor under the start, `source: data`. Spawn floor band
+**[8.5, 12.5] m** (ruling R6: the recon's 9–11 was an approximation; the hall floor measures 8.999). It is the hall's centre line, 21.4 m in front of the altar's face (z 22.41), under the
 cgpr's `DorminLight1` (0, 58, 3) and next to `wander2dormin` (0, 9, 1.454). The start records carry
 no yaw: **yaw 0 (facing +Z, the altar) is authored** (`yaw_source: authored`).
 
@@ -191,7 +191,7 @@ every surface in the column:
 | `altar_step` | (0, 20) | 10.305 | 4 | 10.395 in these 2 glbs; the roof above is in others (`cathint_shadow` 32.03, `cathedral_new_firstlevel` 83.17) | the dais top step (z 16 → 20: 9.0 → 10.3) |
 | `hall` | (0, −20) | 8.999 | 2 | 37.562 (interior); 109.98 with the garden glb | floor vs the hall roof / garden above |
 | `stair` | (0, −68) | 9.789 | 16 | 89.221 | the back stair (z −64 → −72: 9.05 → 11.02) under stacked geometry |
-| `wall` | (0, −13) → (14, −13) | — | to: 9.62, 10.49, 11.06, 11.83, … | — | ends inside the alcove divider between idols 3/5 (steep faces in the body band from x ≈ 9 to 16 at z −12…−14); the walk must stop near x ≈ 9 |
+| `wall` | (0, −13) → (14, −13) | — | to: 9.62, 10.49, 11.06, 11.83, … | — | ends inside the alcove divider between idols 3/5 (steep faces in the body band from x ≈ 9.4 to 16 at z −12…−14); the steep face is at x ≈ 9.33–9.39, so the walk must stop near x ≈ 9.3 |
 
 ## 4 · Files
 
