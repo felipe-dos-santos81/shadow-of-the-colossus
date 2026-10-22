@@ -17,7 +17,7 @@
 - Static-only RE; evidence in `docs/notes/s7-recon.md` as addresses/counts/sizes, no game content.
 - Frozen and invoked unchanged: `scripts/s6-acceptance.sh`, `s5-`, `s42-`, `s41-`, `s4-`, `s3-acceptance.sh`; `s5_map.json`, `s6_map.json`; the existing `out/re/stage/encounter.manifest` (never recomposed); the output of `--selftest` and `--s3`…`--s6-selftest`.
 - No frozen selftest ever steps the return machine or requests a stage switch.
-- Every viewer/acceptance run under `caffeinate -dimsu`; never two acceptances concurrently; never a bake (`bp-convert convert … --force`) while an acceptance runs; scripts bash 3.2; tests fail fast when `SOTC_GAME_ROOT`/`SOTC_LIB` are unset.
+- Every viewer/acceptance run under `caffeinate -dimsu`; never two acceptances concurrently; never a bake (`bp-convert convert … --force`) while an acceptance runs; `out/library` is **shared by every branch and worktree** — a bake must leave `main`'s suite green (Task 8 lands the relaxed clip pins on `main` before baking); scripts bash 3.2; tests fail fast when `SOTC_GAME_ROOT`/`SOTC_LIB` are unset.
 - The shrine is silent in S7 (a recorded gap, not a placeholder).
 - Builder-authored values (camera keys, timings unless R2 answers them, fallback idol/spawn/Mono placement) carry `source: authored` and are labelled in the notes and the walk.
 - ≤ 4 concurrent agents; W1 (app) and W2 (RE) never share files — findings cross as `s7-recon.md` and `tools/re/s7/shrine_placements.json`.
@@ -253,17 +253,18 @@ struct StageCarry { ReturnState ret{}; int s7Step = 0; bool reloadedShrine = fal
 ### Task 8: The shrine bakes (W4, alone)
 
 **Files:**
-- Modify: `app/tests/test_asset_io.cpp:499, 938, 1007` (the Wander clip count), `docs/notes/s7-recon.md` (the bake commands)
+- Modify: `app/tests/test_asset_io.cpp:499, 938, 1007` (the Wander clip-count pins), `docs/notes/s7-recon.md` (the bake commands)
 
 **Interfaces:**
 - Consumes: Task 0's `wake.clips`.
 - Produces: `out/library/models/shadow/characters/mono/_cmn/mono.glb` carrying `girl_a_death_loop`; `wander.glb` carrying its current 15 clips in their current order, then the wake clips.
 
+- [ ] **Step 0: Relax the pins on `main` first** — `out/library` is shared, so a 15-exact pin on `main` would fail the moment Wander is re-baked. Change the three pins from `== 15` to `>= 15` plus a check that clips 0–14 carry the 15 S2–S6 names in their current order (list them from `wander.clips.json`); `ctest` green; commit as `test(app): pin Wander's S2–S6 clips by name, not count` on a branch off `main`, and land it on `main` (fast-forward) **with the user's OK** before Step 2; merge `main` into `s7-shrine`.
 - [ ] **Step 1: List** Wander's current clips in order from `out/library/models/shadow/characters/wander/_cmn/wander.clips.json`.
 - [ ] **Step 2: Bake** (no acceptance running) — `dotnet publish src/BpConvert.Cli -c Release -o out/bin`; `caffeinate -dimsu dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" --under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force`; the same for `models/shadow/characters/wander/_cmn/wander.cmsh` with `--clips <the 15 in order>,<wake clips>`. Check both `clips.json` files list the clips in that order.
-- [ ] **Step 3: Update** the three `animations.size() == 15` pins to `15 + <wake clip count>`; `ctest --test-dir app/build --output-on-failure` → green.
+- [ ] **Step 3: Check** `ctest --test-dir app/build --output-on-failure` → green on `s7-shrine` **and** on `main` (the Step 0 pins accept the appended clips); add one S7 case asserting the wake clips follow at index 15+.
 - [ ] **Step 4: Verify** — alone, `caffeinate -dimsu ./scripts/s6-acceptance.sh` → PASS (the clip indices the S2–S6 paths use are unchanged).
-- [ ] **Step 5: Commit** — `git commit -m "test(app): Wander carries the wake clips"` (the bakes are gitignored; the commands are in `s7-recon.md`).
+- [ ] **Step 5: Commit** — `git commit -m "test(app): Wander carries the wake clips"` (the bakes are gitignored; the commands are in `s7-recon.md`; the shared library change is recorded there too).
 
 ### Task 9: The return, the shrine and the S7 selftest (W1)
 
