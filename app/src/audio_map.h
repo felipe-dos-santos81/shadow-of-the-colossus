@@ -20,6 +20,7 @@ struct SoundCue {
     const char* clip;  // manifest name, never null for a mapped cue
     float gain;        // fractional voice gain (HurtHeavy is a 1.25 boost)
     bool loop;         // the clip's own loop flag is authoritative; informational
+    bool s6Only = false;  // required only by the S6 slice's load gate (death, club swing)
 };
 
 // The fight music is not an `Sfx`: the app owns its lifecycle through
@@ -31,7 +32,9 @@ inline constexpr float kMusicGain = 0.45f;
 namespace audio_map_detail {
 
 // Indexed by `Sfx`; the order is the enum's and the static_assert keeps them in
-// step. A nullptr clip is a deliberately deferred event.
+// step. A nullptr clip is a deliberately deferred event. `s6Only` marks the two
+// rows the S6 slice adds: the S5 load gate does not require them, so the frozen
+// S5 acceptance's eight-entry manifest loads unchanged.
 inline constexpr SoundCue kCues[] = {
     {"player.swing", 0.60f, false},    // Strike: Wander's swing
     {"player.hit", 0.60f, false},      // StrikeHit: the blade landing
@@ -46,12 +49,12 @@ inline constexpr SoundCue kCues[] = {
     {"valus.telegraph", 0.60f, false},  // ClubStart
     {"valus.impact", 0.50f, false},     // ClubImpact
     {nullptr, 1.00f, false},            // ClubCancel: deferred
-    {"valus.hurt", 0.60f, false},       // ValusReaction
-    {"valus.death", 0.80f, false},      // ValusDefeat: the S6 death roar
-    {nullptr, 1.00f, false},            // FootLeft: deferred
-    {nullptr, 1.00f, false},            // FootRight: deferred
-    {nullptr, 1.00f, false},            // Reset: deferred
-    {"valus.club_swing", 0.70f, false}, // ClubSwing: the S6 club whoosh
+    {"valus.hurt", 0.60f, false, false},       // ValusReaction
+    {"valus.death", 0.80f, false, true},       // ValusDefeat: the S6 death roar
+    {nullptr, 1.00f, false, false},            // FootLeft: deferred
+    {nullptr, 1.00f, false, false},            // FootRight: deferred
+    {nullptr, 1.00f, false, false},            // Reset: deferred
+    {"valus.club_swing", 0.70f, false, true},  // ClubSwing: the S6 club whoosh
 };
 
 static_assert(sizeof(kCues) / sizeof(kCues[0]) == static_cast<std::size_t>(Sfx::Count),
@@ -122,12 +125,20 @@ inline const char* sfx_name(Sfx id) {
 // `Sfx::Count` when the loaded manifest satisfies the whole table. The app
 // reports that `Sfx` by name, so a missing clip fails as an event, not as an
 // anonymous file.
+//
+// `includeS6` selects the slice the caller requires: the S5 gate (and the
+// pre-S6 interactive game) asks only for the non-S6 rows, so the frozen S5
+// acceptance's eight-entry manifest stays loadable; the S6 gate asks for every
+// row, so the ten-entry slice must carry `valus.death` and `valus.club_swing`.
 template <typename HasClip>
-Sfx missing_cue(const HasClip& has_clip) {
+Sfx missing_cue(const HasClip& has_clip, bool includeS6 = false) {
     for (int i = 0; i < static_cast<int>(Sfx::Count); ++i) {
         const Sfx id = static_cast<Sfx>(i);
         const SoundCue* cue = cue_for(id);
-        if (cue != nullptr && !has_clip(cue->clip)) {
+        if (cue == nullptr || (cue->s6Only && !includeS6)) {
+            continue;
+        }
+        if (!has_clip(cue->clip)) {
             return id;
         }
     }

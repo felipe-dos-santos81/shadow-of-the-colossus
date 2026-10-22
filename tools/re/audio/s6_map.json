@@ -1,5 +1,6 @@
 {
   "version": 3,
+  "milestone": "s6",
   "generated": "2026-10-22",
   "payload_formula": "wave_record_offset + 0x24 + start (length = bytes); see docs/notes/s5-audio-recon.md §7",
   "identity_policy": "name is the sound-request name (NAME/REQD); wave is the verified WAVE index; layers is the FULL set of waves in the sound, including the primary (layers[0] == wave). confidence is identity confidence only; 0x21 fidelity is a separate field and is medium for every row. ghidra rows require reqd+tone and must pass the actual SEQD/PLAY_TONE walk; audition rows require verified_index=true and are explicitly not chain-proven.",

@@ -245,8 +245,14 @@ TEST_CASE("the cue table maps the shipped slice and defers the rest") {
 }
 
 TEST_CASE("the death and the club swing resolve to the S6 slice") {
-    CHECK(std::string(cue_for(Sfx::ValusDefeat)->clip) == "valus.death");
-    CHECK(std::string(cue_for(Sfx::ClubSwing)->clip) == "valus.club_swing");
+    const SoundCue* death = cue_for(Sfx::ValusDefeat);
+    const SoundCue* swing = cue_for(Sfx::ClubSwing);
+    REQUIRE(death != nullptr);
+    REQUIRE(swing != nullptr);
+    CHECK(std::string(death->clip) == "valus.death");
+    CHECK(std::string(swing->clip) == "valus.club_swing");
+    CHECK(death->s6Only);
+    CHECK(swing->s6Only);
 }
 
 TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
@@ -259,10 +265,28 @@ TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
                     engine.last_error());
 
-    // The load gate: every non-null cue's clip exists, so the app can start
-    // the encounter without a silent hole.
+    // The S5 slice is required of every shipped manifest: the frozen S5
+    // acceptance regenerates its eight entries, and the gate must load them
+    // beside the S6 cue table.
     const Sfx missing = missing_cue([&engine](const char* clip) { return engine.has(clip); });
     CHECK(missing == Sfx::Count);
+
+    // The S6 slice is required only of a manifest that carries it: the S5
+    // acceptance leaves the library at eight, the S6 run at ten, so ctest is
+    // green either way without weakening the S6 gate.
+    const bool s6_shipped = engine.has("valus.death") && engine.has("valus.club_swing");
+    if (s6_shipped) {
+        const Sfx missingS6 = missing_cue(
+            [&engine](const char* clip) { return engine.has(clip); }, /*includeS6=*/true);
+        CHECK(missingS6 == Sfx::Count);
+    } else {
+        // An eight-entry manifest: asking for the whole slice names the first
+        // S6-only row, which is exactly the state the S5 run must tolerate.
+        const Sfx missingS6 = missing_cue(
+            [&engine](const char* clip) { return engine.has(clip); }, /*includeS6=*/true);
+        CHECK(missingS6 == Sfx::ValusDefeat);
+        CHECK_FALSE(engine.has("valus.club_swing"));
+    }
 
     // A rejected clip is reported as the event that names it (the load error's
     // `Sfx` name), not as a bare file path.

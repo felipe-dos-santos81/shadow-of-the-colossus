@@ -5,10 +5,12 @@ Reads a curated cue map (`tools/re/audio/s5_map.json` by default,
 `tools/re/audio/s6_map.json` for the S6 slice), decodes each mapped
 `(bank, wave)` with the loader-derived payload formula (`wave_record_offset +
 0x24 + start`, see `docs/notes/s5-audio-recon.md` §7), writes WAVs under
-`out/s5/audition/<bank>/`, and with `--check` fails if:
+`<out>/<bank>/` (`out/s5/audition/` for the S5 map, `out/s6/audition/gate/`
+for the S6 gate), and with `--check` fails if:
 
-* any core event (every cue except the streamed music) has no cue row with a
-  valid wave, or is `status=deferred`, or is also listed as deferred;
+* any of the map milestone's frozen core events
+  (`CORE_EVENTS_BY_MILESTONE`) has no cue row with a valid wave, or is
+  `status=deferred`, or is also listed as deferred;
 * a `ghidra` row is missing `reqd`/`tone`, its `reqd` does not match the NAME
   hash, the actual `SEQD`/`PLAY_TONE` walk does not return the mapped tone, or
   `TONE[tone].wave` does not equal the mapped wave;
@@ -21,6 +23,8 @@ Reads a curated cue map (`tools/re/audio/s5_map.json` by default,
 Usage
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
       --map tools/re/audio/s5_map.json --out out/s5/audition --check
+  python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
+      --map tools/re/audio/s6_map.json --out out/s6/audition/gate --check
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
       --bank boss01 --all --out out/s5/audition     # decode every wave
 
@@ -44,19 +48,33 @@ import s5_decode_gate as gate  # noqa: E402
 RMS_FLOOR_DBFS = -60.0
 
 
-def core_events(cue_map):
-    """The events `--check` requires: every cue except the streamed music.
-
-    Derived from the map so the S5 slice still requires its seven and the S6
-    slice requires all nine; `music.boss` is the fight score, identity/config
-    checked but not a resident core cue.
-    """
-    return tuple(cue["event"] for cue in cue_map.get("cues", [])
-                 if cue.get("event") and cue.get("bank") != "music")
-
-
 class AuditionError(RuntimeError):
     pass
+
+
+# The frozen expected core sets, by map milestone. The decoded cues come from
+# the map, but the *required* set does not: a cue that silently moves to
+# `deferred` (or is dropped from `cues`) must still fail the gate. The S5 map
+# predates the marker and is S5; `s6_map.json` declares `"milestone": "s6"`.
+CORE_EVENTS_S5 = ("valus.telegraph", "valus.impact", "valus.hurt",
+                  "player.swing", "player.hit", "player.hurt", "player.death")
+CORE_EVENTS_S6 = CORE_EVENTS_S5 + ("valus.death", "valus.club_swing")
+CORE_EVENTS_BY_MILESTONE = {"s5": CORE_EVENTS_S5, "s6": CORE_EVENTS_S6}
+DEFAULT_MILESTONE = "s5"
+
+
+def core_events(cue_map):
+    """The frozen expected core events for the map's milestone.
+
+    `music.boss` is the fight score, identity/config checked but never a
+    resident core cue.
+    """
+    milestone = cue_map.get("milestone", DEFAULT_MILESTONE)
+    if milestone not in CORE_EVENTS_BY_MILESTONE:
+        raise AuditionError(
+            f"unknown map milestone {milestone!r} (expected one of "
+            f"{', '.join(sorted(CORE_EVENTS_BY_MILESTONE))})")
+    return CORE_EVENTS_BY_MILESTONE[milestone]
 
 
 def bank_path(root, bank):

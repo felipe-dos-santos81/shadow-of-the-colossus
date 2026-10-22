@@ -626,10 +626,9 @@ TEST_CASE("the shipped audio manifest loads every entry") {
     AudioEngine engine;
     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
                     engine.last_error());
-    // The entry count is the library's slice (8 after S5, 10 after S6), so the
-    // check derives it from the manifest itself: the frozen S5 acceptance runs
-    // ctest before it regenerates its own eight, so a pinned count would fail
-    // depending on which milestone converted last.
+    // The entry count is the library's slice: eight after the frozen S5
+    // acceptance, ten after the S6 converter. Anything else is drift, so pin
+    // both states and check the S6 rows are present exactly when it is ten.
     std::size_t entries = 0;
     {
         std::ifstream in(manifest);
@@ -641,8 +640,19 @@ TEST_CASE("the shipped audio manifest loads every entry") {
             }
         }
     }
-    REQUIRE(entries >= 8);
+    const bool slice_size_ok = entries == 8 || entries == 10;
+    REQUIRE_MESSAGE(slice_size_ok,
+                    ("expected the S5 eight or the S6 ten manifest entries, found " +
+                     std::to_string(entries))
+                        .c_str());
     CHECK(engine.clip_count() == static_cast<int>(entries));
+    if (entries == 10) {
+        CHECK_MESSAGE(engine.has("valus.death"), "valus.death");
+        CHECK_MESSAGE(engine.has("valus.club_swing"), "valus.club_swing");
+    } else {
+        CHECK_FALSE(engine.has("valus.death"));
+        CHECK_FALSE(engine.has("valus.club_swing"));
+    }
     for (const char* name : {"valus.hurt", "valus.impact", "valus.telegraph", "player.death",
                              "player.hit", "player.swing", "player.hurt", "music.boss"}) {
         CHECK_MESSAGE(engine.has(name), name);

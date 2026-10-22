@@ -1446,15 +1446,18 @@ struct AudioSeam {
     // Loads `libraryDir/audio/audio.manifest` and validates the cue table. The
     // engine names its own manifest failure; a rejected cue names its `Sfx` and
     // the clip. The caller picks the policy (fatal in --s5-selftest, one warning
-    // and a silent game otherwise).
-    bool load(const std::string& libraryDir) {
+    // and a silent game otherwise) and the slice: `includeS6` false requires the
+    // S5 rows only, so the frozen S5 acceptance's eight-entry manifest stays
+    // loadable beside the S6 cue table; true requires every row, including the
+    // death and the club swing (Task 5's --s6-selftest).
+    bool load(const std::string& libraryDir, bool includeS6) {
         enabled = false;
         const std::string manifest = libraryDir + "/audio/audio.manifest";
         if (!engine.load_manifest(manifest, libraryDir)) {
             return false;
         }
-        const Sfx missing =
-            missing_cue([this](const char* clip) { return engine.has(clip); });
+        const Sfx missing = missing_cue(
+            [this](const char* clip) { return engine.has(clip); }, includeS6);
         if (missing != Sfx::Count) {
             const SoundCue* cue = cue_for(missing);
             std::fprintf(stderr,
@@ -1916,7 +1919,11 @@ int run_app(const AppOptions& opts) {
              (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
               !opts.s42Selftest && !opts.entityTimeSet));
         if (audio_wanted) {
-            if (!audio.load(opts.libraryDir)) {
+            // The S5 slice is the load gate here: --s5-selftest and interactive
+            // play must load the frozen eight-entry manifest beside the S6 cue
+            // table. The S6 slice's own gate (Task 5's --s6-selftest) passes
+            // includeS6 = true and requires the death and club-swing rows too.
+            if (!audio.load(opts.libraryDir, /*includeS6=*/false)) {
                 // The engine (or the cue gate) already printed the reason. A
                 // missing curated clip is fatal when the sound is the artifact;
                 // interactive play degrades to silence with that one warning.
