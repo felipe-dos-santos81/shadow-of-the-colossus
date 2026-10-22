@@ -2,10 +2,12 @@
 
 The native macOS viewer for the converted *Shadow of the Colossus* asset library:
 C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
-(`out/library`: `.glb` + `.png`) — never the game tree or original containers.
+(`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
+original containers.
 
-**Status (milestone S4.2): he fights back — shell weakpoints, Valus's stomp and club, Wander's
-health and death, the R reset (user walk pending).**
+**Status (milestone S5): the sound of the forbidden land — the game's own audio decoded at
+build time (the seven attributed cues plus Boss 1), a deterministic mixer, `M` to mute (user
+walk pending).**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -58,6 +60,20 @@ way (left stick move, right stick camera, RT grip, west/X/square strike, Start
 pause) and hot-plugs without latching an input. `--s41-selftest` and
 `--s42-selftest` run the deterministic acceptance timelines described below.
 
+The encounter has its own voice. The library's converted audio slice is loaded at start
+(a missing manifest degrades to silence with one warning; an encounter whose manifest lacks
+a curated cue is a load error naming the event) and played through a 32-voice software mixer
+into one SDL3 stream at 48 kHz: the music is non-positional, world sounds attenuate with
+distance and pan by the player's relative bearing. Music starts on the first landed hit
+and loops, and stops at the `R` reset (and on Valus's defeat). `M` mutes and unmutes the whole
+mixer; there is no other audio UI. The curated slice is the seven attributed cues
+(`player.swing`, `player.hit`, `player.hurt`, `player.death`, `valus.telegraph`,
+`valus.impact`, `valus.hurt`) plus `music.boss` (`Boss 1`, 5.1 downmixed to stereo, looped).
+Valus's death, the club whoosh, the player's fall, ambience, grab/climb and footsteps are
+**deferred** — they are not in the cue map, so they are silent rather than placeholders.
+`--s5-selftest --audio-mixdown PATH` runs the S4.2 timeline with the audio observer on and
+writes the proof.
+
 ## Build
 
 ```bash
@@ -106,6 +122,8 @@ is required. Escape or the close button quits.
 | `--s41-stills DIR` | with `--s41-selftest`, write `grab.png`, `mid-climb.png`, `strike.png` and `reaction.png` into `DIR`, plus the defeat still (to `--screenshot`, else `DIR/defeat.png`) and the pixel controls under `DIR/control/`; both `DIR` and `DIR/control/` must exist (the acceptance script creates them) |
 | `--s42-selftest` | compose the encounter `--manifest` and run the deterministic S4.2 fight timeline through fixed 1/60 s steps with no window input: both shell proxies, the foot/head damage gate, the chest→shoulder→arm route, a stomp and a club hit (with the i-frame gate), the 4 m club miss and the 3 m stomp shockwave, a lethal club with the pinned death clip, the R soft reset, and the teleport-free foot→head stamina climb; prints the `s42-*` lines and `s42-status`, exits 1 on a failed invariant; needs `--manifest` (with an entity) and `--model` |
 | `--s42-stills DIR` | with `--s42-selftest`, write six HUD-bearing stills into `DIR`: `stomp-telegraph.png`, `stomp-impact.png`, `club-swing.png`, `hurt.png`, `death.png`, `arm-weakpoint.png`; each capture restores the playback clocks, so the `s42-*` event lines are identical with and without stills; `DIR` must exist (the acceptance script creates it) |
+| `--s5-selftest` | compose the encounter `--manifest` and run the S4.2 timeline with the S5 audio observer on: the same fixed 1/60 s steps, one `s5-event t= event= clip=<manifest name> gain=` line per played cue, then the `s5-mix` quality line and `s5-status` last; writes the mixdown to `--audio-mixdown` and exits 1 on a missing cue clip or a silent capture; needs `--manifest` (with an entity) and `--audio-mixdown`; cannot be combined with another selftest |
+| `--audio-mixdown PATH` | with `--s5-selftest`, the 48 kHz float stereo WAV the mixer's disk sink writes — the headless acceptance capture; needs `--s5-selftest` |
 
 ## Manifests
 
@@ -150,7 +168,8 @@ Controls (no mouse capture: the cursor stays visible and free):
 | `T` | Toggle entity target framing: orbit the entity's chest; `T` again restores the follow view without a snap. Inert when the manifest has no entity (the S3 arena) |
 | `Space` | Play/pause the current clip |
 | `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
-| `R` | Soft-reset the encounter (player HP/stamina/i-frames/mode/spawn/camera and Valus HP/pose/cooldown); without an encounter, restart the current clip |
+| `R` | Soft-reset the encounter (player HP/stamina/i-frames/mode/spawn/camera, Valus HP/pose/cooldown, and the music); without an encounter, restart the current clip |
+| `M` | Mute/unmute the whole mixer (music and SFX); the only audio UI |
 | Escape / close button | Quit |
 
 Gamepad (standard SDL3 mapping, polled once per frame, hot-plugged):
@@ -266,6 +285,41 @@ acceptance script (`scripts/s42-acceptance.sh`) parses every line, guards the
 stills, measures the marginal frame cost and runs the S4.1 acceptance unchanged;
 `docs/notes/s42-results.md` records the measured values and the walk checklist.
 
+`--s5-selftest` is the same S4.2 timeline with the S5 audio observer on and a
+disk-sink capture. It prints one `s5-event` line per played cue, in order,
+each naming the manifest entry (not `bank/name`), then the mixdown's quality
+line and `s5-status` last:
+
+```text
+s5-event t=1.017 event=strike clip=player.swing gain=0.60
+s5-event t=2.050 event=strike clip=player.swing gain=0.60
+s5-event t=2.050 event=strike_hit clip=player.hit gain=0.60
+s5-event t=2.050 event=valus_reaction clip=valus.hurt gain=0.60
+s5-event t=2.050 event=music_start clip=music.boss gain=0.45
+s5-event t=13.667 event=strike clip=player.swing gain=0.60
+s5-event t=13.667 event=strike_hit clip=player.hit gain=0.60
+s5-event t=13.667 event=valus_reaction clip=valus.hurt gain=0.60
+s5-event t=15.700 event=stomp_start clip=valus.telegraph gain=0.60
+s5-event t=16.233 event=stomp_impact clip=valus.impact gain=0.50
+s5-event t=16.233 event=hurt_light clip=player.hurt gain=1.00
+s5-event t=17.250 event=club_start clip=valus.telegraph gain=0.60
+s5-event t=17.683 event=club_impact clip=valus.impact gain=0.50
+s5-event t=17.683 event=hurt_heavy clip=player.hurt gain=1.25
+s5-event t=18.933 event=club_start clip=valus.telegraph gain=0.60
+s5-event t=19.367 event=club_impact clip=valus.impact gain=0.50
+s5-event t=19.367 event=death clip=player.death gain=0.80
+s5-event t=20.483 event=music_stop clip=music.boss gain=0.00
+s5-mix frames=2139200 rms=0.0514 peak=0.9022 window_rms=0.1520
+s5-status mixdown=…/out/s5/mix.wav events=18 music=1
+```
+
+The first strike (1.017 s) is the foot clang: it swings but deals no damage, so
+it plays no hit and starts no music. The first landed hit starts Boss 1;
+`hurt_heavy` is the same `player.hurt` clip pushed to 1.25; the music stops at
+the reset (20.483 s), one step after the death, because the reset is what ends
+the fight in this timeline. With audio off the timeline prints the same
+`s42-*` lines byte for byte.
+
 A manifest with an `entity` is an encounter: the player's combat clips
 (`player_a_grip_loop`, `player_a_grip_move_f1`,
 `player_a_grip_float_u_hi_attack`, `player_a_damage_m_fly2`,
@@ -280,6 +334,40 @@ club glb) is a load error (exit 2) naming the glb and the clip — never a silen
 fallback to the first clip. A rig without `OptBone_sword` degrades instead: one
 line on stderr and no club drawn, so the fight still loads without its prop. The
 S3 arena has no entity and needs none of them.
+
+## Audio
+
+The viewer plays only converted audio. `bp-convert audio` decodes the curated cues from the
+game's resident `SXDF` banks and the `music.sxd1`/`music.sxd2` pair at **build time** into
+`<library>/audio/<bank>/<event>.wav` (48 kHz float PCM) plus
+`<library>/audio/audio.manifest`; the runtime never parses `.sxd`/`.sxd2`. A cue name that is
+not in the manifest is a load error naming the event, never a silent fallback.
+
+```bash
+export SOTC_GAME_ROOT=…/SOTC-extract/extracted/game
+dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" --out out/library \
+  --map tools/re/audio/s5_map.json --force
+# -> manifest: out/library/audio/audio.manifest (8 entries)
+# -> audio: 8 written, 0 reused, 8 manifest entries
+```
+
+`tools/re/audio/s5_map.json` is the slice's authority: seven attributed cues (`player.swing`,
+`player.hit`, `player.hurt`, `player.death`, `valus.telegraph`, `valus.impact`,
+`valus.hurt`) and `music.boss`. Only `valus.impact` is chain-verified (`NAME` → `REQD` →
+`SEQD` → `PLAY_TONE` → `WAVE`); the other six are audition picks, and every 0x21 PS-ADPCM
+row is a fitted-filter decode. Each row's method, identity confidence and fidelity are in
+`docs/notes/s5-audio-attribution.md`; the decode itself is in
+`docs/notes/s5-audio-recon.md`. **Deferred** (not in the map, therefore silent rather than
+replaced): Valus's death, the club whoosh, the player's fall, ambience, grab/climb and
+footsteps. The user's ear is the identity check (`docs/notes/s5-results.md`).
+
+The mixer is a 32-voice software mix at 48 kHz float stereo into one SDL3 stream: category
+gains, distance attenuation and bearing pan for world sounds, whole-track loops for music,
+oldest/quietest voice stealing, a 0.85 master headroom before the clamp, and `M` to mute.
+`--s5-selftest --audio-mixdown out/s5/mix.wav` proves it headlessly (no audio device); the
+acceptance script (`scripts/s5-acceptance.sh`) runs it, checks the sequence / the WAV /
+`ffmpeg astats`, proves the `s42-*` lines are unchanged with audio off, then runs the S4.2
+acceptance unchanged.
 
 ## Tests
 
