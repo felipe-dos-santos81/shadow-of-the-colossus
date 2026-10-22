@@ -6,14 +6,26 @@
 // the clip playback, the camera and the rendering; everything that answers a
 // question about the death's timeline answers it here.
 //
-//     Idle --defeat--> Motion --kMotionSeconds--> Collapse --8.0 s--> Done
-//                        \_ tendril burst 0.4-3.0 s _/    (corpse stays)
+//     Idle --defeat--> Motion --kMotionSeconds--> Collapse --total 8.0 s--> Done
+//                        \_ tendril burst 0.4-3.0 s _/     (corpse stays)
+//
+// Collapse is then 1.833 s long; the 8.0 s in the diagram is the defeat clock,
+// not the collapse's own duration.
 //
 // The death clip is `minotaur_a_death_front`. Its runtime duration is the
 // maximum input time, 6.166877 s (93 / 15.08056640625), not the 94-frame
 // figure (6.2332 s): the last key sits one frame interval before the count.
-// `kMotionSeconds` pins that duration, and the one-shot clip the app starts on
-// the defeat must not outlive it.
+// R8 in `.superpowers/sdd/2026-10-22-s6-the-fall/progress.md` retires the
+// design's 6.233 s. `kMotionSeconds` pins the duration.
+//
+// Task 5 guidance (the clip is driven from this machine's clock, not a second
+// clock): compute `clipTime = std::min(death.total, kMotionSeconds)` each
+// frame, or skip the clip's own `dt` on the transition frame; the defeat frame
+// deliberately starts `total` at 0 and does not accumulate that frame's `dt`.
+// The glb sampler max (6.1668767929077 s) and the constant are the same float,
+// but the exact quotient is 6.16687727 s, so compare a loaded clip's duration
+// with at least a 1e-5 relative tolerance instead of equality. The recon note's
+// `6.166933 s` is a typo; R8's `6.166877` is the pinned value.
 //
 // `DeathPhase::Tendrils` is part of the interface but the machine never enters
 // it: the burst *overlaps* Motion (it is an effect window, not a playback
@@ -30,8 +42,8 @@ enum class DeathPhase { Idle, Motion, Tendrils, Collapse, Done };
 
 struct DeathState {
     DeathPhase phase = DeathPhase::Idle;
-    float t = 0.0f;      // seconds in the current phase
-    float total = 0.0f;  // seconds since the defeat
+    float t = 0.0f;      // seconds in the current phase (0 in Idle and Done)
+    float total = 0.0f;  // seconds since the defeat, capped at kDeathEnd in Done
     bool inputLocked = false;
     bool corpseVisible = false;
     int roots = 0;  // tendril roots: 2 from the defeat until the reset
@@ -51,9 +63,10 @@ inline constexpr int kDeathRoots = 2;
 // untouched. Once running, `dt` advances `total` (a negative or non-finite
 // `dt` advances nothing) and the phase follows `total`: Motion below
 // `kMotionSeconds`, Collapse below `kDeathEnd`, Done from `kDeathEnd` on.
-// `t` is the time inside the current phase, so a long frame's overshoot is
-// kept. `defeated` is not re-read after the transition; only `reset_death`
-// returns to Idle.
+// A running phase's `t` keeps a long frame's overshoot; Done instead clamps
+// `total` to `kDeathEnd` and `t` to 0, so the terminal state is exactly stable
+// and every further step returns it unchanged. `defeated` is not re-read after
+// the transition; only `reset_death` returns to Idle.
 DeathState step_death(DeathState state, float dt, bool defeated);
 
 // Idle, unlocked, no corpse, no roots.

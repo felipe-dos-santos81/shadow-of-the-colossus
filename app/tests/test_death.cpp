@@ -20,25 +20,43 @@ DeathState begun() { return step_death({}, 0.0f, true); }
 
 }  // namespace
 
+TEST_CASE("the motion boundary is the runtime clip's 6.166877 s (R8)") {
+    // The retired 6.233 s (94 frames) is 66 ms late; the recon note's
+    // 6.166933 is a typo. The exact quotient is 6.16687727 s, so 1e-6 accepts
+    // the constant and the quotient while rejecting both wrong values.
+    CHECK(kMotionSeconds == doctest::Approx(6.166877f).epsilon(1e-6));
+    CHECK(kMotionSeconds == doctest::Approx(93.0 / 15.08056640625).epsilon(1e-6));
+    CHECK(kMotionSeconds != doctest::Approx(6.166933f).epsilon(1e-6));
+    CHECK(kMotionSeconds != doctest::Approx(6.233f).epsilon(1e-6));
+}
+
 TEST_CASE("the death machine walks Idle to Motion to Collapse to Done") {
     DeathState s = step_death({}, 1.0f / 60.0f, false);
     CHECK(s.phase == DeathPhase::Idle);
+    CHECK_FALSE(s.inputLocked);
+    CHECK_FALSE(s.corpseVisible);
     CHECK_FALSE(death_locks_input(s));
     CHECK_FALSE(death_corpse_visible(s));
 
     s = step_death({}, 1.0f / 60.0f, true);
     CHECK(s.phase == DeathPhase::Motion);
+    CHECK(s.inputLocked);
+    CHECK_FALSE(s.corpseVisible);
     CHECK(death_locks_input(s));
     CHECK_FALSE(death_corpse_visible(s));
     CHECK(s.roots == 2);
 
     s = step_death(s, 6.3f, true);
     CHECK(s.phase == DeathPhase::Collapse);
+    CHECK(s.inputLocked);
+    CHECK(s.corpseVisible);
     CHECK(death_corpse_visible(s));
     CHECK(death_locks_input(s));
 
     s = step_death(s, 1.8f, true);
     CHECK(s.phase == DeathPhase::Done);
+    CHECK_FALSE(s.inputLocked);
+    CHECK(s.corpseVisible);
     CHECK_FALSE(death_locks_input(s));
     CHECK(death_corpse_visible(s));
 }
@@ -50,18 +68,24 @@ TEST_CASE("the tendril window starts at 0.4 s and ends at 3.0 s") {
 
     s = step_death(s, 0.39f, true);  // total 0.39: just before the burst
     CHECK(s.total == doctest::Approx(0.39f));
+    CHECK(s.phase == DeathPhase::Motion);
     CHECK_FALSE(death_tendrils_active(s));
 
     s = step_death(s, 0.02f, true);  // total 0.41: the burst is running
     CHECK(s.total == doctest::Approx(0.41f));
+    CHECK(s.phase == DeathPhase::Motion);
     CHECK(death_tendrils_active(s));
+    CHECK(s.inputLocked);
+    CHECK_FALSE(s.corpseVisible);
 
     s = step_death(s, 2.58f, true);  // total 2.99: still running
     CHECK(s.total == doctest::Approx(2.99f));
+    CHECK(s.phase == DeathPhase::Motion);
     CHECK(death_tendrils_active(s));
 
     s = step_death(s, 0.02f, true);  // total 3.01: the burst has ended
     CHECK(s.total == doctest::Approx(3.01f));
+    CHECK(s.phase == DeathPhase::Motion);
     CHECK_FALSE(death_tendrils_active(s));
 }
 
@@ -81,21 +105,29 @@ TEST_CASE("the tendril window includes both of its edges") {
 TEST_CASE("the lock holds through the motion and collapse and releases in Done") {
     DeathState s = step_death(begun(), kMotionSeconds - 0.001f, true);
     CHECK(s.phase == DeathPhase::Motion);
+    CHECK(s.inputLocked);
+    CHECK_FALSE(s.corpseVisible);
     CHECK(death_locks_input(s));
     CHECK_FALSE(death_corpse_visible(s));
 
     s = step_death(begun(), kMotionSeconds, true);
     CHECK(s.phase == DeathPhase::Collapse);
+    CHECK(s.inputLocked);
+    CHECK(s.corpseVisible);
     CHECK(death_locks_input(s));
     CHECK(death_corpse_visible(s));
 
     s = step_death(begun(), kDeathEnd - 0.001f, true);
     CHECK(s.phase == DeathPhase::Collapse);
+    CHECK(s.inputLocked);
+    CHECK(s.corpseVisible);
     CHECK(death_locks_input(s));
     CHECK(death_corpse_visible(s));
 
     s = step_death(begun(), kDeathEnd, true);
     CHECK(s.phase == DeathPhase::Done);
+    CHECK_FALSE(s.inputLocked);
+    CHECK(s.corpseVisible);
     CHECK_FALSE(death_locks_input(s));
     CHECK(death_corpse_visible(s));
 }
@@ -103,17 +135,23 @@ TEST_CASE("the lock holds through the motion and collapse and releases in Done")
 TEST_CASE("the corpse stays and the lock stays off once Done") {
     DeathState s = step_death(begun(), kDeathEnd, true);
     CHECK(s.phase == DeathPhase::Done);
+    CHECK(s.total == kDeathEnd);
+    CHECK(s.t == 0.0f);
 
     s = step_death(s, 1.0f, true);
     CHECK(s.phase == DeathPhase::Done);
-    CHECK_FALSE(death_locks_input(s));
-    CHECK(death_corpse_visible(s));
+    CHECK_FALSE(s.inputLocked);
+    CHECK(s.corpseVisible);
+    CHECK(s.total == kDeathEnd);  // capped: the terminal state does not drift
+    CHECK(s.t == 0.0f);
 
     // Only the reset returns to Idle; a cleared defeat does not rewind.
     s = step_death(s, 1.0f, false);
     CHECK(s.phase == DeathPhase::Done);
-    CHECK_FALSE(death_locks_input(s));
-    CHECK(death_corpse_visible(s));
+    CHECK_FALSE(s.inputLocked);
+    CHECK(s.corpseVisible);
+    CHECK(s.total == kDeathEnd);
+    CHECK(s.t == 0.0f);
 }
 
 TEST_CASE("the defeat plants two tendril roots and only the reset clears them") {
@@ -187,10 +225,10 @@ TEST_CASE("total accumulates across steps and t tracks the current phase") {
     CHECK(s.phase == DeathPhase::Collapse);
     CHECK(s.t == doctest::Approx(6.75f - kMotionSeconds));
 
-    s = step_death(s, 2.0f, true);  // total 8.75: done
-    CHECK(s.total == doctest::Approx(8.75f));
+    s = step_death(s, 2.0f, true);  // total 8.75: Done caps the clock
+    CHECK(s.total == kDeathEnd);
     CHECK(s.phase == DeathPhase::Done);
-    CHECK(s.t == doctest::Approx(8.75f - kDeathEnd));
+    CHECK(s.t == 0.0f);
 }
 
 TEST_CASE("a long frame still ends in Done instead of stranding the sequence") {
@@ -198,7 +236,31 @@ TEST_CASE("a long frame still ends in Done instead of stranding the sequence") {
     CHECK(s.phase == DeathPhase::Done);
     CHECK_FALSE(death_locks_input(s));
     CHECK(death_corpse_visible(s));
-    CHECK(s.total == doctest::Approx(100.0f));
+    CHECK(s.total == kDeathEnd);
+    CHECK(s.t == 0.0f);
+    CHECK(s.inputLocked == false);
+    CHECK(s.corpseVisible);
+}
+
+TEST_CASE("Done stays exactly put over a long idle") {
+    DeathState s = step_death(begun(), 9.0f, true);
+    CHECK(s.phase == DeathPhase::Done);
+    CHECK(s.total == kDeathEnd);
+    CHECK(s.t == 0.0f);
+
+    const DeathState done = s;
+    for (int frame = 0; frame < 3600; ++frame) {
+        s = step_death(s, 1.0f / 60.0f, true);
+        REQUIRE(s.phase == DeathPhase::Done);
+        REQUIRE(s.total == done.total);
+        REQUIRE(s.t == done.t);
+        REQUIRE(s.inputLocked == done.inputLocked);
+        REQUIRE(s.corpseVisible == done.corpseVisible);
+        REQUIRE(s.roots == done.roots);
+    }
+    CHECK(s.roots == 2);
+    CHECK_FALSE(death_locks_input(s));
+    CHECK(death_corpse_visible(s));
 }
 
 TEST_CASE("a non-finite or negative dt does not move the clock") {

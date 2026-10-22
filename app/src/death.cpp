@@ -28,11 +28,14 @@ DeathState step_death(DeathState state, float dt, bool defeated) {
 
     state.total += non_negative_dt(dt);
 
-    // Ordered by the later boundary first: one long frame may skip a phase,
-    // and `t` keeps the overshoot rather than discarding it.
+    // Ordered by the later boundary first: one long frame may skip a phase.
+    // Done is terminal and capped, so the claim "the corpse stays" is also a
+    // claim that the state stops moving: `total`/`t` would otherwise grow (and
+    // lose float precision) for the rest of the session.
     if (state.total >= kDeathEnd) {
         state.phase = DeathPhase::Done;
-        state.t = state.total - kDeathEnd;
+        state.total = kDeathEnd;
+        state.t = 0.0f;
         state.inputLocked = false;
         state.corpseVisible = true;
     } else if (state.total >= kMotionSeconds) {
