@@ -1462,6 +1462,17 @@ struct AudioSeam {
             engine.reset();
             return false;
         }
+        // The music is not an `Sfx`, so `missing_cue` cannot see it; the score
+        // is as mandatory as the fight cues (D5), so gate it here — a manifest
+        // without it fails at load, not as "a cue clip was missing at play time".
+        if (!engine.has(kMusicClip)) {
+            std::fprintf(
+                stderr,
+                "sotc-viewer: audio: music cue names clip '%s', which %s does not load\n",
+                kMusicClip, manifest.c_str());
+            engine.reset();
+            return false;
+        }
         enabled = true;
         return true;
     }
@@ -1485,6 +1496,10 @@ struct AudioSeam {
             engine.play_ui(cue->clip, gain);
         }
         if (log) {
+            // `clip=` is the R1 manifest `name=` (e.g. `valus.impact`), not
+            // `bank/name`: the engine indexes clips by that name and exposes no
+            // bank. Ledger R16 makes the manifest name the log contract; Task 6
+            // parses these tokens.
             std::printf("s5-event t=%.3f event=%s clip=%s gain=%.2f\n", clock,
                         sfx_name(event.id), cue->clip, gain);
             ++eventCount;
@@ -1534,8 +1549,11 @@ struct AudioSeam {
         if (!enabled) {
             return;
         }
+        // D5's reset stop must be observable: the reset emits the same
+        // `music_stop` the defeat path does (only while the music is actually
+        // live — stop_music is idempotent), then every voice goes.
+        stop_music();
         engine.reset();  // every voice, music included
-        musicStarted = false;
     }
 
     void toggle_mute() {
@@ -2869,10 +2887,14 @@ int run_app(const AppOptions& opts) {
             // audio off every audio branch is skipped, so the `s42-*` values
             // are byte-identical (the audio-off diff is the proof).
             const bool audioOn = audio.enabled;
+            // One shared stepper serves two flags: name the invoked one in the
+            // load/shape errors so an S5 run never blames --s42-selftest.
+            const char* const selftestFlag =
+                opts.s5Selftest ? "--s5-selftest" : "--s42-selftest";
             if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
                 entityRig >= playbacks.size()) {
-                std::fprintf(stderr,
-                             "sotc-viewer: --s42-selftest: the manifest has no entity\n");
+                std::fprintf(stderr, "sotc-viewer: %s: the manifest has no entity\n",
+                             selftestFlag);
                 return 2;
             }
             if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
@@ -2882,8 +2904,8 @@ int run_app(const AppOptions& opts) {
                 playerClips.death < 0) {
                 // The load gate above already refused this case; keep the
                 // invariant explicit so no future path can reach a fallback.
-                throw std::runtime_error(
-                    "s42-selftest: a fight clip is missing despite the load gate");
+                throw std::runtime_error(std::string(selftestFlag) +
+                                         ": a fight clip is missing despite the load gate");
             }
 
             Playback& entity_playback = playbacks[entityRig];
@@ -3004,12 +3026,14 @@ int run_app(const AppOptions& opts) {
                 if (audioOn) {
                     flush_sfx();
                     // The first landed hit is the fight music's downbeat (D5);
-                    // a death or a defeat stops it. Both transitions land on a
+                    // only Valus's defeat stops it. Wander's death does not: the
+                    // score runs through the death clip (D5 names defeat and
+                    // reset, not the player's death). Both transitions land on a
                     // step boundary, so the log order is stable.
                     if (events.damageDealt > 0) {
                         audio.start_music();
                     }
-                    if (combat.mode == PlayerMode::Dead || encounter.defeated) {
+                    if (encounter.defeated) {
                         audio.stop_music();
                     }
                     audio.update(stepSeconds, player.position, camera_look_yaw(camera));
@@ -4714,7 +4738,9 @@ int run_app(const AppOptions& opts) {
                     if (events.damageDealt > 0) {
                         audio.start_music();
                     }
-                    if (combat.mode == PlayerMode::Dead || encounter.defeated) {
+                    // D5: the score stops on Valus's defeat and on the R reset,
+                    // never on Wander's death — it runs through the death clip.
+                    if (encounter.defeated) {
                         audio.stop_music();
                     }
                     audio.update(dt, player.position, camera_look_yaw(camera));

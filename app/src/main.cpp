@@ -234,9 +234,11 @@ int main(int argc, char** argv) {
         print_usage(stderr);
         return 2;
     }
-    if (opts.s5Selftest && opts.s42Selftest) {
+    if (opts.s5Selftest &&
+        (opts.selftest || opts.s3Selftest || opts.s4Selftest || opts.s41Selftest ||
+         opts.s42Selftest)) {
         std::fprintf(stderr,
-                     "sotc-viewer: --s5-selftest and --s42-selftest run the same timeline; "
+                     "sotc-viewer: --s5-selftest cannot be combined with another selftest; "
                      "pass one\n");
         print_usage(stderr);
         return 2;
