@@ -44,17 +44,18 @@ Modes
   fs <file> [--json <out>]   structure dump of a .fs: header, entries, v histogram
   classify                   one line per family: counts, size ranges, name ranges
   check-fs                   pinned assertions for the stage .fs family (exit 0/1)
-  cwks <file> [--json <out>] [--arena-out <out>] [--match SUBSTR]
+  cwks <file> [--json <out>] [--arena-out <out>] [--match SUBSTR] [--stage NAME]
                              structure dump of the workspace file: header,
                              records, string pool; extracts the pool path list
-                             matching SUBSTR (default: the arena match)
+                             matching SUBSTR (default: the stage's match)
   check-cwks                 pinned assertions for the workspace file (exit 0/1)
-  compose --library <dir> --out <file> [--paths <file>]
+  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|shrine]
                              emit the arena scene manifest (the W1↔W2 format):
                              the level sets' non-*_collision* glbs, identity
                              transforms, the labeled spawn pick
-  check-manifest [<file>] --library <dir>
-                             pinned assertions for the arena manifest (exit 0/1)
+  check-manifest [<file>] --library <dir> [--stage arena_01|shrine]
+                             pinned assertions for the stage's manifest (exit 0/1);
+                             no --stage means arena_01
   compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
                              derive the S4 encounter manifest from the S3 one:
                              the 30 instances verbatim, a rewritten spawn, one
@@ -118,9 +119,6 @@ CWKS_POOL_START = 0x105E60
 CWKS_ENTRIES = 407965  # the pool's string entries (tagged + bare)
 CWKS_TAGGED = 340920
 CWKS_BARE = 67045
-CWKS_ARENA_MATCH = "levels/arena_01/"
-CWKS_ARENA_COUNT = 142
-CWKS_ARENA_SHA256 = "13e3bb60daf3dc91bbf36818b3bc6dd50dc59c27e9730f341d2c4b24d77e5706"
 CWKS_TAIL_MATCH = "cp3shadow/data/fs/stage"
 CWKS_TAIL_FIRST = 0x1C07319
 CWKS_TAIL_PATHS = (
@@ -139,34 +137,74 @@ CWKS_TAIL_PATHS = (
     "/cp3shadow/data/fs/stagetexseg_def/660533.fs",
 )
 
-# The arena composition pins (W2.3; all re-measured 2026-10-18, docs/notes/re-stage.md §3).
-# The two level sets (library-relative), the measured glb file counts, and the
-# *_collision* subset: the non-*_collision* glbs are the manifest's instances
-# (identity transforms — the glbs are already world-positioned); the collision
-# glbs are collision geometry, not render dependencies (the workspace pool
+# The per-stage composition configs (W2.3 for arena_01, S7 for shrine; the arena
+# values were re-measured 2026-10-18, docs/notes/re-stage.md §3).  `compose`,
+# `check-manifest` and `cwks` take `--stage`; none means arena_01.
+#   cwks_match   the pool path substring that lists the stage's workspace entries
+#   count        that list's entry count; cwks_sha256 its canonical-text sha256
+#   sets         the library directories holding the stage's glbs
+#   instances    the manifest's instance count (None until pinned on a measured compose)
+#   spawn        the manifest's spawn (x y z yaw), or None when the stage has none yet
+#   bounds_evidence  (key, level glb, evidence) per level glb (arena_01 only)
+# arena_01: the two level sets hold 13 + 22 glbs; the non-*_collision* ones (12 + 18 = 30)
+# are the instances (identity transforms — the glbs are already world-positioned); the
+# collision glbs are collision geometry, not render dependencies (the workspace pool
 # references their `.cclm` definitions, and the non-collision cmsh exactly — §3).
-ARENA_SETS = (
-    "models/shadow/levels/arena_01",
-    "models/shadow/levels/arena_01_entrance",
-)
-ARENA_SET_FILES = (13, 22)        # glb files per set, before the collision filter
-ARENA_SET_COLLISION = (1, 4)      # *_collision* glb files per set
-ARENA_INSTANCES = 30              # 12 + 18 non-*_collision* glbs (35 - 5)
-ARENA_LEVEL_GLB = "models/shadow/levels/arena_01/_cmn/arena_01.glb"
-ENTRANCE_LEVEL_GLB = "models/shadow/levels/arena_01_entrance/_cmn/arena_01_entrance.glb"
+# The spawn is a labeled builder pick (§3): the entrance `_ground` mesh's footprint centre
+# (309.3118, 285.4028) at its surface height (4.3940 m, ray-cast), facing +Z — the app's
+# yaw 0 is +Z, toward the arena bowl; the sets meet near z≈300.  NOT data-derived (the
+# `.path`/camdata candidates are in §3).  The bounds evidence is the plan's rounded numbers
+# (check-manifest re-derives them from the accessor min/max and matches at this precision —
+# x/z to integers, the entrance's y to 1 dp).
+# shrine: one set, in cwks order (the first appearance of each cmsh in the pool list), minus
+# the exclusions below (design D3).  `instances`, `meshes` and `sha256` stay None until
+# Task 7 pins them on the first composed manifest.
+STAGES = {
+    "arena_01": {
+        "cwks_match": "levels/arena_01/",
+        "count": 142,
+        "cwks_sha256": "13e3bb60daf3dc91bbf36818b3bc6dd50dc59c27e9730f341d2c4b24d77e5706",
+        "sets": (
+            "models/shadow/levels/arena_01",
+            "models/shadow/levels/arena_01_entrance",
+        ),
+        "order": "sorted",            # instances sorted per set
+        "set_files": (13, 22),        # glb files per set, before the collision filter
+        "set_collision": (1, 4),      # *_collision* glb files per set
+        "instances": 30,              # 12 + 18 non-*_collision* glbs (35 - 5)
+        "spawn": (309.312, 4.394, 285.403, 0.0),
+        "bounds_evidence": (
+            ("arena_01", "models/shadow/levels/arena_01/_cmn/arena_01.glb",
+             ("x[237,431]", "y[28,70]", "z[298,390]")),
+            ("entrance", "models/shadow/levels/arena_01_entrance/_cmn/arena_01_entrance.glb",
+             ("x[259,345]", "y[-1.7,81.5]", "z[249,307]")),
+        ),
+    },
+    "shrine": {
+        "cwks_match": "levels/cathedral/",
+        "count": 589,
+        "cwks_sha256": "c52e90a680e958916fb5e8fe6d358b52afc345c838cd7d56ddfd14010102199d",
+        "sets": ("models/shadow/levels/cathedral",),
+        "order": "cwks",              # instances in the pool list's order
+        "instances": None,
+        "meshes": None,
+        "sha256": None,
+        "spawn": None,
+        # Dropped from the library's glbs (matched on the file stem, `_collision` anywhere in it):
+        "exclude_stub": re.compile(r"_[0-9a-f]{8}\."),   # hash-suffix reference stubs (72-byte glbs)
+        "exclude_lod": re.compile(r"_lod[0-9]"),
+        "exclude_names": (
+            "occluder1", "occluderint1", "occluderintlow", "occluderstairs1", "cathedral_sg_occluder",
+            "cathint_shadow", "cathedral_sg_shadow", "shadowcaster1", "cath_int_shadowblocker_pool",
+            "emitter_arch_lightray_long",
+        ),
+        # plus any `<name>_low` glb whose full-detail `<name>` sibling exists (stage_sets)
+    },
+}
+ARENA = STAGES["arena_01"]
 COLLISION_MARK = "_collision"
 MANIFEST_OUT = "out/re/stage/valus.manifest"
 ARENA_PATHS_OUT = "out/re/stage/arena_paths.txt"
-# The labeled spawn pick (§3): the entrance `_ground` mesh's footprint centre
-# (309.3118, 285.4028) at its surface height (4.3940 m, ray-cast), facing +Z —
-# the app's yaw 0 is +Z, toward the arena bowl; the sets meet near z≈300.  A
-# builder pick, NOT data-derived (the `.path`/camdata candidates are in §3).
-ARENA_SPAWN = (309.312, 4.394, 285.403, 0.0)
-# The level glbs' bounds evidence (the plan's rounded numbers; check-manifest
-# re-derives them from the accessor min/max and matches at this precision —
-# x/z to integers, the entrance's y to 1 dp).
-ARENA_BOUNDS_EVIDENCE = ("x[237,431]", "y[28,70]", "z[298,390]")
-ENTRANCE_BOUNDS_EVIDENCE = ("x[259,345]", "y[-1.7,81.5]", "z[249,307]")
 
 # The S4 encounter (Task 6): the S3 arena's 30 instances carried verbatim, a
 # rewritten player spawn, and one placed animated entity.  The placement values
@@ -648,7 +686,7 @@ def cwks_parse(path):
     }
 
 
-def arena_list(entries, match=CWKS_ARENA_MATCH):
+def arena_list(entries, match=ARENA["cwks_match"]):
     """The pool path list matching `match`, in pool order.  The default is the
     arena path list: every entry matching `levels/arena_01/` (measured 142
     entries; the literal `models/shadow/` prefix narrows it to 32 — see
@@ -676,7 +714,7 @@ def cmd_cwks(args):
     records = parsed["records"]
     if not records:
         die("%s has 0 index records (nothing to dump)" % path)
-    match = args.match
+    match = args.match or STAGES[args.stage]["cwks_match"]
     arena = arena_list(entries, match)
     arena_sha = hashlib.sha256(arena_text(arena)).hexdigest()
     tail = [p for _, _, p in entries if CWKS_TAIL_MATCH in p]
@@ -856,10 +894,10 @@ def cmd_check_cwks(args):
             tagged == CWKS_TAGGED and len(entries) - tagged == CWKS_BARE)
         add("record field[0] non-decreasing", "structure", "0 decreases",
             "%d decreases" % decreases, decreases == 0)
-        add("arena list (match %r)" % CWKS_ARENA_MATCH, "structure",
-            CWKS_ARENA_COUNT, len(arena), len(arena) == CWKS_ARENA_COUNT)
-        add("arena list sha256", "structure", CWKS_ARENA_SHA256, arena_sha,
-            arena_sha == CWKS_ARENA_SHA256)
+        add("arena list (match %r)" % ARENA["cwks_match"], "structure",
+            ARENA["count"], len(arena), len(arena) == ARENA["count"])
+        add("arena list sha256", "structure", ARENA["cwks_sha256"], arena_sha,
+            arena_sha == ARENA["cwks_sha256"])
         add("tail stage paths (13 verbatim from 0x%X)" % CWKS_TAIL_FIRST, "structure",
             "%d paths" % len(CWKS_TAIL_PATHS),
             "%d paths%s" % (len(tail), "" if tail == list(CWKS_TAIL_PATHS) else ": %s" % tail[:1]),
@@ -897,8 +935,8 @@ CHECK_CWKS_SPEC = [
     ("string entries", "measured", CWKS_ENTRIES),
     ("tagged / bare split", "measured", "%d / %d" % (CWKS_TAGGED, CWKS_BARE)),
     ("record field[0] non-decreasing", "structure", "0 decreases"),
-    ("arena list (match %r)" % CWKS_ARENA_MATCH, "structure", CWKS_ARENA_COUNT),
-    ("arena list sha256", "structure", CWKS_ARENA_SHA256),
+    ("arena list (match %r)" % ARENA["cwks_match"], "structure", ARENA["count"]),
+    ("arena list sha256", "structure", ARENA["cwks_sha256"]),
     ("tail stage paths (13 verbatim from 0x%X)" % CWKS_TAIL_FIRST, "structure",
      "%d paths" % len(CWKS_TAIL_PATHS)),
 ]
@@ -996,7 +1034,7 @@ def arena_sets(library):
     paths, sorted.  `excluded` are the *_collision* glbs (collision geometry,
     not render dependencies — §3)."""
     sets = []
-    for setrel in ARENA_SETS:
+    for setrel in ARENA["sets"]:
         setdir = os.path.join(library, setrel)
         if not os.path.isdir(setdir):
             die("arena set not found under the library: %s" % setdir)
@@ -1007,6 +1045,65 @@ def arena_sets(library):
             (excluded if COLLISION_MARK in os.path.basename(rel) else instances).append(rel)
         sets.append((setrel, instances, excluded))
     return sets
+
+
+def shrine_sets(library):
+    """The shrine's one set, as `arena_sets` returns it: the glbs that survive
+    the stage's exclusions (design D3), in the pool list's order; `excluded` is
+    everything dropped.  Every kept glb's cmsh must be referenced by the
+    workspace (the arena's cross-check, done here because the order comes from
+    the same list); the list's sha256 is pinned."""
+    stage = STAGES["shrine"]
+    setrel = stage["sets"][0]
+    setdir = os.path.join(library, setrel)
+    if not os.path.isdir(setdir):
+        die("shrine set not found under the library: %s" % setdir)
+    rels = [
+        os.path.relpath(path, library)
+        for path in sorted(glob.glob(os.path.join(setdir, "**", "*.glb"), recursive=True))
+    ]
+    stems = {os.path.basename(rel)[: -len(".glb")] for rel in rels}
+    kept = []
+    excluded = []
+    for rel in rels:
+        name = os.path.basename(rel)
+        stem = name[: -len(".glb")]
+        drop = (
+            stage["exclude_stub"].search(name)
+            or stage["exclude_lod"].search(stem)
+            or COLLISION_MARK in stem
+            or stem in stage["exclude_names"]
+            or (stem.endswith("_low") and stem[: -len("_low")] in stems)
+        )
+        (excluded if drop else kept).append(rel)
+
+    path = resolve_cwks(None)
+    try:
+        listed = arena_list(cwks_parse(path)["entries"], stage["cwks_match"])
+    except CwksError as exc:
+        die("%s does not fit the .cwks layout: %s" % (path, exc))
+    sha = hashlib.sha256(arena_text(listed)).hexdigest()
+    if (len(listed), sha) != (stage["count"], stage["cwks_sha256"]):
+        die(
+            "shrine path list (match %r): %d entries, sha256 %s != the pin %d, %s"
+            % (stage["cwks_match"], len(listed), sha, stage["count"], stage["cwks_sha256"])
+        )
+    order = {}
+    for entry in listed:
+        if entry.startswith("/" + setrel + "/") and entry.endswith(".cmsh"):
+            order.setdefault(entry[1 : -len(".cmsh")] + ".glb", len(order))
+    unlisted = [rel for rel in kept if rel not in order]
+    if unlisted:
+        die(
+            "%d shrine glb(s) not referenced by the workspace list (%s)"
+            % (len(unlisted), ", ".join(unlisted[:3]))
+        )
+    kept.sort(key=order.__getitem__)
+    return [(setrel, kept, excluded)]
+
+
+def stage_sets(library, name):
+    return (arena_sets if STAGES[name]["order"] == "sorted" else shrine_sets)(library)
 
 
 def fmt_counts(counts):
@@ -1179,15 +1276,15 @@ def cross_check_paths(instances, list_path):
         )
     raw = read_bytes(list_path)
     sha = hashlib.sha256(raw).hexdigest()
-    if sha != CWKS_ARENA_SHA256:
+    if sha != ARENA["cwks_sha256"]:
         die(
             "path list %s: sha256 %s != the pin %s (regenerate with cwks --arena-out)"
-            % (list_path, sha, CWKS_ARENA_SHA256)
+            % (list_path, sha, ARENA["cwks_sha256"])
         )
     listed = [line for line in raw.decode("utf-8").splitlines() if line]
 
     parts = []
-    for setrel in ARENA_SETS:
+    for setrel in ARENA["sets"]:
         want = {
             "/" + rel[: -len(".glb")] + ".cmsh"
             for rel in instances
@@ -1224,46 +1321,64 @@ def cmd_compose(args):
     library = os.path.abspath(args.library)
     if not os.path.isdir(library):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
+    stage = STAGES[args.stage]
+    arena = args.stage == "arena_01"
 
-    sets = arena_sets(library)
+    sets = stage_sets(library, args.stage)
     instances = [rel for _, set_instances, _ in sets for rel in set_instances]
-    if len(instances) != ARENA_INSTANCES:
+    if stage["instances"] is not None and len(instances) != stage["instances"]:
         die(
-            "instance set is %d glbs, expected %d (%s files minus %s *_collision*)"
+            "instance set is %d glbs, expected %d (%s files minus %s excluded)"
             % (
                 len(instances),
-                ARENA_INSTANCES,
+                stage["instances"],
                 fmt_counts([len(i) + len(e) for _, i, e in sets]),
                 fmt_counts([len(e) for _, _, e in sets]),
             )
         )
 
-    summary = cross_check_paths(instances, os.path.abspath(args.paths))
-
-    header = [
-        "# valus arena — RE-3 composition (W2.3), generated by tools/re/stage/probe.py compose",
-        "# instances: every non-*_collision* glb of models/shadow/levels/arena_01/ and",
-        "#   models/shadow/levels/arena_01_entrance/ (%s of the %s glb files;"
-        % (fmt_counts([len(i) for _, i, _ in sets]), fmt_counts([len(i) + len(e) for _, i, e in sets])),
-        "#   %s collision glbs excluded — collision geometry, not render dependencies);"
-        % fmt_counts([len(e) for _, _, e in sets]),
-        "#   identity transforms: the glbs are already world-positioned (the level glbs span",
-        "#   x[237,431] y[28,70] z[298,390] and x[259,345] y[-1.7,81.5] z[249,307]; the sets",
-        "#   meet near z~300).  Cross-checked against out/re/stage/arena_paths.txt (sha256-pinned).",
-        "# spawn: BUILDER PICK, not data-derived — the entrance ground mesh's footprint centre at",
-        "#   its surface height, facing +Z into the arena; the candidates (.path, camdata) are",
-        "#   recorded in docs/notes/re-stage.md §3.",
-    ]
+    if arena:
+        summary = cross_check_paths(instances, os.path.abspath(args.paths))
+        header = [
+            "# valus arena — RE-3 composition (W2.3), generated by tools/re/stage/probe.py compose",
+            "# instances: every non-*_collision* glb of models/shadow/levels/arena_01/ and",
+            "#   models/shadow/levels/arena_01_entrance/ (%s of the %s glb files;"
+            % (fmt_counts([len(i) for _, i, _ in sets]), fmt_counts([len(i) + len(e) for _, i, e in sets])),
+            "#   %s collision glbs excluded — collision geometry, not render dependencies);"
+            % fmt_counts([len(e) for _, _, e in sets]),
+            "#   identity transforms: the glbs are already world-positioned (the level glbs span",
+            "#   x[237,431] y[28,70] z[298,390] and x[259,345] y[-1.7,81.5] z[249,307]; the sets",
+            "#   meet near z~300).  Cross-checked against out/re/stage/arena_paths.txt (sha256-pinned).",
+            "# spawn: BUILDER PICK, not data-derived — the entrance ground mesh's footprint centre at",
+            "#   its surface height, facing +Z into the arena; the candidates (.path, camdata) are",
+            "#   recorded in docs/notes/re-stage.md §3.",
+        ]
+    else:
+        summary = "%d/%d kept glbs' cmsh referenced" % (len(instances), len(instances))
+        header = [
+            "# shrine — S7 composition, generated by tools/re/stage/probe.py compose --stage shrine",
+            "# instances: the %d highest-detail glbs of %s/ (of the %d glb files), in the"
+            % (len(instances), stage["sets"][0], len(instances) + len(sets[0][2])),
+            "#   workspace pool-list order; hash-suffix stubs, _lod*, *_collision*, the occluders,",
+            "#   the shadow casters/blockers, emitter_arch_lightray_long and _low duplicates dropped",
+            "#   (design D3); identity transforms: the glbs are already world-positioned.",
+        ]
     lines = list(header)
     for rel in instances:
         lines.append("instance %s 0 0 0 0 0 0 1 1 1 1" % rel)
-    lines.append("spawn %s" % " ".join(fmt_manifest_float(v) for v in ARENA_SPAWN))
+    spawn = stage["spawn"]
+    if spawn:
+        lines.append("spawn %s" % " ".join(fmt_manifest_float(v) for v in spawn))
     text = "\n".join(lines) + "\n"
 
     # Round-trip the text through the schema before writing: a path that the
     # format cannot carry (whitespace, `#`) must fail here, not in the app.
     parsed_instances, parsed_spawns, parsed_entities = parse_manifest_text(text, args.out)
-    if len(parsed_instances) != len(instances) or len(parsed_spawns) != 1 or parsed_entities:
+    if (
+        len(parsed_instances) != len(instances)
+        or len(parsed_spawns) != (1 if spawn else 0)
+        or parsed_entities
+    ):
         die(
             "composed manifest does not round-trip: %d instances, %d spawns"
             % (len(parsed_instances), len(parsed_spawns))
@@ -1277,17 +1392,35 @@ def cmd_compose(args):
     print("compose: library %s" % library)
     for setrel, set_instances, set_excluded in sets:
         print(
-            "compose: %-44s %d glb (%d instances, %d *_collision* excluded)"
-            % (setrel, len(set_instances) + len(set_excluded), len(set_instances), len(set_excluded))
+            "compose: %-44s %d glb (%d instances, %d %sexcluded)"
+            % (
+                setrel,
+                len(set_instances) + len(set_excluded),
+                len(set_instances),
+                len(set_excluded),
+                "*_collision* " if arena else "",
+            )
         )
-    print("compose: cross-check %s (sha256 %s): %s" % (args.paths, CWKS_ARENA_SHA256[:8] + "…", summary))
+    if arena:
+        print(
+            "compose: cross-check %s (sha256 %s): %s"
+            % (args.paths, ARENA["cwks_sha256"][:8] + "…", summary)
+        )
+    else:
+        print(
+            "compose: cross-check %s (sha256 %s…, %d entries): %s"
+            % (stage["cwks_match"], stage["cwks_sha256"][:8], stage["count"], summary)
+        )
+    if spawn:
+        print(
+            "compose: spawn %s (builder pick — docs/notes/re-stage.md §3)"
+            % " ".join(fmt_manifest_float(v) for v in spawn)
+        )
+    else:
+        print("compose: no spawn (the %s stage has none pinned yet)" % args.stage)
     print(
-        "compose: spawn %s (builder pick — docs/notes/re-stage.md §3)"
-        % " ".join(fmt_manifest_float(v) for v in ARENA_SPAWN)
-    )
-    print(
-        "compose: wrote %s (%d instances + 1 spawn + %d comment lines)"
-        % (out, len(instances), len(header))
+        "compose: wrote %s (%d instances + %d spawn + %d comment lines)"
+        % (out, len(instances), 1 if spawn else 0, len(header))
     )
     return 0
 
@@ -1300,13 +1433,15 @@ def cmd_check_manifest(args):
     if not os.path.isdir(library):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
     path = os.path.abspath(args.file)
+    stage = STAGES[args.stage]
+    arena = args.stage == "arena_01"
     checks = []
 
     def add(name, kind, expected, measured, ok):
         checks.append(Check(name, kind, expected, measured, ok))
 
     def fail_all(reason):
-        for name, kind, expected in CHECK_MANIFEST_SPEC:
+        for name, kind, expected in check_manifest_spec(args.stage):
             add(name, kind, expected, "unparsed: %s" % reason, False)
 
     try:
@@ -1325,11 +1460,12 @@ def cmd_check_manifest(args):
     if error is not None:
         fail_all(error)
     else:
-        sets = arena_sets(library)
+        sets = stage_sets(library, args.stage)
         want = [rel for _, set_instances, _ in sets for rel in set_instances]
         files = [len(i) + len(e) for _, i, e in sets]
         collisions = [len(e) for _, _, e in sets]
         rels = [rel for rel, _ in instances]
+        count = stage["instances"]
 
         add(
             "manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)",
@@ -1338,28 +1474,38 @@ def cmd_check_manifest(args):
             "ok",
             True,
         )
-        add(
-            "arena glb files (pre-filter)",
-            "structure",
-            fmt_counts(ARENA_SET_FILES),
-            fmt_counts(files),
-            tuple(files) == ARENA_SET_FILES,
-        )
-        add(
-            "*_collision* glbs excluded",
-            "structure",
-            fmt_counts(ARENA_SET_COLLISION),
-            fmt_counts(collisions),
-            tuple(collisions) == ARENA_SET_COLLISION,
-        )
-        add(
-            "manifest instances (non-*_collision*)",
-            "structure",
-            "%d (%d - %d)" % (ARENA_INSTANCES, sum(ARENA_SET_FILES), sum(ARENA_SET_COLLISION)),
-            len(instances),
-            len(instances) == ARENA_INSTANCES,
-        )
-        exact = sorted(set(rels)) == want and len(rels) == len(set(rels))
+        if arena:
+            add(
+                "arena glb files (pre-filter)",
+                "structure",
+                fmt_counts(stage["set_files"]),
+                fmt_counts(files),
+                tuple(files) == stage["set_files"],
+            )
+            add(
+                "*_collision* glbs excluded",
+                "structure",
+                fmt_counts(stage["set_collision"]),
+                fmt_counts(collisions),
+                tuple(collisions) == stage["set_collision"],
+            )
+            add(
+                "manifest instances (non-*_collision*)",
+                "structure",
+                "%d (%d - %d)"
+                % (count, sum(stage["set_files"]), sum(stage["set_collision"])),
+                len(instances),
+                len(instances) == count,
+            )
+        else:
+            add(
+                "manifest instances (the shrine set)",
+                "structure" if count is not None else "measured",
+                count if count is not None else "unpinned",
+                len(instances),
+                count is None or len(instances) == count,
+            )
+        exact = sorted(set(rels)) == sorted(want) and len(rels) == len(set(rels))
         missing = sorted(set(want) - set(rels))
         extra = sorted(set(rels) - set(want))
         duplicates = sorted(rel for rel in set(rels) if rels.count(rel) > 1)
@@ -1405,15 +1551,19 @@ def cmd_check_manifest(args):
             "%d/%d" % (len(identity), len(instances)),
             len(identity) == len(instances),
         )
-        add("exactly one spawn", "structure", 1, len(spawns), len(spawns) == 1)
+        wanted = 1 if stage["spawn"] else 0
+        add(
+            "exactly one spawn" if wanted else "no spawn (none pinned for the stage)",
+            "structure",
+            wanted,
+            len(spawns),
+            len(spawns) == wanted,
+        )
 
         # The level glbs' bounds: re-derived from the library, matched to the
         # plan's rounded evidence; then the spawn tested against the entrance's.
         bounds = {}
-        for key, rel, evidence in (
-            ("arena_01", ARENA_LEVEL_GLB, ARENA_BOUNDS_EVIDENCE),
-            ("entrance", ENTRANCE_LEVEL_GLB, ENTRANCE_BOUNDS_EVIDENCE),
-        ):
+        for key, rel, evidence in stage.get("bounds_evidence", ()):
             name = "%s bounds evidence (plan %s)" % (key, " ".join(evidence))
             try:
                 lo, hi = glb_bounds(os.path.join(library, rel))
@@ -1424,25 +1574,27 @@ def cmd_check_manifest(args):
             add(name, "measured", " ".join(evidence), measured, measured == " ".join(evidence))
             bounds[key] = (lo, hi)
 
-        spawn = spawns[0] if spawns else None
-        if bounds.get("entrance") is None or spawn is None:
-            add(
-                "spawn inside the entrance bounds",
-                "structure",
-                "inside " + " ".join(ENTRANCE_BOUNDS_EVIDENCE),
-                "unparsed: %s" % ("no entrance bounds" if spawn is not None else "no spawn line"),
-                False,
-            )
-        else:
-            lo, hi = bounds["entrance"]
-            inside = all(lo[i] <= spawn[i] <= hi[i] for i in range(3))
-            add(
-                "spawn inside the entrance bounds",
-                "structure",
-                "inside " + " ".join(ENTRANCE_BOUNDS_EVIDENCE),
-                "inside" if inside else "outside (spawn %.3f %.3f %.3f)" % tuple(spawn[:3]),
-                inside,
-            )
+        if arena:
+            entrance = " ".join(stage["bounds_evidence"][1][2])
+            spawn = spawns[0] if spawns else None
+            if bounds.get("entrance") is None or spawn is None:
+                add(
+                    "spawn inside the entrance bounds",
+                    "structure",
+                    "inside " + entrance,
+                    "unparsed: %s" % ("no entrance bounds" if spawn is not None else "no spawn line"),
+                    False,
+                )
+            else:
+                lo, hi = bounds["entrance"]
+                inside = all(lo[i] <= spawn[i] <= hi[i] for i in range(3))
+                add(
+                    "spawn inside the entrance bounds",
+                    "structure",
+                    "inside " + entrance,
+                    "inside" if inside else "outside (spawn %.3f %.3f %.3f)" % tuple(spawn[:3]),
+                    inside,
+                )
 
     print("check-manifest: %s (library %s)" % (path, library))
     for check in checks:
@@ -1465,27 +1617,39 @@ def cmd_check_manifest(args):
 
 # The check-manifest spec: (name, kind, expected) — used verbatim when the
 # manifest is unparsable, so every pin renders as a FAIL with the parse error.
-CHECK_MANIFEST_SPEC = [
-    ("manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)",
-     "structure", "ok"),
-    ("arena glb files (pre-filter)", "structure", fmt_counts(ARENA_SET_FILES)),
-    ("*_collision* glbs excluded", "structure", fmt_counts(ARENA_SET_COLLISION)),
-    ("manifest instances (non-*_collision*)", "structure",
-     "%d (%d - %d)" % (ARENA_INSTANCES, sum(ARENA_SET_FILES), sum(ARENA_SET_COLLISION))),
-    ("instance set == the library's non-*_collision* set", "structure",
-     "exact (%d)" % ARENA_INSTANCES),
-    ("every glbRelPath exists under the library", "structure",
-     "%d/%d" % (ARENA_INSTANCES, ARENA_INSTANCES)),
-    ("identity transforms on every instance", "structure",
-     "%d/%d" % (ARENA_INSTANCES, ARENA_INSTANCES)),
-    ("exactly one spawn", "structure", 1),
-    ("arena_01 bounds evidence (plan %s)" % " ".join(ARENA_BOUNDS_EVIDENCE), "measured",
-     " ".join(ARENA_BOUNDS_EVIDENCE)),
-    ("entrance bounds evidence (plan %s)" % " ".join(ENTRANCE_BOUNDS_EVIDENCE), "measured",
-     " ".join(ENTRANCE_BOUNDS_EVIDENCE)),
-    ("spawn inside the entrance bounds", "structure",
-     "inside " + " ".join(ENTRANCE_BOUNDS_EVIDENCE)),
-]
+def check_manifest_spec(name):
+    stage = STAGES[name]
+    count = stage["instances"]
+    head = [
+        ("manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)",
+         "structure", "ok"),
+    ]
+    if name != "arena_01":
+        return head + [
+            ("manifest instances (the shrine set)",
+             "structure" if count is not None else "measured",
+             count if count is not None else "unpinned"),
+            ("instance set == the library's non-*_collision* set", "structure",
+             "exact (the shrine set)"),
+            ("every glbRelPath exists under the library", "structure", "all"),
+            ("identity transforms on every instance", "structure", "all"),
+            ("no spawn (none pinned for the stage)", "structure", 0),
+        ]
+    (key0, _, ev0), (key1, _, ev1) = stage["bounds_evidence"]
+    return head + [
+        ("arena glb files (pre-filter)", "structure", fmt_counts(stage["set_files"])),
+        ("*_collision* glbs excluded", "structure", fmt_counts(stage["set_collision"])),
+        ("manifest instances (non-*_collision*)", "structure",
+         "%d (%d - %d)" % (count, sum(stage["set_files"]), sum(stage["set_collision"]))),
+        ("instance set == the library's non-*_collision* set", "structure",
+         "exact (%d)" % count),
+        ("every glbRelPath exists under the library", "structure", "%d/%d" % (count, count)),
+        ("identity transforms on every instance", "structure", "%d/%d" % (count, count)),
+        ("exactly one spawn", "structure", 1),
+        ("%s bounds evidence (plan %s)" % (key0, " ".join(ev0)), "measured", " ".join(ev0)),
+        ("%s bounds evidence (plan %s)" % (key1, " ".join(ev1)), "measured", " ".join(ev1)),
+        ("spawn inside the entrance bounds", "structure", "inside " + " ".join(ev1)),
+    ]
 
 
 # ------------------------------------------------------- encounter (S4, Task 6)
@@ -1534,10 +1698,10 @@ def cmd_compose_encounter(args):
         die("S3 manifest does not parse: %s" % exc)
     if entities:
         die("S3 manifest already carries %d entity line(s); compose the encounter from the arena manifest" % len(entities))
-    if len(instances) != ARENA_INSTANCES:
+    if len(instances) != ARENA["instances"]:
         die(
             "S3 manifest has %d instances, expected %d — regenerate it with `compose`"
-            % (len(instances), ARENA_INSTANCES)
+            % (len(instances), ARENA["instances"])
         )
     if not spawns:
         die("S3 manifest has no spawn line; `compose` always writes one")
@@ -1638,7 +1802,7 @@ def cmd_compose_encounter(args):
         parsed = parse_manifest_text(text, args.out)
     except ManifestError as exc:
         die("composed encounter manifest does not parse: %s" % exc)
-    if len(parsed[0]) != ARENA_INSTANCES or len(parsed[1]) != 1 or len(parsed[2]) != 1:
+    if len(parsed[0]) != ARENA["instances"] or len(parsed[1]) != 1 or len(parsed[2]) != 1:
         die(
             "composed encounter manifest does not round-trip: %d instances, %d spawns, %d entities"
             % (len(parsed[0]), len(parsed[1]), len(parsed[2]))
@@ -1685,13 +1849,13 @@ def cmd_compose_encounter(args):
 
 CHECK_ENCOUNTER_SPEC = [
     ("manifest parses (S3 schema + entity directive)", "structure", "ok"),
-    ("manifest instances (the S3 arena set)", "structure", ARENA_INSTANCES),
+    ("manifest instances (the S3 arena set)", "structure", ARENA["instances"]),
     ("instance set == the library's non-*_collision* set", "structure",
-     "exact (%d)" % ARENA_INSTANCES),
+     "exact (%d)" % ARENA["instances"]),
     ("every glbRelPath exists under the library", "structure",
-     "%d/%d" % (ARENA_INSTANCES, ARENA_INSTANCES)),
+     "%d/%d" % (ARENA["instances"], ARENA["instances"])),
     ("identity transforms on every instance", "structure",
-     "%d/%d" % (ARENA_INSTANCES, ARENA_INSTANCES)),
+     "%d/%d" % (ARENA["instances"], ARENA["instances"])),
     ("exactly one entity", "structure", 1),
     ("exactly one spawn", "structure", 1),
     ("header provenance placement=builder-pick", "provenance", ENCOUNTER_PLACEMENT),
@@ -1757,9 +1921,9 @@ def cmd_check_encounter(args):
         add(
             "manifest instances (the S3 arena set)",
             "structure",
-            ARENA_INSTANCES,
+            ARENA["instances"],
             len(instances),
-            len(instances) == ARENA_INSTANCES,
+            len(instances) == ARENA["instances"],
         )
         exact = sorted(rels) == sorted(want) and len(rels) == len(set(rels))
         missing = sorted(set(want) - set(rels))
@@ -2093,8 +2257,12 @@ def main(argv=None):
     p_cwks.add_argument(
         "--match",
         metavar="SUBSTR",
-        default=CWKS_ARENA_MATCH,
-        help="pool path substring for the extracted list (default %r)" % CWKS_ARENA_MATCH,
+        default=None,
+        help="pool path substring for the extracted list (default: --stage's cwks_match, %r)"
+        % ARENA["cwks_match"],
+    )
+    p_cwks.add_argument(
+        "--stage", choices=sorted(STAGES), default="arena_01", help="the stage whose match is the default"
     )
     p_cwks.set_defaults(func=cmd_cwks)
 
@@ -2116,6 +2284,9 @@ def main(argv=None):
         metavar="FILE",
         help="W2.2's arena path list to cross-check against (default %s)" % ARENA_PATHS_OUT,
     )
+    p_compose.add_argument(
+        "--stage", choices=sorted(STAGES), default="arena_01", help="the stage to compose (default arena_01)"
+    )
     p_compose.set_defaults(func=cmd_compose)
 
     p_check_manifest = sub.add_parser(
@@ -2125,6 +2296,9 @@ def main(argv=None):
                                   help="manifest (default %s)" % MANIFEST_OUT)
     p_check_manifest.add_argument(
         "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
+    )
+    p_check_manifest.add_argument(
+        "--stage", choices=sorted(STAGES), default="arena_01", help="the stage to check (default arena_01)"
     )
     p_check_manifest.set_defaults(func=cmd_check_manifest)
 
