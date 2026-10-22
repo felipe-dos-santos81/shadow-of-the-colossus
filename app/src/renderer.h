@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -7,6 +8,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+#include "effect.h"
 #include "hud.h"
 #include "math3d.h"
 #include "scene.h"
@@ -42,12 +44,23 @@ public:
     // scene or the size does not match that rig's uploaded joint count.
     void upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palette);
 
+    // The tendril pass's textures and pipelines (S6 Task 4, design §8.2). Call
+    // once, after the device is up. False means the pass is unavailable (a
+    // missing shader, a texture or a pipeline failure — one stderr line names
+    // it), and the death sequence draws without tendrils; never throws.
+    bool upload_effect_textures(const std::array<TextureCpu, 4>& textures);
+
     // Renders the offscreen target (clear + one draw per mesh, pushing the
     // view-projection once and the per-mesh model + material uniforms), then —
     // when acquire_swapchain — copies it to the swapchain in the same submit.
     // A frame whose swapchain cannot be acquired (too many frames in flight,
     // minimized window) is skipped, not an error.
-    void render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain);
+    //
+    // `effects`, when non-null and active, draws the tendril pass after the
+    // opaque meshes and before the HUD, against the same depth buffer.
+    // nullptr (the default) is the no-op every non-death frame passes.
+    void render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain,
+                      const EffectFrame* effects = nullptr);
 
     // The last rendered frame as RGBA8, row 0 = top. Only valid after a
     // render_frame; throws if nothing has been rendered yet.
@@ -140,6 +153,11 @@ private:
     std::vector<MeshGpu> meshes_;
     std::vector<SDL_GPUTexture*> textures_;
     bool uploaded_ = false;
+
+    // The tendril pass (S6 Task 4). Its resources are created once by
+    // upload_effect_textures; until then (and on failure) its draws no-op.
+    EffectRenderer effects_;
+    bool effects_ready_ = false;
 
     // One palette buffer per rig (index = Scene::rigs index), each sized by
     // that rig's own joint count; a scene with no rigs keeps one identity

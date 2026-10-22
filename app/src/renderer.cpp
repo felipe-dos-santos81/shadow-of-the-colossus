@@ -773,7 +773,20 @@ void Renderer::upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palett
     }
 }
 
-void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain) {
+bool Renderer::upload_effect_textures(const std::array<TextureCpu, 4>& textures) {
+    effects_ready_ = effects_.create(device_, textures, color_format_);
+    if (!effects_ready_) {
+        // A visual pass never aborts the run: the death sequence keeps its
+        // motion, corpse and audio, and only the tendrils are missing.
+        std::fprintf(stderr,
+                     "renderer: the tendril effect pass is unavailable; the death sequence "
+                     "draws without tendrils\n");
+    }
+    return effects_ready_;
+}
+
+void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain,
+                            const EffectFrame* effects) {
     // Refresh the label before the frame's command buffer: the upload is its
     // own submission and only happens when the rounded percentage changed.
     // Uploading is not drawing — the overlay draws only after the swapchain
@@ -816,6 +829,15 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     }
 
     ensure_targets(width, height);
+
+    // The tendril pass's vertices are built and uploaded before the frame's
+    // render pass opens: the upload is its own submission (update's copy pass
+    // and fence wait), ordered ahead of this frame on the same queue. The draw
+    // itself happens after the opaque meshes, below.
+    const bool draw_effects = effects != nullptr && effects->active && effects_ready_;
+    if (draw_effects) {
+        effects_.update(*effects, viewProj);
+    }
 
     SDL_GPUColorTargetInfo color_target{};
     color_target.texture = color_target_;
@@ -903,6 +925,16 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         SDL_BindGPUFragmentSamplers(pass, 0, texture_bindings, 2);
 
         SDL_DrawGPUIndexedPrimitives(pass, mesh.index_count, 1, 0, 0, 0);
+    }
+
+    // The tendril pass (S6 Task 4, design §7 D4/§8.2): world-space blended
+    // ribbons and billboards over the opaque meshes, still inside this pass so
+    // they depth-test against the scene (LESS_EQUAL, no depth write). It comes
+    // after every mesh and before the HUD pass below. nullptr or an inactive
+    // frame is the no-op every non-death path passes (the app passes nullptr
+    // until the death sequence is wired).
+    if (draw_effects) {
+        effects_.draw(cmd, pass, viewProj);
     }
 
     SDL_EndGPURenderPass(pass);
