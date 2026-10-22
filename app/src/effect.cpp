@@ -26,7 +26,11 @@ static_assert(kTendrilEndSeconds == kDeathTendrilEnd, "the tendril end must matc
 constexpr float kRootWidth = 0.6f;
 constexpr float kTipWidth = 0.05f;
 
-// The billboards' 1.2 s life and the vein mask's repeats along the path.
+// The billboards' 1.2 s life. The vein mask repeats kVeinRepeats times along
+// the path: the ribbon's own sampler wraps `v` (u stays clamped, so the
+// width's two edges cannot bleed into each other). Wrapping is what makes the
+// repeat real — a clamped v would smear the texture's bottom row over every
+// station past the first repeat.
 constexpr float kBillboardLifeSeconds = 1.2f;
 constexpr float kVeinRepeats = 4.0f;
 
@@ -458,6 +462,8 @@ std::vector<EffectVertex> build_tendril_vertices(const EffectFrame& frame, const
             // Collapsed (ungrown) stations are a single point: no width, so the
             // quads beyond the growth horizon are degenerate.
             const float half_width = is_grown(ribbon, station) ? station_half_width(station) : 0.0f;
+            // v runs along the path, so the mask repeats kVeinRepeats times (the
+            // veins sampler wraps v); u runs across the width exactly once.
             const float v = kVeinRepeats * static_cast<float>(station) /
                             static_cast<float>(kTendrilSegments);
             const Vec3 left{center.x - side.x * half_width, center.y - side.y * half_width,
@@ -473,17 +479,19 @@ std::vector<EffectVertex> build_tendril_vertices(const EffectFrame& frame, const
         }
     }
 
-    // 2. The 24 smoke quads along the grown ribbon (the 2x2 tendril atlas): a
-    //    sqrt bias keeps them denser at the wound where the column is thickest.
+    // 2. The 24 smoke quads along the grown ribbon (the 2x2 tendril atlas). The
+    //    squared fraction biases the spread toward the wound (the first quad
+    //    sits at station 0.09, not 7 m up the path) while the last still reaches
+    //    the grown tip.
     for (int quad = 0; quad < kTendrilSmokeQuads; ++quad) {
         const int root = quad % root_count;
         const EffectRoot& effect_root = frame.roots[root];
         const Ribbon& ribbon = ribbons[static_cast<std::size_t>(root)];
         const uint32_t slot = effect_root.seed * 4099u + static_cast<uint32_t>(quad) * 131u;
 
-        const float spread = std::sqrt((static_cast<float>(quad) + 0.5f) /
-                                       static_cast<float>(kTendrilSmokeQuads));
-        const PathSample sample = sample_path(ribbon, spread * ribbon.horizon);
+        const float fraction = (static_cast<float>(quad) + 0.5f) /
+                               static_cast<float>(kTendrilSmokeQuads);
+        const PathSample sample = sample_path(ribbon, fraction * fraction * ribbon.horizon);
         const float lateral = 0.45f * signed_unit_of(slot + 1u);
         const float lift = 0.25f * signed_unit_of(slot + 2u);
         const Vec3 center{sample.point.x + sample.side.x * lateral,
@@ -598,6 +606,10 @@ void EffectRenderer::release() {
         SDL_ReleaseGPUSampler(device_, sampler_);
         sampler_ = nullptr;
     }
+    if (vein_sampler_ != nullptr) {
+        SDL_ReleaseGPUSampler(device_, vein_sampler_);
+        vein_sampler_ = nullptr;
+    }
     if (premultiplied_pipeline_ != nullptr) {
         SDL_ReleaseGPUGraphicsPipeline(device_, premultiplied_pipeline_);
         premultiplied_pipeline_ = nullptr;
@@ -623,8 +635,14 @@ void EffectRenderer::release() {
 
 bool EffectRenderer::create(SDL_GPUDevice* device, const std::array<TextureCpu, 4>& textures,
                             SDL_GPUTextureFormat colorFormat) {
-    if (device == nullptr || device_ != nullptr) {
-        return false;  // one create per object
+    if (device == nullptr) {
+        return false;
+    }
+    if (device_ != nullptr) {
+        // Already created: report the live pass rather than failing a second
+        // call. Only a different device is an error (the object holds one
+        // device's resources).
+        return device_ == device;
     }
     device_ = device;
 
@@ -679,8 +697,9 @@ bool EffectRenderer::create_pipeline(SDL_GPUTextureFormat colorFormat) {
     sampler_info.min_filter = SDL_GPU_FILTER_LINEAR;
     sampler_info.mag_filter = SDL_GPU_FILTER_LINEAR;
     sampler_info.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
-    // Clamp: the atlas UVs are inset by half a texel, and the veins mask runs
-    // past v = 1 along the ribbon; wrapping would pull the opposite edge in.
+    // The atlas sampler clamps both axes: the tile UVs are inset by half a
+    // texel, and no tile may sample its neighbour's edge. The ribbon's mask
+    // repeats along its length and gets the wrapping sampler below.
     sampler_info.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
     sampler_info.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
     sampler_info.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
@@ -689,6 +708,19 @@ bool EffectRenderer::create_pipeline(SDL_GPUTextureFormat colorFormat) {
     sampler_ = SDL_CreateGPUSampler(device_, &sampler_info);
     if (sampler_ == nullptr) {
         log_sdl("SDL_CreateGPUSampler(tendril)");
+        return false;
+    }
+
+    // The ribbon's vein mask repeats along `v`, so that axis wraps. `u` stays
+    // clamped: it runs exactly 0..1 across the width, where a wrap would pull
+    // the texture's opposite edge column into the ribbon's right edge.
+    SDL_GPUSamplerCreateInfo vein_sampler_info = sampler_info;
+    vein_sampler_info.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    vein_sampler_info.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    vein_sampler_info.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    vein_sampler_ = SDL_CreateGPUSampler(device_, &vein_sampler_info);
+    if (vein_sampler_ == nullptr) {
+        log_sdl("SDL_CreateGPUSampler(tendril veins)");
         return false;
     }
 
@@ -1013,7 +1045,7 @@ void EffectRenderer::draw(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass, co
     SDL_BindGPUFragmentSamplers(pass, 0, &wisp_b_binding, 1);
     SDL_DrawGPUIndexedPrimitives(pass, wisp_count, 1, wisp_b_first, 0, 0);
 
-    const SDL_GPUTextureSamplerBinding vein_binding{textures_[3], sampler_};
+    const SDL_GPUTextureSamplerBinding vein_binding{textures_[3], vein_sampler_};
     SDL_BindGPUFragmentSamplers(pass, 0, &vein_binding, 1);
     SDL_DrawGPUIndexedPrimitives(pass, ribbon_count, 1, ribbon_first, 0, 0);
 }

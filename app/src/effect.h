@@ -93,14 +93,15 @@ std::vector<EffectVertex> build_tendril_vertices(const EffectFrame& frame, const
 std::array<TextureCpu, 4> load_effect_textures(const std::string& libraryRoot);
 
 // The tendril pass's GPU state: two pipelines over one `tendril.metal` (a
-// premultiplied-alpha smoke pipeline and an additive wisp/ribbon pipeline), one
-// sampler, four textures, a persistent dynamic vertex buffer and one static
-// index buffer per root count (1 and 2; the billboard vertex base moves with the
-// ribbon count, so the index values cannot be shared).
+// premultiplied-alpha smoke pipeline and an additive wisp/ribbon pipeline), two
+// samplers (the clamped atlas one and the ribbon's v-wrapping mask one), four
+// textures, a persistent dynamic vertex buffer and one static index buffer per
+// root count (1 and 2; the billboard vertex base moves with the ribbon count, so
+// the index values cannot be shared).
 //
-// create() must be called once, after the device is up; it returns false (and
-// prints one line) rather than throwing, so a visual pass can never abort the
-// run. A not-created renderer's update/draw are no-ops.
+// create() is called once, after the device is up; it returns false (and prints
+// one line) rather than throwing, so a visual pass can never abort the run. A
+// not-created renderer's update/draw are no-ops.
 class EffectRenderer {
 public:
     EffectRenderer() = default;
@@ -112,6 +113,10 @@ public:
     // `colorFormat` must be the render pipeline's color target format (the
     // renderer passes its swapchain format). The default is macOS's usual
     // B8G8R8A8_UNORM swapchain for a caller with no renderer at hand.
+    //
+    // Idempotent: a second call for the same device returns the live pass's
+    // state instead of failing (a caller that re-runs startup must not disable
+    // a working pass); a different device returns false.
     bool create(SDL_GPUDevice* device, const std::array<TextureCpu, 4>& textures,
                 SDL_GPUTextureFormat colorFormat = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
 
@@ -144,6 +149,8 @@ private:
     SDL_GPUGraphicsPipeline* premultiplied_pipeline_ = nullptr;
     SDL_GPUGraphicsPipeline* additive_pipeline_ = nullptr;
     SDL_GPUSampler* sampler_ = nullptr;
+    // The ribbon's mask sampler: u clamped, v wrapped (kVeinRepeats).
+    SDL_GPUSampler* vein_sampler_ = nullptr;
 
     std::array<SDL_GPUTexture*, 4> textures_{};
 

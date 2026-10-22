@@ -774,6 +774,9 @@ void Renderer::upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palett
 }
 
 bool Renderer::upload_effect_textures(const std::array<TextureCpu, 4>& textures) {
+    if (effects_ready_) {
+        return true;  // idempotent: a second call must not disable a live pass
+    }
     effects_ready_ = effects_.create(device_, textures, color_format_);
     if (!effects_ready_) {
         // A visual pass never aborts the run: the death sequence keeps its
