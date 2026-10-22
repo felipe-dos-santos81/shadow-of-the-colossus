@@ -24,10 +24,16 @@ public sealed record MeshData(
 /// writer's texture map; a slot is omitted from the output when it is null or absent from the map.
 /// </summary>
 /// <param name="BaseColorFactor">RGBA; 3 components are padded with alpha 1.</param>
-/// <param name="EmissiveFactor">RGB.</param>
+/// <param name="EmissiveFactor">RGB; additive light in the app's mesh shader.</param>
+/// <param name="EmissiveTexture">
+/// glTF <c>emissiveTexture</c> source path; null = none. Used as the carrier for the corpse's
+/// veins layer (the dead materials' sixth slot): that texture is black with an alpha veil, so the
+/// app reads it as a multiplicative dark overlay, not as light (unlike <paramref name="EmissiveFactor"/>)
+/// — see the S6 design D9 and <c>app/shaders/mesh.metal</c>.
+/// </param>
 public sealed record MaterialData(
     string Name, string? BaseColorTexture, string? NormalTexture, string? SpecularTexture,
-    float[] BaseColorFactor, float[] EmissiveFactor);
+    float[] BaseColorFactor, float[] EmissiveFactor, string? EmissiveTexture = null);
 
 /// <summary>One skeleton joint: parent index in <see cref="SkeletonData.Joints"/> (-1 = root).</summary>
 /// <param name="InverseBindMatrix16">Column-major 4x4 inverse bind matrix, written as-is (glTF is column-major).</param>

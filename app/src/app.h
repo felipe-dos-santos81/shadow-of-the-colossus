@@ -26,8 +26,16 @@ struct Encounter {
     float attackSeconds = 0.0f;
     float cooldownSeconds = 0.0f;
     bool attackHit = false;
+    // S6: the club's swing-phase whoosh fired for this attack (once per clip;
+    // see kValusClubSwingSeconds). Reset when the attack starts, is cancelled
+    // or ends, and by the soft reset.
+    bool attackSwinged = false;
     float pendingCooldownSeconds = 0.0f;
     bool stompLeftNext = true;  // alternation seed (ruling R8's testable input)
+    // S6: the weakpoint the killing blow hit (0 forehead, 1 right arm, -1 when
+    // the defeat came from another route). The tendril roots order the burst
+    // from this weakpoint first.
+    int deathWeakpoint = -1;
 
     // Ruling R8: the manifest entity transform, recomposed each frame from
     // entityYawDeg so Valus can turn (and the club, which reads the live mesh
@@ -55,8 +63,10 @@ inline void reset_encounter(Encounter& encounter) {
     encounter.attackSeconds = 0.0f;
     encounter.cooldownSeconds = 0.0f;
     encounter.attackHit = false;
+    encounter.attackSwinged = false;
     encounter.pendingCooldownSeconds = 0.0f;
     encounter.stompLeftNext = true;
+    encounter.deathWeakpoint = -1;
     encounter.entityYawDeg = encounter.entityBaseYawDeg;
 }
 
@@ -132,6 +142,24 @@ struct AppOptions {
     // mode (requires a manifest whose scene has an entity). Interactive runs
     // can still toggle the mode with T.
     std::string cameraTarget = "player";
+    // --s6-selftest: the S6 acceptance timeline (design §8.5). Compose the
+    // encounter manifest, hear a club swing's whoosh, drive a scripted lethal
+    // `apply_combat_events` (damageDealt = 100; the real three-strike defeat
+    // stays the frozen S4.1 acceptance, ruling R6), run the death phase machine
+    // to Done with the cinematic camera, the corpse swap and the tendril
+    // effect, print the `s6-phase`/`s6-event`/`s6-death`/`s6-status` lines,
+    // soft-reset with R, print `s6-reset`, and exit 0. Fixed 1/60 s steps and
+    // no window input. A missing clip, manifest, effect texture or corpse is
+    // fatal. Requires --manifest (with an entity) and --model.
+    bool s6Selftest = false;
+    // --s6-stills DIR: with --s6-selftest, write one PNG per death phase into
+    // DIR: `motion.png` (the death motion), `camera.png` (the pull-back key),
+    // `tendrils.png` (the burst), `corpse.png` (the corpse wide). The
+    // acceptance script creates DIR; an absent one is a write failure, never a
+    // silent skip. Each capture is an observation: the playback clocks are
+    // snapshotted and restored around it, so the timeline's values are
+    // identical with and without stills.
+    std::string s6StillsPath;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode

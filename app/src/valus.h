@@ -32,6 +32,11 @@ inline constexpr float kValusStompImpactBegin = 0.55f;
 inline constexpr float kValusStompImpactEnd = 0.70f;
 inline constexpr float kValusClubImpactBegin = 0.45f;
 inline constexpr float kValusClubImpactEnd = 0.65f;
+// S6: the club's swing phase — the whoosh fires once here, mid-clip and before
+// the [0.45, 0.65] impact window (design §8.4: the swing, not the telegraph).
+// Builder call, tuned by ear against the club clip (`minotaur_a_atk_weapon2_a`,
+// 1.333 s).
+inline constexpr float kValusClubSwingSeconds = 0.30f;
 
 // One frame's attack decision inputs. The fields are ruling R8's list, plus
 // `stompLeftNext`: alternation needs one bit of memory, and carrying it in the

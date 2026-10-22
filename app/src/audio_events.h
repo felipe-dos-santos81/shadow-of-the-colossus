@@ -38,6 +38,7 @@ enum class Sfx : std::uint16_t {
     FootLeft,
     FootRight,
     Reset,
+    ClubSwing,
     Count
 };
 
@@ -74,10 +75,13 @@ struct SfxQueue {
 // The encounter transitions the app reports. The plan's one-argument
 // `Encounter` snapshot cannot tell a telegraph from an impact, or a cancel from
 // a defeat; the app knows which transition it just made, so it names it.
+// `ClubSwing` (S6) is the club's mid-swing whoosh, distinct from the club's
+// telegraph and its impact.
 enum class EncounterSfx : std::uint8_t {
     StompStart,
     StompImpact,
     ClubStart,
+    ClubSwing,
     ClubImpact,
     ClubCancel,
     ValusReaction,
@@ -107,6 +111,9 @@ inline void append_encounter_sfx(EncounterSfx event, const Vec3& at, SfxQueue& o
             break;
         case EncounterSfx::ClubStart:
             id = Sfx::ClubStart;
+            break;
+        case EncounterSfx::ClubSwing:
+            id = Sfx::ClubSwing;
             break;
         case EncounterSfx::ClubImpact:
             id = Sfx::ClubImpact;

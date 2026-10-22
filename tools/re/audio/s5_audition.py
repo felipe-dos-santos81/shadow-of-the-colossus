@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""S5 audition — decode the curated cue map to WAV and gate it.
+"""S5/S6 audition — decode the curated cue map to WAV and gate it.
 
-Reads `tools/re/audio/s5_map.json`, decodes each mapped `(bank, wave)` with the
-loader-derived payload formula (`wave_record_offset + 0x24 + start`, see
-`docs/notes/s5-audio-recon.md` §7), writes WAVs under
-`out/s5/audition/<bank>/`, and with `--check` fails if:
+Reads a curated cue map (`tools/re/audio/s5_map.json` by default,
+`tools/re/audio/s6_map.json` for the S6 slice), decodes each mapped
+`(bank, wave)` with the loader-derived payload formula (`wave_record_offset +
+0x24 + start`, see `docs/notes/s5-audio-recon.md` §7), writes WAVs under
+`<out>/<bank>/` (`out/s5/audition/` for the S5 map, `out/s6/audition/gate/`
+for the S6 gate), and with `--check` fails if:
 
-* any of the seven core events has no cue row with a valid wave, or is
+* any of the map milestone's frozen core events
+  (`CORE_EVENTS_BY_MILESTONE`) has no cue row with a valid wave, or is
   `status=deferred`, or is also listed as deferred;
 * a `ghidra` row is missing `reqd`/`tone`, its `reqd` does not match the NAME
   hash, the actual `SEQD`/`PLAY_TONE` walk does not return the mapped tone, or
@@ -20,6 +23,8 @@ loader-derived payload formula (`wave_record_offset + 0x24 + start`, see
 Usage
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
       --map tools/re/audio/s5_map.json --out out/s5/audition --check
+  python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
+      --map tools/re/audio/s6_map.json --out out/s6/audition/gate --check
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
       --bank boss01 --all --out out/s5/audition     # decode every wave
 
@@ -41,12 +46,35 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import s5_decode_gate as gate  # noqa: E402
 
 RMS_FLOOR_DBFS = -60.0
-CORE_EVENTS = ("valus.telegraph", "valus.impact", "valus.hurt",
-               "player.swing", "player.hit", "player.hurt", "player.death")
 
 
 class AuditionError(RuntimeError):
     pass
+
+
+# The frozen expected core sets, by map milestone. The decoded cues come from
+# the map, but the *required* set does not: a cue that silently moves to
+# `deferred` (or is dropped from `cues`) must still fail the gate. The S5 map
+# predates the marker and is S5; `s6_map.json` declares `"milestone": "s6"`.
+CORE_EVENTS_S5 = ("valus.telegraph", "valus.impact", "valus.hurt",
+                  "player.swing", "player.hit", "player.hurt", "player.death")
+CORE_EVENTS_S6 = CORE_EVENTS_S5 + ("valus.death", "valus.club_swing")
+CORE_EVENTS_BY_MILESTONE = {"s5": CORE_EVENTS_S5, "s6": CORE_EVENTS_S6}
+DEFAULT_MILESTONE = "s5"
+
+
+def core_events(cue_map):
+    """The frozen expected core events for the map's milestone.
+
+    `music.boss` is the fight score, identity/config checked but never a
+    resident core cue.
+    """
+    milestone = cue_map.get("milestone", DEFAULT_MILESTONE)
+    if milestone not in CORE_EVENTS_BY_MILESTONE:
+        raise AuditionError(
+            f"unknown map milestone {milestone!r} (expected one of "
+            f"{', '.join(sorted(CORE_EVENTS_BY_MILESTONE))})")
+    return CORE_EVENTS_BY_MILESTONE[milestone]
 
 
 def bank_path(root, bank):
@@ -438,6 +466,7 @@ def main(argv=None):
         cue_map = json.load(fh)
     cues = cue_map.get("cues", [])
     deferred = cue_map.get("deferred", [])
+    required = core_events(cue_map)
     problems = []
     decoded = 0
 
@@ -455,7 +484,7 @@ def main(argv=None):
                 problems.append(f"duplicate cue name {name!r}")
             seen_names[name] = event
     deferred_events = {d.get("event") for d in deferred}
-    for event in CORE_EVENTS:
+    for event in required:
         cue = seen_events.get(event)
         if cue is None:
             problems.append(f"{event}: core cue has no row in cues")
@@ -473,7 +502,7 @@ def main(argv=None):
         event = cue.get("event", "?")
         if cue.get("status") == "deferred" or cue.get("wave") is None:
             print(f"  {event:<16} deferred: {cue.get('reason', 'no wave')}")
-            if event in CORE_EVENTS:
+            if event in required:
                 problems.append(f"{event}: core cue is deferred")
             continue
         if cue.get("bank") == "music":

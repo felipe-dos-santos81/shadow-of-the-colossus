@@ -583,3 +583,98 @@ TEST_CASE("climb camera survives a degenerate surface normal") {
     CHECK(camera.target.z == doctest::Approx(last.z));
     CHECK(camera.yaw == doctest::Approx(90.0f));  // the valid normal still seeds
 }
+
+// --- Death cinematic (S6 Task 5) ---------------------------------------------
+//
+// The reconstructed death camera (design §8.3, D2): five key poses on the
+// death clock, eased between. T0 is the follow pose the defeat interrupted;
+// T0.4 the 12 m pull-back / 4 m up; T3.0 the low angle on the tendrils;
+// T6.2 the corpse wide; T8.0 the follow pose again, re-anchored on the
+// player's head. `valus` is the entity's placement point (the ground under
+// him), so the keys are world-space relative to the Valus transform.
+
+TEST_CASE("camera_death_pose keys the cinematic path") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const Vec3 valus{382.0f, 28.369f, 370.0f};
+    const Vec3 player{353.0f, 27.951f, 345.0f};
+    // A base whose target is NOT the head point: T0 must return it untouched
+    // and T8 must re-anchor the follow key on the player's head.
+    Camera base{};
+    base.target = Vec3{player.x, player.y + 3.0f, player.z};
+    base.yaw = 49.0f;
+    base.pitch = 6.0f;
+    base.distance = 4.5f;
+
+    // T0: the follow pose exactly.
+    const Camera t0 = camera_death_pose(base, valus, player, 0.0f);
+    CHECK(t0.target.x == doctest::Approx(base.target.x));
+    CHECK(t0.target.y == doctest::Approx(base.target.y));
+    CHECK(t0.target.z == doctest::Approx(base.target.z));
+    CHECK(t0.yaw == doctest::Approx(base.yaw));
+    CHECK(t0.pitch == doctest::Approx(base.pitch));
+    CHECK(t0.distance == doctest::Approx(base.distance));
+    CHECK(t0.fovYDeg == doctest::Approx(base.fovYDeg));
+
+    // T0.4: the pull-back — the eye 12 m out and exactly 4 m above the entity
+    // base, tilted up at the body's midpoint so the death is framed, not the
+    // legs.
+    const Camera pull = camera_death_pose(base, valus, player, kDeathPullSeconds);
+    CHECK(pull.target.x == doctest::Approx(valus.x));
+    CHECK(pull.target.y == doctest::Approx(valus.y + kDeathPullTargetHeight));
+    CHECK(pull.target.z == doctest::Approx(valus.z));
+    CHECK(pull.distance == doctest::Approx(kDeathPullDistance));
+    CHECK(pull.pitch == doctest::Approx(kDeathPullPitchDeg));
+    CHECK(pull.yaw == doctest::Approx(base.yaw));
+    const float pull_eye =
+        pull.target.y + pull.distance * std::sin(pull.pitch * kDegToRad);
+    CHECK(pull_eye == doctest::Approx(valus.y + kDeathPullEyeHeight).epsilon(0.01));
+
+    // T3.0: the low angle — below the tendril band, looking up at it.
+    const Camera low = camera_death_pose(base, valus, player, kDeathLowSeconds);
+    CHECK(low.target.x == doctest::Approx(valus.x));
+    CHECK(low.target.y == doctest::Approx(valus.y + kDeathLowTargetHeight));
+    CHECK(low.distance == doctest::Approx(kDeathLowDistance));
+    CHECK(low.pitch == doctest::Approx(kDeathLowPitchDeg));
+    CHECK(low.pitch < 0.0f);  // the eye below the target: a low angle
+    CHECK(low.yaw == doctest::Approx(base.yaw + kDeathLowYawOffsetDeg));
+    // The eye is low: target height + distance * sin(pitch) above the base.
+    const float low_eye = low.target.y + low.distance * std::sin(low.pitch * kDegToRad);
+    CHECK(low_eye > valus.y);
+    CHECK(low_eye < valus.y + kDeathLowTargetHeight);
+
+    // T6.2: the corpse wide — the whole fallen body in frame.
+    const Camera wide = camera_death_pose(base, valus, player, kDeathWideSeconds);
+    CHECK(wide.target.x == doctest::Approx(valus.x));
+    CHECK(wide.target.y == doctest::Approx(valus.y + kDeathWideTargetHeight));
+    CHECK(wide.distance == doctest::Approx(kDeathWideDistance));
+    CHECK(wide.pitch == doctest::Approx(kDeathWidePitchDeg));
+    CHECK(wide.yaw == doctest::Approx(base.yaw + kDeathWideYawOffsetDeg));
+
+    // T8.0 and later: the follow pose again, re-anchored on the player's head.
+    for (const float t : {kDeathFollowSeconds, 12.0f}) {
+        CAPTURE(t);
+        const Camera back = camera_death_pose(base, valus, player, t);
+        CHECK(back.target.x == doctest::Approx(player.x));
+        CHECK(back.target.y == doctest::Approx(player.y + kFollowHeadHeight));
+        CHECK(back.target.z == doctest::Approx(player.z));
+        CHECK(back.yaw == doctest::Approx(base.yaw));
+        CHECK(back.pitch == doctest::Approx(base.pitch));
+        CHECK(back.distance == doctest::Approx(base.distance));
+    }
+
+    // The segments ease: a mid-segment pose sits strictly between its keys.
+    const Camera mid_pull = camera_death_pose(base, valus, player, 0.5f * kDeathPullSeconds);
+    CHECK(mid_pull.distance > base.distance);
+    CHECK(mid_pull.distance < kDeathPullDistance);
+    const Camera mid_low = camera_death_pose(base, valus, player, 4.0f);
+    CHECK(mid_low.distance > kDeathLowDistance);
+    CHECK(mid_low.distance < kDeathWideDistance);
+
+    // t <= 0 and a non-finite clock/point answer the base pose, never NaN.
+    const Camera before = camera_death_pose(base, valus, player, -1.0f);
+    CHECK(before.distance == doctest::Approx(base.distance));
+    const Camera nan_time = camera_death_pose(base, valus, player, nan);
+    CHECK(nan_time.target.y == doctest::Approx(base.target.y));
+    const Camera nan_valus = camera_death_pose(base, Vec3{nan, nan, nan}, player, 3.0f);
+    CHECK(nan_valus.distance == doctest::Approx(base.distance));
+}

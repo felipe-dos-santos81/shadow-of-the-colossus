@@ -108,6 +108,7 @@ public static class ModelConverter
                 BaseColorTexture = RelativeSlot(root, material.BaseColorTexture),
                 NormalTexture = RelativeSlot(root, material.NormalTexture),
                 SpecularTexture = RelativeSlot(root, material.SpecularTexture),
+                EmissiveTexture = RelativeSlot(root, material.EmissiveTexture),
             }).ToList(),
             ReferencedTexturePaths = model.ReferencedTexturePaths.Select(path => Relative(root, path)).ToList(),
         };

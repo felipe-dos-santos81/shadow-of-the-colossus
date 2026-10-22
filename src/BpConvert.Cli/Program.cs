@@ -2,6 +2,7 @@
 using BpConvert.Core;
 using BpConvert.Core.Audio;
 using BpConvert.Core.Pipeline;
+using BpConvert.Core.Textures;
 
 if (args.Length == 0)
 {
@@ -15,6 +16,8 @@ switch (args[0])
         return InspectCommand(args);
     case "convert":
         return ConvertCommand(args);
+    case "texture":
+        return TextureCommand(args);
     case "audio":
         return AudioCommand(args);
     case "report":
@@ -35,6 +38,9 @@ static void PrintUsage()
     Console.Error.WriteLine("                               scope it to one model with --under <file>: every baked track must");
     Console.Error.WriteLine("                               map into that model's skeleton, so a directory-scope run fails on");
     Console.Error.WriteLine("                               non-matching sources. Recorded-ok sources need --force to rebake.");
+    Console.Error.WriteLine("  bp-convert texture --in <texture> --out <png>");
+    Console.Error.WriteLine("                               decode one .ctxr/.cptx container to an RGBA8 PNG (parent directories");
+    Console.Error.WriteLine("                               are created); prints <width>x<height> and the container variant");
     Console.Error.WriteLine("  bp-convert report --out <lib> [--top N]");
     Console.Error.WriteLine("                               print catalog counts and the top-N failure reasons");
     Console.Error.WriteLine("  bp-convert audio --root <game> --out <lib> --map <map.json> [--events a,b] [--music <track>] [--force]");
@@ -198,6 +204,84 @@ static int ConvertCommand(string[] args)
     {
         var cause = (e as AggregateException)?.InnerException ?? e;
         Console.Error.WriteLine($"bp-convert convert: {cause.GetType().Name}: {cause.Message}");
+        return 1;
+    }
+}
+
+/// <summary>
+/// <c>texture --in &lt;texture&gt; --out &lt;png&gt;</c>: decode one CTXR-family container
+/// (<c>.ctxr</c> or the <c>.cptx</c> particle atlas) into an RGBA8 PNG.
+/// Exit codes: 0 = written, 1 = the container/decoder refused (the message names the input),
+/// 2 = bad invocation or an unreadable input.
+/// </summary>
+static int TextureCommand(string[] args)
+{
+    string? input = null, output = null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--in":
+                if (input is not null)
+                {
+                    Console.Error.WriteLine("bp-convert texture: --in given twice");
+                    return 2;
+                }
+                if (!TryValue(args, ref i, out input) || input!.StartsWith("--"))
+                    return MissingValue("--in");
+                break;
+            case "--out":
+                if (output is not null)
+                {
+                    Console.Error.WriteLine("bp-convert texture: --out given twice");
+                    return 2;
+                }
+                if (!TryValue(args, ref i, out output) || output!.StartsWith("--"))
+                    return MissingValue("--out");
+                break;
+            default:
+                Console.Error.WriteLine($"bp-convert texture: unknown argument '{args[i]}'");
+                PrintUsage();
+                return 2;
+        }
+    }
+
+    if (input is null)
+    {
+        Console.Error.WriteLine("bp-convert texture: --in <texture> is required");
+        PrintUsage();
+        return 2;
+    }
+    if (output is null)
+    {
+        Console.Error.WriteLine("bp-convert texture: --out <png> is required");
+        PrintUsage();
+        return 2;
+    }
+    if (!File.Exists(input))
+    {
+        Console.Error.WriteLine($"bp-convert texture: input not found: {input}");
+        return 2;
+    }
+
+    try
+    {
+        var result = CtxrConverter.Convert(input, output);
+        Console.WriteLine($"texture: {input} -> {output} ({result.Width}x{result.Height}, variant {result.Variant})");
+        return 0;
+    }
+    catch (Exception e) when (e is InvalidDataException or NotSupportedException)
+    {
+        Console.Error.WriteLine($"bp-convert texture: {e.Message}");
+        return 1;
+    }
+    catch (Exception e)
+    {
+        // An IO failure, or any other (a decoder's ArgumentException, say), is
+        // still a decode failure, not a crash: the documented matrix is 0 = ok,
+        // 1 = decode/IO failure, 2 = bad invocation.
+        Console.Error.WriteLine($"bp-convert texture: {e.GetType().Name}: {e.Message}");
         return 1;
     }
 }

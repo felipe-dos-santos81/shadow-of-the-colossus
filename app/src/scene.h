@@ -33,6 +33,12 @@ struct MeshCpu {
     // (includeRig=true, skeleton or not). The player's meshes are 0, each
     // `entity`'s are 1, 2, ... in manifest order.
     int rig = -1;
+    // The per-mesh draw gate (S6 Task 5): the renderer skips a mesh whose
+    // `visible` is false. The corpse swap toggles the live entity's range off
+    // and the dead body's on at Collapse; every other mesh stays true, so a
+    // scene that never touches it draws exactly as before. Collision, bounds
+    // and the heightmap read the mesh lists, not this flag.
+    bool visible = true;
 };
 
 // One decoded PNG, RGBA8, top-down (glTF image origin).
@@ -46,9 +52,15 @@ struct TextureCpu {
 struct MaterialCpu {
     std::string name;
     float baseColorFactor[4];
-    float emissiveFactor[3];
+    float emissiveFactor[3];  // additive light (`m.emissive.rgb` in the mesh shader)
     int baseColorTexture;  // index into Scene::textures, -1 = none
     int normalTexture;     // index into Scene::textures, -1 = none
+    // The glTF emissive slot, used as the corpse's veins carrier: index into Scene::textures,
+    // -1 = none. The slot has two different meanings in the mesh shader: `emissiveFactor` is
+    // additive light, while this texture is multiplicative (a dark veil): the shipped veins
+    // texture is black RGB with the vein mask in alpha, so the shader applies
+    // `mix(1, rgb, alpha)` rather than adding it.
+    int emissiveTexture = -1;
 };
 
 // One skeleton joint, in the skin's own order: `parent` is resolved against

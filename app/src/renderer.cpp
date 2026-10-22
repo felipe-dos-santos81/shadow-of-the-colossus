@@ -202,10 +202,10 @@ void Renderer::create_pipeline() {
 
     // Vertex stage: uniforms 0 (viewProj) and 1 (model) plus the palette
     // storage buffer. Fragment stage: slot 0 (material) plus the base-color
-    // texture and its sampler.
+    // texture/sampler and the emissive slot (the veins carrier, or white).
     vertex_shader_ = create_shader(SDL_GPU_SHADERSTAGE_VERTEX, "mesh_vertex", 2, 1, 0,
                                    source.data(), source.size());
-    fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "mesh_fragment", 1, 0, 1,
+    fragment_shader_ = create_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, "mesh_fragment", 1, 0, 2,
                                      source.data(), source.size());
 
     SDL_GPUVertexBufferDescription vertex_buffer{};
@@ -773,7 +773,23 @@ void Renderer::upload_pose(std::size_t rigIndex, const std::vector<Mat4>& palett
     }
 }
 
-void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain) {
+bool Renderer::upload_effect_textures(const std::array<TextureCpu, 4>& textures) {
+    if (effects_ready_) {
+        return true;  // idempotent: a second call must not disable a live pass
+    }
+    effects_ready_ = effects_.create(device_, textures, color_format_);
+    if (!effects_ready_) {
+        // A visual pass never aborts the run: the death sequence keeps its
+        // motion, corpse and audio, and only the tendrils are missing.
+        std::fprintf(stderr,
+                     "renderer: the tendril effect pass is unavailable; the death sequence "
+                     "draws without tendrils\n");
+    }
+    return effects_ready_;
+}
+
+void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain,
+                            const EffectFrame* effects) {
     // Refresh the label before the frame's command buffer: the upload is its
     // own submission and only happens when the rounded percentage changed.
     // Uploading is not drawing — the overlay draws only after the swapchain
@@ -817,6 +833,15 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
 
     ensure_targets(width, height);
 
+    // The tendril pass's vertices are built and uploaded before the frame's
+    // render pass opens: the upload is its own submission (update's copy pass
+    // and fence wait), ordered ahead of this frame on the same queue. The draw
+    // itself happens after the opaque meshes, below.
+    const bool draw_effects = effects != nullptr && effects->active && effects_ready_;
+    if (draw_effects) {
+        effects_.update(*effects, viewProj);
+    }
+
     SDL_GPUColorTargetInfo color_target{};
     color_target.texture = color_target_;
     color_target.clear_color = SDL_FColor{0.1f, 0.1f, 0.1f, 1.0f};
@@ -840,6 +865,11 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     for (size_t i = 0; i < scene.meshes.size() && i < meshes_.size(); ++i) {
         const MeshGpu& mesh = meshes_[i];
         if (mesh.index_buffer == nullptr || mesh.index_count == 0) {
+            continue;
+        }
+        // The S6 corpse swap's draw gate: a hidden instance is skipped whole,
+        // so the live body and the dead body never draw together.
+        if (!scene.meshes[i].visible) {
             continue;
         }
 
@@ -871,6 +901,18 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
             albedo = textures_[static_cast<size_t>(texture_index)];
         }
 
+        // Emissive/veins slot (S6 D9): the white fallback is the no-op — the shader's
+        // `mix(1, rgb, alpha)` is exactly 1 for white/opaque, so materials without the
+        // texture render as before. The dead body's black-with-alpha veil is the only
+        // material that binds a real one.
+        SDL_GPUTexture* emissive_texture = white_texture_;
+        const int emissive_index =
+            has_material ? scene.materials[static_cast<size_t>(material_index)].emissiveTexture : -1;
+        if (emissive_index >= 0 && static_cast<size_t>(emissive_index) < textures_.size() &&
+            textures_[static_cast<size_t>(emissive_index)] != nullptr) {
+            emissive_texture = textures_[static_cast<size_t>(emissive_index)];
+        }
+
         // Vertex storage buffer 0: this mesh's own rig palette — never another
         // rig's. A static mesh (rig < 0) binds slot 0, whose zero-weight
         // vertices the shader passes through without reading it.
@@ -884,10 +926,23 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         SDL_BindGPUVertexBuffers(pass, 0, &vertex_binding, 1);
         const SDL_GPUBufferBinding index_binding{mesh.index_buffer, 0};
         SDL_BindGPUIndexBuffer(pass, &index_binding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        const SDL_GPUTextureSamplerBinding texture_binding{albedo, sampler_};
-        SDL_BindGPUFragmentSamplers(pass, 0, &texture_binding, 1);
+        const SDL_GPUTextureSamplerBinding texture_bindings[2] = {
+            {albedo, sampler_},
+            {emissive_texture, sampler_},
+        };
+        SDL_BindGPUFragmentSamplers(pass, 0, texture_bindings, 2);
 
         SDL_DrawGPUIndexedPrimitives(pass, mesh.index_count, 1, 0, 0, 0);
+    }
+
+    // The tendril pass (S6 Task 4, design §7 D4/§8.2): world-space blended
+    // ribbons and billboards over the opaque meshes, still inside this pass so
+    // they depth-test against the scene (LESS_EQUAL, no depth write). It comes
+    // after every mesh and before the HUD pass below. nullptr or an inactive
+    // frame is the no-op every non-death path passes (the app passes nullptr
+    // until the death sequence is wired).
+    if (draw_effects) {
+        effects_.draw(cmd, pass, viewProj);
     }
 
     SDL_EndGPURenderPass(pass);
