@@ -13,7 +13,6 @@ constexpr float kZoomPerWheelStep = 0.15f;     // distance decays by exp(-0.15) 
 constexpr float kFramePitchDeg = 20.0f;        // camera_frame's framing angle
 
 // The follow camera's pinned constants (S3 W1.4).
-constexpr float kFollowHeight = 1.4f;            // head point above the player
 constexpr float kFollowMinDistance = 2.0f;       // wheel zoom floor (m)
 constexpr float kFollowMaxDistance = 12.0f;      // wheel zoom ceiling (m)
 constexpr float kFollowPitchLimitDeg = 60.0f;    // drag pitch clamp
@@ -144,7 +143,7 @@ void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float p
 
     // The head point is the orbit target, set exactly (no smoothing on it).
     if (std::isfinite(playerPos.x) && std::isfinite(playerPos.y) && std::isfinite(playerPos.z)) {
-        camera.target = Vec3{playerPos.x, playerPos.y + kFollowHeight, playerPos.z};
+        camera.target = Vec3{playerPos.x, playerPos.y + kFollowHeadHeight, playerPos.z};
     }
 
     // The look yaw targets the player's facing plus the drag offset; the orbit
@@ -347,4 +346,86 @@ void camera_climb_exit(Camera&, CameraClimb& state) {
     state.active = false;
     // The orbit (target, yaw, pitch, distance) is deliberately left untouched:
     // the follow camera eases back from where the user left it, with no snap.
+}
+
+// --- Death cinematic (S6 Task 5) ---------------------------------------------
+
+namespace {
+
+// The smoothstep ease: 0 at 0, 1 at 1, zero slope at both ends. A clamped
+// input keeps a hand-driven segment time inside its own segment.
+float death_ease(float u) {
+    u = std::clamp(u, 0.0f, 1.0f);
+    return u * u * (3.0f - 2.0f * u);
+}
+
+// Component-wise interpolation between two key poses. Yaw is lerped raw (the
+// keys are base.yaw + a fixed offset, so there is no wrap ambiguity).
+Camera death_blend(const Camera& from, const Camera& to, float u) {
+    Camera out;
+    out.target = Vec3{from.target.x + (to.target.x - from.target.x) * u,
+                      from.target.y + (to.target.y - from.target.y) * u,
+                      from.target.z + (to.target.z - from.target.z) * u};
+    out.yaw = from.yaw + (to.yaw - from.yaw) * u;
+    out.pitch = from.pitch + (to.pitch - from.pitch) * u;
+    out.distance = from.distance + (to.distance - from.distance) * u;
+    out.fovYDeg = from.fovYDeg + (to.fovYDeg - from.fovYDeg) * u;
+    return out;
+}
+
+}  // namespace
+
+Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t) {
+    if (!std::isfinite(t) || !finite_vec3(valus) || !finite_vec3(player)) {
+        return base;  // a broken sample: never write NaN into the camera
+    }
+
+    // The five key poses. The four cinematic keys share the base's fov and its
+    // viewing side, offset by the fixed yaw offsets; the follow key re-anchors
+    // the base on the player's head so it is a live follow pose.
+    Camera pull = base;
+    pull.target = Vec3{valus.x, valus.y + kDeathPullTargetHeight, valus.z};
+    pull.distance = kDeathPullDistance;
+    pull.yaw = base.yaw;
+    pull.pitch = kDeathPullPitchDeg;
+
+    Camera low = base;
+    low.target = Vec3{valus.x, valus.y + kDeathLowTargetHeight, valus.z};
+    low.distance = kDeathLowDistance;
+    low.yaw = base.yaw + kDeathLowYawOffsetDeg;
+    low.pitch = kDeathLowPitchDeg;
+
+    Camera wide = base;
+    wide.target = Vec3{valus.x, valus.y + kDeathWideTargetHeight, valus.z};
+    wide.distance = kDeathWideDistance;
+    wide.yaw = base.yaw + kDeathWideYawOffsetDeg;
+    wide.pitch = kDeathWidePitchDeg;
+
+    Camera follow = base;
+    follow.target = Vec3{player.x, player.y + kFollowHeadHeight, player.z};
+
+    // The segment boundaries return the key pose exactly (a segment's u is 0 at
+    // its start and 1 at its end), so the test's five keys are exact values.
+    if (t <= 0.0f) {
+        return base;
+    }
+    if (t < kDeathPullSeconds) {
+        return death_blend(base, pull, death_ease(t / kDeathPullSeconds));
+    }
+    if (t < kDeathLowSeconds) {
+        return death_blend(
+            pull, low,
+            death_ease((t - kDeathPullSeconds) / (kDeathLowSeconds - kDeathPullSeconds)));
+    }
+    if (t < kDeathWideSeconds) {
+        return death_blend(
+            low, wide,
+            death_ease((t - kDeathLowSeconds) / (kDeathWideSeconds - kDeathLowSeconds)));
+    }
+    if (t < kDeathFollowSeconds) {
+        return death_blend(
+            wide, follow,
+            death_ease((t - kDeathWideSeconds) / (kDeathFollowSeconds - kDeathWideSeconds)));
+    }
+    return follow;
 }

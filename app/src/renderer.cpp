@@ -867,6 +867,11 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         if (mesh.index_buffer == nullptr || mesh.index_count == 0) {
             continue;
         }
+        // The S6 corpse swap's draw gate: a hidden instance is skipped whole,
+        // so the live body and the dead body never draw together.
+        if (!scene.meshes[i].visible) {
+            continue;
+        }
 
         // Vertex slot 1: this mesh's model matrix — identity for a single-glb
         // load, the instance's baked TRS in a composed scene.

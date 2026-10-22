@@ -33,6 +33,12 @@ struct MeshCpu {
     // (includeRig=true, skeleton or not). The player's meshes are 0, each
     // `entity`'s are 1, 2, ... in manifest order.
     int rig = -1;
+    // The per-mesh draw gate (S6 Task 5): the renderer skips a mesh whose
+    // `visible` is false. The corpse swap toggles the live entity's range off
+    // and the dead body's on at Collapse; every other mesh stays true, so a
+    // scene that never touches it draws exactly as before. Collision, bounds
+    // and the heightmap read the mesh lists, not this flag.
+    bool visible = true;
 };
 
 // One decoded PNG, RGBA8, top-down (glTF image origin).

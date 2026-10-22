@@ -179,3 +179,55 @@ void camera_climb_update(Camera&, CameraClimb&, Vec3 attachPoint, float dragDx,
 // Leaves the climb orbit: `active = false` and nothing else — the orbit is left
 // exactly where it is (no snap).
 void camera_climb_exit(Camera&, CameraClimb&);
+
+// --- Death cinematic (S6 Task 5) ---------------------------------------------
+//
+// The reconstructed death camera (design §8.3, ruling D2: the shipped
+// `camera_minoa_death_front` clips are track type 36 and are not played). The
+// path is keyed on the death clock `t` (seconds since the defeat) and eases
+// between five key poses, all orbit cameras around a point above the entity's
+// placement point `valus`:
+//
+//   t = 0        the follow pose (`base`): the pose the defeat interrupted
+//   0.4 s        the pull-back: the eye 12 m out and 4 m above the entity
+//                base, tilted up at the body's midpoint (9 m) — "a 12 m
+//                pull-back / 4 m up", framing the death, not the legs
+//   3.0 s        the low angle: the target 10 m up (the tendril band), 8 m out,
+//                pitched -40° so the eye sits low and looks up at the burst
+//   6.2 s        the corpse wide: the target 2 m up, 24 m out, pitched 12°
+//   8.0 s        the follow pose again, re-anchored on the player's head
+//
+// The keys after T0 orbit the base's own viewing side by fixed yaw offsets, so
+// the cinematic turns around Valus without depending on where the player was
+// facing. The app passes the follow pose captured when the sequence started as
+// `base`, so the path cannot feed back on itself; the player's input is locked
+// while it runs (design D7) and the cursor is never captured (A5).
+
+// The follow camera's head point above the player (camera_follow's target);
+// camera_death_pose re-anchors its return key on the same point.
+inline constexpr float kFollowHeadHeight = 1.4f;
+
+inline constexpr float kDeathPullSeconds = 0.4f;   // the pull-back key
+inline constexpr float kDeathLowSeconds = 3.0f;    // the low-angle key
+inline constexpr float kDeathWideSeconds = 6.2f;   // the corpse-wide key
+inline constexpr float kDeathFollowSeconds = 8.0f; // the follow key
+inline constexpr float kDeathPullDistance = 12.0f;      // the 12 m pull-back
+inline constexpr float kDeathPullEyeHeight = 4.0f;      // the eye 4 m above the entity base
+inline constexpr float kDeathPullTargetHeight = 9.0f;   // the body's midpoint
+// The pitch that puts the eye at kDeathPullEyeHeight: -asin((9 - 4) / 12).
+inline constexpr float kDeathPullPitchDeg = -24.6243f;
+inline constexpr float kDeathLowTargetHeight = 10.0f;  // the tendril band
+inline constexpr float kDeathLowDistance = 8.0f;
+inline constexpr float kDeathLowPitchDeg = -40.0f;     // below the target: a low angle
+inline constexpr float kDeathLowYawOffsetDeg = 25.0f;
+inline constexpr float kDeathWideTargetHeight = 2.0f;  // the corpse on the ground
+inline constexpr float kDeathWideDistance = 24.0f;
+inline constexpr float kDeathWidePitchDeg = 12.0f;
+inline constexpr float kDeathWideYawOffsetDeg = 45.0f;
+
+// The pose at death-clock time `t`. `t <= 0` answers `base` exactly, and so
+// does a non-finite `t` or point (a broken sample never writes NaN). The
+// segments ease with a smoothstep, so the pose at each key time is exactly that
+// key and the path is continuous. `valus` is the entity's placement point;
+// `player` anchors the T8 follow key.
+Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t);

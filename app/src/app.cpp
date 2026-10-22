@@ -7,6 +7,8 @@
 #include "audio_map.h"
 #include "camera.h"
 #include "collision.h"
+#include "death.h"
+#include "effect.h"
 #include "gamepad_map.h"
 #include "grab.h"
 #include "heightmap.h"
@@ -216,6 +218,15 @@ constexpr const char* kClubGlb =
     "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a_weapon.glb";
 constexpr const char* kClubSocketJoint = "OptBone_sword";
 
+// The corpse swap's assets (S6, design D5/§8.3): the already-converted dead
+// body (6 meshes, the six `_dead` materials with the veins veil) and the
+// dirtmound it lies on. Both load as static instances at startup, hidden, and
+// appear at Collapse at the live entity's transform.
+constexpr const char* kCorpseGlb =
+    "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_body.glb";
+constexpr const char* kDirtmoundGlb =
+    "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_dirtmound.glb";
+
 // The club, once loaded into a composed scene: the entity rig it binds to, the
 // socket joint resolved by name, and its half-open static mesh range. `loaded`
 // stays false in single-model mode, in a manifest scene with no entity, and
@@ -294,6 +305,217 @@ void update_club_model(Scene& scene, const std::vector<std::vector<Mat4>>& palet
     const std::size_t end = std::min(club.meshEnd, scene.meshes.size());
     for (std::size_t i = club.meshBegin; i < end; ++i) {
         scene.meshes[i].model = model;
+    }
+}
+
+// --- S6: the corpse and the death wiring (Task 5) ---------------------------
+
+// The dead body + dirtmound, loaded as static instances at startup and hidden
+// until Collapse (design D5/§8.3). `meshBegin..meshEnd` is their half-open
+// static range in the scene; `loaded` stays false in a scene with no entity
+// (and outside the death-wired runs, where the corpse is never placed).
+struct CorpseAttachment {
+    bool loaded = false;
+    std::size_t meshBegin = 0;
+    std::size_t meshEnd = 0;
+};
+
+// Appends the corpse (the dead body then the dirtmound) at the entity's
+// placement, hidden. The initial model only has to be sane: while the corpse is
+// visible `apply_death_visibility` rewrites it from the live entity's first
+// mesh, so it lands exactly where the body fell. A missing glb throws (the same
+// policy as the club): the corpse is the death's payoff, not an optional prop.
+CorpseAttachment load_corpse(Scene& scene, const std::filesystem::path& libraryDir,
+                             std::size_t entityRig) {
+    CorpseAttachment corpse{};
+    if (entityRig >= scene.rigs.size()) {
+        return corpse;
+    }
+    const RigCpu& rig = scene.rigs[entityRig];
+    if (rig.meshBegin >= scene.meshes.size()) {
+        return corpse;
+    }
+    const Mat4 model = scene.meshes[rig.meshBegin].model;
+    corpse.meshBegin = append_static_model(scene, libraryDir, kCorpseGlb, model);
+    append_static_model(scene, libraryDir, kDirtmoundGlb, model);
+    corpse.meshEnd = scene.meshes.size();
+    for (std::size_t i = corpse.meshBegin; i < corpse.meshEnd; ++i) {
+        scene.meshes[i].visible = false;
+    }
+    corpse.loaded = true;
+    return corpse;
+}
+
+// The per-mesh draw gate for a half-open range; out-of-range bounds are
+// clamped, so a caller never indexes past the scene.
+void set_mesh_range_visible(Scene& scene, std::size_t begin, std::size_t end, bool visible) {
+    const std::size_t last = std::min(end, scene.meshes.size());
+    for (std::size_t i = std::min(begin, last); i < last; ++i) {
+        scene.meshes[i].visible = visible;
+    }
+}
+
+// The corpse swap (design G3): while `corpseVisible` the live entity's meshes
+// (weakpoint shells included) and the held club are hidden and the dead body +
+// dirtmound are shown at the entity's current transform; before and after the
+// death window the live body is shown and the corpse hidden. Every other mesh
+// (the level, the player) is untouched, so an R reset restores the opening
+// frame exactly.
+void apply_death_visibility(Scene& scene, const CorpseAttachment& corpse,
+                            const ClubAttachment& club, std::size_t entityRig,
+                            bool corpseVisible) {
+    if (entityRig < scene.rigs.size()) {
+        const RigCpu& rig = scene.rigs[entityRig];
+        set_mesh_range_visible(scene, rig.meshBegin, rig.meshEnd, !corpseVisible);
+    }
+    if (club.loaded) {
+        set_mesh_range_visible(scene, club.meshBegin, club.meshEnd, !corpseVisible);
+    }
+    if (!corpse.loaded) {
+        return;
+    }
+    set_mesh_range_visible(scene, corpse.meshBegin, corpse.meshEnd, corpseVisible);
+    if (!corpseVisible || entityRig >= scene.rigs.size()) {
+        return;
+    }
+    // The corpse follows the body that fell: the live entity's first mesh
+    // carries the placement (manifest TRS * the grounding lift * the live yaw),
+    // so the corpse lands where Valus fell, not at the manifest's opening yaw.
+    const RigCpu& rig = scene.rigs[entityRig];
+    if (rig.meshBegin >= scene.meshes.size()) {
+        return;
+    }
+    const Mat4 model = scene.meshes[rig.meshBegin].model;
+    const std::size_t end = std::min(corpse.meshEnd, scene.meshes.size());
+    for (std::size_t i = std::min(corpse.meshBegin, end); i < end; ++i) {
+        scene.meshes[i].model = model;
+    }
+}
+
+// The stable phase token the `s6-phase` line prints (the machine never enters
+// Tendrils — the burst overlaps Motion — but the name exists for completeness).
+const char* death_phase_name(DeathPhase phase) {
+    switch (phase) {
+        case DeathPhase::Idle:
+            return "Idle";
+        case DeathPhase::Motion:
+            return "Motion";
+        case DeathPhase::Tendrils:
+            return "Tendrils";
+        case DeathPhase::Collapse:
+            return "Collapse";
+        case DeathPhase::Done:
+            return "Done";
+    }
+    return "Idle";
+}
+
+// The cinematic key the camera is on at death-clock time `t`: the segment's
+// destination key (`follow` before the pull and after the return). The
+// `s6-death` line reports it.
+const char* death_camera_key(float t) {
+    if (!std::isfinite(t) || t <= 0.0f) {
+        return "follow";
+    }
+    if (t <= kDeathPullSeconds) {
+        return "pull";
+    }
+    if (t <= kDeathLowSeconds) {
+        return "low";
+    }
+    if (t <= kDeathWideSeconds) {
+        return "wide";
+    }
+    return "follow";
+}
+
+// The fallback chest height (above the entity's placement) for the tendril
+// roots' outward direction when the rig has no Bone_MUNE.
+constexpr float kEffectFallbackChestHeight = 8.0f;
+
+// This frame's tendril roots (design §8.2): the hit weakpoint's shell first,
+// the other second — the binary's one-tendril-per-hit-point list, with the
+// shells as the fallback for a hit point the app does not track. Each root's
+// outward direction is the shell's direction from the body centre (the curl's
+// initial heading); `seed` is the root's slot, so the two curls differ. `age`
+// is the death clock (the burst begins at 0.4 s); `active` is the machine's
+// burst window, so the frame is the renderer's no-op outside it.
+EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
+                               const std::vector<std::vector<Mat4>>& palettes,
+                               const Encounter& encounter, const DeathState& death) {
+    EffectFrame frame;
+    frame.age = death.total;
+    frame.active = death_tendrils_active(death);
+    if (!frame.active || entityRig >= palettes.size()) {
+        return frame;
+    }
+
+    Vec3 centre{encounter.entityPosition.x, encounter.entityPosition.y + kEffectFallbackChestHeight,
+                encounter.entityPosition.z};
+    Vec3 chest{};
+    if (posed_joint_world_position(scene, entityRig, palettes[entityRig], "Bone_MUNE", chest) &&
+        std::isfinite(chest.x) && std::isfinite(chest.y) && std::isfinite(chest.z)) {
+        centre = chest;
+    }
+
+    const int first = encounter.deathWeakpoint == 1 ? 1 : 0;
+    const int order[2] = {first, 1 - first};
+    for (const int weakpoint : order) {
+        if (frame.rootCount >= static_cast<int>(frame.roots.size())) {
+            break;
+        }
+        const char* material = weakpoint_material_name(weakpoint);
+        if (material == nullptr) {
+            continue;
+        }
+        Vec3 shell{};
+        float radius = 0.0f;
+        if (!posed_weakpoint_proxy(scene, entityRig, palettes[entityRig], material, shell,
+                                   radius) ||
+            !std::isfinite(shell.x) || !std::isfinite(shell.y) || !std::isfinite(shell.z)) {
+            continue;
+        }
+        Vec3 normal{shell.x - centre.x, shell.y - centre.y, shell.z - centre.z};
+        const float length = std::sqrt(vec3_dot(normal, normal));
+        if (length > 1e-4f) {
+            normal = Vec3{normal.x / length, normal.y / length, normal.z / length};
+        } else {
+            normal = Vec3{0.0f, 1.0f, 0.0f};
+        }
+        EffectRoot& root = frame.roots[static_cast<std::size_t>(frame.rootCount)];
+        root.position = shell;
+        root.normal = normal;
+        root.seed = static_cast<std::uint32_t>(frame.rootCount);
+        ++frame.rootCount;
+    }
+    return frame;
+}
+
+// The death cue's one-shot latch: true exactly on the frame the tendril burst
+// opens (0.4 s), when `fired` is set. The defeat itself queues nothing — the
+// roar is the burst's sound (design §8.4).
+bool death_cue_due(const DeathState& death, bool& fired) {
+    if (fired || !death_tendrils_active(death)) {
+        return false;
+    }
+    fired = true;
+    return true;
+}
+
+// S6: the club whoosh, fired once at the swing phase of an in-progress club
+// attack (`kValusClubSwingSeconds`, the impact's lead — not the telegraph).
+// The app calls this after `advance_valus_attack`; the frozen S5 timeline does
+// not, so its 20-event contract cannot gain a club_swing.
+void maybe_club_swing(Encounter& encounter, SfxQueue* sfx) {
+    if (encounter.attack != ValusAttack::Club || encounter.attackSwinged) {
+        return;
+    }
+    if (!(encounter.attackSeconds >= kValusClubSwingSeconds)) {
+        return;
+    }
+    encounter.attackSwinged = true;
+    if (sfx != nullptr) {
+        append_encounter_sfx(EncounterSfx::ClubSwing, encounter.entityPosition, *sfx);
     }
 }
 
@@ -398,6 +620,14 @@ constexpr float kS42ArmStrikeT = 1.0f;        // bandT on the right arm that rea
 constexpr float kS42MinClimbRise = 10.0f;     // m the full foot -> head route must gain
 constexpr float kS42Eps = 1e-3f;              // shell, ground and contact epsilon
 constexpr int kS42TelegraphLeadFrames = 5;    // stills: capture this many steps before an impact
+
+// --- S6 death wiring and self-test (Task 5) ---------------------------------
+
+// The corpse assets (kCorpseGlb/kDirtmoundGlb) are declared with the club's,
+// above: the load precedes the renderer's one-shot upload.
+constexpr int kS6MaxSwingFrames = 240;  // 4 s: walk the club clip to its swing phase
+constexpr int kS6MaxDeathFrames = 600;  // 10 s: the death machine to Done
+constexpr float kS6Eps = 1e-4f;         // the stills' phase-time epsilon
 
 // The R3 reaction names, plus the generic body reaction a strike on a band with
 // no weakpoint plays (the pinned bands without a weakpoint are not silent). The
@@ -1037,6 +1267,7 @@ void cancel_valus_attack(Encounter& encounter, SfxQueue* sfx = nullptr) {
     encounter.attack = ValusAttack::None;
     encounter.attackSeconds = 0.0f;
     encounter.attackHit = false;
+    encounter.attackSwinged = false;
     if (sfx != nullptr) {
         append_encounter_sfx(EncounterSfx::ClubCancel, encounter.entityPosition, *sfx);
     }
@@ -1056,6 +1287,7 @@ void start_valus_attack(Encounter& encounter, Playback& playback, const EntityCl
     encounter.attack = attack;
     encounter.attackSeconds = 0.0f;
     encounter.attackHit = false;
+    encounter.attackSwinged = false;
     playback.index = clip;
     playback.time = 0.0f;
     playback.pinned = false;
@@ -1084,6 +1316,7 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
         encounter.attack = ValusAttack::None;
         encounter.attackSeconds = 0.0f;
         encounter.attackHit = false;
+        encounter.attackSwinged = false;
         encounter.pendingCooldownSeconds = 0.0f;
         return;
     }
@@ -1119,6 +1352,7 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
         encounter.attack = ValusAttack::None;
         encounter.attackSeconds = 0.0f;
         encounter.attackHit = false;
+        encounter.attackSwinged = false;
         return;
     }
     const float duration = playback.clips[static_cast<std::size_t>(clip)].duration;
@@ -1131,6 +1365,7 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
         encounter.attack = ValusAttack::None;
         encounter.attackSeconds = 0.0f;
         encounter.attackHit = false;
+        encounter.attackSwinged = false;
         if (clips.stand >= 0) {
             playback.index = clips.stand;
             playback.time = 0.0f;
@@ -1258,8 +1493,10 @@ ValusAttackInput valus_attack_input(const Scene& scene, std::size_t entityRig,
 // in-progress attack and its pending impact (design §7.4); a whiff never has
 // damageDealt > 0, so it reaches none of this.
 //
-// S5: `sfx`, when given, banks Valus's reaction — or his defeat, which
-// supersedes it — at the entity's world position.
+// S5/S6: `sfx`, when given, banks Valus's reaction at the entity's world
+// position. The defeat itself queues nothing: its roar is the tendril burst's
+// sound at 0.4 s, and the app queues it then (S6, design §8.4). The killing
+// blow's weakpoint is recorded for the tendril roots.
 void apply_combat_events(Encounter& encounter, Playback& entityPlayback,
                          const EntityClips& clips, const StepEvents& events, int weakpoint,
                          SfxQueue* sfx = nullptr) {
@@ -1274,10 +1511,8 @@ void apply_combat_events(Encounter& encounter, Playback& entityPlayback,
     if (encounter.health <= 0.0f) {
         encounter.defeated = true;
         encounter.pendingCooldownSeconds = 0.0f;
+        encounter.deathWeakpoint = weakpoint;
         start_encounter_one_shot(entityPlayback, encounter, clips.death);
-        if (sfx != nullptr) {
-            append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition, *sfx);
-        }
         return;
     }
     const int reaction =
@@ -1435,7 +1670,10 @@ void write_screenshot(Renderer& renderer, SDL_Window* win, const std::string& pa
 struct AudioSeam {
     AudioEngine engine;
     bool enabled = false;       // the manifest and every mapped clip loaded
-    bool log = false;           // --s5-selftest: one s5-event line per played cue
+    bool log = false;           // --s5-selftest/--s6-selftest: one line per played cue
+    // The log line's tag: `s5-event` for the frozen S5 acceptance, `s6-event`
+    // for the S6 selftest. The format is otherwise identical (Task 6 parses it).
+    const char* logPrefix = "s5-event";
     bool failed = false;        // a mapped clip went missing at play time
     bool musicStarted = false;  // the music voice is live
     bool musicEverStarted = false;
@@ -1504,7 +1742,7 @@ struct AudioSeam {
             // `bank/name`: the engine indexes clips by that name and exposes no
             // bank. Ledger R16 makes the manifest name the log contract; Task 6
             // parses these tokens.
-            std::printf("s5-event t=%.3f event=%s clip=%s gain=%.2f\n", clock,
+            std::printf("%s t=%.3f event=%s clip=%s gain=%.2f\n", logPrefix, clock,
                         sfx_name(event.id), cue->clip, gain);
             ++eventCount;
         }
@@ -1529,7 +1767,7 @@ struct AudioSeam {
         musicStarted = true;
         musicEverStarted = true;
         if (log) {
-            std::printf("s5-event t=%.3f event=music_start clip=%s gain=%.2f\n", clock,
+            std::printf("%s t=%.3f event=music_start clip=%s gain=%.2f\n", logPrefix, clock,
                         kMusicClip, kMusicGain);
             ++eventCount;
         }
@@ -1545,7 +1783,7 @@ struct AudioSeam {
         engine.stop_music();
         musicStarted = false;
         if (log) {
-            std::printf("s5-event t=%.3f event=music_stop clip=%s gain=0.00\n", clock,
+            std::printf("%s t=%.3f event=music_stop clip=%s gain=0.00\n", logPrefix, clock,
                         kMusicClip);
             ++eventCount;
         }
@@ -1684,9 +1922,23 @@ int run_app(const AppOptions& opts) {
         // The entity prop: loaded only in a composed scene with an entity (see
         // load_club); identity/unloaded everywhere else.
         ClubAttachment club{};
+        // The S6 corpse prop and the tendril pass's readiness: both are loaded
+        // only when the death is wired (see below).
+        CorpseAttachment corpse{};
+        bool effects_ready = false;
         SceneManifest manifest{};          // empty when --manifest is absent
         Heightmap heightmap{};             // an empty heightmap = no ground
         const bool follow_mode = !opts.manifestPath.empty();
+        // S6: whether this run wires the death sequence (the interactive game
+        // and the --s6-selftest). The frozen scripted timelines (s3/s4/s41/
+        // s42/s5), the pinned captures and the plain screenshot runs must not
+        // load the corpse or the effect textures: their outputs and pixel
+        // stats are the regression.
+        const bool death_wired =
+            opts.s6Selftest ||
+            (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
+             !opts.s42Selftest && !opts.s5Selftest && !opts.entityTimeSet &&
+             opts.screenshotPath.empty());
         if (follow_mode) {
             // The manifest is user data: a malformed line is a usage error
             // (exit 2) carrying the file and line, never a crash.
@@ -1727,8 +1979,32 @@ int run_app(const AppOptions& opts) {
                 club = load_club(scene, opts.libraryDir, scene.playerRig + 1,
                                  manifest.entities[0].placement.glbRelPath);
             }
+            // S6: the corpse, hidden until Collapse. Also a static append, so it
+            // must precede upload() too; a scene the death cannot reach never
+            // loads it (the frozen timelines' mesh counts stay untouched).
+            if (death_wired && !manifest.entities.empty()) {
+                corpse = load_corpse(scene, opts.libraryDir, scene.playerRig + 1);
+            }
             renderer.upload(scene);
             print_scene_line(scene);
+            // S6: the tendril pass's four shipped textures (design §8.2). The
+            // S6 selftest cannot prove the burst without them, so a load
+            // failure there is fatal; the interactive game degrades to a death
+            // without tendrils with one warning (never throws — Task 4's
+            // contract).
+            if (death_wired && !manifest.entities.empty()) {
+                try {
+                    effects_ready =
+                        renderer.upload_effect_textures(load_effect_textures(opts.libraryDir));
+                } catch (const std::exception& error) {
+                    if (opts.s6Selftest) {
+                        std::fprintf(stderr, "sotc-viewer: --s6-selftest: %s\n", error.what());
+                        return 1;
+                    }
+                    std::fprintf(stderr, "sotc-viewer: the tendril effect is unavailable: %s\n",
+                                 error.what());
+                }
+            }
         } else if (!opts.modelRelPath.empty()) {
             scene = load_scene(opts.libraryDir, opts.modelRelPath);
             renderer.upload(scene);
@@ -1912,29 +2188,39 @@ int run_app(const AppOptions& opts) {
                          "sotc-viewer: --s5-selftest: the manifest has no entity\n");
             return 2;
         }
+        if (opts.s6Selftest && (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
+                                entityRig >= playbacks.size())) {
+            std::fprintf(stderr,
+                         "sotc-viewer: --s6-selftest: the manifest has no entity\n");
+            return 2;
+        }
         AudioSeam audio;
         const bool audio_wanted =
             follow_mode && !manifest.entities.empty() &&
-            (opts.s5Selftest ||
+            (opts.s5Selftest || opts.s6Selftest ||
              (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
               !opts.s42Selftest && !opts.entityTimeSet));
         if (audio_wanted) {
-            // The S5 slice is the load gate here: --s5-selftest and interactive
-            // play must load the frozen eight-entry manifest beside the S6 cue
-            // table. The S6 slice's own gate (Task 5's --s6-selftest) passes
+            // The S5 slice is the load gate for --s5-selftest and interactive
+            // play: both must load the frozen eight-entry manifest beside the
+            // S6 cue table. The S6 slice's own gate (--s6-selftest) passes
             // includeS6 = true and requires the death and club-swing rows too.
-            if (!audio.load(opts.libraryDir, /*includeS6=*/false)) {
+            if (!audio.load(opts.libraryDir, /*includeS6=*/opts.s6Selftest)) {
                 // The engine (or the cue gate) already printed the reason. A
                 // missing curated clip is fatal when the sound is the artifact;
                 // interactive play degrades to silence with that one warning.
-                if (opts.s5Selftest) {
+                if (opts.s5Selftest || opts.s6Selftest) {
                     return 1;
                 }
             }
-            audio.log = opts.s5Selftest;
+            audio.log = opts.s5Selftest || opts.s6Selftest;
+            if (opts.s6Selftest) {
+                audio.logPrefix = "s6-event";
+            }
         }
-        if (opts.s5Selftest && !audio.enabled) {
-            std::fprintf(stderr, "sotc-viewer: --s5-selftest: audio is not loaded\n");
+        if ((opts.s5Selftest || opts.s6Selftest) && !audio.enabled) {
+            std::fprintf(stderr, "sotc-viewer: %s: audio is not loaded\n",
+                         opts.s6Selftest ? "--s6-selftest" : "--s5-selftest");
             return 1;
         }
 
@@ -4077,6 +4363,330 @@ int run_app(const AppOptions& opts) {
             return 0;
         }
 
+        if (opts.s6Selftest) {
+            // The S6 acceptance timeline (design §8.5): a club swing (so the
+            // whoosh fires on the production path), a scripted lethal event
+            // through the production `apply_combat_events` (ruling R6: the real
+            // three-strike defeat stays the frozen S4.1 acceptance), the death
+            // phase machine to Done with the cinematic camera, the corpse swap
+            // and the tendril burst, four stills at the phase times, and the R
+            // soft reset. Fixed 1/60 s steps and no window input.
+            if (entityClips.stand < 0 || entityClips.club < 0 || entityClips.death < 0) {
+                // The load gate above already refused this case; keep the
+                // invariant explicit so no future path can reach a fallback.
+                throw std::runtime_error(
+                    "s6-selftest: a fight clip is missing despite the load gate");
+            }
+            if (!corpse.loaded) {
+                std::fprintf(stderr, "sotc-viewer: --s6-selftest: the corpse did not load\n");
+                return 1;
+            }
+            if (!effects_ready) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the tendril pass is not available\n");
+                return 1;
+            }
+            if (!audio.enabled) {
+                std::fprintf(stderr, "sotc-viewer: --s6-selftest: audio is not loaded\n");
+                return 1;
+            }
+
+            Playback& entity_playback = playbacks[entityRig];
+            const float stepSeconds = kFixedFrameSeconds;
+            const Vec3 spawn = spawn_position(manifest, scene);
+            const float spawnYaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
+
+            // The death clip must be the baked motion the machine pins: a
+            // re-baked clip that moved would silently shift every phase
+            // boundary (R8). The comparison is relative (1e-5), not equality.
+            const float deathDuration =
+                entity_playback.clips[static_cast<std::size_t>(entityClips.death)].duration;
+            if (!(std::fabs(deathDuration - kMotionSeconds) <= kMotionSeconds * 1e-5f)) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the death clip is %.6f s, expected "
+                             "%.6f s\n",
+                             deathDuration, kMotionSeconds);
+                return 1;
+            }
+
+            // The follow pose the cinematic starts from and returns to: the
+            // snapped follow camera the setup left (the player stands at the
+            // spawn). Passed as `base` every frame, so the path cannot feed
+            // back on itself.
+            const Camera deathBase = camera;
+
+            // One pinned stand frame for the swing phase, then the club attack.
+            entity_playback.index = entityClips.stand;
+            entity_playback.time = 0.0f;
+            entity_playback.pinned = true;
+            entity_playback.playing = false;
+
+            SfxQueue sfx;
+            DeathState death = reset_death();
+            bool deathCueFired = false;
+
+            const auto print_phase = [&]() {
+                std::printf("s6-phase phase=%s t=%.3f total=%.3f lock=%d corpse=%d roots=%d\n",
+                            death_phase_name(death.phase), death.t, death.total,
+                            death_locks_input(death) ? 1 : 0,
+                            death_corpse_visible(death) ? 1 : 0, death.roots);
+            };
+            const auto flush = [&]() { audio.play_all(sfx); };
+
+            // The opening line: Idle, nothing running.
+            print_phase();
+
+            // --- 1. The club swing: the whoosh fires on the production path ---
+            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club, &sfx);
+            if (encounter.attack != ValusAttack::Club) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the club attack did not start\n");
+                return 1;
+            }
+            flush();  // the telegraph, at the sequence clock 0.000
+            bool swingHeard = false;
+            for (int frame = 0; frame < kS6MaxSwingFrames && !swingHeard; ++frame) {
+                ValusAttackInput attackInput;
+                attackInput.playerGrounded = true;
+                attackInput.playerPos = player.position;
+                attackInput.entityPos = encounter.entityPosition;
+                attackInput.entityYawDeg = encounter.entityYawDeg;
+                advance_valus_attack(encounter, entity_playback, entityClips, attackInput,
+                                     stepSeconds, &sfx);
+                maybe_club_swing(encounter, &sfx);
+                swingHeard = encounter.attackSwinged;
+                audio.update(stepSeconds, player.position, camera_look_yaw(camera));
+                flush();
+            }
+            if (!swingHeard) {
+                std::fprintf(stderr, "sotc-viewer: --s6-selftest: the club swing never fired\n");
+                return 1;
+            }
+            // Cut the attack short: the timeline needs the swing, not the
+            // impact (which would fire a club_impact cue and could hurt the
+            // player). The state clears exactly like a cancelled attack, minus
+            // the deferred cancel cue.
+            encounter.attack = ValusAttack::None;
+            encounter.attackSeconds = 0.0f;
+            encounter.attackHit = false;
+            encounter.attackSwinged = false;
+            encounter.cooldownSeconds = 0.0f;
+            encounter.pendingCooldownSeconds = 0.0f;
+            entity_playback.index = entityClips.stand;
+            entity_playback.time = 0.0f;
+            entity_playback.pinned = true;
+            entity_playback.playing = false;
+
+            // --- 2. The scripted lethal event (R6) ----------------------------
+            StepEvents lethal;
+            lethal.damageDealt = 100;  // the pinned lethal damage
+            apply_combat_events(encounter, entity_playback, entityClips, lethal,
+                                /*weakpoint=*/-1, &sfx);
+            if (!encounter.defeated || encounter.health > 0.0f) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the lethal event did not defeat "
+                             "Valus\n");
+                return 1;
+            }
+            death = step_death(death, stepSeconds, true);
+            // The death sequence's clock starts here: from the defeat on the
+            // event log's t is the death clock (music_stop at 0.000, the roar
+            // at 0.400), which is also what the phase lines print. The defeat
+            // frame's own mixer step runs first, so the clock and `death.total`
+            // stay in step from the next frame on.
+            audio.update(stepSeconds, player.position, camera_look_yaw(camera));
+            audio.clock = 0.0f;
+            flush();  // nothing is queued at the defeat itself
+            audio.start_music();  // the landed hit is the score's downbeat (D5)
+            audio.stop_music();   // ... and the defeat stops it (D5)
+            if (audio.musicStarted) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the defeat did not stop the music\n");
+                return 1;
+            }
+            print_phase();  // Motion, total = 0.000
+
+            // --- 3. The death phases to Done, with the four stills ------------
+            struct StillDue {
+                const char* name;
+                float total;
+            };
+            // The stills sit on the cinematic's keys: the motion's first beat,
+            // the pull-back key (12 m / 4 m up), the fully grown burst, and the
+            // corpse wide just after Collapse.
+            const StillDue stills[4] = {
+                {"motion", 0.200f},
+                {"camera", kDeathPullSeconds},
+                {"tendrils", 1.600f},
+                {"corpse", 6.200f},
+            };
+            int stillIndex = 0;
+            int effectRoots = 0;
+            DeathPhase printed = death.phase;
+
+            // A still is an observation: every rig's clock is snapshotted and
+            // restored around the render, so no capture can move a clip time or
+            // a playing/pinned flag between two timeline steps.
+            struct PlaybackClockState {
+                int index;
+                float time;
+                bool playing;
+                bool pinned;
+            };
+            const auto still_dir = [&]() {
+                std::string dir = opts.s6StillsPath;
+                if (!dir.empty() && dir.back() != '/') {
+                    dir += '/';
+                }
+                return dir;
+            };
+            const auto still_path = [&](const char* name) {
+                return still_dir() + name + ".png";
+            };
+            const auto capture_still = [&](const char* name) {
+                if (opts.s6StillsPath.empty()) {
+                    return;
+                }
+                std::vector<PlaybackClockState> saved;
+                saved.reserve(playbacks.size());
+                for (const Playback& p : playbacks) {
+                    saved.push_back(PlaybackClockState{p.index, p.time, p.playing, p.pinned});
+                }
+                const std::vector<std::vector<Mat4>> stillPalettes =
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                const EffectFrame stillFrame =
+                    build_effect_frame(scene, entityRig, stillPalettes, encounter, death);
+                renderer.set_hud(hud_state(/*visible=*/true));
+                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                      /*acquire_swapchain=*/true,
+                                      stillFrame.active ? &stillFrame : nullptr);
+                write_screenshot(renderer, shell.win, still_path(name));
+                for (std::size_t i = 0; i < saved.size() && i < playbacks.size(); ++i) {
+                    playbacks[i].index = saved[i].index;
+                    playbacks[i].time = saved[i].time;
+                    playbacks[i].playing = saved[i].playing;
+                    playbacks[i].pinned = saved[i].pinned;
+                }
+            };
+
+            bool done = false;
+            for (int frame = 0; frame < kS6MaxDeathFrames; ++frame) {
+                death = step_death(death, stepSeconds, true);
+                if (entity_playback.index == entityClips.death) {
+                    // The machine's clock drives the one-shot clip (R8): the
+                    // clip time is the death total, clamped at its end.
+                    entity_playback.time = std::min(death.total, kMotionSeconds);
+                    entity_playback.pinned = true;
+                    entity_playback.playing = false;
+                }
+                apply_death_visibility(scene, corpse, club, entityRig,
+                                       death_corpse_visible(death));
+                if (death_cue_due(death, deathCueFired)) {
+                    append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
+                                         sfx);
+                }
+                camera = camera_death_pose(deathBase, encounter.entityPosition, player.position,
+                                           death.total);
+                const std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                apply_player_transform(scene, player_rig_record, player,
+                                       active_player_lift(scene, playback, player_rig_record));
+                const EffectFrame effectFrame =
+                    build_effect_frame(scene, entityRig, palettes, encounter, death);
+                effectRoots = std::max(effectRoots, effectFrame.rootCount);
+                audio.update(stepSeconds, player.position, camera_look_yaw(camera));
+                flush();
+                if (death.phase != printed) {
+                    printed = death.phase;
+                    print_phase();
+                }
+                while (stillIndex < 4 &&
+                       death.total + kS6Eps >= stills[stillIndex].total) {
+                    capture_still(stills[stillIndex].name);
+                    ++stillIndex;
+                }
+                if (death.phase == DeathPhase::Done) {
+                    done = true;
+                    break;
+                }
+            }
+            if (!done || death.phase != DeathPhase::Done) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the death did not reach Done in %d "
+                             "frames (phase %s, total %.3f)\n",
+                             kS6MaxDeathFrames, death_phase_name(death.phase), death.total);
+                return 1;
+            }
+            if (stillIndex != 4) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: only %d of the 4 stills fired\n",
+                             stillIndex);
+                return 1;
+            }
+            if (effectRoots != kDeathRoots) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the tendril roots resolved %d of %d\n",
+                             effectRoots, kDeathRoots);
+                return 1;
+            }
+            const std::string deathClip =
+                entity_playback.clips[static_cast<std::size_t>(entityClips.death)].name;
+            std::printf("s6-death clip=%s total=%.3f corpse=%d camera=%s\n", deathClip.c_str(),
+                        death.total, death_corpse_visible(death) ? 1 : 0,
+                        death_camera_key(death.total));
+            print_status_line(opts, shell.win);
+            if (!encounter.defeated || !death_corpse_visible(death) ||
+                death.roots != kDeathRoots || combat.mode == PlayerMode::Dead) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the post-death state is wrong "
+                             "(defeated %d, corpse %d, roots %d, mode %s)\n",
+                             encounter.defeated ? 1 : 0, death_corpse_visible(death) ? 1 : 0,
+                             death.roots, player_mode_name(combat.mode));
+                return 1;
+            }
+            std::printf("s6-status defeated=%d corpse=%d roots=%d player_dead=%d\n",
+                        encounter.defeated ? 1 : 0, death_corpse_visible(death) ? 1 : 0,
+                        death.roots, combat.mode == PlayerMode::Dead ? 1 : 0);
+
+            // --- 4. The R soft reset (the interactive handler's own sequence) --
+            reset_player_combat(player, combat, spawn, spawnYaw, tuning);
+            reset_encounter(encounter);
+            audio.reset();  // every voice; the music already stopped at the defeat
+            death = reset_death();
+            deathCueFired = false;
+            apply_death_visibility(scene, corpse, club, entityRig, /*corpseVisible=*/false);
+            entity_playback.index = entityClips.stand;
+            entity_playback.time = 0.0f;
+            entity_playback.pinned = false;
+            entity_playback.playing = true;
+            climbCamera.active = false;
+            targetCamera = CameraTarget{};
+            follow = CameraFollow{};
+            update_entity_transform(scene, encounter, entityRig);
+            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                          /*moving=*/false, /*dtSeconds=*/10.0f);
+            playback.pinned = false;
+            playback.playing = true;
+            playback.time = 0.0f;
+            if (death.phase != DeathPhase::Idle || death_corpse_visible(death) ||
+                death_locks_input(death) ||
+                static_cast<int>(std::lround(encounter.health)) != 100 ||
+                static_cast<int>(std::lround(combat.health)) != 100) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the reset did not restore the opening "
+                             "state\n");
+                return 1;
+            }
+            std::printf("s6-reset phase=%s corpse=%d lock=%d valus=%d player=%d\n",
+                        death_phase_name(death.phase), death_corpse_visible(death) ? 1 : 0,
+                        death_locks_input(death) ? 1 : 0,
+                        static_cast<int>(std::lround(encounter.health)),
+                        static_cast<int>(std::lround(combat.health)));
+            return 0;
+        }
+
         if (opts.s4Selftest) {
             // The S4 acceptance walk: one pinned entity pose (t = 0), a guard
             // that the manifest's spawn is outside every entity capsule, the
@@ -4472,6 +5082,13 @@ int run_app(const AppOptions& opts) {
         // never SDL_CaptureMouse) — the cursor stays visible and free.
         bool running = true;
         bool climb_recenter = false;
+        // The S6 death sequence's own state (design §8.1): the phase machine,
+        // the one-shot burst-cue latch, and the follow pose the cinematic
+        // starts from. All three are reset by R.
+        DeathState death = reset_death();
+        bool deathCueFired = false;
+        bool deathCameraSet = false;
+        Camera deathCameraBase{};
         // The S5 audio observer's on/off switch for the whole loop: false when
         // no curated manifest loaded (the game then stays silent).
         const bool audio_on = audio.enabled;
@@ -4563,6 +5180,14 @@ int run_app(const AppOptions& opts) {
                                                     tuning);
                                 reset_encounter(encounter);
                                 audio.reset();  // R stops every voice, music too
+                                // S6: the death machine, its cue latch and the
+                                // cinematic camera all return to Idle; the
+                                // corpse is hidden and the live body shown.
+                                death = reset_death();
+                                deathCueFired = false;
+                                deathCameraSet = false;
+                                apply_death_visibility(scene, corpse, club, entityRig,
+                                                       /*corpseVisible=*/false);
                                 if (entityRig < playbacks.size() &&
                                     entityClips.stand >= 0) {
                                     Playback& entityPlayback = playbacks[entityRig];
@@ -4636,7 +5261,26 @@ int run_app(const AppOptions& opts) {
                 playback.playing = !playback.playing;
             }
 
+            // S6: this frame's tendril frame — nullptr unless the burst is
+            // active (the renderer's no-op for every other frame).
+            EffectFrame effectFrame;
+            const EffectFrame* effectFramePtr = nullptr;
             if (follow_mode) {
+                // S6: the death sequence's clock runs on the real frame time.
+                // The defeat transition happens later in this frame (in
+                // apply_combat_events), so the machine starts on the next frame
+                // with total = 0 and does not accumulate the defeat frame's dt
+                // (death.h's pinned rule). While it runs, the machine's clock
+                // drives the one-shot death clip and gates the player input.
+                if (death_wired && encounter.defeated) {
+                    death = step_death(death, dt, true);
+                    if (entityClips.death >= 0 && entityRig < playbacks.size() &&
+                        playbacks[entityRig].index == entityClips.death) {
+                        playbacks[entityRig].time = std::min(death.total, kMotionSeconds);
+                        playbacks[entityRig].pinned = true;
+                        playbacks[entityRig].playing = false;
+                    }
+                }
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 const auto deadzoned = [](float value) {
                     return std::fabs(value) > kS41StickDeadzone ? value : 0.0f;
@@ -4649,6 +5293,12 @@ int run_app(const AppOptions& opts) {
                 input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
                 input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
                 input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
+                // S6 D7: the death cinematic locks the body — movement, grab
+                // and strike are ignored while the camera runs; R, M and Escape
+                // are handled above and stay live. Control returns in Done.
+                if (death_locks_input(death)) {
+                    input = PlayerInput{};
+                }
                 const bool moving = input.forward || input.back || input.left || input.right;
 
                 // The right stick feeds the cameras' drag channel; clamp the
@@ -4665,9 +5315,15 @@ int run_app(const AppOptions& opts) {
                 // model transform is already this frame's, because the yaw step
                 // below runs before the joint query.
                 SfxQueue frameSfx;  // S5: this frame's cues, drained once below
-                if (entityRig < playbacks.size()) {
+                if (entityRig < playbacks.size() && !encounter.defeated) {
                     advance_encounter_reaction(playbacks[entityRig], encounter,
                                                entityClips.stand, dt);
+                }
+                // S6: the death roar fires at the tendril burst (0.4 s), not at
+                // the defeat — the machine's clock owns the moment.
+                if (death_wired && death_cue_due(death, deathCueFired) && audio_on) {
+                    append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
+                                         frameSfx);
                 }
                 if (valus_behavior) {
                     const float valus_dt = std::clamp(dt, 0.0f, kMaxCombatStepSeconds);
@@ -4685,6 +5341,9 @@ int run_app(const AppOptions& opts) {
                     advance_valus_attack(encounter, playbacks[entityRig], entityClips,
                                          attack_input, valus_dt,
                                          audio_on ? &frameSfx : nullptr);
+                    // S6: the club's mid-swing whoosh (the telegraph already
+                    // sounded at the clip's start).
+                    maybe_club_swing(encounter, audio_on ? &frameSfx : nullptr);
                 }
                 update_combat_clips(playback, scene, combat, input, manual_clip);
                 palettes = update_all_poses(renderer, scene, playbacks, dt, club);
@@ -4781,13 +5440,34 @@ int run_app(const AppOptions& opts) {
                     }
                     audio.update(dt, player.position, camera_look_yaw(camera));
                 }
+                // S6: the corpse swap and the cinematic camera while the death
+                // runs (D5/D7), then this frame's tendril burst. The camera
+                // override comes last: it owns the view through Motion and
+                // Collapse, and Done hands it back to the follow camera above.
+                if (death_wired && encounter.defeated) {
+                    apply_death_visibility(scene, corpse, club, entityRig,
+                                           death_corpse_visible(death));
+                    if (death_locks_input(death)) {
+                        if (!deathCameraSet) {
+                            deathCameraBase = camera;  // this frame's follow pose
+                            deathCameraSet = true;
+                        }
+                        camera = camera_death_pose(deathCameraBase, encounter.entityPosition,
+                                                   player.position, death.total);
+                    }
+                    effectFrame =
+                        build_effect_frame(scene, entityRig, palettes, encounter, death);
+                    if (effectFrame.active) {
+                        effectFramePtr = &effectFrame;
+                    }
+                }
                 renderer.set_hud(hud_state(/*visible=*/true));
             } else {
                 update_all_poses(renderer, scene, playbacks, dt, club);
             }
 
             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                  /*acquire_swapchain=*/true);
+                                  /*acquire_swapchain=*/true, effectFramePtr);
 
             // The S1 fps HUD: the window title shows the rolling average over
             // the last second, refreshed twice a second (drawn text arrives

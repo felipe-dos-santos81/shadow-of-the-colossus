@@ -146,6 +146,11 @@ TEST_CASE("Valus impact translates StompImpact/ClubImpact once per beat") {
     CHECK(queue.items[0].id == Sfx::ClubStart);
 
     queue.clear();
+    append_encounter_sfx(EncounterSfx::ClubSwing, at, queue);
+    REQUIRE(queue.count == 1);
+    CHECK(queue.items[0].id == Sfx::ClubSwing);
+
+    queue.clear();
     append_encounter_sfx(EncounterSfx::ClubImpact, at, queue);
     REQUIRE(queue.count == 1);
     CHECK(queue.items[0].id == Sfx::ClubImpact);
