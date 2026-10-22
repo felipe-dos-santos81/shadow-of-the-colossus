@@ -37,6 +37,16 @@ public:
     // buffer when the scene has no rigs at all).
     void upload(const Scene& scene);
 
+    // Waits for the GPU, then frees everything upload() created for a scene
+    // (meshes, textures, pose palettes); upload() may run again afterwards. The
+    // pipelines, the HUD and the white fallback texture stay.
+    void release_scene();
+
+    // Static meshes drawn / frustum-culled by the last render_frame (hidden and
+    // empty meshes count as neither; rigged meshes count as drawn).
+    int drawn_last_frame() const { return drawn_last_frame_; }
+    int culled_last_frame() const { return culled_last_frame_; }
+
     // Copies `palette` (one matrix per joint of rig `rigIndex`, in that rig's
     // joint order) into that rig's own palette buffer — never another rig's.
     // Called once per frame per rig with animation_pose()'s result. No-op when
@@ -105,6 +115,7 @@ private:
                                  uint32_t num_uniform_buffers, uint32_t num_storage_buffers,
                                  uint32_t num_samplers, const uint8_t* source, size_t source_size);
     void release_gpu_resources();
+    void release_scene_buffers();
 
     // (Re)creates color + depth targets when the drawable size changed.
     void ensure_targets(uint32_t width, uint32_t height);
@@ -153,6 +164,8 @@ private:
     std::vector<MeshGpu> meshes_;
     std::vector<SDL_GPUTexture*> textures_;
     bool uploaded_ = false;
+    int drawn_last_frame_ = 0;
+    int culled_last_frame_ = 0;
 
     // The tendril pass (S6 Task 4). Its resources are created once by
     // upload_effect_textures; until then (and on failure) its draws no-op.

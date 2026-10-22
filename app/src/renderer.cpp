@@ -510,8 +510,10 @@ void Renderer::upload(const Scene& scene) {
         SDL_UploadToGPUTexture(copy_pass, &source, &destination, false);
     }
 
-    // 1x1 white fallback for materials without a base-color texture.
-    {
+    // 1x1 white fallback for materials without a base-color texture. It is not
+    // scene-owned: release_scene keeps it, so the fade quad still draws between
+    // two scenes.
+    if (white_texture_ == nullptr) {
         const uint8_t white[4] = {255, 255, 255, 255};
         SDL_GPUTextureCreateInfo texture_info{};
         texture_info.type = SDL_GPU_TEXTURETYPE_2D;
@@ -862,6 +864,8 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     // Vertex slot 0: one view-projection for the whole frame.
     SDL_PushGPUVertexUniformData(cmd, 0, &viewProj, sizeof(Mat4));
 
+    drawn_last_frame_ = 0;
+    culled_last_frame_ = 0;
     for (size_t i = 0; i < scene.meshes.size() && i < meshes_.size(); ++i) {
         const MeshGpu& mesh = meshes_[i];
         if (mesh.index_buffer == nullptr || mesh.index_count == 0) {
@@ -872,6 +876,17 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         if (!scene.meshes[i].visible) {
             continue;
         }
+        // Frustum cull (S7 Task 3): a static mesh whose box, moved by its
+        // CURRENT model, lies wholly outside one clip plane draws nothing.
+        // Rigged meshes (the player, the entities) pose away from their rest
+        // vertices, so they always draw.
+        if (scene.meshes[i].rig < 0 &&
+            aabb_outside_frustum(mat4_mul(viewProj, scene.meshes[i].model),
+                                 scene.meshes[i].localMin, scene.meshes[i].localMax)) {
+            ++culled_last_frame_;
+            continue;
+        }
+        ++drawn_last_frame_;
 
         // Vertex slot 1: this mesh's model matrix — identity for a single-glb
         // load, the instance's baked TRS in a composed scene.
@@ -950,8 +965,12 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     // HUD overlay: a second, depth-less pass that loads the scene color and
     // composites the bars, then the stamina label. It runs only after the
     // swapchain acquisition above succeeded (the early returns skip the frame
-    // before this point), and before the swapchain copy below.
-    if (hud_.visible) {
+    // before this point), and before the swapchain copy below. The fade quad
+    // (S7) rides the same pass but outside the `visible` gate: a faded frame
+    // dims the scene whether or not the bars show, and fade 0 opens no pass.
+    const HudFade fade = hud_fade_rect(hud_.fade);
+    const bool draw_fade = fade.alpha > 0.0f;
+    if (hud_.visible || draw_fade) {
         SDL_GPUColorTargetInfo hud_target{};
         hud_target.texture = color_target_;
         hud_target.load_op = SDL_GPU_LOADOP_LOAD;
@@ -968,22 +987,32 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
         const SDL_GPUBufferBinding hud_index_binding{hud_index_buffer_, 0};
         SDL_BindGPUIndexBuffer(hud_pass, &hud_index_binding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
 
-        // Bars first, label last: the label sits above the stamina bar and must
-        // stay readable over it.
-        draw_hud_quad(cmd, hud_pass, hud_stamina_rect(hud_.stamina), white_texture_, hud_sampler_,
-                      kStaminaBarColor);
-        draw_hud_quad(cmd, hud_pass, hud_health_rect(hud_.health), white_texture_, hud_sampler_,
-                      kHealthBarColor);
-        // The player's own pool, amber, above the stamina bar. A zero fraction
-        // (a state no run has fed yet) draws nothing.
-        draw_hud_quad(cmd, hud_pass, hud_player_health_rect(hud_.playerHealth), white_texture_,
-                      hud_sampler_, kPlayerHealthBarColor);
+        if (hud_.visible) {
+            // Bars first, label last: the label sits above the stamina bar and
+            // must stay readable over it.
+            draw_hud_quad(cmd, hud_pass, hud_stamina_rect(hud_.stamina), white_texture_,
+                          hud_sampler_, kStaminaBarColor);
+            draw_hud_quad(cmd, hud_pass, hud_health_rect(hud_.health), white_texture_,
+                          hud_sampler_, kHealthBarColor);
+            // The player's own pool, amber, above the stamina bar. A zero
+            // fraction (a state no run has fed yet) draws nothing.
+            draw_hud_quad(cmd, hud_pass, hud_player_health_rect(hud_.playerHealth),
+                          white_texture_, hud_sampler_, kPlayerHealthBarColor);
 
-        if (hud_text_texture_ != nullptr && hud_text_width_ > 0.0f) {
-            const HudRect stamina = hud_stamina_rect(hud_.stamina);
-            const HudRect label{stamina.x, stamina.y - hud_text_height_ - kHudLabelGap,
-                                hud_text_width_, hud_text_height_};
-            draw_hud_quad(cmd, hud_pass, label, hud_text_texture_, hud_sampler_, kHudTextColor);
+            if (hud_text_texture_ != nullptr && hud_text_width_ > 0.0f) {
+                const HudRect stamina = hud_stamina_rect(hud_.stamina);
+                const HudRect label{stamina.x, stamina.y - hud_text_height_ - kHudLabelGap,
+                                    hud_text_width_, hud_text_height_};
+                draw_hud_quad(cmd, hud_pass, label, hud_text_texture_, hud_sampler_,
+                              kHudTextColor);
+            }
+        }
+
+        // Last, over everything: the full-window fade.
+        if (draw_fade) {
+            const float fade_color[4] = {hud_.fadeColour[0], hud_.fadeColour[1],
+                                         hud_.fadeColour[2], fade.alpha};
+            draw_hud_quad(cmd, hud_pass, fade.rect, white_texture_, hud_sampler_, fade_color);
         }
 
         SDL_EndGPURenderPass(hud_pass);
@@ -1269,17 +1298,13 @@ void Renderer::release_targets() {
     target_height_ = 0;
 }
 
-void Renderer::release_gpu_resources() {
+void Renderer::release_scene_buffers() {
     for (SDL_GPUTexture* texture : textures_) {
         if (texture != nullptr) {
             SDL_ReleaseGPUTexture(device_, texture);
         }
     }
     textures_.clear();
-    if (white_texture_ != nullptr) {
-        SDL_ReleaseGPUTexture(device_, white_texture_);
-        white_texture_ = nullptr;
-    }
     for (PoseGpu& pose : pose_buffers_) {
         if (pose.buffer != nullptr) {
             SDL_ReleaseGPUBuffer(device_, pose.buffer);
@@ -1296,6 +1321,21 @@ void Renderer::release_gpu_resources() {
         }
     }
     meshes_.clear();
+}
+
+void Renderer::release_scene() {
+    // The released buffers may still be read by a frame in flight.
+    SDL_WaitForGPUIdle(device_);
+    release_scene_buffers();
+    uploaded_ = false;
+}
+
+void Renderer::release_gpu_resources() {
+    release_scene_buffers();
+    if (white_texture_ != nullptr) {
+        SDL_ReleaseGPUTexture(device_, white_texture_);
+        white_texture_ = nullptr;
+    }
     if (hud_text_texture_ != nullptr) {
         SDL_ReleaseGPUTexture(device_, hud_text_texture_);
         hud_text_texture_ = nullptr;

@@ -79,3 +79,16 @@ TEST_CASE("hud stamina label rounds and clamps") {
     hud_format_stamina(label, 7.0f);
     REQUIRE(std::string(label) == "STAMINA 100");
 }
+
+TEST_CASE("hud fade quad covers the window and clamps its alpha") {
+    REQUIRE(hud_fade_rect(0.0f).alpha == 0.0f);
+    const HudFade full = hud_fade_rect(1.0f);
+    REQUIRE(full.alpha == doctest::Approx(1.0f));
+    REQUIRE(full.rect.x == 0.0f);
+    REQUIRE(full.rect.y == 0.0f);
+    REQUIRE(full.rect.w == doctest::Approx(1280.0f));
+    REQUIRE(full.rect.h == doctest::Approx(720.0f));
+    REQUIRE(hud_fade_rect(2.0f).alpha == doctest::Approx(1.0f));
+    REQUIRE(hud_fade_rect(-1.0f).alpha == 0.0f);
+    REQUIRE(hud_fade_rect(0.25f).alpha == doctest::Approx(0.25f));
+}

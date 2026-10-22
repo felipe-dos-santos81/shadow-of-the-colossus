@@ -774,6 +774,25 @@ TEST_CASE("compose_scene places two plank instances and the player") {
         check_material_matches(scene, composed_index, wander, wander.meshes[i].materialIndex);
     }
 
+    // The cull box is the raw vertex bounds, in the mesh's own space (the
+    // translation lives in `model`, not in the box).
+    for (const MeshCpu& mesh : scene.meshes) {
+        REQUIRE_FALSE(mesh.vertices.empty());
+        Vec3 lo{mesh.vertices[0].px, mesh.vertices[0].py, mesh.vertices[0].pz};
+        Vec3 hi = lo;
+        for (const Vertex& v : mesh.vertices) {
+            lo = Vec3{std::min(lo.x, v.px), std::min(lo.y, v.py), std::min(lo.z, v.pz)};
+            hi = Vec3{std::max(hi.x, v.px), std::max(hi.y, v.py), std::max(hi.z, v.pz)};
+        }
+        CHECK(mesh.localMin.x == lo.x);
+        CHECK(mesh.localMin.y == lo.y);
+        CHECK(mesh.localMin.z == lo.z);
+        CHECK(mesh.localMax.x == hi.x);
+        CHECK(mesh.localMax.y == hi.y);
+        CHECK(mesh.localMax.z == hi.z);
+    }
+    CHECK(scene.meshes[0].localMin.x == scene.meshes[1].localMin.x);
+
     // The composed scene keeps the player's skeleton.
     CHECK(player_rig(scene).skin.joints.size() == 348);
 

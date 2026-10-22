@@ -678,3 +678,45 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     const Camera nan_valus = camera_death_pose(base, Vec3{nan, nan, nan}, player, 3.0f);
     CHECK(nan_valus.distance == doctest::Approx(base.distance));
 }
+
+// Frustum culling (S7 Task 3). The eye sits at the origin looking down -Z.
+namespace {
+Mat4 cull_view_proj() {
+    return mat4_mul(mat4_perspective(60.0f, 16.0f / 9.0f, 0.1f, 100.0f),
+                    mat4_look_at(Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, -1.0f},
+                                 Vec3{0.0f, 1.0f, 0.0f}));
+}
+Mat4 translation(float x, float y, float z) {
+    Mat4 out = mat4_identity();
+    out.m[12] = x;
+    out.m[13] = y;
+    out.m[14] = z;
+    return out;
+}
+}  // namespace
+
+TEST_CASE("test_renderer_cull: a box in front is kept") {
+    CHECK_FALSE(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, -11}, Vec3{1, 1, -9}));
+}
+
+TEST_CASE("test_renderer_cull: a box behind the eye is culled") {
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, 9}, Vec3{1, 1, 11}));
+}
+
+TEST_CASE("test_renderer_cull: a box straddling the near plane is kept") {
+    CHECK_FALSE(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, -5}, Vec3{1, 1, 5}));
+}
+
+TEST_CASE("test_renderer_cull: a box far to the side or beyond the far plane is culled") {
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{199, -1, -11}, Vec3{201, 1, -9}));
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{-1, 199, -11}, Vec3{1, 201, -9}));
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, -201}, Vec3{1, 1, -199}));
+}
+
+TEST_CASE("test_renderer_cull: the model matrix moves the box into view") {
+    const Vec3 mn{199, -1, -11};
+    const Vec3 mx{201, 1, -9};
+    const Mat4 viewProj = cull_view_proj();
+    CHECK(aabb_outside_frustum(mat4_mul(viewProj, mat4_identity()), mn, mx));
+    CHECK_FALSE(aabb_outside_frustum(mat4_mul(viewProj, translation(-200.0f, 0.0f, 0.0f)), mn, mx));
+}

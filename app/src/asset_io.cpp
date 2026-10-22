@@ -562,6 +562,20 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
                 }
             }
 
+            // The cull box: the raw vertex bounds, before `model` applies.
+            if (!out.vertices.empty()) {
+                out.localMin = out.localMax =
+                    Vec3{out.vertices[0].px, out.vertices[0].py, out.vertices[0].pz};
+                for (const Vertex& vertex : out.vertices) {
+                    out.localMin = Vec3{std::min(out.localMin.x, vertex.px),
+                                        std::min(out.localMin.y, vertex.py),
+                                        std::min(out.localMin.z, vertex.pz)};
+                    out.localMax = Vec3{std::max(out.localMax.x, vertex.px),
+                                        std::max(out.localMax.y, vertex.py),
+                                        std::max(out.localMax.z, vertex.pz)};
+                }
+            }
+
             if (primitive.indices != nullptr) {
                 out.indices.resize(primitive.indices->count);
                 for (cgltf_size i = 0; i < primitive.indices->count; ++i) {
