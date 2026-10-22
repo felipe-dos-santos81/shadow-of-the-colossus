@@ -22,6 +22,22 @@
 
 namespace {
 
+// Wander's S2-S6 clips, by name, in the order the app indexes them. Later
+// milestones append (S7 adds the wake clips), so the pin is "at least these
+// fifteen, first, in this order" rather than an exact count.
+constexpr const char* kWanderS2S6Clips[15] = {
+    "player_a_stand", "player_a_walk", "player_a_run", "player_a_grip_stand_crouch",
+    "player_a_grip_loop", "player_a_grip_move_f1", "player_a_grip_move_f2",
+    "player_a_grip_float_u_hi_attack", "player_a_atk1", "player_a_damage_m_fly2",
+    "player_a_fall_damage_to_death", "player_a_damage_h_fly1", "player_a_damage_h_fly_end",
+    "player_a_fall_damage_start", "player_a_fall_damage_end"};
+
+template <typename Clips>
+void check_wander_s2s6_clips(const Clips& clips) {
+    REQUIRE(clips.size() >= 15);
+    for (std::size_t i = 0; i < 15; ++i) CHECK(clips[i].name == kWanderS2S6Clips[i]);
+}
+
 // The converted-asset library lives outside the repo, so the environment must
 // name it; tests fail with this message rather than skipping silently. A
 // relative value is the documented `<repo>/out/library` form, resolved against
@@ -496,7 +512,7 @@ TEST_CASE("wander carries its 348-joint skeleton") {
     // the source clip stem: the app plays these instead of the stand-in. S4.1
     // baked the climb set and S4.2 adds the fight set (15 clips total); the
     // clips are found by name — the way the app selects them.
-    REQUIRE(player_rig(scene).animations.size() == 15);
+    check_wander_s2s6_clips(player_rig(scene).animations);
     CHECK(player_rig(scene).animations[0].name == "player_a_stand");
     CHECK(player_rig(scene).animations[1].name == "player_a_walk");
     CHECK(player_rig(scene).animations[2].name == "player_a_run");
@@ -935,7 +951,7 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
 
     // The player keeps its own fifteen baked clips (S4.1's climb set plus S4.2's
     // fight set).
-    REQUIRE(player.animations.size() == 15);
+    check_wander_s2s6_clips(player.animations);
     CHECK(player.animations[0].name == "player_a_stand");
     // The entity carries Valus's eight baked clips (S4.2 adds the three attack
     // clips); the app selects the one the manifest names by name, never by
@@ -1004,7 +1020,7 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
     Playback entity_playback;
     build_playback(scene, 0, player_playback);
     build_playback(scene, 1, entity_playback);
-    REQUIRE(player_playback.clips.size() == 15);
+    check_wander_s2s6_clips(player_playback.clips);
     REQUIRE(entity_playback.clips.size() == 8);
     CHECK(player_playback.clips[static_cast<std::size_t>(player_playback.index)].name ==
           "player_a_stand");
