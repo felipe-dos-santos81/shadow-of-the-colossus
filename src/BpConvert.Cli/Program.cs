@@ -223,10 +223,22 @@ static int TextureCommand(string[] args)
         switch (args[i])
         {
             case "--in":
-                if (!TryValue(args, ref i, out input)) return MissingValue("--in");
+                if (input is not null)
+                {
+                    Console.Error.WriteLine("bp-convert texture: --in given twice");
+                    return 2;
+                }
+                if (!TryValue(args, ref i, out input) || input!.StartsWith("--"))
+                    return MissingValue("--in");
                 break;
             case "--out":
-                if (!TryValue(args, ref i, out output)) return MissingValue("--out");
+                if (output is not null)
+                {
+                    Console.Error.WriteLine("bp-convert texture: --out given twice");
+                    return 2;
+                }
+                if (!TryValue(args, ref i, out output) || output!.StartsWith("--"))
+                    return MissingValue("--out");
                 break;
             default:
                 Console.Error.WriteLine($"bp-convert texture: unknown argument '{args[i]}'");

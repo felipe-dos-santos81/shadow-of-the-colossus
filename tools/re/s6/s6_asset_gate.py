@@ -7,7 +7,7 @@ library (the `out/library` symlink); nothing is written.
 What is gated (and where the evidence lives, `docs/notes/s6-recon.md`):
 
 Death bundle — `cp3shadow/anim/`
-  `minotaur_a_death_front.anb`      24,732 B, "xff\\0", 94 f @ 15.0806 fps = 6.233 s, 58 tracks
+  `minotaur_a_death_front.anb`      24,732 B, "xff\\0", 94 f @ 15.0806 fps, 58 tracks
   `minotaur_a_death_front_loop.anb`  3,532 B, 1 f (the shipped dead-hold pose)
   `objanim_minotaur_a_death_front.anb` 4,808 B, object track type 29
   `camera_minoa_death_front_camera_01/02.anb` 844 / 2,244 B, track type 36 (undecoded)
@@ -17,20 +17,24 @@ Death bundle — `cp3shadow/anim/`
   `frames: 94`, `fps: 15.08056640625`, `tracks: 58`.
 
   The gate hard-requires the *baked* clip (the artifact the viewer plays) and checks the
-  source `.anb` bytes against the extraction manifest hashes.  A source that no longer
-  carries the `xff\\0` magic is reported as a **source warning**: the game tree is
-  read-only for this project, and the original bytes are recoverable from the paks
-  (see the note).  A missing library asset is always a hard failure.
+  source `.anb` bytes against the extraction manifest hashes.  Exactly one exception is a
+  **source warning**: the known 2026-10-22 clobber (246,449 B, sha256 a4d9c3b0…), because
+  the game tree is read-only for this project and the original bytes are recoverable from
+  the paks (see the note §2.1).  Any other source mismatch, and every missing library
+  asset, is a hard failure.
 
 Dead body — `models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/`
-  `c01_minotaur_a_dead_body.glb` 11,924,836 B, 6 meshes / 6 materials / 0 skins, all
-  materials `colossus_01_*_dead`; `c01_minotaur_a_dead_dirtmound.glb` 254,948 B.
+  `c01_minotaur_a_dead_body.glb` 11,924,836 B, 6 meshes / 6 materials / 0 skins, the six
+  materials exactly `colossus_01_{waist,back,face,arms,chest,legs}_dead`;
+  `c01_minotaur_a_dead_dirtmound.glb` 254,948 B.
 
 Tendril textures — `out/library/textures/`
   `vfx/common/smoke/_ps4/8x8_wispysmoke02_1024_white_pfx.png`   1024x1024
   `vfx/common/smoke/_ps4/8x8_smoke_wispy_sharp_1024_pfx.png`   1024x1024
   `vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.png`       512x512
   `shadow/characters/common/_ps4/death_tentacle_veins.png`      1024x256 (the ribbon)
+  Each is pinned by dimensions *and* SHA-256, so a blank/wrong atlas of the right size
+  fails (the converter's PNG output is deterministic for these containers).
 
 `.cprt` — `particles/shadow/colossus/death_tentacle/_ps4/death_tentacle.cprt`
   2,376 B.  Header u32[5] = {0, 3, 8, 1, 0x64} (3 emitters, data base 0x64).
@@ -39,7 +43,7 @@ Tendril textures — `out/library/textures/`
     main_wisp  -> textures/vfx/common/smoke/_ps4/8x8_wispysmoke02_1024_white_pfx.cptx
     smoke      -> textures/vfx/common/smoke/_ps4/8x8_smoke_wispy_sharp_1024_pfx.cptx
     veins      -> textures/vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.cptx
-  Footer: "TRAPL" + u32 0 + u32 (file size - 12) at the last 16 bytes.
+  Footer (last 12 bytes, from 0x93c): "TRAPL" + 3 pad bytes + u32 (file size - 12).
 
 Usage
   python3 tools/re/s6/s6_asset_gate.py --root "$SOTC_GAME_ROOT" --out out/library --check
@@ -58,7 +62,6 @@ import os
 import struct
 import sys
 
-XFF_MAGIC = b"\x78\x66\x66\x00"  # "xff\0" — .anb / .skb / .nmo / .nmb / .clb
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 # The five death-bundle clips: (path under the game root, size, sha256 of the shipped file).
@@ -77,6 +80,12 @@ DEATH_SOURCES = [
      "1a57e540eedf629c8b8b5cb4452b266755ad0544e00a9be999fd76541fe51146"),
 ]
 
+# The known 2026-10-22 corruption: a 246,449-byte `player_a_stand` JSON dump was written
+# over four of the five death-bundle clips (see docs/notes/s6-recon.md §2.1). That exact
+# incident is a warning; any other mismatch is a hard failure.
+KNOWN_CLOBBER_BYTES = 246449
+KNOWN_CLOBBER_SHA = "a4d9c3b0d54feb7ecc48a56b26b5df9dfaead2125dc575c7949412788c40f75b"
+
 # The baked motion the viewer plays (the model glb carries it) and its clip record.
 CLIP_MODEL = "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb"
 CLIP_RECORD = "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.clips.json"
@@ -84,29 +93,39 @@ CLIP_NAME = "minotaur_a_death_front"
 CLIP_FRAMES = 94
 CLIP_FPS = 15.08056640625
 CLIP_TRACKS = 58
-CLIP_SECONDS = (CLIP_FRAMES - 1) / CLIP_FPS  # 6.1669 s: 94 keys span 93 intervals
+CLIP_SECONDS = (CLIP_FRAMES - 1) / CLIP_FPS  # 6.166933 s: 94 keys span 93 intervals
 
 DEAD_BODY = "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_body.glb"
 DEAD_BODY_MESHES = 6
-DEAD_BODY_MATERIALS = 6
+DEAD_BODY_PARTS = ("waist", "back", "face", "arms", "chest", "legs")
+DEAD_BODY_MATERIALS = {"colossus_01_%s_dead" % part for part in DEAD_BODY_PARTS}
 DIRTMOUND = "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_dirtmound.glb"
 
 # The `death_tentacle.cprt` emitter order -> converted atlas under <out>/textures/.
-# (emitter name, cptx basename, library PNG, expected size)
+# (emitter name, library PNG, expected size, expected PNG SHA-256, the cprt's full reference)
+# The PNGs are the converter's deterministic output for these containers, so the SHA-256 pins
+# the pixels, not just the dimensions (a blank/wrong atlas of the right size fails).
 CPRT = "particles/shadow/colossus/death_tentacle/_ps4/death_tentacle.cprt"
 CPRT_SIZE = 2376
 CPRT_HEADER = (0, 3, 8, 1, 100)
 CPRT_EMITTERS = [
-    ("main_wisp", "8x8_wispysmoke02_1024_white_pfx.cptx",
-     "textures/vfx/common/smoke/_ps4/8x8_wispysmoke02_1024_white_pfx.png", (1024, 1024)),
-    ("smoke", "8x8_smoke_wispy_sharp_1024_pfx.cptx",
-     "textures/vfx/common/smoke/_ps4/8x8_smoke_wispy_sharp_1024_pfx.png", (1024, 1024)),
-    ("veins", "2x2_smoke_tendrils_01_pfx.cptx",
-     "textures/vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.png", (512, 512)),
+    ("main_wisp",
+     "textures/vfx/common/smoke/_ps4/8x8_wispysmoke02_1024_white_pfx.png", (1024, 1024),
+     "0fd737f277bf3b7077b16f088113acfbd1e2462f01bba8005b84405749dd1a45",
+     "$/textures/vfx/common/smoke/_ps4/8x8_wispysmoke02_1024_white_pfx.cptx"),
+    ("smoke",
+     "textures/vfx/common/smoke/_ps4/8x8_smoke_wispy_sharp_1024_pfx.png", (1024, 1024),
+     "135499f5485f2a373fc714f6c2177bfc522549f4604f3aa2f45ac41aaa79c69d",
+     "$/textures/vfx/common/smoke/_ps4/8x8_smoke_wispy_sharp_1024_pfx.cptx"),
+    ("veins",
+     "textures/vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.png", (512, 512),
+     "2788814f0d2b06d0fbab743685a50a32371ec9919971bbf59d9e061c0df0bd4f",
+     "$/textures/vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.cptx"),
 ]
 
 # The ribbon texture is not a .cprt texture: it is the dead-body material's veil layer.
-VEINS_PNG = ("textures/shadow/characters/common/_ps4/death_tentacle_veins.png", (1024, 256))
+VEINS_PNG = ("textures/shadow/characters/common/_ps4/death_tentacle_veins.png", (1024, 256),
+             "f45991263e0ebc329b0bd367c05e561700b0f454c54fcbc718f2f7cc255a3e3c")
 
 
 class GateError(Exception):
@@ -124,15 +143,15 @@ def read_bytes(path):
         raise GateError("cannot read %s: %s" % (path, exc))
 
 
-def png_size(path):
-    """Validate the PNG signature + IHDR and return (width, height)."""
+def png_fingerprint(path):
+    """Validate the PNG and return (width, height, byte size, SHA-256 hex)."""
     data = read_bytes(path)
     if len(data) < 24 or not data.startswith(PNG_MAGIC):
         raise ValueError("not a PNG (signature missing)")
     width, height = struct.unpack(">II", data[16:24])
     if width <= 0 or height <= 0:
         raise ValueError("PNG declares %dx%d" % (width, height))
-    return width, height
+    return width, height, len(data), hashlib.sha256(data).hexdigest()
 
 
 def glb_summary(path):
@@ -154,9 +173,13 @@ def glb_summary(path):
     for anim in doc.get("animations", []):
         counts, ends = [], []
         for sampler in anim.get("samplers", []):
-            accessor = accessors[sampler["input"]]
-            counts.append(accessor.get("count", 0))
-            ends.append(accessor.get("max", [0])[0])
+            try:
+                accessor = accessors[sampler["input"]]
+                counts.append(accessor.get("count", 0))
+                ends.append((accessor.get("max") or [0])[0])
+            except (KeyError, IndexError, TypeError) as exc:
+                raise ValueError("animation %r sampler input is not a valid accessor (%s)"
+                                 % (anim.get("name", ""), exc))
         animations[anim.get("name", "")] = {
             "keys": max(counts) if counts else 0,
             "seconds": max(ends) if ends else 0.0,
@@ -207,9 +230,11 @@ def parse_cprt(path):
         if start < 0:
             break
         end = data.find(b"\x00", start)
+        if end < 0:
+            raise ValueError("emitter marker at 0x%X is not NUL-terminated" % start)
         markers.append((start, data[start + len(b"death_tentacle:"):end].decode("ascii")))
         cursor = end + 1
-    if [name for _, name in markers] != [name for name, _, _, _ in CPRT_EMITTERS]:
+    if [name for _, name in markers] != [emitter[0] for emitter in CPRT_EMITTERS]:
         raise ValueError("emitter markers %s, expected %s"
                          % ([name for _, name in markers], [e[0] for e in CPRT_EMITTERS]))
 
@@ -231,7 +256,6 @@ def parse_cprt(path):
             "name": name,
             "csdr": csdr,
             "cptx": cptx[0],
-            "cptx_name": os.path.basename(cptx[0]),
         })
     return {"header": header, "emitters": emitters}
 
@@ -272,16 +296,18 @@ def check_sources(root, report):
             continue
         data = read_bytes(path)
         digest = hashlib.sha256(data).hexdigest()
-        if data[:4] == XFF_MAGIC and len(data) == expected_size and digest == expected_sha:
+        if len(data) == expected_size and digest == expected_sha:
             report.good("source", name, "%d B sha256 %s" % (len(data), digest[:16]))
+        elif len(data) == KNOWN_CLOBBER_BYTES and digest == KNOWN_CLOBBER_SHA:
+            report.warn("source", name,
+                        "known 2026-10-22 clobber: a %d B `player_a_stand` JSON dump, not the "
+                        "%d B clip; restore it from the pak (docs/notes/s6-recon.md §2.1)"
+                        % (len(data), expected_size))
         else:
-            detail = ("CORRUPTED: %d B, head %s, sha256 %s — expected %d B sha256 %s; "
-                      "the game-tree copy is not this clip (see docs/notes/s6-recon.md §2.1)"
-                      % (len(data), data[:4].hex(), digest[:16], expected_size, expected_sha[:16]))
-            if data[:4] != XFF_MAGIC:
-                report.warn("source", name, detail)
-            else:
-                report.bad("source", name, detail)
+            report.bad("source", name,
+                       "CORRUPTED: %d B, head %s, sha256 %s — expected %d B sha256 %s; "
+                       "this is not the shipped clip and is not the known clobber"
+                       % (len(data), data[:4].hex(), digest[:16], expected_size, expected_sha[:16]))
 
 
 def check_clip_model(out, report):
@@ -325,7 +351,7 @@ def check_clip_model(out, report):
             raise ValueError("%.4f s, expected %.4f s" % (anim["seconds"], CLIP_SECONDS))
         report.good("clip", os.path.basename(CLIP_MODEL),
                     "animation %s %d keys, %.4f s" % (CLIP_NAME, anim["keys"], anim["seconds"]))
-    except ValueError as exc:
+    except (ValueError, struct.error) as exc:
         report.bad("clip", os.path.basename(CLIP_MODEL), str(exc))
 
 
@@ -340,21 +366,22 @@ def check_corpse(out, report):
             problems = []
             if summary["meshes"] != DEAD_BODY_MESHES:
                 problems.append("%d meshes, expected %d" % (summary["meshes"], DEAD_BODY_MESHES))
-            if len(summary["materials"]) != DEAD_BODY_MATERIALS:
-                problems.append("%d materials, expected %d"
-                                % (len(summary["materials"]), DEAD_BODY_MATERIALS))
             if summary["skins"] != 0:
                 problems.append("%d skins, expected 0 (static corpse)" % summary["skins"])
-            not_dead = [name for name in summary["materials"] if not name.endswith("_dead")]
-            if not_dead:
-                problems.append("non-dead material(s): %s" % ", ".join(not_dead))
+            materials = set(summary["materials"])
+            if materials != DEAD_BODY_MATERIALS:
+                missing = sorted(DEAD_BODY_MATERIALS - materials)
+                extra = sorted(materials - DEAD_BODY_MATERIALS)
+                if missing:
+                    problems.append("missing material(s): %s" % ", ".join(missing))
+                if extra:
+                    problems.append("unexpected material(s): %s" % ", ".join(extra))
             if problems:
                 raise ValueError("; ".join(problems))
             report.good("corpse", os.path.basename(DEAD_BODY),
-                        "%d meshes, %d materials (%s), 0 skins"
-                        % (summary["meshes"], len(summary["materials"]),
-                           ", ".join(summary["materials"])))
-        except ValueError as exc:
+                        "%d meshes, 6 materials (%s), 0 skins"
+                        % (summary["meshes"], ", ".join(sorted(materials))))
+        except (ValueError, struct.error) as exc:
             report.bad("corpse", os.path.basename(DEAD_BODY), str(exc))
 
     mound_path = library_path(out, DIRTMOUND)
@@ -367,7 +394,7 @@ def check_corpse(out, report):
                 raise ValueError("no meshes")
             report.good("corpse", os.path.basename(DIRTMOUND),
                         "%d mesh(es), %d material(s)" % (summary["meshes"], len(summary["materials"])))
-        except ValueError as exc:
+        except (ValueError, struct.error) as exc:
             report.bad("corpse", os.path.basename(DIRTMOUND), str(exc))
 
 
@@ -385,13 +412,13 @@ def check_cprt(root, out, report):
         report.bad("cprt", os.path.basename(CPRT), str(exc))
         return None
 
-    for index, (expected_name, expected_cptx, _, _) in enumerate(CPRT_EMITTERS):
+    for index, (expected_name, _, _, _, expected_cptx) in enumerate(CPRT_EMITTERS):
         emitter = parsed["emitters"][index]
         problems = []
         if emitter["name"] != expected_name:
             problems.append("named %r, expected %r" % (emitter["name"], expected_name))
-        if emitter["cptx_name"] != expected_cptx:
-            problems.append("cptx %r, expected %r" % (emitter["cptx_name"], expected_cptx))
+        if emitter["cptx"] != expected_cptx:
+            problems.append("cptx %r, expected %r" % (emitter["cptx"], expected_cptx))
         for ref in emitter["csdr"] + [emitter["cptx"]]:
             game_rel = ref[2:] if ref.startswith("$/") else ref
             if not os.path.isfile(os.path.join(root, game_rel.replace("/", os.sep))):
@@ -400,7 +427,8 @@ def check_cprt(root, out, report):
             report.bad("cprt", emitter["name"], "; ".join(problems))
         else:
             report.good("cprt", emitter["name"],
-                        "3 csdr (emitter_%d_*) + %s" % (index, emitter["cptx"]))
+                        "3 csdr (emitter_%d_*) + %s"
+                        % (index, os.path.basename(emitter["cptx"])))
     return parsed
 
 
@@ -408,9 +436,9 @@ def check_textures(out, report, parsed):
     print("textures")
     cptx_by_name = {}
     if parsed is not None:
-        cptx_by_name = {emitter["name"]: emitter["cptx_name"] for emitter in parsed["emitters"]}
+        cptx_by_name = {emitter["name"]: emitter["cptx"] for emitter in parsed["emitters"]}
 
-    for name, expected_cptx, rel, expected_size in CPRT_EMITTERS:
+    for name, rel, expected_size, expected_sha, expected_cptx in CPRT_EMITTERS:
         path = library_path(out, rel)
         label = os.path.basename(rel)
         if name in cptx_by_name and cptx_by_name[name] != expected_cptx:
@@ -421,27 +449,33 @@ def check_textures(out, report, parsed):
             report.bad("texture", label, "missing: %s" % path)
             continue
         try:
-            size = png_size(path)
-            if size != expected_size:
-                raise ValueError("%dx%d, expected %dx%d" % (size + expected_size))
+            width, height, size, digest = png_fingerprint(path)
+            if (width, height) != expected_size:
+                raise ValueError("%dx%d, expected %dx%d" % ((width, height) + expected_size))
+            if digest != expected_sha:
+                raise ValueError("sha256 %s, expected %s (pixels differ from the converted "
+                                 "atlas)" % (digest[:16], expected_sha[:16]))
             report.good("texture", label,
-                        "%dx%d, %d B" % (size[0], size[1], os.path.getsize(path)))
-        except ValueError as exc:
+                        "%dx%d, %d B, sha256 %s" % (width, height, size, digest[:16]))
+        except (ValueError, struct.error) as exc:
             report.bad("texture", label, str(exc))
 
-    rel, expected_size = VEINS_PNG
+    rel, expected_size, expected_sha = VEINS_PNG
     path = library_path(out, rel)
     label = os.path.basename(rel)
     if not os.path.isfile(path):
         report.bad("texture", label, "missing: %s" % path)
     else:
         try:
-            size = png_size(path)
-            if size != expected_size:
-                raise ValueError("%dx%d, expected %dx%d" % (size + expected_size))
+            width, height, size, digest = png_fingerprint(path)
+            if (width, height) != expected_size:
+                raise ValueError("%dx%d, expected %dx%d" % ((width, height) + expected_size))
+            if digest != expected_sha:
+                raise ValueError("sha256 %s, expected %s (pixels differ from the shipped "
+                                 "veil texture)" % (digest[:16], expected_sha[:16]))
             report.good("texture", label,
-                        "%dx%d, %d B" % (size[0], size[1], os.path.getsize(path)))
-        except ValueError as exc:
+                        "%dx%d, %d B, sha256 %s" % (width, height, size, digest[:16]))
+        except (ValueError, struct.error) as exc:
             report.bad("texture", label, str(exc))
 
 
@@ -474,11 +508,11 @@ def main(argv=None):
 
     total = report.ok + len(report.failures)
     print()
-    print("checked %d asset(s): %d ok, %d failed, %d source warning(s)"
-          % (total, report.ok, len(report.failures), len(report.warnings)))
+    print("checked %d required asset(s): %d ok, %d failed"
+          % (total, report.ok, len(report.failures)))
     if report.warnings:
-        print("  source warnings: the game-tree copies listed above are not the shipped clips;")
-        print("  the library/baked assets are unaffected (docs/notes/s6-recon.md §2.1)")
+        print("source warnings: %d (not required assets — the known game-tree clobber; see "
+              "docs/notes/s6-recon.md §2.1)" % len(report.warnings))
     if not args.check:
         print("inventory only — run with --check to gate")
         return 0
@@ -488,7 +522,10 @@ def main(argv=None):
         print("S6 ASSET GATE FAILED — %d required asset(s) missing or invalid"
               % len(report.failures))
         return 4
-    print("S6 ASSET GATE PASSED")
+    if report.warnings:
+        print("S6 ASSET GATE PASSED (%d source warning(s))" % len(report.warnings))
+    else:
+        print("S6 ASSET GATE PASSED")
     return 0
 
 

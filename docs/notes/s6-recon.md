@@ -19,8 +19,9 @@ The conversions use the new CLI verb `bp-convert texture --in <texture> --out <p
 export SOTC_GAME_ROOT=…/SOTC-extract/extracted/game
 export SOTC_LIB=<worktree>/out/library
 python3 tools/re/s6/s6_asset_gate.py --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" --check
-# -> checked 13 asset(s): 13 ok, 0 failed, 4 source warning(s)
-# -> S6 ASSET GATE PASSED        (exit 0)
+# -> checked 13 required asset(s): 13 ok, 0 failed
+# -> source warnings: 4 (not required assets — the known game-tree clobber; see §2.1)
+# -> S6 ASSET GATE PASSED (4 source warning(s))        (exit 0)
 
 # one atlas (the other two are the same command with their paths)
 caffeinate -dimsu dotnet exec out/bin/bp-convert.dll texture \
@@ -37,11 +38,11 @@ caffeinate -dimsu dotnet exec out/bin/bp-convert.dll texture \
 
 | group | what is asserted | hard? |
 |---|---|---|
-| `clips (source)` | the five `.anb` paths exist; the shipped bytes are the shipped bytes (size + SHA-256) | missing = **fail**; no `xff\0` magic = **source warning** (§2.1); any other mismatch = **fail** |
+| `clips (source)` | the five `.anb` paths exist; the shipped bytes are the shipped bytes (size + SHA-256) | missing = **fail**; the exact known clobber (246,449 B, SHA-256 `a4d9c3b0…`) = **source warning** (§2.1); anything else = **fail** |
 | `clips (library)` | `c01_minotaur_a.clips.json` has `minotaur_a_death_front` frames 94 / fps 15.08056640625 / tracks 58; `c01_minotaur_a.glb` has the animation named `minotaur_a_death_front` with 94 keys and 6.1669 s | **fail** |
-| `corpse` | `c01_minotaur_a_dead_body.glb` = 6 meshes, 6 materials all `colossus_01_*_dead`, 0 skins; `c01_minotaur_a_dead_dirtmound.glb` has ≥ 1 mesh | **fail** |
-| `cprt` | `death_tentacle.cprt` = 2,376 B, header `{0,3,8,1,100}`, `TRAPL` footer; exactly three emitters `main_wisp`/`smoke`/`veins`, each with `emitter_<i>_{emit,spawn,update}.csdr` and one `.cptx`; every referenced `.csdr`/`.cptx` exists in the game tree | **fail** |
-| `textures` | the three converted atlas PNGs + `death_tentacle_veins.png` exist, carry the PNG signature and the pinned dimensions | **fail** |
+| `corpse` | `c01_minotaur_a_dead_body.glb` = 6 meshes, the six exact `colossus_01_{waist,back,face,arms,chest,legs}_dead` materials, 0 skins; `c01_minotaur_a_dead_dirtmound.glb` has ≥ 1 mesh | **fail** |
+| `cprt` | `death_tentacle.cprt` = 2,376 B, header `{0,3,8,1,100}`, `TRAPL` footer; exactly three emitters `main_wisp`/`smoke`/`veins`, each with `emitter_<i>_{emit,spawn,update}.csdr` and its full `.cptx` reference; every referenced `.csdr`/`.cptx` exists in the game tree | **fail** |
+| `textures` | the three converted atlas PNGs + `death_tentacle_veins.png` exist, carry the PNG signature, the pinned dimensions **and the pinned SHA-256** | **fail** |
 
 Exit codes: `0` pass, `4` a required asset is missing/invalid (each is named on its line and in a
 final list), `2` configuration/IO error (bad `--root`/`--out`). Without `--check` it prints the
@@ -55,8 +56,14 @@ negative run, reproduced by moving the three PNGs aside and re-running (§1's ex
   FAIL texture  8x8_wispysmoke02_1024_white_pfx.png  missing: …/textures/vfx/common/smoke/_ps4/…
   FAIL texture  8x8_smoke_wispy_sharp_1024_pfx.png  missing: …/textures/vfx/common/smoke/_ps4/…
   FAIL texture  2x2_smoke_tendrils_01_pfx.png        missing: …/textures/vfx/common/smokeman/_ps4/…
+checked 13 required asset(s): 10 ok, 3 failed
+source warnings: 4 (not required assets — the known game-tree clobber; see §2.1)
 S6 ASSET GATE FAILED — 3 required asset(s) missing or invalid
 ```
+
+The fingerprint is exercised in both directions: a moved atlas, a zero-byte atlas, and a
+same-dimension wrong-pixel atlas (the sharp PNG copied over the white one) each exit 4 — the last
+one fails on the SHA-256, not the signature or the size.
 
 ---
 
@@ -89,21 +96,22 @@ The frame/track counts were re-read from the recovered originals with `tools/re/
 front **94 frames / 58 tracks** and loop **1 frame / 58 tracks**, both flag-clear (version word
 `0xc`); the object animation is flag-set (version word `0x0001000C`) with track type 29.
 
-**Timing detail for S6.** The glTF clip's `duration` is its maximum input time, **6.1669 s**;
-`94/15.0806 = 6.2332 s` counts the 94 frames as intervals. The design's "94 f / 6.233 s" is the
-frame-count figure. The phase machine should use the clip's own duration (6.1669 s) for "the
-motion ended"; using 6.233 s delays the Collapse by 66 ms after the last key. Either is defensible,
-but pick one and record it.
+**Timing detail for S6.** The runtime clip's duration is its maximum input time, **6.166933 s**
+(93/15.08056640625); `94/15.0806 = 6.2332 s` is the frame-count figure (94 frames as intervals).
+The clip's `duration` is the source of truth: Task 2 reads it from the loaded animation and should
+not hardcode either number. The design's "94 f / 6.233 s" is descriptive, one frame interval longer
+than the clip's last key.
 
 ### 2.1 The four corrupted game-tree `.anb` copies (source warning)
 
 On 2026-10-22 10:54 the game-tree copies of the four `.anb` files in this bundle (except
 `camera_02`) were replaced, **in place and in their hardlinked psarc copies**, by a 246,449-byte
 JSON dump of `player_a_stand` (`head 7b 0a 20 20`, `{"clip": "player_a_stand", …`, a parse2-style
-dump). All four have the same content — a tool wrote its dump over its own inputs, not a packaging
-quirk. The extraction manifest (`SOTC-extract/logs/game.sha256`) and the pak archives still hold
-the originals; re-reading the entries from `uroot/pak3.psarc` (three clips) and
-`uroot/cachedFiles.psarc` (`camera_01`) gave byte-identical files:
+dump). All four have the same content — a parse2-style dump of `player_a_stand`, a Wander clip S6 never
+reads — which rules out a packaging or conversion quirk. The extraction manifest
+(`SOTC-extract/logs/game.sha256`) and the pak archives still hold the originals; re-reading the
+entries from `uroot/pak3.psarc` (three clips) and `uroot/cachedFiles.psarc` (`camera_01`) gave
+byte-identical files:
 
 | game-tree path (clobbered) | now | shipped bytes | shipped SHA-256 | pak |
 |---|---:|---:|---|---|
@@ -114,16 +122,33 @@ the originals; re-reading the entries from `uroot/pak3.psarc` (three clips) and
 | `cp3shadow/anim/camera_minoa_death_front_camera_02.anb` | 2,244 | 2,244 | `1a57e540eedf629c8b8b5cb4452b266755ad0544e00a9be999fd76541fe51146` | intact |
 
 All four clobbered files have the same current SHA-256 (`a4d9c3b0d54feb7e…`), the same size and the
-same content: a dump was written over its own inputs by a scouting run, not a packaging quirk. The
-project did **not** write the game tree in this task.
+same content: a parse2-style dump of `player_a_stand` — a Wander clip S6 never reads — was written
+over its own inputs. The author is unknown; the corruption was detected during Task 0 (mtimes
+10:54, before the task started), and the content argument rules out a packaging or conversion
+quirk. The project did **not** write the game tree in this task.
 
-Why this is a warning, not a hard failure: the viewer does not read the `.anb` at runtime — it
-plays the baked animation in `c01_minotaur_a.glb`, and the gate proves that baked clip
-(94 keys / 6.1669 s) independently. The converted library is unaffected. What is lost is the
-ability to **re-bake** the death clip from source until the four files are restored. The restore is
-mechanical (re-extract those entries from the two paks into the game tree and re-check the five
-hashes above); it was deliberately left to the user because this task's constraint is no game-tree
-writes. The gate's four `warn source` lines are the durable reminder.
+The gate treats exactly this incident as a warning (246,449 B **and** that SHA-256); any other
+source mismatch — a truncated, zeroed or arbitrary `.anb` — is a hard failure. The rationale for
+the warning: the viewer does not read the `.anb` at runtime — it plays the baked animation in
+`c01_minotaur_a.glb`, and the gate proves that baked clip (94 keys / 6.1669 s) independently. What
+is lost is the ability to **re-bake** the death clip from source until the four files are restored.
+
+**Restore procedure (not run here).** The entries live in `uroot/pak3.psarc`
+(`cp3shadow/anim/minotaur_a_death_front.anb`, `…_loop.anb`, `objanim_minotaur_a_death_front.anb`)
+and `uroot/cachedFiles.psarc` (`camera_minoa_death_front_camera_01.anb`). The extractor is
+`SOTC-extract/tools/psarc_final.py`:
+
+```bash
+python3 SOTC-extract/tools/psarc_final.py extract <tmp>/psarc <uroot>/pak3.psarc <uroot>/cachedFiles.psarc
+# then copy <tmp>/psarc/pak3/cp3shadow/anim/{three}.anb and
+#           <tmp>/psarc/cachedFiles/cp3shadow/anim/camera_..._01.anb into the game tree,
+# and re-check: shasum -a 256  (the five hashes above / logs/game.sha256)
+```
+
+Caveat: the game tree is hardlinked to the `psarc/` trees, so writing a file **in place** (truncate
+or overwrite) also rewrites the pak copy — that is how the clobber propagated. Replace the file
+(unlink + new inode) or restore both trees; then re-run the gate and confirm the four warnings are
+gone. The gate's four `warn source` lines are the durable reminder.
 
 ---
 
@@ -223,8 +248,9 @@ inside `FUN_0082c080` (the boss update). The function:
 * registers the callback `FUN_008426d0`; the callback loads
   `$/scripts/shadow/entities/colossi/****/death_tentacle.cgpr` as `DeathTent`, allocates two
   `segments << 4` byte arrays (201 × `vec4` positions and directions) and stores the **0.25 m**
-  spacing `0x3e800000` in the per-tendril instance. The gate's geometry constants
-  (201 × 0.25 m) therefore come straight from the binary, not from the design prose.
+  spacing `0x3e800000` in the per-tendril instance. The milestone's geometry constants
+  (201 × 0.25 m) therefore come straight from the binary (this note's evidence), not from the
+  design prose; the asset gate itself does not re-read `eboot.elf`.
 
 **The trigger is the motion-change latch, not HP.** `FUN_00636650` (the motion setter) sets
 `byte [obj+0x52c] = 1` at **0x00637015** and clears it at **0x00636ed8**; `FUN_0082c080` tests
@@ -254,13 +280,17 @@ $ python3 tools/re/anb/records.py decode …/camera_minoa_death_front_camera_02.
 ParseError: track 0 is type 36, not in the caseD_9 family
 ```
 
-`tools/re/anb/records.py`'s dispatch table does list type 36's sampler case (0x23: `FUN_00600810`
-for the pose plus `FUN_00600d70(t, 0, motion, "camera_0", viewAngle/aspectRatio/timeScale)` and the
-camera id at `motion+8 + track*4`), but no decoded pose reader exists for it. The clips are
-therefore **not played**: S6 reconstructs the camera (D2, §8.3 of the design), and the note keeps
-the gap explicit. `camera_02` (2,244 B) is intact in the game tree; `camera_01`'s game-tree copy is
-one of the four clobbered files (§2.1), and its 844 B original is recoverable from
-`cachedFiles.psarc` with the hash above.
+The type-36 fact for `camera_02` was read from the intact game-tree file. `camera_01`'s game-tree
+copy is one of the four clobbered files (§2.1) and is unreadable as an ANB; its type-36 fact was
+read from the **recovered pak copy** (844 B, hash above), so this section does not depend on the
+damaged tree.
+
+`tools/re/anb/records.py`'s **Python** dispatch table does list type 36's sampler case (0x23:
+`FUN_00600810` for the pose plus `FUN_00600d70(t, 0, motion, "camera_0",
+viewAngle/aspectRatio/timeScale)` and the camera id at `motion+8 + track*4`); that table mirrors
+the **native** sampler `FUN_005fd900`'s switch, but neither has a decoded pose reader for the
+type — the reader rejects it by name. The clips are therefore **not played**: S6 reconstructs the
+camera (D2, §8.3 of the design), and the note keeps the gap explicit.
 
 ---
 
@@ -298,11 +328,15 @@ for pair in \
 done
 ```
 
-Converted PNGs (all `variant 8c0a`, RGBA8): `textures/vfx/common/smoke/_ps4/
-8x8_wispysmoke02_1024_white_pfx.png` 1024×1024 / 707,088 B; `…/8x8_smoke_wispy_sharp_1024_pfx.png`
-1024×1024 / 919,600 B; `textures/vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.png` 512×512 /
-73,087 B; the pre-existing `textures/shadow/characters/common/_ps4/death_tentacle_veins.png`
-1024×256 / 228,032 B.
+Converted PNGs (all `variant 8c0a`, RGBA8; the gate pins dimensions **and** SHA-256):
+`textures/vfx/common/smoke/_ps4/8x8_wispysmoke02_1024_white_pfx.png` 1024×1024 / 707,088 B /
+`0fd737f277bf3b7077b16f088113acfbd1e2462f01bba8005b84405749dd1a45`;
+`…/8x8_smoke_wispy_sharp_1024_pfx.png` 1024×1024 / 919,600 B /
+`135499f5485f2a373fc714f6c2177bfc522549f4604f3aa2f45ac41aaa79c69d`;
+`textures/vfx/common/smokeman/_ps4/2x2_smoke_tendrils_01_pfx.png` 512×512 / 73,087 B /
+`2788814f0d2b06d0fbab743685a50a32371ec9919971bbf59d9e061c0df0bd4f`;
+the pre-existing `textures/shadow/characters/common/_ps4/death_tentacle_veins.png` 1024×256 /
+228,032 B / `f45991263e0ebc329b0bd367c05e561700b0f454c54fcbc718f2f7cc255a3e3c`.
 
 Files: `tools/re/s6/s6_asset_gate.py` (new), `src/BpConvert.Cli/Program.cs` (the `texture` verb and
 usage line), this note. The library and the PNGs are gitignored; no asset is committed.
