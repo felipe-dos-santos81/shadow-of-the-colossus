@@ -199,9 +199,11 @@ void camera_climb_exit(Camera&, CameraClimb&);
 //
 // The keys after T0 orbit the base's own viewing side by fixed yaw offsets, so
 // the cinematic turns around Valus without depending on where the player was
-// facing. The app passes the follow pose captured when the sequence started as
-// `base`, so the path cannot feed back on itself; the player's input is locked
-// while it runs (design D7) and the cursor is never captured (A5).
+// facing. The app captures the camera pose on the first locked frame and passes
+// it as `base` for the whole sequence (the follow pose in the ordinary defeat;
+// the climb/target pose if that owned the view when the death started), so the
+// path cannot feed back on itself. The player's input is locked while it runs
+// (design D7) and the cursor is never captured (A5).
 
 // The follow camera's head point above the player (camera_follow's target);
 // camera_death_pose re-anchors its return key on the same point.

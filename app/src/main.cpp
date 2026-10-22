@@ -215,6 +215,20 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // --s6-selftest composes the encounter manifest with the player's glb, so
+    // it names both requirements itself (the generic --manifest rule below
+    // would otherwise answer for --model with a manifest-generic message).
+    if (opts.s6Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s6-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s6Selftest && opts.modelRelPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s6-selftest needs --model (the player glb)\n");
+        print_usage(stderr);
+        return 2;
+    }
+
     // --manifest composes the scene, so --model is the player's glb (required);
     // --s3-selftest only makes sense for a composed scene.
     if (!opts.manifestPath.empty() && opts.modelRelPath.empty()) {
@@ -244,11 +258,6 @@ int main(int argc, char** argv) {
     }
     if (opts.s5Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --manifest\n");
-        print_usage(stderr);
-        return 2;
-    }
-    if (opts.s6Selftest && opts.manifestPath.empty()) {
-        std::fprintf(stderr, "sotc-viewer: --s6-selftest needs --manifest\n");
         print_usage(stderr);
         return 2;
     }

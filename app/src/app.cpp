@@ -355,6 +355,19 @@ void set_mesh_range_visible(Scene& scene, std::size_t begin, std::size_t end, bo
     }
 }
 
+// Whether every mesh of a half-open range is visible (an empty range is
+// vacuously visible). The S6 reset assertion reads the mesh gate itself, not
+// just the death flags, so a half-restored swap fails loudly.
+bool mesh_range_visible(const Scene& scene, std::size_t begin, std::size_t end) {
+    const std::size_t last = std::min(end, scene.meshes.size());
+    for (std::size_t i = std::min(begin, last); i < last; ++i) {
+        if (!scene.meshes[i].visible) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The corpse swap (design G3): while `corpseVisible` the live entity's meshes
 // (weakpoint shells included) and the held club are hidden and the dead body +
 // dirtmound are shown at the entity's current transform; before and after the
@@ -491,15 +504,39 @@ EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
     return frame;
 }
 
-// The death cue's one-shot latch: true exactly on the frame the tendril burst
-// opens (0.4 s), when `fired` is set. The defeat itself queues nothing — the
-// roar is the burst's sound (design §8.4).
+// The death cue's one-shot latch: true exactly on the first frame the death
+// clock has reached the burst start (0.4 s), when `fired` is set. The defeat
+// itself queues nothing — the roar is the burst's sound (design §8.4). The test
+// is `total >= kDeathTendrilStart`, not `death_tendrils_active`: a long hitch
+// can jump the clock past the render window's 3.0 s end, and the roar must still
+// fire once (the ribbon window itself stays 0.4-3.0).
 bool death_cue_due(const DeathState& death, bool& fired) {
-    if (fired || !death_tendrils_active(death)) {
+    if (fired || death.phase == DeathPhase::Idle) {
+        return false;
+    }
+    if (!(death.total >= kDeathTendrilStart)) {
         return false;
     }
     fired = true;
     return true;
+}
+
+// One frame of the death machine and its presentation state (design §8.1/§8.3):
+// advance the clock, drive the pinned one-shot death clip from it, and swap the
+// corpse at Collapse. The caller owns the camera, the tendril frame and the
+// audio (they need this frame's poses and the caller's bookkeeping); the
+// interactive loop and the S6 selftest share this, so a reset/replay runs the
+// same sequence.
+void advance_death_frame(DeathState& death, float dt, Playback& entityPlayback, int deathClip,
+                         const CorpseAttachment& corpse, const ClubAttachment& club,
+                         Scene& scene, std::size_t entityRig) {
+    death = step_death(death, dt, true);
+    if (deathClip >= 0 && entityPlayback.index == deathClip) {
+        entityPlayback.time = std::min(death.total, kMotionSeconds);
+        entityPlayback.pinned = true;
+        entityPlayback.playing = false;
+    }
+    apply_death_visibility(scene, corpse, club, entityRig, death_corpse_visible(death));
 }
 
 // S6: the club whoosh, fired once at the swing phase of an in-progress club
@@ -1103,15 +1140,22 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
 // The weakpoint lookup resolves a band's shell through posed_weakpoint_proxy on
 // this frame's palette; `weakpoint_material_name` answers nullptr for anything
 // but the two weakpoints, so it must be checked before building a string.
+//
+// `entityLive = false` is the S6 corpse state (design §8.3): the dead colossus
+// is a static prop, so the frame carries no climb joints, no weakpoint shells
+// and no collision capsules — it cannot be grabbed, climbed, struck or walked
+// into. The lookups are left empty (player_state/climb_band_segment guard an
+// empty lookup) and the frozen timelines pass the default true.
 PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                             const std::vector<std::vector<Mat4>>& palettes,
-                            const Heightmap& heightmap, float cameraYawDeg) {
+                            const Heightmap& heightmap, float cameraYawDeg,
+                            bool entityLive = true) {
     PlayerFrame frame;
     frame.scene = &scene;
     frame.heightmap = &heightmap;
     frame.entityRig = entityRig;
     frame.cameraYawDeg = cameraYawDeg;
-    if (entityRig < palettes.size()) {
+    if (entityLive && entityRig < palettes.size()) {
         frame.jointWorld = [&scene, entityRig, &palettes](std::string_view name, Vec3& out) {
             return posed_joint_world_position(scene, entityRig, palettes[entityRig],
                                               std::string(name), out);
@@ -1126,7 +1170,9 @@ PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                                          std::string(material), center, radius);
         };
     }
-    frame.entityCapsules = entity_capsules(scene, palettes);
+    if (entityLive) {
+        frame.entityCapsules = entity_capsules(scene, palettes);
+    }
     return frame;
 }
 
@@ -4573,16 +4619,8 @@ int run_app(const AppOptions& opts) {
 
             bool done = false;
             for (int frame = 0; frame < kS6MaxDeathFrames; ++frame) {
-                death = step_death(death, stepSeconds, true);
-                if (entity_playback.index == entityClips.death) {
-                    // The machine's clock drives the one-shot clip (R8): the
-                    // clip time is the death total, clamped at its end.
-                    entity_playback.time = std::min(death.total, kMotionSeconds);
-                    entity_playback.pinned = true;
-                    entity_playback.playing = false;
-                }
-                apply_death_visibility(scene, corpse, club, entityRig,
-                                       death_corpse_visible(death));
+                advance_death_frame(death, stepSeconds, entity_playback, entityClips.death,
+                                    corpse, club, scene, entityRig);
                 if (death_cue_due(death, deathCueFired)) {
                     append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
                                          sfx);
@@ -4631,11 +4669,50 @@ int run_app(const AppOptions& opts) {
                              effectRoots, kDeathRoots);
                 return 1;
             }
+            if (audio.failed) {
+                // The S5 finish's own gate (a mapped cue went missing at play
+                // time): the S6 run must fail too, not print a clean status.
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: a cue clip was missing at play "
+                             "time\n");
+                return 1;
+            }
+
+            // The dead colossus must be a static prop in Done (design §8.3):
+            // the player frame carries no entity capsules, no climb joints and
+            // no weakpoint shells, so it cannot be walked into, climbed or
+            // struck. The live control (the same pose, entityLive = true)
+            // proves the geometry is still there and only the death gate is off.
+            const std::vector<std::vector<Mat4>> donePalettes =
+                update_all_poses(renderer, scene, playbacks, 0.0f, club);
+            const PlayerFrame liveFrame =
+                player_frame_of(scene, entityRig, donePalettes, heightmap,
+                                camera_look_yaw(camera), /*entityLive=*/true);
+            const PlayerFrame deadFrame =
+                player_frame_of(scene, entityRig, donePalettes, heightmap,
+                                camera_look_yaw(camera), /*entityLive=*/false);
+            if (liveFrame.entityCapsules.empty() || !deadFrame.entityCapsules.empty() ||
+                deadFrame.jointWorld || deadFrame.weakpointProxy) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the corpse left the dead colossus "
+                             "collidable or climbable (live capsules %zu, dead capsules %zu)\n",
+                             liveFrame.entityCapsules.size(), deadFrame.entityCapsules.size());
+                return 1;
+            }
+
+            const int deathHealth = static_cast<int>(std::lround(encounter.health));
+            if (deathHealth != 0) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: Valus's health at Done is %d, "
+                             "expected 0\n",
+                             deathHealth);
+                return 1;
+            }
             const std::string deathClip =
                 entity_playback.clips[static_cast<std::size_t>(entityClips.death)].name;
-            std::printf("s6-death clip=%s total=%.3f corpse=%d camera=%s\n", deathClip.c_str(),
-                        death.total, death_corpse_visible(death) ? 1 : 0,
-                        death_camera_key(death.total));
+            std::printf("s6-death clip=%s total=%.3f corpse=%d health=%d camera=%s\n",
+                        deathClip.c_str(), death.total, death_corpse_visible(death) ? 1 : 0,
+                        deathHealth, death_camera_key(death.total));
             print_status_line(opts, shell.win);
             if (!encounter.defeated || !death_corpse_visible(death) ||
                 death.roots != kDeathRoots || combat.mode == PlayerMode::Dead) {
@@ -4670,13 +4747,29 @@ int run_app(const AppOptions& opts) {
             playback.pinned = false;
             playback.playing = true;
             playback.time = 0.0f;
+            // The reset must restore the actual draw gate, not just the flags:
+            // the live entity and its club visible, the corpse hidden.
+            const bool entityRestored =
+                entityRig < scene.rigs.size() &&
+                mesh_range_visible(scene, scene.rigs[entityRig].meshBegin,
+                                   scene.rigs[entityRig].meshEnd);
+            const bool corpseHidden =
+                !corpse.loaded || !mesh_range_visible(scene, corpse.meshBegin, corpse.meshEnd);
+            const bool clubRestored =
+                !club.loaded || mesh_range_visible(scene, club.meshBegin, club.meshEnd);
             if (death.phase != DeathPhase::Idle || death_corpse_visible(death) ||
-                death_locks_input(death) ||
+                death_locks_input(death) || !entityRestored || !corpseHidden ||
+                !clubRestored ||
                 static_cast<int>(std::lround(encounter.health)) != 100 ||
                 static_cast<int>(std::lround(combat.health)) != 100) {
                 std::fprintf(stderr,
                              "sotc-viewer: --s6-selftest: the reset did not restore the opening "
-                             "state\n");
+                             "state (entity visible %d, corpse hidden %d, club visible %d, "
+                             "valus %d, player %d)\n",
+                             entityRestored ? 1 : 0, corpseHidden ? 1 : 0,
+                             clubRestored ? 1 : 0,
+                             static_cast<int>(std::lround(encounter.health)),
+                             static_cast<int>(std::lround(combat.health)));
                 return 1;
             }
             std::printf("s6-reset phase=%s corpse=%d lock=%d valus=%d player=%d\n",
@@ -4684,6 +4777,61 @@ int run_app(const AppOptions& opts) {
                         death_locks_input(death) ? 1 : 0,
                         static_cast<int>(std::lround(encounter.health)),
                         static_cast<int>(std::lround(combat.health)));
+
+            // --- 5. The arm-root ordering (design §8.2) -----------------------
+            // The run above used the route-less weakpoint -1, so the burst
+            // started at the forehead. A killing blow on weakpoint 1 must put
+            // the right arm's shell first; this silent second death proves the
+            // hit weakpoint drives the order, then resets the run again.
+            StepEvents armLethal;
+            armLethal.damageDealt = 100;
+            apply_combat_events(encounter, entity_playback, entityClips, armLethal,
+                                /*weakpoint=*/1, nullptr);
+            death = step_death(death, stepSeconds, true);
+            for (int frame = 0; frame < 32 && !death_tendrils_active(death); ++frame) {
+                death = step_death(death, stepSeconds, true);
+            }
+            const std::vector<std::vector<Mat4>> armPalettes =
+                update_all_poses(renderer, scene, playbacks, 0.0f, club);
+            const EffectFrame armFrame =
+                build_effect_frame(scene, entityRig, armPalettes, encounter, death);
+            const char* armMaterial = weakpoint_material_name(1);
+            const char* headMaterial = weakpoint_material_name(0);
+            Vec3 armShell{};
+            Vec3 headShell{};
+            float armRadius = 0.0f;
+            float headRadius = 0.0f;
+            const bool armResolved =
+                armMaterial != nullptr && entityRig < armPalettes.size() &&
+                posed_weakpoint_proxy(scene, entityRig, armPalettes[entityRig], armMaterial,
+                                      armShell, armRadius);
+            const bool headResolved =
+                headMaterial != nullptr && entityRig < armPalettes.size() &&
+                posed_weakpoint_proxy(scene, entityRig, armPalettes[entityRig], headMaterial,
+                                      headShell, headRadius);
+            const auto near = [](Vec3 a, Vec3 b) {
+                return std::fabs(a.x - b.x) <= 1e-3f && std::fabs(a.y - b.y) <= 1e-3f &&
+                       std::fabs(a.z - b.z) <= 1e-3f;
+            };
+            if (!death_tendrils_active(death) || armFrame.rootCount != kDeathRoots ||
+                !armResolved || !headResolved || !near(armFrame.roots[0].position, armShell) ||
+                !near(armFrame.roots[1].position, headShell)) {
+                std::fprintf(stderr,
+                             "sotc-viewer: --s6-selftest: the weakpoint-1 death did not put the "
+                             "arm shell first (roots %d, burst %d, arm %d, head %d)\n",
+                             armFrame.rootCount, death_tendrils_active(death) ? 1 : 0,
+                             armResolved ? 1 : 0, headResolved ? 1 : 0);
+                return 1;
+            }
+            // Leave the run in the opening state (no output: this check is an
+            // assertion, not a status line).
+            reset_encounter(encounter);
+            death = reset_death();
+            apply_death_visibility(scene, corpse, club, entityRig, /*corpseVisible=*/false);
+            entity_playback.index = entityClips.stand;
+            entity_playback.time = 0.0f;
+            entity_playback.pinned = false;
+            entity_playback.playing = true;
             return 0;
         }
 
@@ -5271,15 +5419,11 @@ int run_app(const AppOptions& opts) {
                 // apply_combat_events), so the machine starts on the next frame
                 // with total = 0 and does not accumulate the defeat frame's dt
                 // (death.h's pinned rule). While it runs, the machine's clock
-                // drives the one-shot death clip and gates the player input.
-                if (death_wired && encounter.defeated) {
-                    death = step_death(death, dt, true);
-                    if (entityClips.death >= 0 && entityRig < playbacks.size() &&
-                        playbacks[entityRig].index == entityClips.death) {
-                        playbacks[entityRig].time = std::min(death.total, kMotionSeconds);
-                        playbacks[entityRig].pinned = true;
-                        playbacks[entityRig].playing = false;
-                    }
+                // drives the one-shot death clip and gates the player input;
+                // the corpse swap follows the same clock (advance_death_frame).
+                if (death_wired && encounter.defeated && entityRig < playbacks.size()) {
+                    advance_death_frame(death, dt, playbacks[entityRig], entityClips.death,
+                                        corpse, club, scene, entityRig);
                 }
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 const auto deadzoned = [](float value) {
@@ -5375,10 +5519,13 @@ int run_app(const AppOptions& opts) {
 
                 // The player step: the state machine runs the Grounded
                 // controller + capsule resolver in the S3/S4 order, or recomputes
-                // the attach point from this frame's entity palette.
+                // the attach point from this frame's entity palette. Once the
+                // corpse has replaced the body (S6, design §8.3) the frame
+                // carries no live entity: nothing to walk into, climb or strike.
                 const PlayerFrame frame =
                     player_frame_of(scene, entityRig, palettes, heightmap,
-                                    camera_look_yaw(camera));
+                                    camera_look_yaw(camera),
+                                    /*entityLive=*/!death_corpse_visible(death));
                 const int weakpoint = combat.weakpoint;  // detach() clears it
                 StepEvents events =
                     player_step(player, combat, input, frame, tuning, dt);
@@ -5440,16 +5587,19 @@ int run_app(const AppOptions& opts) {
                     }
                     audio.update(dt, player.position, camera_look_yaw(camera));
                 }
-                // S6: the corpse swap and the cinematic camera while the death
-                // runs (D5/D7), then this frame's tendril burst. The camera
-                // override comes last: it owns the view through Motion and
-                // Collapse, and Done hands it back to the follow camera above.
+                // S6: the cinematic camera while the death runs (D5/D7), then
+                // this frame's tendril burst. The corpse swap runs with the
+                // machine at the top of the frame (advance_death_frame); the
+                // camera override comes last: it owns the view through Motion
+                // and Collapse, and Done hands it back to the follow camera.
                 if (death_wired && encounter.defeated) {
-                    apply_death_visibility(scene, corpse, club, entityRig,
-                                           death_corpse_visible(death));
                     if (death_locks_input(death)) {
                         if (!deathCameraSet) {
-                            deathCameraBase = camera;  // this frame's follow pose
+                            // The pose the cinematic starts from: this frame's
+                            // camera — the follow pose in the ordinary defeat,
+                            // the climb/target pose if that owned the view on
+                            // the first locked frame.
+                            deathCameraBase = camera;
                             deathCameraSet = true;
                         }
                         camera = camera_death_pose(deathCameraBase, encounter.entityPosition,
