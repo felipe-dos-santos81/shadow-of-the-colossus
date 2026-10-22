@@ -1,4 +1,5 @@
 using BpConvert.Core.Anim;
+using BpConvert.Core.Aqua;
 using BpConvert.Core.Pipeline;
 using SharpGLTF.Schema2;
 
@@ -18,6 +19,10 @@ public class ModelConverterTests : IDisposable
     private const string PlankRel = "models/objects/props/_cmn/obj_plank_01.cmsh";
     private const string WanderRel = "models/shadow/characters/wander/_cmn/wander.cmsh";
     private const string AgroRel = "models/shadow/characters/agro/_cmn/agro.cmsh";
+    private const string DeadBodyRel =
+        "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_body.cmsh";
+    private const string LiveValusRel =
+        "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.cmsh";
 
     private static readonly string[] WanderClips = ["player_a_stand", "player_a_walk", "player_a_run"];
 
@@ -26,6 +31,32 @@ public class ModelConverterTests : IDisposable
 
     private static string SourcePath(MaterialChannel? channel) =>
         channel!.Value.Texture.PrimaryImage.Content.SourcePath.Replace('\\', '/');
+
+    [Fact]
+    public void VeinsVeil_IsScopedToDeadMaterials()
+    {
+        // The sixth `.cmat` slot (death_tentacle_veins) exists on the living Colossus too, so the
+        // material-name scope is what keeps a routine re-convert from veiling the living boss.
+        var resolver = new AssetResolver(TestAssets.Root);
+
+        var dead = new AquaModelAdapter(resolver).Load(TestAssets.Sample(DeadBodyRel));
+        Assert.Equal(6, dead.Materials.Count);
+        Assert.All(dead.Materials, material =>
+        {
+            Assert.EndsWith("_dead", material.Name);
+            Assert.NotNull(material.EmissiveTexture);
+            Assert.EndsWith("textures/shadow/characters/common/_ps4/death_tentacle_veins.ctxr",
+                material.EmissiveTexture);
+        });
+
+        // The living Valus references the same texture (a null emissive is not vacuous) but every
+        // live material stays unbound: §8.3's "null/black for every other material".
+        var live = new AquaModelAdapter(resolver).Load(TestAssets.Sample(LiveValusRel));
+        Assert.NotEmpty(live.Materials);
+        Assert.Contains(live.ReferencedTexturePaths,
+            path => path.EndsWith("death_tentacle_veins.ctxr", StringComparison.Ordinal));
+        Assert.All(live.Materials, material => Assert.Null(material.EmissiveTexture));
+    }
 
     [Fact]
     public void Convert_Plank_ProducesLoadableGlb()

@@ -46,12 +46,14 @@ struct TextureCpu {
 struct MaterialCpu {
     std::string name;
     float baseColorFactor[4];
-    float emissiveFactor[3];
+    float emissiveFactor[3];  // additive light (`m.emissive.rgb` in the mesh shader)
     int baseColorTexture;  // index into Scene::textures, -1 = none
     int normalTexture;     // index into Scene::textures, -1 = none
     // The glTF emissive slot, used as the corpse's veins carrier: index into Scene::textures,
-    // -1 = none. The shipped veins texture is black RGB with the vein mask in alpha, so the mesh
-    // shader applies it as a dark veil (`mix(1, rgb, alpha)`), not as light.
+    // -1 = none. The slot has two different meanings in the mesh shader: `emissiveFactor` is
+    // additive light, while this texture is multiplicative (a dark veil): the shipped veins
+    // texture is black RGB with the vein mask in alpha, so the shader applies
+    // `mix(1, rgb, alpha)` rather than adding it.
     int emissiveTexture = -1;
 };
 

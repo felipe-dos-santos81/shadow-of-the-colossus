@@ -60,6 +60,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import struct
 import sys
 
@@ -98,8 +99,13 @@ CLIP_SECONDS = (CLIP_FRAMES - 1) / CLIP_FPS  # 6.166933 s: 94 keys span 93 inter
 
 DEAD_BODY = "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_body.glb"
 DEAD_BODY_MESHES = 6
+DEAD_BODY_BYTES = 11925120
 DEAD_BODY_PARTS = ("waist", "back", "face", "arms", "chest", "legs")
 DEAD_BODY_MATERIALS = {"colossus_01_%s_dead" % part for part in DEAD_BODY_PARTS}
+# The corpse's bound layers: the dirt pair the adapter's slot heuristic picks, and the veins veil.
+DEAD_BODY_BASE_PNG = "textures/tiling/dirt/_ps4/cmn_dirt_pebbly_01_col.png"
+DEAD_BODY_NORMAL_PNG = "textures/tiling/dirt/_ps4/cmn_dirt_pebbly_01_nml.png"
+LIVE_BODY = "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb"
 DIRTMOUND = "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_dirtmound.glb"
 
 # The `death_tentacle.cprt` emitter order -> converted atlas under <out>/textures/.
@@ -183,6 +189,17 @@ def glb_summary(path):
         except (KeyError, IndexError, TypeError):
             return ""
 
+    def material_detail(material):
+        pbr = material.get("pbrMetallicRoughness") or {}
+        factor = material.get("emissiveFactor")
+        return {
+            "base": texture_uri(pbr.get("baseColorTexture")),
+            "normal": texture_uri(material.get("normalTexture")),
+            "emissive": texture_uri(material.get("emissiveTexture")),
+            "emissive_present": "emissiveTexture" in material,
+            "emissive_factor": None if factor is None else [float(c) for c in factor],
+        }
+
     animations = {}
     for anim in doc.get("animations", []):
         counts, ends = [], []
@@ -199,13 +216,13 @@ def glb_summary(path):
             "seconds": max(ends) if ends else 0.0,
         }
     return {
+        "bytes": len(data),
         "meshes": len(doc.get("meshes", [])),
         "materials": [m.get("name", "") for m in doc.get("materials", [])],
-        # Material name -> emissive image uri ("" when absent or dangling). S6 carries the
-        # corpse's veins layer through this standard slot; the gate proves the binding.
-        "material_emissive": {
-            m.get("name", ""): texture_uri(m.get("emissiveTexture"))
-            for m in doc.get("materials", [])
+        # Material name -> its texture slots and factor. S6 carries the corpse's veins layer
+        # through the standard emissive slot; the gate proves the whole binding set.
+        "materials_detail": {
+            m.get("name", ""): material_detail(m) for m in doc.get("materials", [])
         },
         "skins": len(doc.get("skins", [])),
         "animations": animations,
@@ -384,6 +401,8 @@ def check_corpse(out, report):
         try:
             summary = glb_summary(body_path)
             problems = []
+            if summary["bytes"] != DEAD_BODY_BYTES:
+                problems.append("%d B, expected %d" % (summary["bytes"], DEAD_BODY_BYTES))
             if summary["meshes"] != DEAD_BODY_MESHES:
                 problems.append("%d meshes, expected %d" % (summary["meshes"], DEAD_BODY_MESHES))
             if summary["skins"] != 0:
@@ -399,19 +418,36 @@ def check_corpse(out, report):
                     problems.append("missing material(s): %s" % ", ".join(missing))
                 if extra:
                     problems.append("unexpected material(s): %s" % ", ".join(extra))
-            # The veins layer (S6 D9): every dead material must carry the converted veins PNG as
-            # its emissiveTexture. A dangling index or a different image fails by name.
-            veins = os.path.basename(VEINS_PNG[0])
+
+            # The whole binding set, not just the veil: base/normal stay the dirt pair the adapter
+            # picks today, the veins PNG rides the emissive slot (S6 D9), and the factor stays black
+            # (a conformant viewer shows no invented glow). A dangling index fails the resolution.
+            def resolved(uri):
+                if not uri:
+                    return ""
+                return posixpath.normpath(posixpath.join(posixpath.dirname(DEAD_BODY), uri))
+
             for name in sorted(DEAD_BODY_MATERIALS):
-                binding = summary["material_emissive"].get(name, "")
-                if os.path.basename(binding) != veins:
+                detail = summary["materials_detail"].get(name)
+                if detail is None:
+                    continue  # the missing/unexpected material problem above already names it
+                if resolved(detail["base"]) != DEAD_BODY_BASE_PNG:
+                    problems.append("%s: base %r, expected %s"
+                                    % (name, detail["base"] or "<none>", DEAD_BODY_BASE_PNG))
+                if resolved(detail["normal"]) != DEAD_BODY_NORMAL_PNG:
+                    problems.append("%s: normal %r, expected %s"
+                                    % (name, detail["normal"] or "<none>", DEAD_BODY_NORMAL_PNG))
+                if resolved(detail["emissive"]) != VEINS_PNG[0]:
                     problems.append("%s: emissiveTexture %r, expected %s"
-                                    % (name, binding or "<none>", veins))
+                                    % (name, detail["emissive"] or "<none>", VEINS_PNG[0]))
+                if detail["emissive_factor"] != [0.0, 0.0, 0.0]:
+                    problems.append("%s: emissiveFactor %r, expected [0, 0, 0]"
+                                    % (name, detail["emissive_factor"]))
             if problems:
                 raise ValueError("; ".join(problems))
             report.good("corpse", os.path.basename(DEAD_BODY),
-                        "%d meshes, 6 materials (%s), 0 skins, veins emissive on all 6"
-                        % (summary["meshes"], ", ".join(sorted(materials))))
+                        "%d meshes, 6 materials (%s), 0 skins, %d B, veins emissive on all 6"
+                        % (summary["meshes"], ", ".join(sorted(materials)), summary["bytes"]))
         except (ValueError, struct.error) as exc:
             report.bad("corpse", os.path.basename(DEAD_BODY), str(exc))
 
@@ -427,6 +463,23 @@ def check_corpse(out, report):
                         "%d mesh(es), %d material(s)" % (summary["meshes"], len(summary["materials"])))
         except (ValueError, struct.error) as exc:
             report.bad("corpse", os.path.basename(DIRTMOUND), str(exc))
+
+    # The veil is dead-only (design §8.3). The living Colossus glb is already required by the clip
+    # check; assert that its materials carry no emissiveTexture, so a re-convert with the wrong
+    # scope (veins bound by texture identity) fails here instead of silently darkening the boss.
+    live_path = library_path(out, LIVE_BODY)
+    if os.path.isfile(live_path):
+        try:
+            live = glb_summary(live_path)
+            veiled = sorted(name for name, detail in live["materials_detail"].items()
+                            if detail["emissive_present"])
+            if veiled:
+                raise ValueError("live material(s) carry an emissiveTexture: %s" % ", ".join(veiled))
+            report.good("corpse", os.path.basename(LIVE_BODY),
+                        "%d material(s), none carries an emissiveTexture (the veil stays dead-only)"
+                        % len(live["materials"]))
+        except (ValueError, struct.error) as exc:
+            report.bad("corpse", LIVE_BODY, str(exc))
 
 
 def check_cprt(root, out, report):

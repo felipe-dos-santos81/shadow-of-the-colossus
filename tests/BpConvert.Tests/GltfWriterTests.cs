@@ -272,6 +272,24 @@ public class GltfWriterTests : IDisposable
         Assert.False(json.RootElement.TryGetProperty("images", out _));
     }
 
+    [Fact]
+    public void Write_EmissiveTextureNotInMap_OmitsEmissiveTexture()
+    {
+        // The sibling of Write_TextureNotInMap_OmitsChannel: a source path the caller did not map
+        // (e.g. a texture that refused conversion) must not leave a dangling emissive texture ref.
+        var material = new MaterialData("mat", null, null, null,
+            new float[] { 1, 1, 1, 1 }, Array.Empty<float>(), "textures/t_veins.ctxr");
+        var m = new ModelData("x.cmsh", new() { new MeshData("m", Positions, Normals, new[] { Uv0 }, Indices,
+            Array.Empty<int>(), Array.Empty<float>(), 0) }, new() { material }, null, new()
+            { "textures/t_veins.ctxr" });
+
+        using var json = ReadGlbJson(GlbWriter.Write(m, _dir, "dangling", new Dictionary<string, string>()).GlbPath);
+        var written = json.RootElement.GetProperty("materials")[0];
+
+        Assert.False(written.TryGetProperty("emissiveTexture", out _));
+        Assert.False(json.RootElement.TryGetProperty("images", out _));
+    }
+
     /// <summary>The JSON chunk of a .glb (header 12 B, then a chunk length/type pair).</summary>
     private static JsonDocument ReadGlbJson(string path)
     {

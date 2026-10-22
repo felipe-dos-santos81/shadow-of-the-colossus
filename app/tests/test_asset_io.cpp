@@ -91,7 +91,8 @@ std::string base64_encode(const uint8_t* data, std::size_t size) {
 // relative to the model's directory. A non-empty `emissive_uri` adds a second
 // image/texture and the material's `emissiveTexture` (the veins carrier).
 std::string fixture_gltf_json(const std::string& image_uri = "missing.png",
-                              const std::string& emissive_uri = "") {
+                              const std::string& emissive_uri = "",
+                              int emissive_index = 1) {
     const float positions[3][3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
     const std::string buffer_uri =
         "data:application/octet-stream;base64," +
@@ -123,7 +124,9 @@ std::string fixture_gltf_json(const std::string& image_uri = "missing.png",
                                         : R"(, {"uri": ")" + emissive_uri + R"("})";
     const std::string textures_more = emissive_uri.empty() ? "" : R"(, {"source": 1})";
     const std::string material_more =
-        emissive_uri.empty() ? "" : R"(, "emissiveTexture": {"index": 1})";
+        emissive_uri.empty()
+            ? ""
+            : R"(, "emissiveTexture": {"index": )" + std::to_string(emissive_index) + "}";
     json.replace(json.find("%%IMAGES_MORE%%"), std::string("%%IMAGES_MORE%%").size(), images_more);
     json.replace(json.find("%%TEXTURES_MORE%%"), std::string("%%TEXTURES_MORE%%").size(),
                  textures_more);
@@ -434,6 +437,55 @@ TEST_CASE("a material without an emissive texture has no emissive slot") {
 
     REQUIRE(scene.materials.size() == 1);
     CHECK(scene.materials[0].emissiveTexture == -1);
+}
+
+TEST_CASE("a dangling emissive image degrades to no emissive slot") {
+    // The image is declared by the material but absent on disk (the converter's refused-texture
+    // case): the base image still loads, the emissive resolves to -1, and the renderer's white
+    // fallback keeps the draw total.
+    TempFixtureDir dir;
+    write_binary(dir.path() / "base.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "fixture.gltf",
+               fixture_gltf_json("base.png", "missing-veins.png"));
+
+    auto scene = load_scene(dir.path(), "fixture.gltf");
+
+    REQUIRE(scene.materials.size() == 1);
+    CHECK(scene.materials[0].baseColorTexture >= 0);
+    CHECK(scene.materials[0].emissiveTexture == -1);
+    CHECK(scene.textures.size() == 1);
+}
+
+TEST_CASE("an emissive texture without an image degrades to no emissive slot") {
+    // A valid texture view with no `source` (cgltf accepts it; only material texture *indexes*
+    // are required to resolve): the loader's resolve_texture sees a null image and answers -1.
+    TempFixtureDir dir;
+    write_binary(dir.path() / "base.png", kPng1x1Red, sizeof kPng1x1Red);
+    std::string json = fixture_gltf_json("base.png", "veins.png");
+    const std::string sourced = R"({"source": 0}, {"source": 1})";
+    const std::size_t at = json.find(sourced);
+    REQUIRE(at != std::string::npos);
+    json.replace(at, sourced.size(), R"({"source": 0}, {})");
+    write_text(dir.path() / "fixture.gltf", json);
+
+    auto scene = load_scene(dir.path(), "fixture.gltf");
+
+    REQUIRE(scene.materials.size() == 1);
+    CHECK(scene.materials[0].baseColorTexture >= 0);
+    CHECK(scene.materials[0].emissiveTexture == -1);
+}
+
+TEST_CASE("an out-of-range emissive texture index is refused by the parser") {
+    // cgltf requires every material texture index to resolve and refuses the whole document
+    // ("invalid glTF") when it does not, so an out-of-range emissive index can never reach
+    // MaterialCpu as a silent -1 or a stale index. The renderer's bounds fallback remains for
+    // hand-built scenes; from a glb the failure is loud. (Found while hardening Task 3.)
+    TempFixtureDir dir;
+    write_binary(dir.path() / "base.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_binary(dir.path() / "veins.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "fixture.gltf", fixture_gltf_json("base.png", "veins.png", 9));
+
+    CHECK_THROWS_AS(load_scene(dir.path(), "fixture.gltf"), std::runtime_error);
 }
 
 TEST_CASE("wander carries its 348-joint skeleton") {

@@ -411,7 +411,8 @@ public sealed class AquaModelAdapter
                 var resolved = ResolveTexture(texName, cmshPath, texturePaths, knownTextures, note);
                 if (resolved is null) continue;
                 if (baseColor is null && IsBaseColorTexture(texName)) baseColor = resolved;
-                if (emissive is null && IsVeinsTexture(texName)) emissive = resolved;
+                if (emissive is null && IsDeadMaterial(matName!) && IsVeinsTexture(texName))
+                    emissive = resolved;
                 switch (ClassifyNormal(texName))
                 {
                     case NormalKind.Plain when normal is null:
@@ -462,6 +463,16 @@ public sealed class AquaModelAdapter
 
     private static bool IsVeinsTexture(string texName) =>
         Path.GetFileNameWithoutExtension(texName).Equals(VeinsTextureStem, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The veil is the <b>dead body's</b> material layer (S6 design §8.3: null/black for every
+    /// other material). The living colossi carry the same texture in the same slot — the live
+    /// <c>colossus_01_chest.cmat</c> and 131 materials across the colossi do — so binding by
+    /// texture identity alone would put the black veil on the living boss on a routine re-convert.
+    /// The material name is the game's dead/live split: `colossus_01_*_dead`.
+    /// </summary>
+    private static bool IsDeadMaterial(string matName) =>
+        matName.EndsWith("_dead", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The albedo heuristic of the reference implementation (<c>BluePointConvert.cs:987-1001</c>:

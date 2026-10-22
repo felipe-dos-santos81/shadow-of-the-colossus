@@ -106,6 +106,10 @@ fragment float4 mesh_fragment(VSOut in [[stage_in]],
     // black-vein look at the authored coverage. Materials without the texture
     // bind the 1x1 white fallback (alpha 1), for which this is exactly 1.0:
     // their look is unchanged. The sample is linearised like the albedo.
+    //
+    // Note the dual meaning of the glTF emissive slot: `m.emissive.rgb` (the
+    // factor) is additive light, this texture is multiplicative (a veil). A
+    // genuinely glowing texture would need a material flag and an add here.
     float4 veil = emissive.sample(emissive_sampler, in.uv);
     lit *= mix(float3(1.0), pow(veil.rgb, float3(2.2)), veil.a);
 
