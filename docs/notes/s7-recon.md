@@ -211,3 +211,30 @@ every surface in the column:
   duration (15.456 s for both cuts).
 - Measured idol heights: `mino_a_statue` 10.87, `mammoth_statue` 10.83, `knight_statue` 10.68 m;
   the hall ceiling over the centre line is ≈ 37.5 m.
+
+## 6 · Bakes (Task 8, 2026-10-22)
+
+`out/library` is shared by every branch, so the clip pins were relaxed on `main` first (`>= 15` plus
+the 15 S2–S6 names in order; the root-series loop in `test_anim.cpp` covers only the first fifteen,
+because the wake clips carry no root translation series). Then, from `sotc-native/` with
+`SOTC_GAME_ROOT` and `SOTC_LIB=$PWD/out/library` exported and no acceptance running:
+
+```bash
+dotnet publish src/BpConvert.Cli -c Release -o out/bin
+caffeinate -dimsu dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" \
+  --under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
+caffeinate -dimsu dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" \
+  --under models/shadow/characters/wander/_cmn/wander.cmsh --force --clips \
+  player_a_stand,player_a_walk,player_a_run,player_a_grip_stand_crouch,player_a_grip_loop,\
+player_a_grip_move_f1,player_a_grip_move_f2,player_a_grip_float_u_hi_attack,player_a_atk1,\
+player_a_damage_m_fly2,player_a_fall_damage_to_death,player_a_damage_h_fly1,\
+player_a_damage_h_fly_end,player_a_fall_damage_start,player_a_fall_damage_end,\
+player_a_home_boss01_cut04,player_a_home_boss01_cut05
+```
+
+Resulting `clips.json` lists: `wander` — the 15 S2–S6 clips in their previous order, then
+`player_a_home_boss01_cut04` (index 15) and `player_a_home_boss01_cut05` (index 16); `mono` —
+`girl_a_death_loop` (index 0; `mono.glb` had no clips before; `mono_lod1/2.glb` are unchanged).
+The shared library therefore changed in `wander.glb`, `wander.clips.json`, `mono.glb` and
+`catalog.json`. Restore, if ever needed, by re-running the Wander command with only the first 15 names
+and the Mono command without `--clips`.

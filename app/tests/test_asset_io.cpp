@@ -538,6 +538,22 @@ TEST_CASE("agro carries its baked kick clip") {
     CHECK(!player_rig(scene).animations[0].channels.empty());
 }
 
+TEST_CASE("S7: wander carries the wake clips after its S2-S6 set, mono her death loop") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    const auto& clips = player_rig(scene).animations;
+    check_wander_s2s6_clips(clips);
+    REQUIRE(clips.size() >= 17);
+    CHECK(clips[15].name == "player_a_home_boss01_cut04");
+    CHECK(clips[16].name == "player_a_home_boss01_cut05");
+    CHECK(!clips[15].channels.empty());
+    CHECK(!clips[16].channels.empty());
+
+    auto mono = load_scene(test_library(), "models/shadow/characters/mono/_cmn/mono.glb");
+    REQUIRE(player_rig(mono).animations.size() == 1);
+    CHECK(player_rig(mono).animations[0].name == "girl_a_death_loop");
+    CHECK(!player_rig(mono).animations[0].channels.empty());
+}
+
 TEST_CASE("wander's joint rest transforms decompose from their node matrices") {
     // The converter emits `matrix` nodes; the fixture below uses TRS nodes, so
     // this test is what exercises the matrix path on real data. The expected
