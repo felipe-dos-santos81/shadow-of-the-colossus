@@ -1329,6 +1329,14 @@ TEST_CASE("compose_scene skins a posed prop on the CPU into static meshes") {
         CHECK(posed.vertices[v].nx == doctest::Approx(-1.0f).epsilon(1e-4));
         CHECK(posed.vertices[v].ny == doctest::Approx(0.0f).epsilon(1e-4));
     }
+    // Posed for good: no weight or joint survives, or the shader would re-skin the
+    // vertex with the player's live palette (static meshes bind slot 0).
+    for (const Vertex& vertex : posed.vertices) {
+        for (int i = 0; i < 4; ++i) {
+            CHECK(vertex.w[i] == 0.0f);
+            CHECK(vertex.j[i] == 0);
+        }
+    }
     // The cull box is of the posed vertices; the TRS lives in `model`.
     CHECK(posed.localMin.x == doctest::Approx(-1.0f).epsilon(1e-4));
     CHECK(posed.localMin.y == doctest::Approx(1.0f).epsilon(1e-4));
@@ -1388,4 +1396,21 @@ TEST_CASE("mono's posed death loop composes to finite static vertices") {
     }
     CHECK(posed_meshes > 0);
     CHECK(scene.rigs.size() == 1);
+}
+
+TEST_CASE("compose_scene keeps the scene bounds of two posed props") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+    const Scene scene = compose_scene(
+        dir.path(),
+        parsed_manifest(dir, "posed skin.gltf 10 0 0 0 0 0 1 1 1 1 turn 1\n"
+                             "posed skin.gltf -20 5 0 0 0 0 1 1 1 1 turn 1\n"),
+        "skin.gltf");
+    REQUIRE(scene.meshes.size() == 3);
+    REQUIRE(scene.rigs.size() == 1);
+    CHECK(scene.meshes[2].rig == -1);
+    // Posed x in [-1, 0]: props at +10 and -20 cover x in [-21, 10]; y in [1, 7].
+    CHECK(scene.boundsMin.x == doctest::Approx(-21.0f).epsilon(1e-4));
+    CHECK(scene.boundsMax.x == doctest::Approx(10.0f).epsilon(1e-4));
+    CHECK(scene.boundsMax.y == doctest::Approx(7.0f).epsilon(1e-4));
 }

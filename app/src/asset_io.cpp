@@ -816,6 +816,13 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
                     vertex.ny = unit.y;
                     vertex.nz = unit.z;
                 }
+                // The vertex is posed for good: a static mesh binds the player's live
+                // palette (slot 0), so any weight left here would re-skin it with
+                // Wander's joints every frame. Zero weights pass through the shader.
+                for (int i = 0; i < 4; ++i) {
+                    vertex.j[i] = 0;
+                    vertex.w[i] = 0.0f;
+                }
             }
             if (!mesh.vertices.empty()) {
                 mesh.localMin = mesh.localMax =
