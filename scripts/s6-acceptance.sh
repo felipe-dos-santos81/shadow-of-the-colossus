@@ -635,8 +635,13 @@ def main():
     # suppressed, so the difference is exactly the tendrils' own pixels.
     changed, violet, bbox = diff(tendrils, control, lambda r, g, b: b > r + 8)
     _, strong, _ = diff(tendrils, control, lambda r, g, b: b > r + 15)
+    # The black tendrils: pixels the burst darkens by more than 20 luma against
+    # its control. The ribbon's black veins do; a glow-only ribbon cannot.
+    t, c = tendrils[2], control[2]
+    dark = sum(1 for i in range(0, len(t), 4)
+               if luma(c[i], c[i + 1], c[i + 2]) - luma(t[i], t[i + 1], t[i + 2]) > 20)
     print(f"s6-tendrils changed={changed} bbox={bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]} "
-          f"violet={violet} strong={strong}")
+          f"violet={violet} strong={strong} dark={dark}")
 
     # The corpse: the dead body's black veins on the bright sand of the wide.
     veins = row_box(corpse, 600, 950, 1000, 1900, lambda r, g, b: luma(r, g, b) < 25)
@@ -702,11 +707,13 @@ fi
 
 # --- the burst: the effect pass's own pixels, inside the measured region -----
 # Thresholds are the measured values with a wide margin (the measured run:
-# 14 599 changed pixels, the violet ribbon 1 766 / 258 strong).
+# 14 597 changed pixels, the violet ribbon 1 943 / 275 strong, 1 828 darkened by > 20 luma;
+# the glow-only ribbon before it darkened 59).
 tendrils_changed="$(field "$tendrils_line" changed)"
 tendrils_bbox="$(field "$tendrils_line" bbox)"
 tendrils_violet="$(field "$tendrils_line" violet)"
 tendrils_strong="$(field "$tendrils_line" strong)"
+tendrils_dark="$(field "$tendrils_line" dark)"
 [[ "$tendrils_changed" -ge 8000 ]] ||
   fail "the burst covers only $tendrils_changed pixels (need >= 8000): the effect pass is not drawing"
 IFS=, read -r tb_x0 tb_y0 tb_x1 tb_y1 <<<"$tendrils_bbox"
@@ -716,6 +723,8 @@ IFS=, read -r tb_x0 tb_y0 tb_x1 tb_y1 <<<"$tendrils_bbox"
   fail "the burst carries only $tendrils_violet violet pixels (need >= 800): the vein ribbon's colour is missing"
 [[ "$tendrils_strong" -ge 100 ]] ||
   fail "the burst carries only $tendrils_strong strongly violet pixels (need >= 100)"
+[[ "$tendrils_dark" -ge 900 ]] ||
+  fail "the burst darkens only $tendrils_dark pixels (need >= 900): the tendrils are not black"
 
 # --- the corpse: the black veins on the bright sand ----------------------------
 # (measured: 15 449 veins, 32 527 bright sand pixels in the crop).
@@ -812,7 +821,7 @@ done <<<"$(printf '%s\n' "$pixels_out" | grep -E '^s6-hud ')"
 printf 's6-acceptance: perf         %s\n' "$perf_line"
 printf 's6-acceptance: s5 status    %s\n' "$s5_status_line"
 printf 's6-acceptance: s42 perf     %s\n' "$s5_perf_line"
-printf 's6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at %s ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at %s s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst %s changed pixels against its control, %s violet and %s strong, inside (600,0)-(1800,1150); the corpse %s vein pixels on %s bright sand pixels; the pull-back %s floor pixels and %s body pixels at the top edge; the motion %s floor pixels, %s at the top edge and %s body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the frame at the tendril phase %s ms/frame (the marginal of the effect pass %s ms, at the +-0.2 ms measurement noise) and the windowed, cursor-free status\n' \
-  "$s5_marginal" "$collapse_total" "$tendrils_changed" "$tendrils_violet" "$tendrils_strong" \
+printf 's6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at %s ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at %s s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst %s changed pixels against its control, %s violet, %s strong and %s darkened, inside (600,0)-(1800,1150); the corpse %s vein pixels on %s bright sand pixels; the pull-back %s floor pixels and %s body pixels at the top edge; the motion %s floor pixels, %s at the top edge and %s body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the frame at the tendril phase %s ms/frame (the marginal of the effect pass %s ms, at the +-0.2 ms measurement noise) and the windowed, cursor-free status\n' \
+  "$s5_marginal" "$collapse_total" "$tendrils_changed" "$tendrils_violet" "$tendrils_strong" "$tendrils_dark" \
   "$corpse_veins" "$corpse_sand" "$camera_floor" "$camera_top" "$motion_floor" "$motion_top" \
   "$motion_body" "$perf_frame" "$perf_marginal"

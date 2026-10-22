@@ -42,11 +42,16 @@ constexpr float kSmokeTexel = 1.0f / 512.0f;   // the 2x2 atlas
 
 // Authored display-space tints (the pass writes the target's display-space
 // UNORM, like mesh.metal's final encode): a near-black violet smoke veil, a
-// faint violet haze, and a cold glow through the veins mask.
+// faint violet haze, and a cold glow through the veins mask. The ribbon's
+// vertices carry the glow pre-scaled by kVeinAlpha in rgb and the growth fade
+// in alpha: its premultiplied pass reads the mask's black rgb at full coverage
+// (the black tendril), and its additive pass then adds tint * 0.3 * coverage.
 constexpr float kSmokeTint[3] = {0.055f, 0.045f, 0.075f};
 constexpr float kWispTint[3] = {0.120f, 0.090f, 0.160f};
 constexpr float kVeinTint[3] = {0.420f, 0.360f, 0.520f};
 constexpr float kVeinAlpha = 0.30f;
+constexpr float kVeinGlow[3] = {kVeinTint[0] * kVeinAlpha, kVeinTint[1] * kVeinAlpha,
+                                kVeinTint[2] * kVeinAlpha};
 
 float clampf(float value, float low, float high) {
     return value < low ? low : (value > high ? high : value);
@@ -471,11 +476,10 @@ std::vector<EffectVertex> build_tendril_vertices(const EffectFrame& frame, const
             const Vec3 right_point{center.x + side.x * half_width,
                                    center.y + side.y * half_width,
                                    center.z + side.z * half_width};
-            vertices.push_back(EffectVertex{left.x, left.y, left.z, 0.0f, v, kVeinTint[0],
-                                            kVeinTint[1], kVeinTint[2], kVeinAlpha * fade});
+            vertices.push_back(EffectVertex{left.x, left.y, left.z, 0.0f, v, kVeinGlow[0],
+                                            kVeinGlow[1], kVeinGlow[2], fade});
             vertices.push_back(EffectVertex{right_point.x, right_point.y, right_point.z, 1.0f, v,
-                                            kVeinTint[0], kVeinTint[1], kVeinTint[2],
-                                            kVeinAlpha * fade});
+                                            kVeinGlow[0], kVeinGlow[1], kVeinGlow[2], fade});
         }
     }
 
@@ -1030,8 +1034,13 @@ void EffectRenderer::draw(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass, co
     const uint32_t wisp_b_first = wisp_a_first + static_cast<uint32_t>(kTendrilWispQuads / 2 * 6);
     const uint32_t wisp_count = static_cast<uint32_t>(kTendrilWispQuads / 2 * 6);
 
-    // Smoke first (the dark column), then the additive glow over it.
+    // The dark layer first — the ribbons' black veins and the smoke column —
+    // then the additive glow over it.
+    const SDL_GPUTextureSamplerBinding vein_binding{textures_[3], vein_sampler_};
     SDL_BindGPUGraphicsPipeline(pass, premultiplied_pipeline_);
+    SDL_BindGPUFragmentSamplers(pass, 0, &vein_binding, 1);
+    SDL_DrawGPUIndexedPrimitives(pass, ribbon_count, 1, ribbon_first, 0, 0);
+
     const SDL_GPUTextureSamplerBinding smoke_binding{textures_[2], sampler_};
     SDL_BindGPUFragmentSamplers(pass, 0, &smoke_binding, 1);
     SDL_DrawGPUIndexedPrimitives(pass, smoke_count, 1, smoke_first, 0, 0);
@@ -1045,7 +1054,6 @@ void EffectRenderer::draw(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass, co
     SDL_BindGPUFragmentSamplers(pass, 0, &wisp_b_binding, 1);
     SDL_DrawGPUIndexedPrimitives(pass, wisp_count, 1, wisp_b_first, 0, 0);
 
-    const SDL_GPUTextureSamplerBinding vein_binding{textures_[3], vein_sampler_};
     SDL_BindGPUFragmentSamplers(pass, 0, &vein_binding, 1);
     SDL_DrawGPUIndexedPrimitives(pass, ribbon_count, 1, ribbon_first, 0, 0);
 }

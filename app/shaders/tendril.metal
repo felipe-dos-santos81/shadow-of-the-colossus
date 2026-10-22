@@ -1,8 +1,9 @@
 // Tendril effect shader (S6 Task 4, design §8.2): world-space blended geometry.
 //
 // One vertex entry point and two fragment entry points: the renderer builds a
-// premultiplied-alpha pipeline (the smoke quads) and an additive pipeline (the
-// wisp haze and the veins ribbon) from this one source. The vertices are
+// premultiplied-alpha pipeline (the veins ribbon's black body and the smoke
+// quads) and an additive pipeline (the wisp haze and the veins ribbon's glow)
+// from this one source. The vertices are
 // already in world space, so there is no model matrix — only the frame's
 // view-projection.
 //
@@ -47,7 +48,8 @@ vertex VSOut tendril_vertex(VertexIn in [[stage_in]],
 
 // Premultiplied alpha (SRC_ONE, ONE_MINUS_SRC_ALPHA): the smoke's rgb is scaled
 // by its own coverage before the blend, so a near-black tint darkens the scene
-// by (1 - a) — the black tendril column.
+// by (1 - a) — the black tendril column. The veins PNG's rgb is black, so the
+// ribbon drawn here is black wherever its mask covers.
 //
 // No gamma op: the effect art is authored in display space and the offscreen
 // target is the display-space UNORM mesh.metal encodes to.

@@ -93,7 +93,7 @@ std::vector<EffectVertex> build_tendril_vertices(const EffectFrame& frame, const
 std::array<TextureCpu, 4> load_effect_textures(const std::string& libraryRoot);
 
 // The tendril pass's GPU state: two pipelines over one `tendril.metal` (a
-// premultiplied-alpha smoke pipeline and an additive wisp/ribbon pipeline), two
+// premultiplied-alpha smoke/ribbon pipeline and an additive wisp/ribbon pipeline), two
 // samplers (the clamped atlas one and the ribbon's v-wrapping mask one), four
 // textures, a persistent dynamic vertex buffer and one static index buffer per
 // root count (1 and 2; the billboard vertex base moves with the ribbon count, so

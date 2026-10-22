@@ -75,7 +75,7 @@ frozen S5 acceptance (with its nested S4.2 → S4.1 → S4 → S3 chain) is 8 mi
 ### 1.1 The summary line
 
 ```text
-s6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at 8.48 ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at 6.183 s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst 14599 changed pixels against its control, 1766 violet and 258 strong, inside (600,0)-(1800,1150); the corpse 15449 vein pixels on 32527 bright sand pixels; the pull-back 101960 floor pixels and 27286 body pixels at the top edge; the motion 698840 floor pixels, 0 at the top edge and 500826 body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the frame at the tendril phase 9.105 ms/frame (the marginal of the effect pass 0.164 ms, at the +-0.2 ms measurement noise) and the windowed, cursor-free status
+s6-acceptance: PASS — build, both suites, the frozen S5 acceptance green (8 curated clips, 20 s5-events, the unchanged S4.2 render path at 7.65 ms/frame, S4.2+S4.1+S4+S3 regressions green), the S6 decode at 48 kHz (10 manifest entries: the S5 eight plus valus.death and valus.club_swing; every file present, every cue non-silent at peak <= 0.99), the S6 death timeline (Idle -> Motion at 0.000 s locked with 2 roots -> Collapse at 6.183 s with the corpse -> Done at 8.000 s unlocked; 5 s6-events: the club telegraph, the whoosh at 0.300 s, the score at the defeat and its stop, the death roar at 0.400 s; health 0, camera back to follow; the reset restores Idle/100/100), five stills (2560x1440, span >= 30, > 5000 B) and the crop-local pixel guards (the burst 14597 changed pixels against its control, 1943 violet, 275 strong and 1828 darkened, inside (600,0)-(1800,1150); the corpse 15449 vein pixels on 32527 bright sand pixels; the pull-back 101960 floor pixels and 27286 body pixels at the top edge; the motion 698840 floor pixels, 0 at the top edge and 500826 body pixels; the HUD on all four stills: Valus 0 red, stamina and player bars present), the frame at the tendril phase 8.413 ms/frame (the marginal of the effect pass 0.081 ms, at the +-0.2 ms measurement noise) and the windowed, cursor-free status
 ```
 
 The individual steps, for reproduction (the script is the source of truth):
@@ -180,6 +180,7 @@ What the acceptance pins, beyond the count:
 | smoke billboards | 24 on the ribbon (the `2x2` atlas) + 16 wisp puffs at the root (the two `8x8` atlases) | the design's emitter roles |
 | textures | **4** — `8x8_wispysmoke02_1024_white_pfx`, `8x8_smoke_wispy_sharp_1024_pfx`, `2x2_smoke_tendrils_01_pfx`, `death_tentacle_veins` | the library's converted PNGs |
 | roots | 2 — the hit weakpoint first (the forehead by default, the right arm on an arm hit), then the other weakpoint shell | the binary's one-tendril-per-hit-point list, the weakpoint shells as the fallback |
+| ribbon draws | 2 — the veins mask's black RGB through the premultiplied pipeline at full coverage (the black tendril), then the additive violet glow over the same strip at 0.3 | design §8.2's "an additive pass over the same strip, a 0.3 alpha" |
 
 **What is authored, and labelled as such.** The `.csdr` GCN particle simulator is **not**
 ported (design D1): the curl, the turbulence and the growth are the builder's reconstruction,
@@ -219,7 +220,7 @@ timestamp, so the discrepancy is invisible in the image.
 |---|---:|---:|---|
 | `motion.png` | 10,388,483 | 254 | 0.200 s — the death motion's first beat, the whole body from the follow pose, the arena floor below |
 | `camera.png` | 8,531,937 | 255 | 0.400 s — the pull-back key (12 m out, the eye 4 m above the base, pitched up at the body's midpoint) |
-| `tendrils.png` | 8,085,319 | 254 | 1.200 s — the burst: the violet vein ribbon and the smoke over the body, with both roots in frame |
+| `tendrils.png` | 8,086,013 | 254 | 1.200 s — the burst: the black vein ribbon with its violet glow and the smoke over the body, with both roots in frame |
 | `corpse.png` | 11,587,297 | 255 | 6.200 s — the corpse wide: the dirtmound and the dead body with its black veins on the sand |
 | `tendrils-control.png` | 8,061,854 | 254 | the same frame as `tendrils.png` with the effect pass **suppressed** — the control the burst is differenced against |
 
@@ -237,10 +238,11 @@ together.
 
 | measurement | measured | gate |
 |---|---:|---:|
-| changed pixels | **14 599** | ≥ 8 000 |
+| changed pixels | **14 597** | ≥ 8 000 |
 | the changed pixels' bounding box | **719,0 – 1515,1048** | inside (600,0) – (1800,1150) |
-| violet pixels among them (`b > r + 8`) | **1 766** | ≥ 800 |
-| strongly violet among them (`b > r + 15`) | **258** | ≥ 100 |
+| violet pixels among them (`b > r + 8`) | **1 943** | ≥ 800 |
+| strongly violet among them (`b > r + 15`) | **275** | ≥ 100 |
+| darkened by > 20 luma against the control (the black tendrils) | **1 828** | ≥ 900 |
 
 The two clusters are the two roots: the forehead's tendril rises out of the top of the frame and
 the right arm's curls at the lower left. The Task 5 hand-over suggested a wound crop of
@@ -310,6 +312,9 @@ the marginal (≈0.2 ms, at the measurement's noise floor).
 | 240 frames without it (`base_ms`) | **2 145.842 ms** |
 | the **whole frame** at the tendril phase (`frame_ms`) | **9.105 ms/frame** (≈ 110 fps) |
 | the **effect pass's own** cost (`marginal_ms`) | **+0.164 ms/frame** |
+
+The ribbon's black pass (a second draw of the same strip, §3) re-measured on the PASS run quoted
+above: `s6-perf frames=240 effect_ms=2019.146 base_ms=1999.760 marginal_ms=0.081 frame_ms=8.413`.
 
 The gate is **≤ 16.7 ms** (60 fps) on both the frame and the marginal. The marginal is at the
 measurement's noise floor (two 240-frame runs differ by ±50 ms, i.e. ±0.2 ms/frame — an earlier
@@ -414,7 +419,9 @@ move; the identity was checked directly as well: `--s42-selftest` (audio off) pr
 - **The camera is authored.** The type-36 death-camera clips are undecoded and unused.
 - **No ragdoll, no per-segment stagger, an anisotropic vein mask.** §3.
 - **The burst is subtle at the scripted framing.** The measured footprint is 14 599 changed
-  pixels (the violet ribbon 1 766); the shape and the colour are the eye check.
+  pixels (the violet ribbon 1 943, 1 828 darkened); the shape and the colour are the eye check.
+  Before the ribbon's black pass (an additive-only ribbon could only brighten the scene) the
+  same still darkened 59 pixels; the gate's 900 fails that build.
 - **The interactive death path is not driven by an automated run** — a real defeat through
   gameplay is needed. The `R` reset is now **one shared helper** that both the interactive key
   and the selftest call (`soft_reset_encounter`), so the reset the player presses is the reset
