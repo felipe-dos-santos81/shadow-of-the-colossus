@@ -1,0 +1,2714 @@
+# Review package: d0f9ab4..HEAD
+
+## Commits
+26762ef feat(app): wire and prove the S5 sound events
+
+## Files changed
+ app/CMakeLists.txt              |   2 +-
+ app/src/app.cpp                 | 430 +++++++++++++++++++++++++++++++++++++---
+ app/src/app.h                   |   9 +
+ app/src/audio.cpp               |  65 +++++-
+ app/src/audio.h                 |  33 ++-
+ app/src/audio_events.h          | 163 +++++++++++++++
+ app/src/audio_map.h             | 131 ++++++++++++
+ app/src/main.cpp                |  37 +++-
+ app/src/player_state.cpp        |  25 ++-
+ app/src/player_state.h          |  20 +-
+ app/tests/test_audio.cpp        |  74 +++++++
+ app/tests/test_audio_events.cpp | 269 +++++++++++++++++++++++++
+ app/tests/test_player_state.cpp | 202 +++++++++++++++++++
+ 13 files changed, 1420 insertions(+), 40 deletions(-)
+
+## Diff
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index 8a1e58c..56c970e 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -27,20 +27,20 @@ add_custom_command(TARGET sotc-viewer POST_BUILD
+           ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.metal
+           $<TARGET_FILE_DIR:sotc-viewer>/mesh.metal
+   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+           ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hud.metal
+           $<TARGET_FILE_DIR:sotc-viewer>/hud.metal)
+ 
+ enable_testing()
+ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/test_asset_io.cpp
+   tests/test_anim.cpp tests/test_manifest.cpp tests/test_heightmap.cpp tests/test_player.cpp
+   tests/test_grab.cpp tests/test_player_state.cpp tests/test_hud.cpp tests/test_valus.cpp
+-  tests/test_gamepad.cpp tests/test_audio.cpp
++  tests/test_gamepad.cpp tests/test_audio.cpp tests/test_audio_events.cpp
+   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
+   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
+   src/audio.cpp src/wav_io.cpp src/gamepad_map.h)
+ target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+ target_include_directories(sotc-app-tests PRIVATE third_party src)
+ add_test(NAME unit_tests COMMAND sotc-app-tests)
+ add_test(NAME windowed_selftest COMMAND sotc-viewer --selftest)
+ set_tests_properties(windowed_selftest PROPERTIES
+   PASS_REGULAR_EXPRESSION "s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0")
+diff --git a/app/src/app.cpp b/app/src/app.cpp
+index 642c8ed..636d25c 100644
+--- a/app/src/app.cpp
++++ b/app/src/app.cpp
+@@ -1,24 +1,28 @@
+ #include "app.h"
+ 
+ #include "anim.h"
+ #include "asset_io.h"
++#include "audio.h"
++#include "audio_events.h"
++#include "audio_map.h"
+ #include "camera.h"
+ #include "collision.h"
+ #include "gamepad_map.h"
+ #include "grab.h"
+ #include "heightmap.h"
+ #include "manifest.h"
+ #include "player.h"
+ #include "player_state.h"
+ #include "renderer.h"
+ #include "scene.h"
++#include "wav_io.h"
+ 
+ #include <SDL3/SDL.h>
+ 
+ #include <algorithm>
+ #include <cctype>
+ #include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <deque>
+@@ -1016,60 +1020,71 @@ const char* valus_attack_damage_joint(ValusAttack attack) {
+             return "OptBone_hit";
+         case ValusAttack::None:
+             break;
+     }
+     return nullptr;
+ }
+ 
+ // Cuts an in-progress attack short. The cooldown it would have started is
+ // parked in pendingCooldownSeconds: design §7.4 starts it after the reaction,
+ // not at the interruption. The caller owns the playback (the reaction clip
+-// replaces the attack clip in the same step).
+-void cancel_valus_attack(Encounter& encounter) {
++// replaces the attack clip in the same step). S5's `ClubCancel` cue is deferred
++// to silence, but the transition is still reported.
++void cancel_valus_attack(Encounter& encounter, SfxQueue* sfx = nullptr) {
+     if (encounter.attack == ValusAttack::None) {
+         return;
+     }
+     encounter.pendingCooldownSeconds = valus_attack_cooldown_seconds(encounter.attack);
+     encounter.attack = ValusAttack::None;
+     encounter.attackSeconds = 0.0f;
+     encounter.attackHit = false;
++    if (sfx != nullptr) {
++        append_encounter_sfx(EncounterSfx::ClubCancel, encounter.entityPosition, *sfx);
++    }
+ }
+ 
+ // Starts one attack at its first frame. The attack clock is owned by
+ // encounter.attackSeconds, exactly like the reaction clock: update_pose only
+ // advances a playing clip, so the playback flag stays false and the app writes
+ // the sampled time each frame. That keeps the drawn pose and the impact window
+ // on one clock — a playing flag plus a second clock would drift a frame apart.
+ void start_valus_attack(Encounter& encounter, Playback& playback, const EntityClips& clips,
+-                        ValusAttack attack) {
++                        ValusAttack attack, SfxQueue* sfx = nullptr) {
+     const int clip = valus_attack_clip(attack, clips);
+     if (clip < 0 || static_cast<std::size_t>(clip) >= playback.clips.size()) {
+         return;
+     }
+     encounter.attack = attack;
+     encounter.attackSeconds = 0.0f;
+     encounter.attackHit = false;
+     playback.index = clip;
+     playback.time = 0.0f;
+     playback.pinned = false;
+     playback.playing = false;  // encounter.attackSeconds advances this clip
++    if (sfx != nullptr) {
++        // The first frame of the clip is the telegraph: the pose that warns is
++        // also the sound that warns.
++        append_encounter_sfx(attack == ValusAttack::Club ? EncounterSfx::ClubStart
++                                                         : EncounterSfx::StompStart,
++                             encounter.entityPosition, *sfx);
++    }
+ }
+ 
+ // One frame of Valus's attack state: tick the cooldown, start the selected
+ // attack, advance the active clip and return to stand when it ends. The impact
+ // is deliberately not applied here — the caller checks attack_impact_due after
+ // the player's step, so a strike that lands this frame cancels the attack and
+ // its pending impact first. A reaction clip owns the body while it plays: no
+ // new attack starts until it has returned to stand.
+ void advance_valus_attack(Encounter& encounter, Playback& playback,
+                           const EntityClips& clips, const ValusAttackInput& input,
+-                          float dtSeconds) {
++                          float dtSeconds, SfxQueue* sfx = nullptr) {
+     if (encounter.defeated) {
+         // Defeat drops a pending swing without a cooldown: there is no next
+         // attack, and the death clip owns the playback.
+         encounter.attack = ValusAttack::None;
+         encounter.attackSeconds = 0.0f;
+         encounter.attackHit = false;
+         encounter.pendingCooldownSeconds = 0.0f;
+         return;
+     }
+ 
+@@ -1085,21 +1100,21 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
+         }
+         const ValusAttack chosen = select_valus_attack(input);
+         if (chosen == ValusAttack::None) {
+             return;
+         }
+         const int clip = valus_attack_clip(chosen, clips);
+         if (clip < 0 || static_cast<std::size_t>(clip) >= playback.clips.size() ||
+             !(playback.clips[static_cast<std::size_t>(clip)].duration > 0.0f)) {
+             return;  // nothing to play: never start a zero-length telegraph
+         }
+-        start_valus_attack(encounter, playback, clips, chosen);
++        start_valus_attack(encounter, playback, clips, chosen, sfx);
+         if (chosen == ValusAttack::StompL || chosen == ValusAttack::StompR) {
+             encounter.stompLeftNext = chosen == ValusAttack::StompR;
+         }
+         return;  // t = 0 is outside both impact windows
+     }
+ 
+     const int clip = valus_attack_clip(encounter.attack, clips);
+     if (clip < 0 || static_cast<std::size_t>(clip) >= playback.clips.size()) {
+         encounter.attack = ValusAttack::None;
+         encounter.attackSeconds = 0.0f;
+@@ -1127,29 +1142,44 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
+     playback.time = encounter.attackSeconds;  // the drawn pose and the window agree
+ }
+ 
+ // Applies one attack's damage at the frame its window first opens (the caller
+ // marks attackHit before calling, so it can never fire twice). The reach is the
+ // distance from the posed damage joint to the player's capsule segment (feet to
+ // feet + kPlayerCapsuleHeight), measured by player_capsule_distance — the same
+ // shape and the same function the weakpoint gate uses. An attached player takes
+ // no damage (design §7.4); Dead and the i-frame window are player_take_damage's
+ // own gates.
++//
++// S5: `sfx`, when given, banks the impact once per call — the world sound fires
++// even on a miss, because the club really hits the ground. `events`, when
++// given, receives the hurt/death report flags for the same hit.
+ void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
+                         const PlayerFrame& frame, const CombatTuning& tuning,
+-                        ValusAttack attack) {
+-    if (attack == ValusAttack::None || mode_is_attached(combat.mode)) {
++                        ValusAttack attack, SfxQueue* sfx = nullptr,
++                        StepEvents* events = nullptr) {
++    if (attack == ValusAttack::None) {
+         return;
+     }
+     const char* joint = valus_attack_damage_joint(attack);
+     Vec3 point{};
+-    if (joint == nullptr || !frame.jointWorld || !frame.jointWorld(joint, point)) {
++    const bool resolved =
++        joint != nullptr && static_cast<bool>(frame.jointWorld) && frame.jointWorld(joint, point);
++    if (sfx != nullptr && resolved) {
++        append_encounter_sfx(attack == ValusAttack::Club ? EncounterSfx::ClubImpact
++                                                         : EncounterSfx::StompImpact,
++                             point, *sfx);
++    }
++    if (mode_is_attached(combat.mode)) {
++        return;
++    }
++    if (!resolved) {
+         return;
+     }
+     const float distance = player_capsule_distance(player.position, point);
+     if (!std::isfinite(distance)) {
+         return;
+     }
+ 
+     float damage = 0.0f;
+     bool heavy = false;
+     switch (attack) {
+@@ -1166,21 +1196,30 @@ void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
+                 damage = tuning.clubDamage;
+                 heavy = true;
+             }
+             break;
+         case ValusAttack::None:
+             break;
+     }
+     if (!(damage > 0.0f)) {
+         return;
+     }
+-    player_take_damage(combat, damage, heavy, tuning);
++    const bool hitLanded = player_take_damage(combat, damage, heavy, tuning, events);
++    if (sfx != nullptr && hitLanded) {
++        // The reaction is the player's, pushed at the moment the damage lands so
++        // the cue order is impact -> hurt. A ground-lethal hit is the death; an
++        // air-lethal hit stays a hurt here and reports `died` on landing.
++        const Sfx reaction = combat.mode == PlayerMode::Dead
++                                 ? Sfx::Death
++                                 : (heavy ? Sfx::HurtHeavy : Sfx::HurtLight);
++        sfx->push(SfxEvent{reaction, 1.0f, player.position, /*spatial=*/true});
++    }
+ }
+ 
+ // The per-frame attack decision input: the posed feet from the last palette
+ // (posed_joint_world_position reads the live mesh model, so a yaw step taken
+ // earlier this frame is already included), the planar player/entity transform,
+ // and the mode gate. A foot that cannot resolve is pushed to infinity, which
+ // reads as out of range rather than as a stomp at the world origin.
+ ValusAttackInput valus_attack_input(const Scene& scene, std::size_t entityRig,
+                                     const std::vector<std::vector<Mat4>>& palettes,
+                                     const PlayerState& player, const PlayerCombat& combat,
+@@ -1211,39 +1250,49 @@ ValusAttackInput valus_attack_input(const Scene& scene, std::size_t entityRig,
+     return input;
+ }
+ 
+ // Applies one step's damage to the encounter and routes the entity's reaction:
+ // weakpoint 0 (forehead) -> the head reaction, 1 (right arm) -> the arm
+ // reaction, any other band -> the generic body reaction. A killing blow
+ // supersedes the reaction and starts the death clip. A defeated entity takes
+ // no further damage and no second death. A landed strike also cancels Valus's
+ // in-progress attack and its pending impact (design §7.4); a whiff never has
+ // damageDealt > 0, so it reaches none of this.
++//
++// S5: `sfx`, when given, banks Valus's reaction — or his defeat, which
++// supersedes it — at the entity's world position.
+ void apply_combat_events(Encounter& encounter, Playback& entityPlayback,
+-                         const EntityClips& clips, const StepEvents& events, int weakpoint) {
++                         const EntityClips& clips, const StepEvents& events, int weakpoint,
++                         SfxQueue* sfx = nullptr) {
+     if (events.damageDealt <= 0 || encounter.defeated) {
+         return;
+     }
+     if (valus_attack_cancelled(/*landedStrike=*/true, encounter.attack)) {
+-        cancel_valus_attack(encounter);
++        cancel_valus_attack(encounter, sfx);
+     }
+     encounter.health =
+         std::max(0.0f, encounter.health - static_cast<float>(events.damageDealt));
+     if (encounter.health <= 0.0f) {
+         encounter.defeated = true;
+         encounter.pendingCooldownSeconds = 0.0f;
+         start_encounter_one_shot(entityPlayback, encounter, clips.death);
++        if (sfx != nullptr) {
++            append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition, *sfx);
++        }
+         return;
+     }
+     const int reaction =
+         weakpoint == 1 ? clips.arm : (weakpoint == 0 ? clips.head : clips.body);
+     start_encounter_one_shot(entityPlayback, encounter, reaction);
++    if (sfx != nullptr) {
++        append_encounter_sfx(EncounterSfx::ValusReaction, encounter.entityPosition, *sfx);
++    }
+ }
+ 
+ // The gamepad's owned input. Polled once per frame in the interactive loop;
+ // open/close track hot-plug. close() drops the handle and clears every input it
+ // owned, so an unplug mid-grip cannot latch the grip or a pause press on.
+ struct GamepadInput {
+     SDL_Gamepad* handle = nullptr;
+     SDL_JoystickID id = 0;
+     float leftX = 0.0f;
+     float leftY = 0.0f;
+@@ -1369,20 +1418,150 @@ void write_screenshot(Renderer& renderer, SDL_Window* win, const std::string& pa
+                 stats.max_rgb[2], stats.mean_rgb[0], stats.mean_rgb[1], stats.mean_rgb[2]);
+ 
+     if (stbi_write_png(path.c_str(), pixel_width, pixel_height, 4, pixels.data(),
+                        pixel_width * 4) == 0) {
+         throw std::runtime_error("cannot write " + path);
+     }
+     std::printf("s1-screenshot path=%s width=%d height=%d\n", path.c_str(), pixel_width,
+                 pixel_height);
+ }
+ 
++// --- S5 audio seam (Task 5) -------------------------------------------------
++
++// The app's one audio object: the mixer, the music lifecycle, and — for
++// --s5-selftest — the ordered cue log and the WAV capture. One translation path
++// (play_event) serves the interactive loop and the shared scripted timeline, so
++// their sound cannot drift. With the engine off (`enabled == false`) every
++// method is a no-op, which is what keeps the default S4.2 run byte-identical.
++struct AudioSeam {
++    AudioEngine engine;
++    bool enabled = false;       // the manifest and every mapped clip loaded
++    bool log = false;           // --s5-selftest: one s5-event line per played cue
++    bool failed = false;        // a mapped clip went missing at play time
++    bool musicStarted = false;  // the music voice is live
++    bool musicEverStarted = false;
++    float clock = 0.0f;         // simulated seconds since the capture began
++    int eventCount = 0;         // s5-event lines emitted
++
++    // Loads `libraryDir/audio/audio.manifest` and validates the cue table. The
++    // engine names its own manifest failure; a rejected cue names its `Sfx` and
++    // the clip. The caller picks the policy (fatal in --s5-selftest, one warning
++    // and a silent game otherwise).
++    bool load(const std::string& libraryDir) {
++        enabled = false;
++        const std::string manifest = libraryDir + "/audio/audio.manifest";
++        if (!engine.load_manifest(manifest, libraryDir)) {
++            return false;
++        }
++        const Sfx missing =
++            missing_cue([this](const char* clip) { return engine.has(clip); });
++        if (missing != Sfx::Count) {
++            const SoundCue* cue = cue_for(missing);
++            std::fprintf(stderr,
++                         "sotc-viewer: audio: cue %s names clip '%s', which %s does not load\n",
++                         sfx_name(missing), cue != nullptr ? cue->clip : "?", manifest.c_str());
++            engine.reset();
++            return false;
++        }
++        enabled = true;
++        return true;
++    }
++
++    // The one place a queued cue becomes a voice (and an s5-event line).
++    void play_event(const SfxEvent& event) {
++        const SoundCue* cue = cue_for(event.id);
++        if (cue == nullptr || !enabled) {
++            return;  // deferred, or audio off: deliberately silent
++        }
++        if (!engine.has(cue->clip)) {
++            std::fprintf(stderr, "sotc-viewer: audio: cue %s names missing clip '%s'\n",
++                         sfx_name(event.id), cue->clip);
++            failed = true;
++            return;
++        }
++        const float gain = cue->gain * event.gain;
++        if (event.spatial) {
++            engine.play(cue->clip, event.position, gain);
++        } else {
++            engine.play_ui(cue->clip, gain);
++        }
++        if (log) {
++            std::printf("s5-event t=%.3f event=%s clip=%s gain=%.2f\n", clock,
++                        sfx_name(event.id), cue->clip, gain);
++            ++eventCount;
++        }
++    }
++
++    void play_all(SfxQueue& queue) {
++        for (int i = 0; i < queue.count; ++i) {
++            play_event(queue.items[static_cast<std::size_t>(i)]);
++        }
++        queue.clear();
++    }
++
++    void start_music() {
++        if (!enabled || musicStarted) {
++            return;
++        }
++        if (!engine.has(kMusicClip)) {
++            failed = true;
++            return;
++        }
++        engine.play_music(kMusicClip, kMusicGain);
++        musicStarted = true;
++        musicEverStarted = true;
++        if (log) {
++            std::printf("s5-event t=%.3f event=music_start clip=%s gain=%.2f\n", clock,
++                        kMusicClip, kMusicGain);
++            ++eventCount;
++        }
++    }
++
++    void stop_music() {
++        if (!enabled) {
++            return;
++        }
++        engine.stop_music();
++        const bool was_playing = musicStarted;
++        musicStarted = false;
++        if (log && was_playing) {
++            std::printf("s5-event t=%.3f event=music_stop clip=%s gain=0.00\n", clock,
++                        kMusicClip);
++            ++eventCount;
++        }
++    }
++
++    void reset() {
++        if (!enabled) {
++            return;
++        }
++        engine.reset();  // every voice, music included
++        musicStarted = false;
++    }
++
++    void toggle_mute() {
++        if (enabled) {
++            engine.set_muted(!engine.muted());
++        }
++    }
++
++    void update(float dt, const Vec3& listener, float yaw) {
++        if (!enabled) {
++            return;
++        }
++        engine.update(dt, listener, yaw);
++        if (std::isfinite(dt) && dt > 0.0f) {
++            clock += std::min(dt, 1.0f);  // the engine's own dt clamp
++        }
++    }
++};
++
+ }  // namespace
+ 
+ int run_app(const AppOptions& opts) {
+     if (opts.libraryDir.empty()) {
+         std::fprintf(stderr, "sotc-viewer: no asset library: pass --library DIR or set SOTC_LIB\n");
+         return 2;
+     }
+     if (!opts.screenshotPath.empty() && opts.modelRelPath.empty()) {
+         std::fprintf(stderr, "sotc-viewer: --screenshot needs --model: there is nothing to capture\n");
+         return 2;
+@@ -1686,20 +1865,58 @@ int run_app(const AppOptions& opts) {
+                     !require_named_clip(playbacks[entityRig], entityModel, kBodyReactionClip) ||
+                     !require_named_clip(playbacks[entityRig], entityModel, kDeathClip) ||
+                     !require_named_clip(playbacks[entityRig], entityModel, kStompLeftClip) ||
+                     !require_named_clip(playbacks[entityRig], entityModel, kStompRightClip) ||
+                     !require_named_clip(playbacks[entityRig], entityModel, kClubSwingClip)) {
+                     return 2;
+                 }
+             }
+         }
+ 
++        // --- S5 audio (Task 5) ------------------------------------------------
++        // One engine for the run. The curated manifest loads when the encounter
++        // composes — the interactive fight and --s5-selftest. The scripted
++        // S3/S4/S4.1/S4.2 timelines and the pinned captures stay silent: they do
++        // not even open the manifest, so their `s4-*`/`s41-*`/`s42-*` values
++        // cannot move.
++        if (opts.s5Selftest && opts.audioMixdownPath.empty()) {
++            std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --audio-mixdown PATH\n");
++            return 2;
++        }
++        if (opts.s5Selftest && (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
++                                entityRig >= playbacks.size())) {
++            std::fprintf(stderr,
++                         "sotc-viewer: --s5-selftest: the manifest has no entity\n");
++            return 2;
++        }
++        AudioSeam audio;
++        const bool audio_wanted =
++            follow_mode && !manifest.entities.empty() &&
++            (opts.s5Selftest ||
++             (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
++              !opts.s42Selftest && !opts.entityTimeSet));
++        if (audio_wanted) {
++            if (!audio.load(opts.libraryDir)) {
++                // The engine (or the cue gate) already printed the reason. A
++                // missing curated clip is fatal when the sound is the artifact;
++                // interactive play degrades to silence with that one warning.
++                if (opts.s5Selftest) {
++                    return 1;
++                }
++            }
++            audio.log = opts.s5Selftest;
++        }
++        if (opts.s5Selftest && !audio.enabled) {
++            std::fprintf(stderr, "sotc-viewer: --s5-selftest: audio is not loaded\n");
++            return 1;
++        }
++
+         // Single-model framing is on the pose, after --anim/--anim-time resolved
+         // the start state: the clip's root series carries the ground height, so
+         // the bind-pose bounds framed at load would leave the subject out of
+         // frame. Manifest mode keeps its follow camera and bind-bounds framing.
+         if (!follow_mode) {
+             frame_single_model(camera, scene, playback);
+         }
+ 
+         // A clip pinned on the command line keeps manual control; otherwise the
+         // player's controller state selects the loop (stand/walk/run) each
+@@ -1708,21 +1925,22 @@ int run_app(const AppOptions& opts) {
+         const bool manual_clip = !opts.animClip.empty() || opts.animTimeSet;
+ 
+         // Ruling R8's autonomous fight (turn, stomp, club) runs in free
+         // interactive play. The scripted S3/S4/S4.1 acceptance timelines pin the
+         // entity and own every step — a stomp would race their assertions — and
+         // --entity-time pins the clip for a capture, so behavior is off there.
+         // Task 9's s42 timeline opts in with its own fixed steps.
+         const bool valus_behavior = follow_mode && !manifest.entities.empty() &&
+                                     entityRig < playbacks.size() && !opts.s3Selftest &&
+                                     !opts.s4Selftest && !opts.s41Selftest &&
+-                                    !opts.s42Selftest && !opts.entityTimeSet;
++                                    !opts.s42Selftest && !opts.s5Selftest &&
++                                    !opts.entityTimeSet;
+ 
+         // The composed scene's initial placement: every entity's grounding lift
+         // lands on its model transform once, and the player's transform follows
+         // its controller every frame. A single-model load has no entity rig, so
+         // nothing moves here.
+         apply_entity_lifts(scene, playbacks);
+ 
+         // Ruling R8: capture the encounter entity's manifest transform and
+         // recompose its mesh models from `entityYawDeg` (the manifest yaw for
+         // now). The lift is the same rig-local grounding offset apply_entity_lifts
+@@ -2627,30 +2845,37 @@ int run_app(const AppOptions& opts) {
+             }
+             print_status_line(opts, shell.win);
+             std::printf("s41-status grab=%s climb=%.2f strikes=%d entity_health=%d mode=%s "
+                         "defeated=%d\n",
+                         climb_band_name(grabBand), climbRise, strikes,
+                         static_cast<int>(std::lround(encounter.health)),
+                         player_mode_name(combat.mode), encounter.defeated ? 1 : 0);
+             return 0;
+         }
+ 
+-        if (opts.s42Selftest) {
++        if (opts.s42Selftest || opts.s5Selftest) {
+             // The S4.2 acceptance timeline: shell proxies, the foot/head damage
+             // gate, the chest->shoulder->arm branch, a stomp with its i-frame
+             // gate, a club hit, the player's lethal hit and pinned death clip,
+             // the full soft reset, and the real foot->head stamina climb. Fixed
+             // 1/60 s steps and no window input. The attack phases place the
+             // player (the target) and drive `advance_valus_attack` themselves:
+             // the autonomous selection is off for this run so nothing races the
+             // assertions. Only the stamina phase is teleport-free; the gate and
+             // route phases use the same attach scaffolding S4.1 established.
++            //
++            // --s5-selftest runs this same stepper with the S5 observer on
++            // (design §7.4, ruling D11): the cues are translated once per step,
++            // the mix is captured, and `s5-event`/`s5-status` are printed. With
++            // audio off every audio branch is skipped, so the `s42-*` values
++            // are byte-identical (the audio-off diff is the proof).
++            const bool audioOn = audio.enabled;
+             if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
+                 entityRig >= playbacks.size()) {
+                 std::fprintf(stderr,
+                              "sotc-viewer: --s42-selftest: the manifest has no entity\n");
+                 return 2;
+             }
+             if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
+                 entityClips.body < 0 || entityClips.death < 0 || entityClips.stompL < 0 ||
+                 entityClips.stompR < 0 || entityClips.club < 0 || playerClips.gripLoop < 0 ||
+                 playerClips.gripMove < 0 || playerClips.strike < 0 || playerClips.fall < 0 ||
+@@ -2660,20 +2885,47 @@ int run_app(const AppOptions& opts) {
+                 throw std::runtime_error(
+                     "s42-selftest: a fight clip is missing despite the load gate");
+             }
+ 
+             Playback& entity_playback = playbacks[entityRig];
+             const Vec3 spawn = spawn_position(manifest, scene);
+             const float spawnYaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
+             const float stepSeconds = kFixedFrameSeconds;
+             const PlayerInput noInput;
+ 
++            // The S5 frame queue and capture. The capture starts before the
++            // first play (a cue would otherwise be missed) and is the disk sink
++            // for the whole timeline: `begin_capture` also keeps the engine from
++            // opening a device. With audio off the queue is a no-op and no
++            // capture exists.
++            SfxQueue sfx;
++            if (audioOn && !audio.engine.begin_capture(opts.audioMixdownPath)) {
++                throw std::runtime_error("s5-selftest: " + audio.engine.last_error());
++            }
++            const auto flush_sfx = [&]() {
++                if (audioOn) {
++                    audio.play_all(sfx);
++                } else {
++                    sfx.clear();
++                }
++            };
++            // A frame that does not step the state machine (the approach walk)
++            // still advances the mix clock, so the capture's duration and the
++            // timeline's clock agree.
++            const auto tick_audio = [&]() {
++                if (!audioOn) {
++                    return;
++                }
++                flush_sfx();
++                audio.update(stepSeconds, player.position, camera_look_yaw(camera));
++            };
++
+             // Every shell/route/climb phase samples one pinned stand frame, so
+             // the bands and the shells do not drift between steps. The attack
+             // phases replace the clip themselves; the reaction wait restores it.
+             const auto pin_stand = [&]() {
+                 entity_playback.index = entityClips.stand;
+                 entity_playback.time = 0.0f;
+                 entity_playback.playing = false;
+                 entity_playback.pinned = true;
+             };
+             pin_stand();
+@@ -2698,55 +2950,77 @@ int run_app(const AppOptions& opts) {
+                 if (driveAttack && encounter.attack != ValusAttack::None) {
+                     ValusAttackInput attackInput;
+                     attackInput.playerGrounded = combat.mode == PlayerMode::Grounded;
+                     attackInput.playerAttached = mode_is_attached(combat.mode);
+                     attackInput.defeated = encounter.defeated;
+                     attackInput.cooldownSeconds = encounter.cooldownSeconds;
+                     attackInput.playerPos = player.position;
+                     attackInput.entityPos = encounter.entityPosition;
+                     attackInput.entityYawDeg = encounter.entityYawDeg;
+                     advance_valus_attack(encounter, entity_playback, entityClips, attackInput,
+-                                         stepSeconds);
++                                         stepSeconds, audioOn ? &sfx : nullptr);
+                 }
+                 update_combat_clips(playback, scene, combat, input, /*manualClip=*/false);
+                 const std::vector<std::vector<Mat4>> palettes =
+                     update_all_poses(renderer, scene, playbacks, stepSeconds, club);
+                 PlayerFrame frame = frame_of(palettes);
+                 if (driveAttack) {
+                     frame.entityCapsules.clear();
+                 }
+                 const int weakpoint = combat.weakpoint;  // detach() clears it
+-                const StepEvents events =
++                StepEvents events =
+                     player_step(player, combat, input, frame, tuning, stepSeconds);
+-                apply_combat_events(encounter, entity_playback, entityClips, events, weakpoint);
++                if (audioOn) {
++                    // The step's own cues come first: a swing then the hit it
++                    // lands, before the encounter's reaction to it. Hurt/death
++                    // arrive later, at the impact that caused them.
++                    append_player_sfx(events, player.position, sfx);
++                }
++                apply_combat_events(encounter, entity_playback, entityClips, events, weakpoint,
++                                    audioOn ? &sfx : nullptr);
+                 // Valus's impact runs after the player's step, like the
+                 // interactive loop: a landed strike cancels the attack first.
+                 if (driveAttack && encounter.attack != ValusAttack::None &&
+                     attack_impact_due(encounter.attack, encounter.attackSeconds,
+                                       encounter.attackHit)) {
+                     encounter.attackHit = true;
+-                    apply_valus_impact(combat, player, frame, tuning, encounter.attack);
++                    apply_valus_impact(combat, player, frame, tuning, encounter.attack,
++                                       audioOn ? &sfx : nullptr,
++                                       audioOn ? &events : nullptr);
+                 }
+                 if (mode_is_attached(combat.mode)) {
+                     update_climb_camera(camera, climbCamera, player, combat, frame, 0.0f, 0.0f,
+                                         0.0f, /*recenter=*/false, stepSeconds);
+                 } else {
+                     if (climbCamera.active) {
+                         camera_climb_exit(camera, climbCamera);
+                     }
+                     camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                   0.0f,
+                                   input.forward || input.back || input.left || input.right,
+                                   stepSeconds);
+                 }
+                 apply_player_transform(scene, player_rig_record, player,
+                                        active_player_lift(scene, playback, player_rig_record));
++                if (audioOn) {
++                    flush_sfx();
++                    // The first landed hit is the fight music's downbeat (D5);
++                    // a death or a defeat stops it. Both transitions land on a
++                    // step boundary, so the log order is stable.
++                    if (events.damageDealt > 0) {
++                        audio.start_music();
++                    }
++                    if (combat.mode == PlayerMode::Dead || encounter.defeated) {
++                        audio.stop_music();
++                    }
++                    audio.update(stepSeconds, player.position, camera_look_yaw(camera));
++                }
+                 return events;
+             };
+ 
+             // Waits out the entity one-shot a landed strike started and returns
+             // the body to one pinned stand frame (the next phase's bands must
+             // not animate under the route).
+             const auto wait_for_reaction = [&]() {
+                 int frames = 0;
+                 while (encounter.reactionClip >= 0 && frames < kS42MaxReactionFrames) {
+                     step_frame(noInput, /*driveAttack=*/false);
+@@ -3117,21 +3391,23 @@ int run_app(const AppOptions& opts) {
+             if (!(footLength > 1e-3f)) {
+                 footDx = 1.0f;
+                 footDz = 0.0f;
+             } else {
+                 footDx /= footLength;
+                 footDz /= footLength;
+             }
+             place_grounded(stompFoot.x + footDx * kS42StompStandoff,
+                            stompFoot.z + footDz * kS42StompStandoff, "stomp");
+             const int healthBeforeStomp = static_cast<int>(std::lround(combat.health));
+-            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::StompL);
++            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::StompL,
++                               audioOn ? &sfx : nullptr);
++            flush_sfx();  // the telegraph sounds at its real start time
+             if (encounter.attack != ValusAttack::StompL) {
+                 throw std::runtime_error("s42-selftest: the stomp attack did not start");
+             }
+             bool stompLanded = false;
+             bool stompTelegraphCaptured = false;
+             for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
+                 step_frame(noInput, /*driveAttack=*/true);
+                 if (!stompTelegraphCaptured &&
+                     encounter.attack == ValusAttack::StompL &&
+                     encounter.attackSeconds >=
+@@ -3304,21 +3580,23 @@ int run_app(const AppOptions& opts) {
+                     throw std::runtime_error(
+                         "s42-selftest: the stomp shockwave did not leave the player Hurt (mode " +
+                         std::string(player_mode_name(combat.mode)) + ")");
+                 }
+             }
+             std::printf("s42-miss club=%d stomp=%d\n", clubMissDamage, stompWaveDamage);
+             probe_baseline();  // the club phase resumes from the 65 HP post-stomp state
+ 
+             place_grounded(clubTip.x, clubTip.z, "club");
+             const int healthBeforeClub = static_cast<int>(std::lround(combat.health));
+-            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club);
++            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club,
++                               audioOn ? &sfx : nullptr);
++            flush_sfx();  // the telegraph sounds at its real start time
+             if (encounter.attack != ValusAttack::Club) {
+                 throw std::runtime_error("s42-selftest: the club attack did not start");
+             }
+             bool clubLanded = false;
+             bool clubSwingCaptured = false;
+             for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
+                 step_frame(noInput, /*driveAttack=*/true);
+                 if (!clubSwingCaptured && encounter.attack == ValusAttack::Club &&
+                     encounter.attackSeconds >=
+                         kValusClubImpactBegin - kS42TelegraphLeadFrames * stepSeconds) {
+@@ -3373,21 +3651,23 @@ int run_app(const AppOptions& opts) {
+                  ++frame) {
+                 step_frame(noInput, /*driveAttack=*/false);
+             }
+             if (combat.mode != PlayerMode::Grounded || combat.invulnSeconds > 0.0f) {
+                 throw std::runtime_error(
+                     "s42-selftest: the player did not recover before the death phase (mode " +
+                     std::string(player_mode_name(combat.mode)) + ")");
+             }
+             combat.health = tuning.clubDamage;  // the pinned lethal setup
+             place_grounded(clubTip.x, clubTip.z, "death");
+-            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club);
++            start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club,
++                               audioOn ? &sfx : nullptr);
++            flush_sfx();  // the telegraph sounds at its real start time
+             bool deathLanded = false;
+             for (int frame = 0; frame < kS42MaxAttackFrames; ++frame) {
+                 step_frame(noInput, /*driveAttack=*/true);
+                 if (combat.mode == PlayerMode::Dead) {
+                     deathLanded = true;
+                     break;
+                 }
+                 if (encounter.attack == ValusAttack::None) {
+                     throw std::runtime_error(
+                         "s42-selftest: the lethal club ended before its impact window");
+@@ -3426,20 +3706,21 @@ int run_app(const AppOptions& opts) {
+             std::printf("s42-death clip=%s mode=%s\n",
+                         playback.clips[static_cast<std::size_t>(playerClips.death)].name.c_str(),
+                         player_mode_name(combat.mode));
+             // The death clip has played once and is asserted pinned on its last
+             // frame; the still is that frame, with the HUD's depleted amber bar.
+             capture_still("death", still_path("death"));
+ 
+             // --- 7. Full soft reset (the R key's own sequence) --------------
+             reset_player_combat(player, combat, spawn, spawnYaw, tuning);
+             reset_encounter(encounter);
++            audio.reset();  // every voice, the music included (R stops everything)
+             entity_playback.index = entityClips.stand;
+             entity_playback.time = 0.0f;
+             entity_playback.pinned = false;
+             entity_playback.playing = true;
+             climbCamera.active = false;
+             targetCamera = CameraTarget{};
+             follow = CameraFollow{};
+             update_entity_transform(scene, encounter, entityRig);
+             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
+                           /*moving=*/false, /*dtSeconds=*/10.0f);
+@@ -3471,20 +3752,21 @@ int run_app(const AppOptions& opts) {
+                 while (frames < maxFrames) {
+                     const Vec3 previous = player.position;
+                     player_update(player, input, stepSeconds, heightmap, aimYawDeg);
+                     update_locomotion(playback, scene, input, /*manualClip=*/false);
+                     const std::vector<std::vector<Mat4>> palettes =
+                         update_all_poses(renderer, scene, playbacks, stepSeconds, club);
+                     resolve_player_collision(player, entity_capsules(scene, palettes),
+                                              heightmap);
+                     camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                   0.0f, /*moving=*/true, stepSeconds);
++                    tick_audio();  // the mix clock keeps the capture in step
+                     const float dx = player.position.x - previous.x;
+                     const float dz = player.position.z - previous.z;
+                     ++frames;
+                     if (std::sqrt(dx * dx + dz * dz) < kS4StopEpsilon) {
+                         if (++still >= kS4StopFrames) {
+                             stopped = true;
+                             break;
+                         }
+                     } else {
+                         still = 0;
+@@ -3655,20 +3937,94 @@ int run_app(const AppOptions& opts) {
+                 "arm_damage=%d stomp_damage=%d stomp_health=%d club_damage=%d club_health=%d "
+                 "death_clip=%s reset_health=%d reset_stamina=%d reset_mode=%s reset_valus=%d "
+                 "stamina_remaining=%d defeated=%d\n",
+                 proxyCount, footStrike.damageDealt, headStrike.damageDealt,
+                 climb_band_name(armBand), armWeakpoint,
+                 armStrike.damageDealt, stompDamage,
+                 healthBeforeStomp - stompDamage, clubDamage, healthBeforeClub - clubDamage,
+                 playback.clips[static_cast<std::size_t>(playerClips.death)].name.c_str(),
+                 resetHealth, resetStamina, resetMode, resetValus, staminaRemaining,
+                 encounter.defeated ? 1 : 0);
++
++            // --- 10. S5 finish: write the mixdown and its proof --------------
++            // The same timeline just ran with the audio observer on. A cue that
++            // pointed at a missing clip, a write failure, or a capture with no
++            // audible window is a failed S5 run (exit 1); the acceptance reads
++            // the ordered s5-event lines and this line.
++            if (opts.s5Selftest) {
++                if (audio.failed) {
++                    std::fprintf(stderr,
++                                 "sotc-viewer: s5-selftest: a cue clip was missing at play "
++                                 "time\n");
++                    return 1;
++                }
++                if (!audio.engine.end_capture()) {
++                    std::fprintf(stderr, "sotc-viewer: s5-selftest: %s\n",
++                                 audio.engine.last_error().c_str());
++                    return 1;
++                }
++                AudioClip mixed;
++                std::string wav_error;
++                if (!read_wav(opts.audioMixdownPath, mixed, &wav_error)) {
++                    std::fprintf(stderr, "sotc-viewer: s5-selftest: %s\n", wav_error.c_str());
++                    return 1;
++                }
++                double sum = 0.0;
++                float mix_peak = 0.0f;
++                for (const float sample : mixed.samples) {
++                    sum += static_cast<double>(sample) * static_cast<double>(sample);
++                    mix_peak = std::max(mix_peak, std::fabs(sample));
++                }
++                const float mix_rms =
++                    mixed.samples.empty()
++                        ? 0.0f
++                        : static_cast<float>(std::sqrt(
++                              sum / static_cast<double>(mixed.samples.size())));
++                // The loudest one-second window: a fully silent capture (or one
++                // whose only sound is a click) has no audible window.
++                constexpr int kWindowFrames = 48000;
++                constexpr double kNonSilentWindowRms = 0.01;  // -40 dBFS
++                constexpr float kNonSilentPeak = 0.05f;       // -26 dBFS
++                float best_window_rms = 0.0f;
++                const std::size_t frames = mixed.frames();
++                for (std::size_t start = 0; start < frames;
++                     start += static_cast<std::size_t>(kWindowFrames)) {
++                    const std::size_t count = std::min<std::size_t>(
++                        static_cast<std::size_t>(kWindowFrames), frames - start);
++                    double window_sum = 0.0;
++                    for (std::size_t frame = start; frame < start + count; ++frame) {
++                        for (int channel = 0; channel < 2; ++channel) {
++                            const double value = mixed.samples[
++                                frame * static_cast<std::size_t>(mixed.channels) +
++                                static_cast<std::size_t>(channel)];
++                            window_sum += value * value;
++                        }
++                    }
++                    best_window_rms = std::max(
++                        best_window_rms,
++                        static_cast<float>(std::sqrt(
++                            window_sum / static_cast<double>(count * 2))));
++                }
++                std::printf("s5-mix frames=%zu rms=%.4f peak=%.4f window_rms=%.4f\n",
++                            frames, mix_rms, mix_peak, best_window_rms);
++                if (!(mix_peak >= kNonSilentPeak) ||
++                    !(best_window_rms >= kNonSilentWindowRms)) {
++                    std::fprintf(stderr,
++                                 "sotc-viewer: s5-selftest: the mixdown is silent (peak "
++                                 "%.4f, window rms %.4f): %s\n",
++                                 mix_peak, best_window_rms, opts.audioMixdownPath.c_str());
++                    return 1;
++                }
++                std::printf("s5-status mixdown=%s events=%d music=%d\n",
++                            opts.audioMixdownPath.c_str(), audio.eventCount,
++                            audio.musicEverStarted ? 1 : 0);
++            }
+             return 0;
+         }
+ 
+         if (opts.s4Selftest) {
+             // The S4 acceptance walk: one pinned entity pose (t = 0), a guard
+             // that the manifest's spawn is outside every entity capsule, the
+             // feet-on-ground measurement, the screen bbox the idle-pair pixel
+             // guard uses, and a walk into the nearest leg capsule that must
+             // stop with bounded penetration while staying grounded.
+             const std::string placement = manifest_header_value(opts.manifestPath, "placement");
+@@ -4053,20 +4409,23 @@ int run_app(const AppOptions& opts) {
+         // whole encounter (manifest mode), Escape or the close button quits.
+         // In manifest mode W/A/S/D walk (Shift runs), E grabs (held) and J
+         // charges a strike (held; released to plunge); the camera follows. A
+         // standard SDL3 gamepad is polled once per frame: left stick moves,
+         // right stick turns the camera, RT grips, X/square strikes, Start
+         // pauses; hot-plug opens/closes it. Input needs no capture: plain
+         // mouse-motion events with SDL_BUTTON_LMASK held (never relative mode,
+         // never SDL_CaptureMouse) — the cursor stays visible and free.
+         bool running = true;
+         bool climb_recenter = false;
++        // The S5 audio observer's on/off switch for the whole loop: false when
++        // no curated manifest loaded (the game then stays silent).
++        const bool audio_on = audio.enabled;
+         GamepadInput gamepad;
+         open_first_gamepad(gamepad);
+         // This frame's rig poses. Hoisted so Valus's attack decision can read
+         // the previous frame's posed feet before this frame's clip is chosen.
+         std::vector<std::vector<Mat4>> palettes =
+             update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f, club);
+         std::deque<Uint64> frame_ticks;  // frame arrival times within the last second
+         Uint64 last_title_update = SDL_GetTicks();
+         Uint64 last_ticks = SDL_GetTicks();
+         while (running) {
+@@ -4112,20 +4471,23 @@ int run_app(const AppOptions& opts) {
+                                     follow.distance = CameraFollow{}.distance;
+                                 }
+                             } else {
+                                 // Keep the whole subject in frame when the clip's root series
+                                 // carries the ground height: frame the current pose, not the
+                                 // bind bounds.
+                                 frame_single_model(camera, scene, playback);
+                             }
+                         } else if (event.key.key == SDLK_SPACE) {
+                             playback.playing = !playback.playing;
++                        } else if (event.key.key == SDLK_M) {
++                            // S5: mute the whole mixer (design D6: no new UI).
++                            audio.toggle_mute();
+                         } else if (event.key.key == SDLK_T) {
+                             // Camera-only framing: orbit the entity's chest. T
+                             // is inert when the manifest has no entity (the S3
+                             // arena) or its chest did not resolve — otherwise
+                             // the camera would park on the zero target.
+                             if (entity_target_key_allowed(follow_mode, haveEntityChest)) {
+                                 camera_target_toggle(camera, follow, targetCamera, entityChest);
+                             }
+                         } else if (event.key.key == SDLK_R) {
+                             if (follow_mode) {
+@@ -4133,20 +4495,21 @@ int run_app(const AppOptions& opts) {
+                                 // and Valus go back to their opening state, the
+                                 // death pin/hurt one-shot is left behind, and
+                                 // the follow camera snaps behind the spawn.
+                                 reset_player_combat(player, combat,
+                                                     spawn_position(manifest, scene),
+                                                     manifest.hasSpawn
+                                                         ? manifest.spawnYawDeg
+                                                         : 0.0f,
+                                                     tuning);
+                                 reset_encounter(encounter);
++                                audio.reset();  // R stops every voice, music too
+                                 if (entityRig < playbacks.size() &&
+                                     entityClips.stand >= 0) {
+                                     Playback& entityPlayback = playbacks[entityRig];
+                                     entityPlayback.index = entityClips.stand;
+                                     entityPlayback.time = 0.0f;
+                                     entityPlayback.pinned = false;
+                                     entityPlayback.playing = true;
+                                 }
+                                 climbCamera.active = false;
+                                 targetCamera = CameraTarget{};
+@@ -4234,39 +4597,41 @@ int run_app(const AppOptions& opts) {
+                 drag_dx += deadzoned(gamepad.rightX) * kS41StickPixelsPerSecond * stick_dt;
+                 drag_dy += deadzoned(gamepad.rightY) * kS41StickPixelsPerSecond * stick_dt;
+ 
+                 // The encounter's one-shot clock, then Valus's own fight state
+                 // (R8), then the clip choice (from the mode the previous step
+                 // left) and this frame's poses: the target camera, the collision
+                 // proxy and the climb attach point all read the palettes drawn
+                 // today. Valus reads the previous palette's posed feet; the
+                 // model transform is already this frame's, because the yaw step
+                 // below runs before the joint query.
++                SfxQueue frameSfx;  // S5: this frame's cues, drained once below
+                 if (entityRig < playbacks.size()) {
+                     advance_encounter_reaction(playbacks[entityRig], encounter,
+                                                entityClips.stand, dt);
+                 }
+                 if (valus_behavior) {
+                     const float valus_dt = std::clamp(dt, 0.0f, kMaxCombatStepSeconds);
+                     // He turns only for an exactly grounded, living target: while
+                     // the player is on him the body holds still, or the climber
+                     // would slide around the band and the route would move.
+                     if (combat.mode == PlayerMode::Grounded && !encounter.defeated) {
+                         encounter.entityYawDeg = valus_yaw_slew(
+                             encounter.entityYawDeg, encounter.entityPosition,
+                             player.position, kValusYawSlewDegPerSecond, valus_dt);
+                     }
+                     update_entity_transform(scene, encounter, entityRig);
+                     const ValusAttackInput attack_input = valus_attack_input(
+                         scene, entityRig, palettes, player, combat, encounter);
+                     advance_valus_attack(encounter, playbacks[entityRig], entityClips,
+-                                         attack_input, valus_dt);
++                                         attack_input, valus_dt,
++                                         audio_on ? &frameSfx : nullptr);
+                 }
+                 update_combat_clips(playback, scene, combat, input, manual_clip);
+                 palettes = update_all_poses(renderer, scene, playbacks, dt, club);
+                 if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
+                     haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
+                                                            entityChest);
+                 }
+ 
+                 // While gripping, the climb orbit owns the camera: it is updated
+                 // after the step, on this frame's attach point. Otherwise the
+@@ -4289,35 +4654,40 @@ int run_app(const AppOptions& opts) {
+                     }
+                 }
+ 
+                 // The player step: the state machine runs the Grounded
+                 // controller + capsule resolver in the S3/S4 order, or recomputes
+                 // the attach point from this frame's entity palette.
+                 const PlayerFrame frame =
+                     player_frame_of(scene, entityRig, palettes, heightmap,
+                                     camera_look_yaw(camera));
+                 const int weakpoint = combat.weakpoint;  // detach() clears it
+-                const StepEvents events =
++                StepEvents events =
+                     player_step(player, combat, input, frame, tuning, dt);
++                if (audio_on) {
++                    append_player_sfx(events, player.position, frameSfx);
++                }
+                 if (events.damageDealt > 0 && entityRig < playbacks.size()) {
+                     apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
+-                                        weakpoint);
++                                        weakpoint, audio_on ? &frameSfx : nullptr);
+                 }
+                 // Valus's impact runs after the player's step: a strike that
+                 // landed this frame has already cancelled the attack above, so
+                 // its pending impact cannot fire. The first frame inside the
+                 // window consumes it, even when the hit is then ignored.
+                 if (valus_behavior && encounter.attack != ValusAttack::None &&
+                     attack_impact_due(encounter.attack, encounter.attackSeconds,
+                                       encounter.attackHit)) {
+                     encounter.attackHit = true;
+-                    apply_valus_impact(combat, player, frame, tuning, encounter.attack);
++                    apply_valus_impact(combat, player, frame, tuning, encounter.attack,
++                                       audio_on ? &frameSfx : nullptr,
++                                       audio_on ? &events : nullptr);
+                 }
+ 
+                 if (mode_is_attached(combat.mode)) {
+                     update_climb_camera(camera, climbCamera, player, combat, frame, drag_dx,
+                                         drag_dy, wheel_delta, climb_recenter, dt);
+                 } else if (climbCamera.active) {
+                     camera_climb_exit(camera, climbCamera);
+                     // The camera was held by the climb orbit this frame: run one
+                     // follow step now so the view eases back without a snap.
+                     if (targetCamera.active) {
+@@ -4330,20 +4700,32 @@ int run_app(const AppOptions& opts) {
+                                              player.yawDeg, drag_dx, drag_dy, wheel_delta,
+                                              moving, dt);
+                     } else {
+                         camera_follow(camera, follow, player.position, player.yawDeg, drag_dx,
+                                       drag_dy, wheel_delta, moving, dt);
+                     }
+                 }
+ 
+                 apply_player_transform(scene, player_rig_record, player,
+                                        active_player_lift(scene, playback, player_rig_record));
++                if (audio_on) {
++                    // Cues were pushed in time order (step, reaction, impact,
++                    // hurt); drain once, then the mix advances.
++                    audio.play_all(frameSfx);
++                    if (events.damageDealt > 0) {
++                        audio.start_music();
++                    }
++                    if (combat.mode == PlayerMode::Dead || encounter.defeated) {
++                        audio.stop_music();
++                    }
++                    audio.update(dt, player.position, camera_look_yaw(camera));
++                }
+                 renderer.set_hud(hud_state(/*visible=*/true));
+             } else {
+                 update_all_poses(renderer, scene, playbacks, dt, club);
+             }
+ 
+             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                   /*acquire_swapchain=*/true);
+ 
+             // The S1 fps HUD: the window title shows the rolling average over
+             // the last second, refreshed twice a second (drawn text arrives
+diff --git a/app/src/app.h b/app/src/app.h
+index 2641e88..49d518c 100644
+--- a/app/src/app.h
++++ b/app/src/app.h
+@@ -98,20 +98,29 @@ struct AppOptions {
+     // (with an entity) and --model.
+     bool s41Selftest = false;
+     // --s42-selftest: the S4.2 acceptance timeline. Compose the encounter
+     // manifest, resolve both weakpoint shells, test the foot/head damage gate,
+     // climb the chest->shoulder->arm branch, take a stomp and a club hit (with
+     // the i-frame gate), die to a lethal club, reset, and climb foot->head on
+     // the pinned stamina drains. Fixed 1/60 s steps and no window input. Prints
+     // the `s42-*` event lines and `s42-status`, and exits 0. Requires --manifest
+     // (with an entity) and --model.
+     bool s42Selftest = false;
++    // --s5-selftest: the same S4.2 timeline with the S5 audio observer enabled
++    // (design §7.4, ruling D11). Every played cue prints an `s5-event` line, the
++    // mix is captured to `audioMixdownPath` (required) as a 48 kHz float WAV,
++    // and `s5-status` closes the run. A missing cue clip or a silent mixdown is
++    // fatal (exit 1). The simulation is untouched: with audio off the `s42-*`
++    // lines are byte-identical.
++    bool s5Selftest = false;
++    // --audio-mixdown PATH: the --s5-selftest capture destination.
++    std::string audioMixdownPath;
+     // --s41-stills DIR: with --s41-selftest, write one PNG per fight phase
+     // (grab, mid-climb, strike, reaction) into DIR, plus the defeat still and
+     // its two pixel controls under DIR/control/. The acceptance script creates
+     // both DIR and DIR/control/; an absent one is a write failure, never a
+     // silent skip.
+     std::string s41StillsDir;
+     // --s42-stills DIR: with --s42-selftest, write one PNG per fight phase
+     // (stomp telegraph, stomp impact, club swing, hurt, death, arm weakpoint)
+     // into DIR, HUD visible. The acceptance script creates DIR; an absent one
+     // is a write failure, never a silent skip. Each capture snapshots and
+diff --git a/app/src/audio.cpp b/app/src/audio.cpp
+index 80e63f8..c13e5ca 100644
+--- a/app/src/audio.cpp
++++ b/app/src/audio.cpp
+@@ -32,21 +32,21 @@ constexpr int kMaxQueuedBytes = 48000 * 2 * 4 / 2;      // half a second of outp
+ constexpr int kMaxTopUpBlocks = 8;                      // ~133 ms per call, bounded
+ 
+ float category_gain(AudioCategory category) {
+     return kCategoryGains[static_cast<int>(category)];
+ }
+ 
+ float sanitize_gain(float gain) {
+     if (!std::isfinite(gain)) {
+         return 0.0f;
+     }
+-    return std::clamp(gain, 0.0f, 1.0f);
++    return std::clamp(gain, 0.0f, AudioEngine::kMaxVoiceGain);
+ }
+ 
+ // Whitespace-separated tokens; `#` starts a comment. `\r` counts as
+ // whitespace, so CRLF manifests parse.
+ std::vector<std::string> split_tokens(const std::string& line) {
+     std::vector<std::string> tokens;
+     std::string token;
+     for (const char character : line) {
+         if (character == '#') {
+             break;
+@@ -410,27 +410,72 @@ void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
+             ++cursor;
+         }
+         voice.cursor = cursor;
+     }
+ 
+     if (muted_) {
+         std::fill(out, out + sample_count, 0.0f);
+         return;
+     }
+     // The output stage is the only place samples are clamped: a loud stack may
+-    // saturate but never leaves the float WAV's [-1, 1] range.
++    // saturate but never leaves the float WAV's [-1, 1] range. R14's 0.85
++    // master gain sits just before the clamp, so an ordinary music + SFX stack
++    // stays below the 0.99 delivery ceiling instead of square-waving.
+     for (std::size_t i = 0; i < sample_count; ++i) {
+-        const float sample = out[i];
++        const float sample = out[i] * kMasterGain;
+         out[i] = std::isfinite(sample) ? std::clamp(sample, -1.0f, 1.0f) : 0.0f;
+     }
+ }
+ 
++void AudioEngine::append_capture(std::size_t frames) {
++    if (!capturing_ || frames == 0) {
++        return;
++    }
++    assert(frames * 2 <= mixBuffer_.size());
++    capture_samples_.insert(capture_samples_.end(), mixBuffer_.begin(),
++                            mixBuffer_.begin() + static_cast<std::ptrdiff_t>(frames * 2));
++}
++
++bool AudioEngine::begin_capture(const std::string& path) {
++    last_error_.clear();
++    if (capturing_) {
++        last_error_ = path + ": a capture is already in progress";
++        return false;
++    }
++    if (path.empty()) {
++        last_error_ = "capture path is empty";
++        return false;
++    }
++    capture_path_ = path;
++    capture_samples_.clear();
++    capturing_ = true;
++    return true;
++}
++
++bool AudioEngine::end_capture() {
++    if (!capturing_) {
++        last_error_ = "no capture is in progress";
++        return false;
++    }
++    capturing_ = false;
++    std::string error;
++    if (!write_wav(capture_path_, capture_samples_, 2, 48000, &error)) {
++        last_error_ = error;
++        capture_path_.clear();
++        capture_samples_.clear();
++        return false;
++    }
++    capture_path_.clear();
++    capture_samples_.clear();
++    return true;
++}
++
+ void AudioEngine::push_block(std::size_t frames) {
+     if (stream_ == nullptr || frames == 0) {
+         return;
+     }
+     assert(frames * 2 <= mixBuffer_.size());
+     mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+     const int bytes = static_cast<int>(frames * 2 * sizeof(float));
+     if (!SDL_PutAudioStreamData(stream_, mixBuffer_.data(), bytes)) {
+         std::fprintf(stderr, "sotc-viewer: audio: stream push failed: %s\n",
+                      SDL_GetError());
+@@ -452,20 +497,25 @@ void AudioEngine::top_up() {
+     }
+ }
+ 
+ void AudioEngine::clear_stream() {
+     if (stream_ != nullptr) {
+         SDL_ClearAudioStream(stream_);
+     }
+ }
+ 
+ void AudioEngine::ensure_device() {
++    if (capturing_) {
++        // A capture is a disk sink: never open hardware while it runs, even if
++        // a play was queued after begin_capture.
++        return;
++    }
+     if (deviceTried_) {
+         return;
+     }
+     deviceTried_ = true;
+ 
+     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+         std::fprintf(stderr, "sotc-viewer: audio: SDL audio init failed: %s\n",
+                      SDL_GetError());
+         return;
+     }
+@@ -503,33 +553,36 @@ void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg
+         return;
+     }
+     listenerPos_ = listenerPos;
+     listenerYawDeg_ = std::isfinite(listenerYawDeg) ? listenerYawDeg : 0.0f;
+ 
+     const float clamped = std::min(dt, static_cast<float>(kMaxMixFrames) / 48000.0f);
+     const std::size_t frames = static_cast<std::size_t>(std::lround(clamped * 48000.0f));
+     if (frames == 0) {
+         return;
+     }
+-    if (stream_ == nullptr) {
+-        // Nothing has played yet: the mixer still advances on the simulation
+-        // clock, but no audio device is opened by a headless timeline.
++    if (stream_ == nullptr || capturing_) {
++        // Nothing has played yet, or a capture owns the sink: the mixer still
++        // advances on the simulation clock, but no audio device is opened by a
++        // headless timeline.
+         mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
++        append_capture(frames);
+         return;
+     }
+     if (SDL_GetAudioStreamQueued(stream_) < kMaxQueuedBytes) {
+         push_block(frames);
+     } else {
+         // Backlog at the cap: keep the voices on the simulation clock and drop
+         // this block rather than grow the latency.
+         mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+     }
++    append_capture(frames);
+     top_up();
+ }
+ 
+ bool AudioEngine::render_mixdown(const std::string& path, int seconds) {
+     last_error_.clear();
+     if (seconds <= 0 || seconds > kMixdownSecondsCap) {
+         last_error_ = path + ": mixdown seconds must be in [1, " +
+                       std::to_string(kMixdownSecondsCap) + "]";
+         return false;
+     }
+diff --git a/app/src/audio.h b/app/src/audio.h
+index 5fd29c7..7d15274 100644
+--- a/app/src/audio.h
++++ b/app/src/audio.h
+@@ -36,40 +36,49 @@ struct AudioClip {
+ // Forwards the SDL audio types without pulling SDL into the mixer's header: the
+ // engine only ever passes these handles through to audio.cpp.
+ struct SDL_AudioStream;
+ 
+ class AudioEngine {
+ public:
+     // 32 voices: slot 0 music, slot 1 ambience, 2..31 SFX.
+     static constexpr int kMaxVoices = 32;
+     static constexpr int kMaxSfxVoices = kMaxVoices - 2;
+ 
++    // R14 headroom: the output stage scales the summed voices by 0.85 before
++    // the clamp. The shipped clips are normalized to 0.99, so the cue table's
++    // gains (music 0.45, most SFX 0.5-0.8) keep an ordinary music + SFX stack
++    // under the 0.99 delivery ceiling instead of square-waving. A per-voice gain
++    // is accepted up to 2.0 so the table can boost one clip (HurtHeavy's 1.25)
++    // and still be scaled by the master stage.
++    static constexpr float kMasterGain = 0.85f;
++    static constexpr float kMaxVoiceGain = 2.0f;
++
+     AudioEngine();
+     ~AudioEngine();
+     AudioEngine(const AudioEngine&) = delete;
+     AudioEngine& operator=(const AudioEngine&) = delete;
+ 
+     // Parses `manifestPath` (R1 `key=value` lines) and loads every entry's WAV
+     // from `libraryRoot + "/" + file`. A duplicate name, a malformed line, an
+     // absolute `file=` or a missing/unsupported file returns false with the
+     // offending name/path in `last_error()`; a parse/load failure is
+     // transactional (the previous clip set and voices stay untouched), while a
+     // missing manifest empties the engine and warns once. `gain_db` is
+     // provenance only (R12): the clip is never rescaled.
+     bool load_manifest(const std::string& manifestPath, const std::string& libraryRoot);
+ 
+     bool has(const std::string& name) const;
+     std::size_t clip_count() const { return clips_.size(); }
+ 
+     // World SFX. `spatial` true applies distance attenuation and pan; false
+     // plays centred. A voice at 0 m is unattenuated and centred. `gain` is
+-    // clamped into [0, 1]; the category gain is applied on top.
++    // clamped into [0, kMaxVoiceGain]; the category gain is applied on top.
+     void play(const std::string& name, const Vec3& position, float gain = 1.0f,
+               bool spatial = true);
+     // Centred SFX (UI/player-local) — same SFX pool as `play`.
+     void play_ui(const std::string& name, float gain = 1.0f);
+     // Slot 0; a second call replaces the current music.
+     void play_music(const std::string& name, float gain = 1.0f);
+     void stop_music();
+     // Slot 1; a second call replaces the current ambience.
+     void play_ambience(const std::string& name, float gain = 1.0f);
+ 
+@@ -83,20 +92,30 @@ public:
+     // on the first play* call). `dt` is clamped to [0, 1] s; a non-positive or
+     // non-finite dt is a no-op. The listener pose is remembered for
+     // `render_mixdown`.
+     void update(float dt, const Vec3& listenerPos, float listenerYawDeg);
+ 
+     // Runs the same mixer for `seconds` at dt = 1/60 (800 frames a step) and
+     // writes float32 stereo 48 kHz RIFF/WAVE to `path`. No device is opened.
+     // Uses the last listener pose passed to `update` (origin, yaw 0 by default).
+     bool render_mixdown(const std::string& path, int seconds);
+ 
++    // Headless capture (S5 Task 5): while capturing, every `update` appends the
++    // block it mixed to an internal buffer and no device is opened — a capture
++    // must work without hardware. `end_capture` writes the accumulated mix as a
++    // float32 stereo 48 kHz WAV and releases the buffer. Only one capture at a
++    // time; a second `begin_capture` fails.
++    bool begin_capture(const std::string& path);
++    bool end_capture();
++    bool capturing() const { return capturing_; }
++    std::size_t captured_frames() const { return capture_samples_.size() / 2; }
++
+     // Introspection for tests and acceptance: active voice count, whether any
+     // active voice plays `name`, the device queue lead in bytes (0 when no
+     // device is open), and the last load/mixdown failure.
+     int active_voices() const;
+     bool is_playing(const std::string& name) const;
+     int queued_audio_bytes() const;
+     const std::string& last_error() const { return last_error_; }
+ 
+ private:
+     struct Voice {
+@@ -120,24 +139,27 @@ private:
+     // acceptance can dump a whole encounter without truncation.
+     static constexpr int kMixdownSecondsCap = 600;
+ 
+     void start_voice(std::size_t slot, const AudioClip* clip, AudioCategory category,
+                      float gain, const Vec3& position, bool spatial);
+     void stop_slot(std::size_t slot);
+     void stop_all_voices();
+     const AudioClip* find_clip(const std::string& name) const;
+ 
+     // The pure mix: sums every active voice into `out` (interleaved stereo,
+-    // `frames` frames), applies category gain, attenuation/pan, mute and the
+-    // [-1, 1] clamp, and advances the voices' cursors.
++    // `frames` frames), applies category gain, attenuation/pan, mute, the
++    // master headroom gain and the [-1, 1] clamp, and advances the voices'
++    // cursors.
+     void mix(float* out, std::size_t frames, const Vec3& listenerPos,
+              float listenerYawDeg);
++    // Appends the block just mixed to the capture buffer (interleaved stereo).
++    void append_capture(std::size_t frames);
+ 
+     void ensure_device();
+     // Mixes one 800-frame block and pushes it to the bound stream. A failed
+     // push destroys the stream (the engine stays silent, already logged once).
+     void push_block(std::size_t frames);
+     // Keeps ~3 blocks (50 ms) queued so the device never starves between
+     // frames; bounded by the 0.5 s cap and a small iteration guard.
+     void top_up();
+     // Drops queued device audio, so mute/stop/reset take effect immediately
+     // instead of trailing the prebuffer.
+@@ -148,12 +170,17 @@ private:
+     std::vector<Voice> voices_;
+     std::vector<float> mixBuffer_;  // kMaxMixFrames * 2, allocated once
+     std::unordered_set<std::string> warnedMissing_;
+     Vec3 listenerPos_{0.0f, 0.0f, 0.0f};
+     float listenerYawDeg_ = 0.0f;
+     std::uint64_t nextSerial_ = 0;
+     bool muted_ = false;
+     bool deviceTried_ = false;
+     std::uint32_t device_ = 0;
+     SDL_AudioStream* stream_ = nullptr;
++    // Capture state: the sink path, the accumulated float stereo samples, and
++    // whether `update` should append instead of pushing to a device.
++    bool capturing_ = false;
++    std::string capture_path_;
++    std::vector<float> capture_samples_;
+     std::string last_error_;
+ };
+diff --git a/app/src/audio_events.h b/app/src/audio_events.h
+new file mode 100644
+index 0000000..4acc1b1
+--- /dev/null
++++ b/app/src/audio_events.h
+@@ -0,0 +1,163 @@
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++#include "math3d.h"
++#include "player_state.h"
++#include "valus.h"
++
++// The S5 sound seam (design §7.4): the simulation never calls SDL. The player
++// state machine and the app's encounter helpers only report what changed; this
++// header turns those reports into a small fixed-capacity cue queue that the app
++// drains once per frame. Pure data and arithmetic — no SDL, no I/O, no
++// allocation — so the headless tests and the acceptance timeline drive exactly
++// the translation the interactive loop uses.
++//
++// The same queue is translated by one app-side function (cue_for + play), which
++// is what keeps the interactive loop and the shared scripted timeline from
++// drifting apart.
++
++enum class Sfx : std::uint16_t {
++    Strike,
++    StrikeHit,
++    Grab,
++    GripBreak,
++    Land,
++    HurtLight,
++    HurtHeavy,
++    Death,
++    StompStart,
++    StompImpact,
++    ClubStart,
++    ClubImpact,
++    ClubCancel,
++    ValusReaction,
++    ValusDefeat,
++    FootLeft,
++    FootRight,
++    Reset,
++    Count
++};
++
++// One cue. `gain` scales the cue table's own gain; `spatial` selects a world
++// voice (distance attenuation and pan) or a centred one; `position` is the
++// world anchor a spatial cue is attenuated from.
++struct SfxEvent {
++    Sfx id = Sfx::Count;
++    float gain = 1.0f;
++    Vec3 position{};
++    bool spatial = false;
++};
++
++// The fixed pool a frame's cues accumulate in. A 64-cue step is far beyond a
++// real frame (the whole fight emits a handful per frame); overflow drops the
++// extra cue rather than growing, so the per-frame path never allocates.
++struct SfxQueue {
++    static constexpr int kCapacity = 64;
++    std::array<SfxEvent, kCapacity> items{};
++    int count = 0;
++
++    void push(const SfxEvent& event) {
++        if (count >= kCapacity) {
++            return;
++        }
++        items[static_cast<std::size_t>(count)] = event;
++        ++count;
++    }
++
++    void clear() { count = 0; }
++    bool empty() const { return count == 0; }
++};
++
++// The encounter transitions the app reports. The plan's one-argument
++// `Encounter` snapshot cannot tell a telegraph from an impact, or a cancel from
++// a defeat; the app knows which transition it just made, so it names it.
++enum class EncounterSfx : std::uint8_t {
++    StompStart,
++    StompImpact,
++    ClubStart,
++    ClubImpact,
++    ClubCancel,
++    ValusReaction,
++    ValusDefeat,
++    Reset
++};
++
++// Appends the cue an encounter transition banks. All encounter cues are world
++// sounds: `at` is the entity's (or the striking joint's) world position.
++void append_encounter_sfx(EncounterSfx event, const Vec3& at, SfxQueue& out);
++
++// Appends one step's player cues. `playerPosition` anchors the spatial ones
++// (a landed hit, hurt, death); the swing itself is centred and always audible.
++// Nothing is appended for a step that reported nothing.
++void append_player_sfx(const StepEvents& events, const Vec3& playerPosition, SfxQueue& out);
++
++// --- Definitions (header-only: the seam has no translation unit) -------------
++
++inline void append_encounter_sfx(EncounterSfx event, const Vec3& at, SfxQueue& out) {
++    Sfx id = Sfx::Count;
++    switch (event) {
++        case EncounterSfx::StompStart:
++            id = Sfx::StompStart;
++            break;
++        case EncounterSfx::StompImpact:
++            id = Sfx::StompImpact;
++            break;
++        case EncounterSfx::ClubStart:
++            id = Sfx::ClubStart;
++            break;
++        case EncounterSfx::ClubImpact:
++            id = Sfx::ClubImpact;
++            break;
++        case EncounterSfx::ClubCancel:
++            id = Sfx::ClubCancel;
++            break;
++        case EncounterSfx::ValusReaction:
++            id = Sfx::ValusReaction;
++            break;
++        case EncounterSfx::ValusDefeat:
++            id = Sfx::ValusDefeat;
++            break;
++        case EncounterSfx::Reset:
++            id = Sfx::Reset;
++            break;
++    }
++    if (id == Sfx::Count) {
++        return;
++    }
++    out.push(SfxEvent{id, 1.0f, at, /*spatial=*/true});
++}
++
++inline void append_player_sfx(const StepEvents& events, const Vec3& playerPosition,
++                              SfxQueue& out) {
++    // The swing first: when a strike lands, its whoosh is the downbeat and the
++    // hit is the accent.
++    if (events.struck) {
++        out.push(SfxEvent{Sfx::Strike, 1.0f, playerPosition, /*spatial=*/false});
++    }
++    if (events.damageDealt > 0) {
++        // The state machine reports a landed shell hit as its one damage
++        // event; a whiff carries no damage and only the swing.
++        out.push(SfxEvent{Sfx::StrikeHit, 1.0f, playerPosition, /*spatial=*/true});
++    }
++    if (events.hurtLight) {
++        out.push(SfxEvent{Sfx::HurtLight, 1.0f, playerPosition, /*spatial=*/true});
++    }
++    if (events.hurtHeavy) {
++        out.push(SfxEvent{Sfx::HurtHeavy, 1.0f, playerPosition, /*spatial=*/true});
++    }
++    if (events.died) {
++        out.push(SfxEvent{Sfx::Death, 1.0f, playerPosition, /*spatial=*/true});
++    }
++    if (events.grabbed) {
++        out.push(SfxEvent{Sfx::Grab, 1.0f, playerPosition, /*spatial=*/false});
++    }
++    if (events.gripBroke) {
++        out.push(SfxEvent{Sfx::GripBreak, 1.0f, playerPosition, /*spatial=*/false});
++    }
++    if (events.landed) {
++        out.push(SfxEvent{Sfx::Land, 1.0f, playerPosition, /*spatial=*/false});
++    }
++}
+diff --git a/app/src/audio_map.h b/app/src/audio_map.h
+new file mode 100644
+index 0000000..3110ff9
+--- /dev/null
++++ b/app/src/audio_map.h
+@@ -0,0 +1,131 @@
++#pragma once
++
++#include <cstddef>
++
++#include "audio_events.h"
++
++// The S5 cue table: the curated `Sfx` -> shipped manifest clip mapping (design
++// §7.3/§7.4, ruling R15). The table is deliberately narrow — the first slice is
++// the attribution gate's seven cues plus the fight music. A null cue is a
++// deferred event, not a missing one: grabbing, the grip break, landing, the
++// club cancel, Valus's defeat, footsteps and the reset are silent in S5.
++//
++// The names are the R1 manifest's `name=` values, loaded once at start. Every
++// non-null clip must exist in the loaded manifest: `missing_cue` names the
++// first offending `Sfx`, and the app turns that into a load error (fatal in
++// --s5-selftest, one warning and a silent game in interactive play).
++
++struct SoundCue {
++    const char* clip;  // manifest name, never null for a mapped cue
++    float gain;        // fractional voice gain (HurtHeavy is a 1.25 boost)
++    bool loop;         // the clip's own loop flag is authoritative; informational
++};
++
++// The fight music is not an `Sfx`: the app owns its lifecycle through
++// AudioEngine::play_music / stop_music (D5: starts on the first landed hit,
++// loops, stops on defeat and reset).
++inline constexpr const char* kMusicClip = "music.boss";
++inline constexpr float kMusicGain = 0.45f;
++
++namespace audio_map_detail {
++
++// Indexed by `Sfx`; the order is the enum's and the static_assert keeps them in
++// step. A nullptr clip is a deliberately deferred event.
++inline constexpr SoundCue kCues[] = {
++    {"player.swing", 0.60f, false},    // Strike: Wander's swing
++    {"player.hit", 0.60f, false},      // StrikeHit: the blade landing
++    {nullptr, 1.00f, false},           // Grab: deferred
++    {nullptr, 1.00f, false},           // GripBreak: deferred
++    {nullptr, 1.00f, false},           // Land: deferred
++    {"player.hurt", 1.00f, false},     // HurtLight
++    {"player.hurt", 1.25f, false},     // HurtHeavy: the same clip, pushed
++    {"player.death", 0.80f, false},    // Death
++    {"valus.telegraph", 0.60f, false},  // StompStart
++    {"valus.impact", 0.50f, false},     // StompImpact
++    {"valus.telegraph", 0.60f, false},  // ClubStart
++    {"valus.impact", 0.50f, false},     // ClubImpact
++    {nullptr, 1.00f, false},            // ClubCancel: deferred
++    {"valus.hurt", 0.60f, false},       // ValusReaction
++    {nullptr, 1.00f, false},            // ValusDefeat: deferred
++    {nullptr, 1.00f, false},            // FootLeft: deferred
++    {nullptr, 1.00f, false},            // FootRight: deferred
++    {nullptr, 1.00f, false},            // Reset: deferred
++};
++
++static_assert(sizeof(kCues) / sizeof(kCues[0]) == static_cast<std::size_t>(Sfx::Count),
++              "the cue table must cover every Sfx");
++
++}  // namespace audio_map_detail
++
++// The cue for `id`, or nullptr when the event is deliberately silent (or `id`
++// is Count/out of range).
++inline const SoundCue* cue_for(Sfx id) {
++    const std::size_t index = static_cast<std::size_t>(id);
++    if (index >= static_cast<std::size_t>(Sfx::Count)) {
++        return nullptr;
++    }
++    const SoundCue& cue = audio_map_detail::kCues[index];
++    return cue.clip == nullptr ? nullptr : &cue;
++}
++
++// The stable lowercase token the `s5-event` log uses (`strike`, `hurt_heavy`,
++// `valus_reaction`, ...), and `unknown` for Count/out of range.
++inline const char* sfx_name(Sfx id) {
++    switch (id) {
++        case Sfx::Strike:
++            return "strike";
++        case Sfx::StrikeHit:
++            return "strike_hit";
++        case Sfx::Grab:
++            return "grab";
++        case Sfx::GripBreak:
++            return "grip_break";
++        case Sfx::Land:
++            return "land";
++        case Sfx::HurtLight:
++            return "hurt_light";
++        case Sfx::HurtHeavy:
++            return "hurt_heavy";
++        case Sfx::Death:
++            return "death";
++        case Sfx::StompStart:
++            return "stomp_start";
++        case Sfx::StompImpact:
++            return "stomp_impact";
++        case Sfx::ClubStart:
++            return "club_start";
++        case Sfx::ClubImpact:
++            return "club_impact";
++        case Sfx::ClubCancel:
++            return "club_cancel";
++        case Sfx::ValusReaction:
++            return "valus_reaction";
++        case Sfx::ValusDefeat:
++            return "valus_defeat";
++        case Sfx::FootLeft:
++            return "foot_left";
++        case Sfx::FootRight:
++            return "foot_right";
++        case Sfx::Reset:
++            return "reset";
++        case Sfx::Count:
++            break;
++    }
++    return "unknown";
++}
++
++// The first `Sfx` whose non-null cue names a clip `has_clip` rejects, or
++// `Sfx::Count` when the loaded manifest satisfies the whole table. The app
++// reports that `Sfx` by name, so a missing clip fails as an event, not as an
++// anonymous file.
++template <typename HasClip>
++Sfx missing_cue(const HasClip& has_clip) {
++    for (int i = 0; i < static_cast<int>(Sfx::Count); ++i) {
++        const Sfx id = static_cast<Sfx>(i);
++        const SoundCue* cue = cue_for(id);
++        if (cue != nullptr && !has_clip(cue->clip)) {
++            return id;
++        }
++    }
++    return Sfx::Count;
++}
+diff --git a/app/src/main.cpp b/app/src/main.cpp
+index c1ebe0c..8b34cce 100644
+--- a/app/src/main.cpp
++++ b/app/src/main.cpp
+@@ -46,21 +46,25 @@ void print_usage(FILE* out) {
+                  "                    the killing blow through fixed 1/60 s steps; print\n"
+                  "                    s41-status, exit\n"
+                  "  --s41-stills DIR  with --s41-selftest: write grab, mid-climb, strike,\n"
+                  "                    reaction and defeat stills (plus controls) to DIR\n"
+                  "  --s42-selftest    compose the encounter --manifest, then run the\n"
+                  "                    weakpoint, gate, arm-route, stomp, club, death,\n"
+                  "                    reset and stamina timeline through fixed 1/60 s\n"
+                  "                    steps; print s42-status, exit\n"
+                  "  --s42-stills DIR  with --s42-selftest: write the stomp telegraph\n"
+                  "                    and impact, club, hurt, death and arm-weakpoint\n"
+-                 "                    stills to DIR\n");
++                 "                    stills to DIR\n"
++                 "  --s5-selftest     run the same timeline with the curated audio on;\n"
++                 "                    print s5-event/s5-status and capture the mix\n"
++                 "                    (requires --audio-mixdown)\n"
++                 "  --audio-mixdown PATH  the --s5-selftest WAV capture destination\n");
+ }
+ 
+ bool parse_int(const char* text, int& out) {
+     const char* const end = text + std::strlen(text);
+     const auto [ptr, ec] = std::from_chars(text, end, out);
+     return ec == std::errc() && ptr == end;
+ }
+ 
+ // Strict seconds parse for --anim-time: the whole string must be one finite
+ // number. std::strtof alone would accept trailing garbage and the "nan"/"inf"
+@@ -100,26 +104,31 @@ int main(int argc, char** argv) {
+             continue;
+         }
+         if (arg == "--s41-selftest") {
+             opts.s41Selftest = true;
+             continue;
+         }
+         if (arg == "--s42-selftest") {
+             opts.s42Selftest = true;
+             continue;
+         }
++        if (arg == "--s5-selftest") {
++            opts.s5Selftest = true;
++            continue;
++        }
+ 
+         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
+                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
+                                  arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
+                                  arg == "--entity-time" || arg == "--camera-target" ||
+-                                 arg == "--s41-stills" || arg == "--s42-stills";
++                                 arg == "--s41-stills" || arg == "--s42-stills" ||
++                                 arg == "--audio-mixdown";
+         if (!wants_value) {
+             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
+             print_usage(stderr);
+             return 2;
+         }
+         if (i + 1 >= argc) {
+             std::fprintf(stderr, "sotc-viewer: %s requires a value\n", arg.c_str());
+             print_usage(stderr);
+             return 2;
+         }
+@@ -156,20 +165,22 @@ int main(int argc, char** argv) {
+                              "sotc-viewer: --camera-target expects player or entity, got: %s\n",
+                              value);
+                 print_usage(stderr);
+                 return 2;
+             }
+             opts.cameraTarget = value;
+         } else if (arg == "--s41-stills") {
+             opts.s41StillsDir = value;
+         } else if (arg == "--s42-stills") {
+             opts.s42StillsDir = value;
++        } else if (arg == "--audio-mixdown") {
++            opts.audioMixdownPath = value;
+         } else {
+             int parsed = 0;
+             if (!parse_int(value, parsed) || parsed < 1) {
+                 std::fprintf(stderr, "sotc-viewer: %s expects a positive integer, got: %s\n",
+                              arg.c_str(), value);
+                 print_usage(stderr);
+                 return 2;
+             }
+             if (arg == "--frames") {
+                 opts.frames = parsed;
+@@ -211,20 +222,42 @@ int main(int argc, char** argv) {
+     if (opts.s41Selftest && opts.manifestPath.empty()) {
+         std::fprintf(stderr, "sotc-viewer: --s41-selftest needs --manifest\n");
+         print_usage(stderr);
+         return 2;
+     }
+     if (opts.s42Selftest && opts.manifestPath.empty()) {
+         std::fprintf(stderr, "sotc-viewer: --s42-selftest needs --manifest\n");
+         print_usage(stderr);
+         return 2;
+     }
++    if (opts.s5Selftest && opts.manifestPath.empty()) {
++        std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --manifest\n");
++        print_usage(stderr);
++        return 2;
++    }
++    if (opts.s5Selftest && opts.s42Selftest) {
++        std::fprintf(stderr,
++                     "sotc-viewer: --s5-selftest and --s42-selftest run the same timeline; "
++                     "pass one\n");
++        print_usage(stderr);
++        return 2;
++    }
++    if (opts.s5Selftest && opts.audioMixdownPath.empty()) {
++        std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --audio-mixdown PATH\n");
++        print_usage(stderr);
++        return 2;
++    }
++    if (!opts.audioMixdownPath.empty() && !opts.s5Selftest) {
++        std::fprintf(stderr, "sotc-viewer: --audio-mixdown needs --s5-selftest\n");
++        print_usage(stderr);
++        return 2;
++    }
+     if (!opts.s41StillsDir.empty() && !opts.s41Selftest) {
+         std::fprintf(stderr, "sotc-viewer: --s41-stills needs --s41-selftest\n");
+         print_usage(stderr);
+         return 2;
+     }
+     if (!opts.s42StillsDir.empty() && !opts.s42Selftest) {
+         std::fprintf(stderr, "sotc-viewer: --s42-stills needs --s42-selftest\n");
+         print_usage(stderr);
+         return 2;
+     }
+diff --git a/app/src/player_state.cpp b/app/src/player_state.cpp
+index a062b4b..bd3b0c7 100644
+--- a/app/src/player_state.cpp
++++ b/app/src/player_state.cpp
+@@ -367,20 +367,22 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
+                             }
+                         } else {
+                             combat.bandT = t;
+                         }
+                     }
+                 }
+             } else {  // Striking: hold to charge, release to plunge once.
+                 if (input.strike) {
+                     combat.charge = std::min(combat.charge + dt, tuning.chargeSeconds);
+                 } else {
++                    // S5: the release is the swing itself, hit or whiff.
++                    events.struck = true;
+                     const float threshold =
+                         tuning.fullChargeFraction * tuning.chargeSeconds;
+                     const float damage =
+                         combat.charge >= threshold ? tuning.damageFull : tuning.damageWeak;
+                     // §7.2: only a shell hit deals damage; a whiff is a clang.
+                     // `strikeHit` stays false so the encounter plays no reaction.
+                     if (strike_reaches_shell(player.position, combat.weakpoint,
+                                              frame.weakpointProxy)) {
+                         events.damageDealt = static_cast<int>(std::lround(damage));
+                         combat.strikeHit = true;
+@@ -448,20 +450,21 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
+                 const float ground = heightmap_sample(*frame.heightmap, player.position);
+                 if (std::isfinite(ground) && player.position.y <= ground) {
+                     player.position.y = ground;
+                     combat.fallVelocity = 0.0f;
+                     combat.catchSecondsLeft = 0.0f;
+                     events.landed = true;
+                     if (combat.pendingDeath) {
+                         // The lethal hit taken in the air resolves here: the
+                         // death clip replaces the landing stagger.
+                         enter_dead(combat);
++                        events.died = true;
+                     } else {
+                         combat.mode = PlayerMode::Staggered;
+                         combat.modeSeconds = 0.0f;
+                     }
+                 }
+             }
+             if (combat.mode == PlayerMode::Falling) {
+                 combat.catchSecondsLeft = std::max(0.0f, combat.catchSecondsLeft - dt);
+             }
+             break;
+@@ -492,51 +495,69 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
+             // choice of its own (the app plays and pins the death clip).
+             break;
+     }
+ 
+     combat.grabWasDown = input.grab;
+     combat.strikeWasDown = input.strike;
+     return events;
+ }
+ 
+ bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
+-                        const CombatTuning& tuning) {
++                        const CombatTuning& tuning, StepEvents* events) {
+     if (combat.mode == PlayerMode::Dead || combat.invulnSeconds > 0.0f) {
+         return false;  // dead men and active i-frames take no damage
+     }
+     if (!std::isfinite(damage) || damage <= 0.0f) {
+         return false;
+     }
+ 
+     const float health = std::isfinite(combat.health) ? combat.health : 0.0f;
+     const float maxHealth = std::isfinite(tuning.maxHealth) ? tuning.maxHealth : 0.0f;
+     combat.health = std::clamp(health - damage, 0.0f, std::max(0.0f, maxHealth));
+     combat.invulnSeconds =
+         std::isfinite(tuning.invulnSeconds) ? std::max(0.0f, tuning.invulnSeconds) : 0.0f;
+ 
+     if (combat.mode == PlayerMode::Falling) {
+         // The fall owns the transition: lethal damage only arms the landing.
+         // R7: a killing hit also closes the catch window, so a grab press
+-        // cannot escape the death the landing owes.
++        // cannot escape the death the landing owes. The hit is still heard: the
++        // air reaction is reported now and `died` arrives on landing.
++        if (events != nullptr) {
++            if (heavy) {
++                events->hurtHeavy = true;
++            } else {
++                events->hurtLight = true;
++            }
++        }
+         if (combat.health <= 0.0f) {
+             combat.pendingDeath = true;
+             combat.catchSecondsLeft = 0.0f;
+         }
+         return true;
+     }
+ 
+     if (combat.health <= 0.0f) {
+         enter_dead(combat);
++        if (events != nullptr) {
++            events->died = true;
++        }
+         return true;
+     }
+ 
+     enter_hurt(combat, heavy);
++    if (events != nullptr) {
++        if (heavy) {
++            events->hurtHeavy = true;
++        } else {
++            events->hurtLight = true;
++        }
++    }
+     return true;
+ }
+ 
+ void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPosition,
+                          float spawnYawDeg, const CombatTuning& tuning) {
+     player.position = spawnPosition;
+     player.yawDeg = spawnYawDeg;
+ 
+     combat.mode = PlayerMode::Grounded;
+     combat.modeSeconds = 0.0f;
+diff --git a/app/src/player_state.h b/app/src/player_state.h
+index d8285d0..d8708ba 100644
+--- a/app/src/player_state.h
++++ b/app/src/player_state.h
+@@ -121,25 +121,35 @@ struct CombatTuning {
+     float invulnSeconds = 1.0f;      // i-frame window after a hit
+     float stompDamage = 35.0f;       // direct stomp
+     float stompWaveDamage = 15.0f;   // stomp shockwave
+     float clubDamage = 45.0f;        // club swing
+     float mediumHurtSeconds = 0.40f;  // m_fly2, one clip
+     float heavyHurtSeconds = 1.23f;   // h_fly1 0.60 s + h_fly_end 0.63 s
+ };
+ 
+ // What one step changed. `damageDealt` is the amount of the single damage event
+ // this step emitted (0 when none); the app applies it to the encounter.
++//
++// The S5 seam (design §7.4) adds report-only flags: the state machine never
++// plays a sound or touches a device, it says what happened and the app's
++// translation layer decides. `struck` is the release of a swing (a hit or a
++// whiff); `hurtLight`/`hurtHeavy` are damage taken (`heavy` selects the long
++// reaction); `died` is the death mode being entered.
+ struct StepEvents {
+     int damageDealt = 0;
+     bool gripBroke = false;
+     bool landed = false;
+     bool grabbed = false;
++    bool struck = false;
++    bool hurtLight = false;
++    bool hurtHeavy = false;
++    bool died = false;
+ };
+ 
+ // Advances the state machine one frame and returns its events.
+ //
+ // `dtSeconds` is clamped into [0, 0.05] exactly like `player_update`, so a
+ // frame-time spike cannot skip a band or overcharge a strike.
+ //
+ // Grounded: `player_update` then `resolve_player_collision(player,
+ // frame.entityCapsules, *frame.heightmap)` — the S3 order — then stamina regen
+ // (25/s after a 1 s delay) and a grab on a rising edge when a band surface is
+@@ -177,40 +187,46 @@ struct StepEvents {
+ // enters Falling with `catchSeconds` left; a fresh grab press with stamina
+ // left inside that window re-attaches to `nearest_climb_band(...,
+ // catchRange)`. A grab that never took hold is not a grip break: a failed
+ // initial grab stays Grounded with no event and no window. Landing enters
+ // Staggered, then Grounded after `staggerSeconds`; a landing with
+ // `pendingDeath` set enters Dead instead.
+ //
+ // Hurt: the reaction clock runs until `mediumHurtSeconds` or
+ // `heavyHurtSeconds`, then the player returns to Grounded. Dead is terminal
+ // until `reset_player_combat`: it ignores input and never leaves the mode. The
+-// i-frame counter ticks down in every mode.
++// i-frame counter ticks down in every mode. The S5 report flags are set on the
++// release (`struck`, hit or whiff) and on a landing that resolves
++// `pendingDeath` (`died`); a step never plays a sound or touches a device.
+ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerInput& input,
+                        const PlayerFrame& frame, const CombatTuning& tuning, float dtSeconds);
+ 
+ // The one damage entry point (design §7.5). Returns true when the hit landed,
+ // false when it was ignored (Dead, an active i-frame window, or a non-positive
+ // or non-finite amount).
+ //
+ // A landed hit subtracts HP (clamped to [0, maxHealth]) and starts the i-frame
+ // window. On the ground — Grounded, Grabbing, Climbing, Striking or Staggered —
+ // it enters Hurt; Staggered therefore cancels into Hurt. A lethal hit on the
+ // ground enters Dead at once. Damage taken while Falling never cancels the
+ // fall: it keeps health/state changes, and a lethal hit only sets
+ // `pendingDeath`, which `player_step` resolves on landing (Dead instead of
+ // Staggered). Hurt lasts `mediumHurtSeconds` or `heavyHurtSeconds`; `heavyHit`
+ // records which and selects the reaction clip.
+ //
++// `events`, when given, receives the S5 report flags for the same hit: a
++// non-lethal hit sets `hurtLight`/`hurtHeavy` (also in the air — the hit is
++// heard), a ground-lethal hit sets `died` only. The call never plays a sound.
++//
+ // The function does not move the player. Attacks cannot target an attached
+ // player (design §7.4), so the Hurt entry from an attached mode is a defensive
+ // path rather than a reachable fight state.
+ bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
+-                        const CombatTuning& tuning);
++                        const CombatTuning& tuning, StepEvents* events = nullptr);
+ 
+ // The R soft reset (design §7.5): the player goes back to the manifest spawn
+ // with full HP and stamina, no i-frames, no pending reactions and no stale
+ // climb/strike state. The caller resets the encounter (reset_encounter in
+ // app.h), the clip playbacks and the camera; this helper owns only the
+ // player's own state.
+ void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPosition,
+                          float spawnYawDeg, const CombatTuning& tuning);
+diff --git a/app/tests/test_audio.cpp b/app/tests/test_audio.cpp
+index eb445b8..2ba8e26 100644
+--- a/app/tests/test_audio.cpp
++++ b/app/tests/test_audio.cpp
+@@ -572,10 +572,84 @@ TEST_CASE("the shipped audio manifest loads every entry") {
+ 
+     AudioEngine engine;
+     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
+                     engine.last_error());
+     CHECK(engine.clip_count() == 8);
+     for (const char* name : {"valus.hurt", "valus.impact", "valus.telegraph", "player.death",
+                              "player.hit", "player.swing", "player.hurt", "music.boss"}) {
+         CHECK_MESSAGE(engine.has(name), name);
+     }
+ }
++
++TEST_CASE("the capture API writes a non-silent 48 kHz WAV from played cues") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    CHECK_FALSE(engine.capturing());
++    CHECK_FALSE(engine.end_capture());  // nothing to finish
++
++    const std::filesystem::path mix = dir.path() / "capture.wav";
++    REQUIRE_MESSAGE(engine.begin_capture(mix.string()), engine.last_error());
++    CHECK(engine.capturing());
++    CHECK_FALSE(engine.begin_capture((dir.path() / "second.wav").string()));
++    CHECK(engine.last_error().find("in progress") != std::string::npos);
++
++    // The cue is played after the capture starts; no device may open.
++    engine.play_ui("tone");
++    CHECK(engine.queued_audio_bytes() == 0);
++    for (int frame = 0; frame < 60; ++frame) {
++        engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
++    }
++    CHECK(engine.captured_frames() == 48000);
++    REQUIRE_MESSAGE(engine.end_capture(), engine.last_error());
++    CHECK_FALSE(engine.capturing());
++    CHECK(engine.queued_audio_bytes() == 0);  // still no device
++
++    const AudioClip clip = read_mixdown(mix);
++    CHECK(clip.frames() == 48000);
++    CHECK(stereo_rms(clip) > 0.05f);
++    CHECK(peak(clip) > 0.1f);
++    CHECK(peak(clip) <= 1.0f);
++
++    // 60 frames at 1/60 s is exactly one second of 48 kHz stereo float32.
++    CHECK(std::filesystem::file_size(mix) == 44u + 48000u * 2u * 4u);
++}
++
++TEST_CASE("the master gain keeps a music+SFX sum under 0.99") {
++    const TempDir dir;
++    // The realistic worst pair: a 0.5-peak music bed (category 0.7) under a
++    // 0.8-peak one-shot (category 1.0) sums to 1.15 before the master stage.
++    write_tone_wav(dir, "audio/test/score.wav", 1.0f, 0.5f, 1);
++    write_tone_wav(dir, "audio/test/impact.wav", 1.0f, 0.8f, 1);
++    write_tone_wav(dir, "audio/test/full.wav", 1.0f, 1.0f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"score", "audio/test/score.wav", 1, 48000, 1},
++                             {"impact", "audio/test/impact.wav", 1, 48000, 0},
++                             {"full", "audio/test/full.wav", 1, 48000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++
++    engine.play_music("score");
++    engine.play_ui("impact");
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "sum.wav").string(), 1),
++                    engine.last_error());
++    const AudioClip sum = read_mixdown(dir.path() / "sum.wav");
++    // Without the 0.85 master gain this block would peak at 1.15 (clamped);
++    // with it the sum lands at 0.9775, inside the 0.99 delivery ceiling.
++    CHECK(peak(sum) == doctest::Approx(AudioEngine::kMasterGain * 1.15f).epsilon(0.01));
++    CHECK(peak(sum) <= 0.99f);
++
++    // A lone full-scale sample proves the stage itself: exactly -1.41 dB.
++    engine.reset();
++    engine.play_ui("full");
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "full.wav").string(), 1),
++                    engine.last_error());
++    const AudioClip full = read_mixdown(dir.path() / "full.wav");
++    CHECK(peak(full) == doctest::Approx(AudioEngine::kMasterGain).epsilon(0.001));
++}
+diff --git a/app/tests/test_audio_events.cpp b/app/tests/test_audio_events.cpp
+new file mode 100644
+index 0000000..961f423
+--- /dev/null
++++ b/app/tests/test_audio_events.cpp
+@@ -0,0 +1,269 @@
++// The S5 seam (design §7.4): `StepEvents` and the encounter transitions become
++// a fixed-capacity cue queue, and the cue table maps every `Sfx` to a shipped
++// manifest clip or deliberately to silence. Everything here is pure data — no
++// SDL audio device, no playback — except the last case, which loads the real
++// manifest (still without opening a device).
++#include <doctest.h>
++
++#include <cstdlib>
++#include <filesystem>
++#include <stdexcept>
++#include <string>
++#include <system_error>
++
++#include "audio.h"
++#include "audio_events.h"
++#include "audio_map.h"
++#include "math3d.h"
++
++namespace {
++
++std::filesystem::path test_library() {
++    const char* value = std::getenv("SOTC_LIB");
++    if (value == nullptr || value[0] == '\0') {
++        throw std::runtime_error("Set SOTC_LIB to the converted asset library.");
++    }
++    std::filesystem::path library = value;
++    if (library.is_relative()) {
++        const std::filesystem::path repo_root =
++            std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
++        library = repo_root / library;
++    }
++    return library;
++}
++
++bool has_id(const SfxQueue& queue, Sfx id) {
++    for (int i = 0; i < queue.count; ++i) {
++        if (queue.items[static_cast<std::size_t>(i)].id == id) {
++            return true;
++        }
++    }
++    return false;
++}
++
++}  // namespace
++
++TEST_CASE("StepEvents hurt flags translate to HurtLight/HurtHeavy") {
++    const Vec3 at{1.5f, 8.0f, -2.0f};
++    SfxQueue queue;
++
++    StepEvents light;
++    light.hurtLight = true;
++    append_player_sfx(light, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::HurtLight);
++    CHECK(queue.items[0].spatial);
++    CHECK(queue.items[0].gain == doctest::Approx(1.0f));
++    CHECK(queue.items[0].position.x == doctest::Approx(at.x));
++    CHECK(queue.items[0].position.y == doctest::Approx(at.y));
++    CHECK(queue.items[0].position.z == doctest::Approx(at.z));
++
++    queue.clear();
++    StepEvents heavy;
++    heavy.hurtHeavy = true;
++    append_player_sfx(heavy, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::HurtHeavy);
++    CHECK(queue.items[0].spatial);
++    CHECK_FALSE(has_id(queue, Sfx::HurtLight));
++}
++
++TEST_CASE("a landed strike translates to Strike + StrikeHit; a whiff to Strike") {
++    const Vec3 at{0.0f, 1.0f, 0.0f};
++    SfxQueue queue;
++
++    // A whiff still swings the sword: `struck` is the release; a landed hit is
++    // the damage event (the state machine's damageDealt is 0 here).
++    StepEvents whiff;
++    whiff.struck = true;
++    append_player_sfx(whiff, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::Strike);
++    CHECK_FALSE(queue.items[0].spatial);  // Wander's own swing is centred
++    CHECK_FALSE(has_id(queue, Sfx::StrikeHit));
++
++    queue.clear();
++    StepEvents landed;
++    landed.struck = true;
++    landed.damageDealt = 34;  // a landed shell hit reports its damage
++    append_player_sfx(landed, at, queue);
++    REQUIRE(queue.count == 2);
++    // The swing sounds before the hit it lands.
++    CHECK(queue.items[0].id == Sfx::Strike);
++    CHECK(queue.items[1].id == Sfx::StrikeHit);
++    CHECK(queue.items[1].spatial);
++    CHECK(queue.items[1].position.y == doctest::Approx(at.y));
++}
++
++TEST_CASE("grab/grip break/land translate") {
++    const Vec3 at{4.0f, 0.0f, 4.0f};
++    SfxQueue queue;
++
++    StepEvents grabbed;
++    grabbed.grabbed = true;
++    append_player_sfx(grabbed, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::Grab);
++
++    queue.clear();
++    StepEvents broke;
++    broke.gripBroke = true;
++    append_player_sfx(broke, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::GripBreak);
++
++    queue.clear();
++    StepEvents landed;
++    landed.landed = true;
++    append_player_sfx(landed, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::Land);
++
++    // A step that reports nothing pushes nothing.
++    queue.clear();
++    append_player_sfx(StepEvents{}, at, queue);
++    CHECK(queue.count == 0);
++}
++
++TEST_CASE("Valus impact translates StompImpact/ClubImpact once per beat") {
++    const Vec3 at{-3.0f, 12.0f, 2.0f};
++    SfxQueue queue;
++
++    append_encounter_sfx(EncounterSfx::StompStart, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::StompStart);
++    CHECK(queue.items[0].spatial);
++    CHECK(queue.items[0].position.x == doctest::Approx(at.x));
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::StompImpact, at, queue);
++    REQUIRE(queue.count == 1);  // one beat, one impact cue
++    CHECK(queue.items[0].id == Sfx::StompImpact);
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::ClubStart, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::ClubStart);
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::ClubImpact, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::ClubImpact);
++    CHECK_FALSE(has_id(queue, Sfx::StompImpact));
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::ValusReaction, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::ValusReaction);
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::ValusDefeat, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::ValusDefeat);
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::ClubCancel, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::ClubCancel);
++
++    queue.clear();
++    append_encounter_sfx(EncounterSfx::Reset, at, queue);
++    REQUIRE(queue.count == 1);
++    CHECK(queue.items[0].id == Sfx::Reset);
++}
++
++TEST_CASE("reset clears the queue") {
++    SfxQueue queue;
++    StepEvents events;
++    events.struck = true;
++    events.damageDealt = 34;
++    append_player_sfx(events, Vec3{}, queue);
++    append_encounter_sfx(EncounterSfx::StompImpact, Vec3{}, queue);
++    REQUIRE(queue.count == 3);
++    CHECK_FALSE(queue.empty());
++
++    queue.clear();
++    CHECK(queue.count == 0);
++    CHECK(queue.empty());
++
++    // The fixed buffer is bounded: the 65th cue is dropped, never written out
++    // of range.
++    for (int i = 0; i < SfxQueue::kCapacity + 5; ++i) {
++        queue.push(SfxEvent{Sfx::Strike, 1.0f, Vec3{}, false});
++    }
++    CHECK(queue.count == SfxQueue::kCapacity);
++}
++
++TEST_CASE("the cue table maps the shipped slice and defers the rest") {
++    struct Expected {
++        Sfx id;
++        const char* name;
++        const char* clip;  // nullptr = deliberately silent
++        float gain;
++    };
++    const Expected expected[] = {
++        {Sfx::Strike, "strike", "player.swing", 0.60f},
++        {Sfx::StrikeHit, "strike_hit", "player.hit", 0.60f},
++        {Sfx::Grab, "grab", nullptr, 1.0f},
++        {Sfx::GripBreak, "grip_break", nullptr, 1.0f},
++        {Sfx::Land, "land", nullptr, 1.0f},
++        {Sfx::HurtLight, "hurt_light", "player.hurt", 1.0f},
++        {Sfx::HurtHeavy, "hurt_heavy", "player.hurt", 1.25f},
++        {Sfx::Death, "death", "player.death", 0.80f},
++        {Sfx::StompStart, "stomp_start", "valus.telegraph", 0.60f},
++        {Sfx::StompImpact, "stomp_impact", "valus.impact", 0.50f},
++        {Sfx::ClubStart, "club_start", "valus.telegraph", 0.60f},
++        {Sfx::ClubImpact, "club_impact", "valus.impact", 0.50f},
++        {Sfx::ClubCancel, "club_cancel", nullptr, 1.0f},
++        {Sfx::ValusReaction, "valus_reaction", "valus.hurt", 0.60f},
++        {Sfx::ValusDefeat, "valus_defeat", nullptr, 1.0f},
++        {Sfx::FootLeft, "foot_left", nullptr, 1.0f},
++        {Sfx::FootRight, "foot_right", nullptr, 1.0f},
++        {Sfx::Reset, "reset", nullptr, 1.0f},
++    };
++    REQUIRE(static_cast<int>(Sfx::Count) ==
++            static_cast<int>(sizeof(expected) / sizeof(expected[0])));
++
++    for (const Expected& row : expected) {
++        CAPTURE(row.name);
++        const SoundCue* cue = cue_for(row.id);
++        CHECK(std::string(sfx_name(row.id)) == row.name);
++        if (row.clip == nullptr) {
++            CHECK(cue == nullptr);
++        } else {
++            REQUIRE(cue != nullptr);
++            CHECK(std::string(cue->clip) == row.clip);
++            CHECK(cue->gain == doctest::Approx(row.gain));
++            CHECK_FALSE(cue->loop);
++        }
++    }
++
++    // Every id has a distinct name; Count is not a cue.
++    CHECK(std::string(sfx_name(Sfx::Count)) == "unknown");
++    CHECK(cue_for(Sfx::Count) == nullptr);
++}
++
++TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
++    const std::filesystem::path library = test_library();
++    const std::filesystem::path manifest = library / "audio" / "audio.manifest";
++    REQUIRE_MESSAGE(std::filesystem::is_regular_file(manifest),
++                    ("missing " + manifest.string()).c_str());
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
++                    engine.last_error());
++
++    // The load gate: every non-null cue's clip exists, so the app can start
++    // the encounter without a silent hole.
++    const Sfx missing = missing_cue([&engine](const char* clip) { return engine.has(clip); });
++    CHECK(missing == Sfx::Count);
++
++    // A rejected clip is reported as the event that names it (the load error's
++    // `Sfx` name), not as a bare file path.
++    const Sfx rejected =
++        missing_cue([&engine](const char* clip) {
++            return std::string(clip) != "valus.hurt" && engine.has(clip);
++        });
++    CHECK(rejected == Sfx::ValusReaction);
++    CHECK(std::string(sfx_name(rejected)) == "valus_reaction");
++}
+diff --git a/app/tests/test_player_state.cpp b/app/tests/test_player_state.cpp
+index 3bf0495..6f74422 100644
+--- a/app/tests/test_player_state.cpp
++++ b/app/tests/test_player_state.cpp
+@@ -1,21 +1,25 @@
+ // The player combat state machine (S4.1 Task 3): grab, climb, hold-to-charge
+ // strike, stamina, falling, catch and stagger. Frames are hand-built joint
+ // lookups and heightmaps, so this file needs no asset library.
+ #include <doctest.h>
+ 
+ #include <algorithm>
+ #include <cmath>
+ #include <cstddef>
++#include <filesystem>
++#include <fstream>
++#include <iterator>
+ #include <limits>
+ #include <string>
+ #include <string_view>
++#include <type_traits>
+ #include <utility>
+ #include <vector>
+ 
+ #include "app.h"
+ #include "collision.h"
+ #include "grab.h"
+ #include "heightmap.h"
+ #include "math3d.h"
+ #include "player.h"
+ #include "player_state.h"
+@@ -1415,20 +1419,218 @@ TEST_CASE("the right arm band carries weakpoint 1") {
+     PlayerInput input{};
+     input.grab = true;
+     StepEvents e = player_step(player, combat, input, frame, CombatTuning{}, kStep);
+ 
+     REQUIRE(e.grabbed);
+     REQUIRE(combat.mode == PlayerMode::Grabbing);
+     CHECK(combat.band == ClimbBandId::RightArm);
+     CHECK(combat.weakpoint == 1);
+ }
+ 
++// --- S5 seam: the additive hurt/death/strike reports -------------------------
++
++TEST_CASE("damage reports light and heavy hurt flags, and death as died") {
++    const CombatTuning tuning{};
++
++    // A light hit reports HurtLight (the i-frame window then swallows the next
++    // hit whole, so no second report).
++    {
++        PlayerCombat combat{};
++        StepEvents events;
++        REQUIRE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning,
++                                   &events));
++        CHECK(events.hurtLight);
++        CHECK_FALSE(events.hurtHeavy);
++        CHECK_FALSE(events.died);
++
++        StepEvents blocked;
++        CHECK_FALSE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning,
++                                       &blocked));
++        CHECK_FALSE(blocked.hurtLight);
++        CHECK_FALSE(blocked.hurtHeavy);
++        CHECK_FALSE(blocked.died);
++    }
++
++    // A heavy hit is the club's: HurtHeavy, not HurtLight.
++    {
++        PlayerCombat combat{};
++        StepEvents events;
++        REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning,
++                                   &events));
++        CHECK(events.hurtHeavy);
++        CHECK_FALSE(events.hurtLight);
++        CHECK_FALSE(events.died);
++    }
++
++    // A lethal ground hit enters Dead: died, and no hurt reaction (the death
++    // clip supersedes it).
++    {
++        PlayerCombat combat{};
++        combat.health = tuning.clubDamage;
++        StepEvents events;
++        REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning,
++                                   &events));
++        CHECK(combat.mode == PlayerMode::Dead);
++        CHECK(events.died);
++        CHECK_FALSE(events.hurtLight);
++        CHECK_FALSE(events.hurtHeavy);
++    }
++
++    // The same flags are optional: the four-argument call still compiles and
++    // reports through its return value alone.
++    {
++        PlayerCombat combat{};
++        CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
++        CHECK(combat.mode == PlayerMode::Hurt);
++    }
++}
++
++TEST_CASE("a strike release reports struck on a hit and on a whiff") {
++    bool joints_ok = true;
++    Heightmap high = flat_heightmap(10.0f, 8.0f);
++    const CombatTuning tuning{};
++
++    // A landed full charge.
++    {
++        PlayerState player{};
++        player.position = Vec3{0.0f, 8.0f, 0.0f};
++        PlayerCombat combat{};
++        PlayerInput input;
++        input.grab = true;
++        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
++        REQUIRE(combat.mode == PlayerMode::Grabbing);
++        input.strike = true;
++        for (int i = 0; i < 60; ++i) {
++            const StepEvents held =
++                player_step(player, combat, input, head_frame(high, joints_ok), tuning,
++                            kStep);
++            CHECK_FALSE(held.struck);  // the release, not the charge
++        }
++        input.strike = false;
++        const StepEvents release =
++            player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
++        CHECK(release.struck);
++        CHECK(release.damageDealt == 34);
++        CHECK(combat.strikeHit);
++    }
++
++    // A whiff: the release still swings (struck), with no damage.
++    {
++        PlayerState player{};
++        player.position = Vec3{0.0f, 8.0f, 0.0f};
++        PlayerCombat combat{};
++        PlayerInput input;
++        input.grab = true;
++        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
++        REQUIRE(combat.mode == PlayerMode::Grabbing);
++        input.strike = true;
++        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
++        input.strike = false;
++        const WeakpointProxyLookup far = [](int, Vec3& center, float& radius) {
++            center = Vec3{0.0f, 8.5f, 0.0f};
++            radius = 0.01f;
++            return true;
++        };
++        const StepEvents release =
++            player_step(player, combat, input, head_frame(high, joints_ok, far), tuning,
++                        kStep);
++        CHECK(release.struck);
++        CHECK(release.damageDealt == 0);
++        CHECK_FALSE(combat.strikeHit);
++    }
++}
++
++TEST_CASE("a pending death reports died when the landing resolves it") {
++    Heightmap ground = flat_heightmap();
++    PlayerFrame frame = frame_of(ground, lookup_of({}));
++    PlayerState player{};
++    player.position = Vec3{0.0f, 1.0f, 0.0f};
++    PlayerInput input{};
++    const CombatTuning tuning{};
++    PlayerCombat combat{};
++    combat.mode = PlayerMode::Falling;
++
++    // The air hit reports hurt (the hit landed) but not died: the fall resolves
++    // it on landing.
++    StepEvents hit;
++    REQUIRE(player_take_damage(combat, tuning.maxHealth, /*heavy=*/true, tuning, &hit));
++    CHECK(hit.hurtHeavy);
++    CHECK_FALSE(hit.died);
++    REQUIRE(combat.pendingDeath);
++
++    StepEvents last{};
++    int frames = 0;
++    while (combat.mode == PlayerMode::Falling && frames < 600) {
++        last = player_step(player, combat, input, frame, tuning, kStep);
++        ++frames;
++    }
++    CHECK(combat.mode == PlayerMode::Dead);
++    CHECK(last.landed);
++    CHECK(last.died);
++}
++
++TEST_CASE("player_step stays a pure function of its arguments") {
++    // The seam is structural: StepEvents is a plain value with no handle, so a
++    // step can report sound only through its return value (no callback, no
++    // device, no file). The same inputs from the same state produce the same
++    // state and events.
++    static_assert(std::is_trivially_copyable_v<StepEvents>);
++    static_assert(std::is_trivially_copyable_v<PlayerCombat>);
++
++    Heightmap ground = flat_heightmap();
++    PlayerFrame frame = frame_of(ground, lookup_of({}));
++    const CombatTuning tuning{};
++    PlayerInput input;
++    input.grab = true;
++
++    PlayerState first{};
++    PlayerCombat firstCombat{};
++    PlayerState second{};
++    PlayerCombat secondCombat{};
++    for (int i = 0; i < 30; ++i) {
++        const StepEvents a = player_step(first, firstCombat, input, frame, tuning, kStep);
++        const StepEvents b = player_step(second, secondCombat, input, frame, tuning, kStep);
++        CHECK(a.grabbed == b.grabbed);
++        CHECK(a.struck == b.struck);
++        CHECK(a.damageDealt == b.damageDealt);
++        CHECK(a.hurtLight == b.hurtLight);
++        CHECK(a.hurtHeavy == b.hurtHeavy);
++        CHECK(a.died == b.died);
++    }
++    CHECK(first.position.x == second.position.x);
++    CHECK(first.position.y == second.position.y);
++    CHECK(first.position.z == second.position.z);
++    CHECK(firstCombat.mode == secondCombat.mode);
++    CHECK(firstCombat.health == secondCombat.health);
++}
++
++TEST_CASE("player_step has no I/O in its translation unit") {
++    // The state machine is the simulation; sound is an observer. The build
++    // would allow an SDL/audio include here, so pin the invariant in the source:
++    // no device, no file, no console. Any future I/O in the step has to move to
++    // the app's translation layer instead.
++    const std::filesystem::path source =
++        std::filesystem::path(__FILE__).parent_path().parent_path() / "src" /
++        "player_state.cpp";
++    REQUIRE(std::filesystem::is_regular_file(source));
++    std::ifstream in(source);
++    REQUIRE(in.good());
++    const std::string text((std::istreambuf_iterator<char>(in)),
++                           std::istreambuf_iterator<char>());
++    CHECK(text.find("#include <SDL3") == std::string::npos);
++    CHECK(text.find("#include \"audio") == std::string::npos);
++    CHECK(text.find("printf(") == std::string::npos);
++    CHECK(text.find("fopen(") == std::string::npos);
++    CHECK(text.find("std::cout") == std::string::npos);
++    CHECK(text.find("std::cerr") == std::string::npos);
++}
++
+ TEST_CASE("player_mode_name names every mode for the status line") {
+     CHECK(std::string(player_mode_name(PlayerMode::Grounded)) == "grounded");
+     CHECK(std::string(player_mode_name(PlayerMode::Grabbing)) == "grabbing");
+     CHECK(std::string(player_mode_name(PlayerMode::Climbing)) == "climbing");
+     CHECK(std::string(player_mode_name(PlayerMode::Striking)) == "striking");
+     CHECK(std::string(player_mode_name(PlayerMode::Falling)) == "falling");
+     CHECK(std::string(player_mode_name(PlayerMode::Staggered)) == "staggered");
+     CHECK(std::string(player_mode_name(PlayerMode::Hurt)) == "hurt");
+     CHECK(std::string(player_mode_name(PlayerMode::Dead)) == "dead");
+ }

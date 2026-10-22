@@ -1,0 +1,2243 @@
+# Review package: 6962191..HEAD
+
+## Commits
+57ed5f5 feat(convert): decode the S5 audio slice
+
+## Files changed
+ src/BpConvert.Cli/Program.cs               | 113 +++++++
+ src/BpConvert.Core/Audio/AudioCodec.cs     | 499 +++++++++++++++++++++++++++++
+ src/BpConvert.Core/Audio/AudioConverter.cs | 428 +++++++++++++++++++++++++
+ src/BpConvert.Core/Audio/AudioManifest.cs  | 225 +++++++++++++
+ src/BpConvert.Core/Audio/SxdTables.cs      |  86 ++++-
+ src/BpConvert.Core/Audio/WavWriter.cs      |  74 +++++
+ tests/BpConvert.Tests/AudioTests.cs        | 390 +++++++++++++++++++++-
+ tools/re/audio/s5_audition.py              |  68 +++-
+ tools/re/audio/s5_map.json                 |  12 +
+ 9 files changed, 1889 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/src/BpConvert.Cli/Program.cs b/src/BpConvert.Cli/Program.cs
+index 21520e2..aca3ea0 100644
+--- a/src/BpConvert.Cli/Program.cs
++++ b/src/BpConvert.Cli/Program.cs
+@@ -1,46 +1,53 @@
+ ﻿using System.Text;
+ using BpConvert.Core;
++using BpConvert.Core.Audio;
+ using BpConvert.Core.Pipeline;
+ 
+ if (args.Length == 0)
+ {
+     PrintUsage();
+     return 2;
+ }
+ 
+ switch (args[0])
+ {
+     case "inspect":
+         return InspectCommand(args);
+     case "convert":
+         return ConvertCommand(args);
++    case "audio":
++        return AudioCommand(args);
+     case "report":
+         return ReportCommand(args);
+     default:
+         Console.Error.WriteLine($"bp-convert: unknown verb '{args[0]}'");
+         PrintUsage();
+         return 2;
+ }
+ 
+ static void PrintUsage()
+ {
+     Console.Error.WriteLine("usage:");
+     Console.Error.WriteLine("  bp-convert inspect <file>    print size, first 32 header bytes and a library parse summary");
+     Console.Error.WriteLine("  bp-convert convert --root <game> --out <lib> [--under <dir|file>]... [--ext cmsh] [--clips <name,...>] [--jobs N] [--force]");
+     Console.Error.WriteLine("                               convert every matching source; outcomes recorded in <lib>/catalog.json");
+     Console.Error.WriteLine("                               --clips bakes <game>/cp3shadow/anim/<name>.anb into each glb;");
+     Console.Error.WriteLine("                               scope it to one model with --under <file>: every baked track must");
+     Console.Error.WriteLine("                               map into that model's skeleton, so a directory-scope run fails on");
+     Console.Error.WriteLine("                               non-matching sources. Recorded-ok sources need --force to rebake.");
+     Console.Error.WriteLine("  bp-convert report --out <lib> [--top N]");
+     Console.Error.WriteLine("                               print catalog counts and the top-N failure reasons");
++    Console.Error.WriteLine("  bp-convert audio --root <game> --out <lib> --map <map.json> [--events a,b] [--music <track>] [--force]");
++    Console.Error.WriteLine("                               decode the curated cues to <lib>/audio/<bank>/<event>.wav and");
++    Console.Error.WriteLine("                               write <lib>/audio/audio.manifest; no selector = the whole map;");
++    Console.Error.WriteLine("                               --music \"Boss 1\" selects the streamed music cue");
+ }
+ 
+ static int InspectCommand(string[] args)
+ {
+     if (args.Length != 2)
+     {
+         Console.Error.WriteLine("usage: bp-convert inspect <file>");
+         return 2;
+     }
+ 
+@@ -188,20 +195,126 @@ static int ConvertCommand(string[] args)
+         return 1;
+     }
+     catch (Exception e) when (e is IOException or UnauthorizedAccessException or AggregateException)
+     {
+         var cause = (e as AggregateException)?.InnerException ?? e;
+         Console.Error.WriteLine($"bp-convert convert: {cause.GetType().Name}: {cause.Message}");
+         return 1;
+     }
+ }
+ 
++/// <summary>
++/// <c>audio --root &lt;game&gt; --out &lt;lib&gt; --map &lt;map.json&gt; [--events a,b] [--music &lt;track&gt;] [--force]</c>.
++/// Decodes the curated cue map into <c>&lt;lib&gt;/audio/&lt;bank&gt;/&lt;event&gt;.wav</c> and merges the R1
++/// <c>&lt;lib&gt;/audio/audio.manifest</c>. Exit codes: 0 = ok, 1 = decode/IO/map failure (the message
++/// names the event), 2 = bad invocation.
++/// </summary>
++static int AudioCommand(string[] args)
++{
++    string? root = null, outLib = null, map = null, eventsText = null, music = null;
++    var force = false;
++
++    for (var i = 1; i < args.Length; i++)
++    {
++        switch (args[i])
++        {
++            case "--root":
++                if (!TryValue(args, ref i, out root)) return MissingValue("--root");
++                break;
++            case "--out":
++                if (!TryValue(args, ref i, out outLib)) return MissingValue("--out");
++                break;
++            case "--map":
++                if (!TryValue(args, ref i, out map)) return MissingValue("--map");
++                break;
++            case "--events":
++                if (!TryValue(args, ref i, out eventsText)) return MissingValue("--events");
++                break;
++            case "--music":
++                if (!TryValue(args, ref i, out music)) return MissingValue("--music");
++                break;
++            case "--force":
++                force = true;
++                break;
++            default:
++                Console.Error.WriteLine($"bp-convert audio: unknown argument '{args[i]}'");
++                PrintUsage();
++                return 2;
++        }
++    }
++
++    if (root is null)
++    {
++        Console.Error.WriteLine("bp-convert audio: --root <game> is required");
++        PrintUsage();
++        return 2;
++    }
++    if (outLib is null)
++    {
++        Console.Error.WriteLine("bp-convert audio: --out <lib> is required");
++        PrintUsage();
++        return 2;
++    }
++    if (map is null)
++    {
++        Console.Error.WriteLine("bp-convert audio: --map <map.json> is required");
++        PrintUsage();
++        return 2;
++    }
++    if (!File.Exists(map))
++    {
++        Console.Error.WriteLine($"bp-convert audio: map not found: {map}");
++        return 2;
++    }
++
++    var events = Array.Empty<string>();
++    if (eventsText is not null)
++    {
++        events = eventsText.Split(',', StringSplitOptions.TrimEntries);
++        if (events.Any(name => name.Length == 0))
++        {
++            Console.Error.WriteLine(
++                $"bp-convert audio: --events contains an empty name (got '{eventsText}')");
++            return 2;
++        }
++    }
++
++    Console.WriteLine($"audio: root={root} out={outLib} map={map} "
++        + $"events=[{string.Join(",", events)}] music={(music ?? "[all]")} "
++        + $"force={force.ToString().ToLowerInvariant()}");
++
++    try
++    {
++        var result = AudioConverter.Run(
++            new AudioConvertOptions(root, outLib, map, events, music, force), Console.WriteLine);
++        Console.WriteLine();
++        Console.WriteLine($"audio: {result.Written.Count} written, {result.Reused.Count} reused, "
++            + $"{result.Entries.Count} manifest entries");
++        return 0;
++    }
++    catch (ArgumentException e)
++    {
++        Console.Error.WriteLine($"bp-convert audio: {e.Message}");
++        return 2;
++    }
++    catch (InvalidDataException e)
++    {
++        Console.Error.WriteLine($"bp-convert audio: {e.Message}");
++        return 1;
++    }
++    catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
++    {
++        Console.Error.WriteLine($"bp-convert audio: {e.GetType().Name}: {e.Message}");
++        return 1;
++    }
++}
++
+ /// <summary>
+ /// <c>report --out &lt;lib&gt; [--top N]</c>: counts per status plus the top-N failure reasons
+ /// (message → count, one sample source each). Exit codes: 0 = ok, 1 = unreadable catalog,
+ /// 2 = bad invocation or no catalog yet.
+ /// </summary>
+ static int ReportCommand(string[] args)
+ {
+     string? outLib = null, topText = null;
+     for (var i = 1; i < args.Length; i++)
+     {
+diff --git a/src/BpConvert.Core/Audio/AudioCodec.cs b/src/BpConvert.Core/Audio/AudioCodec.cs
+new file mode 100644
+index 0000000..10d1726
+--- /dev/null
++++ b/src/BpConvert.Core/Audio/AudioCodec.cs
+@@ -0,0 +1,499 @@
++using System.Buffers.Binary;
++using System.ComponentModel;
++using System.Diagnostics;
++using System.Runtime.InteropServices;
++
++namespace BpConvert.Core.Audio;
++
++/// <summary>
++/// One decoded clip: interleaved float samples (a frame is <see cref="Channels"/> consecutive
++/// samples) at <see cref="Rate"/> Hz.
++/// </summary>
++/// <param name="Samples">
++/// Interleaved samples in <c>[-1, 1]</c> after <see cref="AudioCodec.Decode"/> normalizes; the
++/// raw path (<c>normalize: false</c>) may overshoot the way an AT9 overlap-add does.
++/// </param>
++/// <param name="Channels">1 or 2: 5.1 sources are downmixed at decode time (ruling R6).</param>
++/// <param name="Rate">Sample rate in Hz (48 000 on every shipped wave).</param>
++public sealed record DecodedAudio(float[] Samples, int Channels, int Rate)
++{
++    /// <summary>
++    /// The attenuation <see cref="AudioCodec.Normalize"/> applied to the peak, in dB (0 when the
++    /// clip was already at/below the ceiling). The manifest records it as <c>gain_db</c>.
++    /// </summary>
++    public double GainDb { get; init; }
++
++    /// <summary>Per-channel frame count.</summary>
++    public int Frames => Channels > 0 ? Samples.Length / Channels : 0;
++
++    /// <summary>Measured duration in seconds.</summary>
++    public double Seconds => Rate > 0 ? (double)Frames / Rate : 0;
++
++    /// <summary>The absolute sample peak.</summary>
++    public float Peak
++    {
++        get
++        {
++            var peak = 0f;
++            foreach (var sample in Samples)
++            {
++                var value = MathF.Abs(sample);
++                if (value > peak)
++                    peak = value;
++            }
++
++            return peak;
++        }
++    }
++
++    /// <summary>The root-mean-square across every interleaved sample.</summary>
++    public double Rms
++    {
++        get
++        {
++            if (Samples.Length == 0)
++                return 0;
++            double sum = 0;
++            foreach (var sample in Samples)
++                sum += (double)sample * sample;
++            return Math.Sqrt(sum / Samples.Length);
++        }
++    }
++}
++
++/// <summary>
++/// The one decode entry point for the S5 audio slice (recon §4-§8, the C# counterpart of the
++/// approved <c>s5_decode_gate.py</c> paths):
++/// <list type="bullet">
++/// <item><c>0x21</c> (and its <c>0x00FF____</c> forms) — PS-ADPCM, 16-byte blocks of 28
++/// samples, the gate's 8-filter predictor table (filters 5-7 fitted, see <see cref="VagCoefficients"/>).</item>
++/// <item><c>0x42</c>/<c>0x0142</c>/<c>0x0242</c>/<c>0x0642</c> — ATRAC9 through <c>ffmpeg</c>
++/// with the record's own big-endian config word as extradata.</item>
++/// </list>
++/// A 6-channel clip is downmixed to stereo and every normalized clip peaks at ≤ 0.99. A rejected
++/// format/config or a non-finite sample throws <see cref="InvalidDataException"/>; there is no
++/// silent fallback.
++/// </summary>
++/// <remarks>
++/// <para>
++/// <c>ffmpeg</c> (with its built-in <c>atrac9</c> decoder) is a converter-time subprocess, never
++/// a runtime dependency of the viewer. Override its path with <c>FFMPEG</c>; the default is
++/// <c>ffmpeg</c> on <c>PATH</c>. The wrapper is the gate's exact
++/// <c>WAVEFORMATEXTENSIBLE</c> layout: AT9 GUID, <c>block_align = frame_bytes &lt;&lt;
++/// superframe</c>, and 12 bytes of extradata (<c>LE32 0</c> + the 4 config bytes + 4 zeros).
++/// </para>
++/// <para>
++/// The PS-ADPCM predictor table is the standard VAG table for filters 0-4 plus the coefficients
++/// fitted in Task 1 for filters 5-7 (they live in the NGS2 firmware, not in <c>eboot.elf</c>).
++/// The fitted entries are a documented fidelity compromise, not a firmware proof: the user's ear
++/// is the final identity/fidelity check for the <c>0x21</c> cues (recon §7.2).
++/// </para>
++/// </remarks>
++public static class AudioCodec
++{
++    /// <summary>The normalized peak ceiling (ruling R6: the mixer can never clip).</summary>
++    public const double PeakCeiling = 0.99;
++
++    /// <summary>The standard VAG predictor table plus the fitted filters 5-7 (recon §7.2).</summary>
++    public static readonly IReadOnlyList<(int C1, int C2)> VagCoefficients = new (int, int)[]
++    {
++        (0, 0), (60, 0), (115, -52), (98, -55), (122, -60),
++        (126, -62), (128, -64), (126, -63),
++    };
++
++    /// <summary>AT9 <c>fmt</c>-chunk GUID (<c>d242e147-ba36-8d4d-88fc-61654f8c836c</c>).</summary>
++    private static readonly byte[] At9Guid =
++        Convert.FromHexString("d242e147ba368d4d88fc61654f8c836c");
++
++    private const int PsAdpcmBlockBytes = 16;
++    private const int PsAdpcmSamplesPerBlock = 28;
++    private const int PsAdpcmCoefficientShift = 6;
++    private const float DownmixCenter = 0.707f;
++    private const float DownmixSurround = 0.5f;
++    private const int FfmpegTimeoutMs = 120_000;
++
++    /// <summary>
++    /// Decodes one carved wave payload.
++    /// </summary>
++    /// <param name="payload">Exactly the record's <c>+0x20</c> byte range (no padding, no header).</param>
++    /// <param name="formatWord">
++    /// The record's <c>+0x04</c> word: low byte = codec id, byte 1 = channel count.
++    /// </param>
++    /// <param name="codecConfig">
++    /// The record's AT9 config word (<c>WaveRecord.CodecConfig</c>); required for the <c>0x42</c>
++    /// family, ignored by PS-ADPCM.
++    /// </param>
++    /// <param name="sampleRate">The record's <c>+0x08</c> rate (48 000 on every shipped wave).</param>
++    /// <param name="normalize">
++    /// True (the public contract) scales the clip to peak ≤ 0.99 and records the gain. The audio
++    /// verb passes false so that layers are mixed at their decoded level and normalized once.
++    /// </param>
++    /// <exception cref="InvalidDataException">
++    /// The format word names an unsupported codec/channel count, the AT9 config is missing or
++    /// disagrees with the record, <c>ffmpeg</c> fails, or the decoded PCM is empty/non-finite.
++    /// </exception>
++    public static DecodedAudio Decode(
++        ReadOnlySpan<byte> payload, uint formatWord, uint codecConfig, uint sampleRate,
++        bool normalize = true)
++    {
++        if (payload.Length == 0)
++            throw Reject("empty payload");
++        if (sampleRate == 0 || sampleRate > int.MaxValue)
++            throw Reject($"sample rate {sampleRate} is not a valid rate");
++
++        var codec = formatWord & 0xFF;
++        var channels = (int)((formatWord >> 8) & 0xFF);
++        var rate = (int)sampleRate;
++
++        var decoded = codec switch
++        {
++            0x21 => DecodePsAdpcm(payload, channels, rate),
++            0x42 => DecodeAt9(payload, channels, rate, codecConfig),
++            _ => throw Reject($"format 0x{formatWord:X8} has codec 0x{codec:X2}, which has no decoder"),
++        };
++
++        ValidateFinite(decoded);
++        return normalize ? Normalize(decoded) : decoded;
++    }
++
++    /// <summary>
++    /// Scales a clip to peak ≤ <see cref="PeakCeiling"/> and records the applied gain in dB. A
++    /// clip already at/below the ceiling is returned unchanged with <c>GainDb = 0</c>. The scaled
++    /// output is clamped to [-1, 1] as a final safety, which is a no-op after the ceiling scale.
++    /// </summary>
++    /// <exception cref="InvalidDataException">The clip contains a NaN/Inf sample.</exception>
++    public static DecodedAudio Normalize(DecodedAudio audio)
++    {
++        ArgumentNullException.ThrowIfNull(audio);
++        ValidateFinite(audio);
++
++        var peak = audio.Peak;
++        if (peak <= (float)PeakCeiling)
++            return audio with { GainDb = 0 };
++
++        var gain = PeakCeiling / peak;
++        var samples = new float[audio.Samples.Length];
++        for (var i = 0; i < samples.Length; i++)
++            samples[i] = Math.Clamp((float)(audio.Samples[i] * gain), -1f, 1f);
++
++        return audio with { Samples = samples, GainDb = 20.0 * Math.Log10(gain) };
++    }
++
++    /// <summary>
++    /// PS-ADPCM: 16-byte blocks (1 header byte <c>shift|filter&lt;&lt;4</c>, 1 flags byte, 14
++    /// nibble bytes → 28 samples). Stereo banks alternate the channels block by block; each
++    /// channel keeps its own predictor state. Exact port of the gate's <c>ps_adpcm_decode</c>.
++    /// </summary>
++    private static DecodedAudio DecodePsAdpcm(ReadOnlySpan<byte> data, int channels, int rate)
++    {
++        if (channels is not (1 or 2))
++            throw Reject($"PS-ADPCM supports 1 or 2 channels, the record says {channels}");
++
++        var blocks = data.Length / PsAdpcmBlockBytes;
++        var framesPerChannel = blocks / channels;
++        if (framesPerChannel == 0)
++            throw Reject(
++                $"PS-ADPCM payload {data.Length} B holds no complete {channels}-channel block");
++
++        var frames = framesPerChannel * PsAdpcmSamplesPerBlock;
++        var samples = new float[frames * channels];
++        var previous1 = new int[channels];
++        var previous2 = new int[channels];
++
++        for (var block = 0; block < framesPerChannel * channels; block++)
++        {
++            var offset = block * PsAdpcmBlockBytes;
++            var header = data[offset];
++            var shift = header & 0x0F;
++            var filter = (header >> 4) & 0x07;
++            var (c1, c2) = VagCoefficients[filter];
++            var channel = block % channels;
++            var s1 = previous1[channel];
++            var s2 = previous2[channel];
++            var frame = (block / channels) * PsAdpcmSamplesPerBlock;
++
++            for (var i = 2; i < PsAdpcmBlockBytes; i++)
++            {
++                var value = data[offset + i];
++                for (var half = 0; half < 2; half++)
++                {
++                    var nibble = half == 0 ? value & 0x0F : value >> 4;
++                    var v = nibble < 8 ? nibble << 12 : (nibble - 16) << 12;
++                    v >>= shift;
++                    var s = v + ((s1 * c1 + s2 * c2) >> PsAdpcmCoefficientShift);
++                    s = s < short.MinValue ? short.MinValue : (s > short.MaxValue ? short.MaxValue : s);
++                    s2 = s1;
++                    s1 = s;
++                    samples[(frame++) * channels + channel] = s / 32768f;
++                }
++            }
++
++            previous1[channel] = s1;
++            previous2[channel] = s2;
++        }
++
++        return new DecodedAudio(samples, channels, rate);
++    }
++
++    /// <summary>
++    /// ATRAC9 through <c>ffmpeg</c>, using the record's config word as extradata (recon §4.3).
++    /// </summary>
++    private static DecodedAudio DecodeAt9(
++        ReadOnlySpan<byte> data, int channels, int rate, uint codecConfig)
++    {
++        if (codecConfig == 0)
++            throw Reject("ATRAC9 record has no config word");
++        if (codecConfig >> 24 != 0xFE)
++            throw Reject($"ATRAC9 config 0x{codecConfig:X8} does not start with 0xFE");
++
++        var sampleRateIndex = (int)((codecConfig >> 20) & 0x0F);
++        var blockConfig = (int)((codecConfig >> 17) & 0x07);
++        var frameBytes = (int)((codecConfig >> 5) & 0x7FF) + 1;
++        var superframe = (int)((codecConfig >> 3) & 0x03);
++
++        if (sampleRateIndex != 7 || rate != 48000)
++            throw Reject(
++                $"ATRAC9 config 0x{codecConfig:X8} is sri {sampleRateIndex}, but the record is {rate} Hz (only 48 kHz/sri 7 is shipped)");
++        var configChannels = blockConfig switch
++        {
++            0 => 1,
++            1 or 2 => 2,
++            3 => 6,
++            4 => 8,
++            5 => 4,
++            _ => 0,
++        };
++        if (configChannels != channels)
++            throw Reject(
++                $"ATRAC9 config 0x{codecConfig:X8} is {configChannels}ch, but the record says {channels}ch");
++        if (superframe is not (0 or 2))
++            throw Reject($"ATRAC9 config 0x{codecConfig:X8} has superframe index {superframe}");
++        if (channels is not (1 or 2 or 6))
++            throw Reject($"ATRAC9 supports 1, 2 or 6 channels here, the record says {channels}");
++
++        var wrapper = BuildAt9Wrapper(data, channels, rate, frameBytes << superframe, codecConfig);
++        var directory = Path.Combine(
++            Path.GetTempPath(), $"bpconvert-at9-{Guid.NewGuid():N}");
++        Directory.CreateDirectory(directory);
++        try
++        {
++            var input = Path.Combine(directory, "carved.at9.wav");
++            var raw = Path.Combine(directory, "decoded.f32");
++            File.WriteAllBytes(input, wrapper);
++
++            RunFfmpeg(input, raw, channels);
++            var pcm = ReadFloats(raw, channels);
++            var decoded = new DecodedAudio(pcm, channels, rate);
++            if (channels == 6)
++                decoded = DownmixToStereo(decoded);
++            return decoded;
++        }
++        finally
++        {
++            try
++            {
++                Directory.Delete(directory, true);
++            }
++            catch (IOException)
++            {
++                // A leftover temp file is not a decode failure.
++            }
++            catch (UnauthorizedAccessException)
++            {
++            }
++        }
++    }
++
++    /// <summary>
++    /// The gate's <c>at9_riff_with_config</c>: 52-byte <c>WAVEFORMATEXTENSIBLE</c> with the AT9
++    /// GUID, mask, and 12-byte extradata, followed by one <c>data</c> chunk.
++    /// </summary>
++    private static byte[] BuildAt9Wrapper(
++        ReadOnlySpan<byte> payload, int channels, int rate, int blockAlign, uint codecConfig)
++    {
++        var mask = channels switch
++        {
++            1 => 0x4u,
++            2 => 0x3u,
++            4 => 0x33u,
++            6 => 0x3Fu,
++            8 => 0x63Fu,
++            _ => throw Reject($"no WAVEFORMATEXTENSIBLE mask for {channels} channels"),
++        };
++
++        const int extraDataLength = 12;
++        const int formatLength = 52;
++        var body = new byte[4 + 8 + formatLength + 8 + payload.Length];
++        var span = body.AsSpan();
++
++        "WAVE"u8.CopyTo(span);
++        "fmt "u8.CopyTo(span[4..]);
++        BinaryPrimitives.WriteUInt32LittleEndian(span[8..], formatLength);
++
++        var fmt = span[12..];
++        BinaryPrimitives.WriteUInt16LittleEndian(fmt, 0xFFFE); // WAVE_FORMAT_EXTENSIBLE
++        BinaryPrimitives.WriteUInt16LittleEndian(fmt[2..], (ushort)channels);
++        BinaryPrimitives.WriteUInt32LittleEndian(fmt[4..], (uint)rate);
++        BinaryPrimitives.WriteUInt32LittleEndian(fmt[8..], 0); // byte rate is unused by AT9
++        BinaryPrimitives.WriteUInt16LittleEndian(fmt[12..], (ushort)blockAlign);
++        BinaryPrimitives.WriteUInt16LittleEndian(fmt[14..], 0); // bits per sample
++        BinaryPrimitives.WriteUInt16LittleEndian(fmt[16..], 22 + extraDataLength);
++        BinaryPrimitives.WriteUInt16LittleEndian(fmt[18..], 0); // valid bits
++        BinaryPrimitives.WriteUInt32LittleEndian(fmt[20..], mask);
++        At9Guid.CopyTo(fmt[24..]);
++        // extradata: LE32 version 0 | 4 big-endian config bytes | 4 zero bytes
++        BinaryPrimitives.WriteUInt32LittleEndian(fmt[40..], 0);
++        BinaryPrimitives.WriteUInt32BigEndian(fmt[44..], codecConfig);
++        BinaryPrimitives.WriteUInt32LittleEndian(fmt[48..], 0);
++
++        var at = 12 + formatLength;
++        "data"u8.CopyTo(span[at..]);
++        BinaryPrimitives.WriteUInt32LittleEndian(span[(at + 4)..], (uint)payload.Length);
++        payload.CopyTo(span[(at + 8)..]);
++
++        // "RIFF" + the size of everything after it (the body is "WAVE" onward).
++        var riff = new byte[8 + body.Length];
++        "RIFF"u8.CopyTo(riff);
++        BinaryPrimitives.WriteUInt32LittleEndian(riff.AsSpan(4), (uint)body.Length);
++        body.CopyTo(riff, 8);
++        return riff;
++    }
++
++    /// <summary>Runs <c>ffmpeg</c> over the wrapper and leaves raw little-endian f32 samples.</summary>
++    private static void RunFfmpeg(string input, string output, int channels)
++    {
++        var executable = Environment.GetEnvironmentVariable("FFMPEG") ?? "ffmpeg";
++        var start = new ProcessStartInfo
++        {
++            FileName = executable,
++            RedirectStandardOutput = true,
++            RedirectStandardError = true,
++            UseShellExecute = false,
++        };
++        foreach (var argument in new[]
++                 {
++                     "-hide_banner", "-v", "error", "-y", "-i", input,
++                     "-map", "0:a", "-c:a", "pcm_f32le", "-f", "f32le", output,
++                 })
++            start.ArgumentList.Add(argument);
++
++        Process process;
++        try
++        {
++            process = Process.Start(start)
++                ?? throw new InvalidDataException("ffmpeg did not start");
++        }
++        catch (Win32Exception e)
++        {
++            throw Reject(
++                $"ATRAC9 needs '{executable}' on PATH (or FFMPEG); {e.Message}");
++        }
++        catch (InvalidOperationException e)
++        {
++            throw Reject($"ATRAC9 needs ffmpeg: {e.Message}");
++        }
++
++        using (process)
++        {
++            var error = process.StandardError.ReadToEndAsync();
++            process.StandardOutput.ReadToEnd(); // drain so the pipe cannot fill
++            if (!process.WaitForExit(FfmpegTimeoutMs))
++            {
++                try
++                {
++                    process.Kill(entireProcessTree: true);
++                }
++                catch (InvalidOperationException)
++                {
++                }
++
++                throw Reject($"ffmpeg timed out after {FfmpegTimeoutMs / 1000} s");
++            }
++
++            var stderr = error.GetAwaiter().GetResult().Trim();
++            if (process.ExitCode != 0)
++                throw Reject($"ffmpeg failed ({process.ExitCode}): {Tail(stderr)}");
++        }
++
++        if (!File.Exists(output))
++            throw Reject("ffmpeg produced no PCM");
++    }
++
++    /// <summary>Reads the raw f32le file and rejects a partial frame.</summary>
++    private static float[] ReadFloats(string path, int channels)
++    {
++        var bytes = File.ReadAllBytes(path);
++        if (bytes.Length == 0)
++            throw Reject("ffmpeg produced an empty PCM stream");
++        if (bytes.Length % (4 * channels) != 0)
++            throw Reject(
++                $"ffmpeg produced {bytes.Length} B, not whole {channels}-channel frames");
++
++        var samples = new float[bytes.Length / 4];
++        if (BitConverter.IsLittleEndian)
++        {
++            MemoryMarshal.Cast<byte, float>(bytes.AsSpan()).CopyTo(samples);
++        }
++        else
++        {
++            for (var i = 0; i < samples.Length; i++)
++                samples[i] = BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(4 * i));
++        }
++
++        return samples;
++    }
++
++    /// <summary>
++    /// 5.1 → stereo (ruling R6): <c>L' = L + 0.707·C + 0.5·LFE + 0.5·SL</c>,
++    /// <c>R' = R + 0.707·C + 0.5·LFE + 0.5·SR</c>. The channel order is the shipped AT9 5.1
++    /// layout (FL FR FC LFE SL SR).
++    /// </summary>
++    /// <remarks>
++    /// The sum is left unclipped on purpose. Every music master overshoots unity (recon §8) and
++    /// clamping the sum at [-1, 1] here hard-clips 2.36 % of Boss 1's stereo samples before
++    /// <see cref="Normalize"/> can attenuate them, which is exactly the distortion R6 exists to
++    /// avoid. <see cref="Normalize"/> brings the summed clip to peak 0.99 and clamps the final
++    /// output, so the delivered WAV is in range without pre-normalization clipping.
++    /// </remarks>
++    private static DecodedAudio DownmixToStereo(DecodedAudio audio)
++    {
++        var frames = audio.Frames;
++        var source = audio.Samples;
++        var stereo = new float[frames * 2];
++        for (var frame = 0; frame < frames; frame++)
++        {
++            var at = frame * 6;
++            stereo[frame * 2] = source[at] + DownmixCenter * source[at + 2]
++                + DownmixSurround * source[at + 3] + DownmixSurround * source[at + 4];
++            stereo[frame * 2 + 1] = source[at + 1] + DownmixCenter * source[at + 2]
++                + DownmixSurround * source[at + 3] + DownmixSurround * source[at + 5];
++        }
++
++        return new DecodedAudio(stereo, 2, audio.Rate);
++    }
++
++    private static void ValidateFinite(DecodedAudio audio)
++    {
++        if (audio.Channels is not (1 or 2))
++            throw Reject($"{audio.Channels} channels reached the output (only mono/stereo exist)");
++        if (audio.Rate <= 0)
++            throw Reject($"output rate {audio.Rate} Hz is not positive");
++        if (audio.Samples.Length % audio.Channels != 0)
++            throw Reject(
++                $"{audio.Samples.Length} samples do not form whole {audio.Channels}-channel frames");
++
++        for (var i = 0; i < audio.Samples.Length; i++)
++        {
++            if (!float.IsFinite(audio.Samples[i]))
++                throw Reject($"non-finite sample at frame {i / audio.Channels}, channel {i % audio.Channels}");
++        }
++    }
++
++    private static string Tail(string text)
++    {
++        const int limit = 400;
++        return text.Length <= limit ? text : text[^limit..];
++    }
++
++    private static InvalidDataException Reject(string detail) => new($"audio decode: {detail}");
++}
+diff --git a/src/BpConvert.Core/Audio/AudioConverter.cs b/src/BpConvert.Core/Audio/AudioConverter.cs
+new file mode 100644
+index 0000000..6072443
+--- /dev/null
++++ b/src/BpConvert.Core/Audio/AudioConverter.cs
+@@ -0,0 +1,428 @@
++using System.Globalization;
++using System.Text.Json;
++
++namespace BpConvert.Core.Audio;
++
++/// <summary>One curated cue from <c>tools/re/audio/s5_map.json</c>.</summary>
++/// <param name="Event">The sound-request event key, e.g. <c>valus.impact</c> or <c>music.boss</c>.</param>
++/// <param name="Bank">The bank file stem (<c>boss01</c>, <c>music</c>, …).</param>
++/// <param name="Name">
++/// The request name (<c>NAME</c>/<c>REQD</c> namespace) for resident cues, or the <c>REQD</c>
++/// track name for music (<c>"Boss 1"</c>). Validated against the bank's own table.
++/// </param>
++/// <param name="Wave">The primary <c>WAVE</c> table index.</param>
++/// <param name="Layers">
++/// Every wave in the sound, primary included; <c>Layers[0] == Wave</c>. Mixed with equal gains
++/// from t=0 (the gate's <c>valus.impact</c> mix).
++/// </param>
++/// <param name="Loop">True for the streamed music track.</param>
++public sealed record AudioCue(
++    string Event, string Bank, string Name, int Wave, IReadOnlyList<int> Layers, bool Loop);
++
++/// <summary>
++/// The <c>audio</c> verb's inputs. <paramref name="Events"/> empty and <paramref name="Music"/>
++/// null means "the whole curated map".
++/// </summary>
++public sealed record AudioConvertOptions(
++    string Root, string OutLibrary, string MapPath, IReadOnlyList<string> Events, string? Music,
++    bool Force);
++
++/// <summary>What one run produced: the merged manifest entries, plus which cues were decoded.</summary>
++public sealed record AudioConvertResult(
++    IReadOnlyList<AudioEntry> Entries, IReadOnlyList<string> Written, IReadOnlyList<string> Reused,
++    string ManifestPath);
++
++/// <summary>
++/// The converter pipeline behind <c>bp-convert audio</c> (plan Task 3): read the curated map,
++/// resolve each cue's bank and <c>WAVE</c> record(s), carve with the loader formula, decode,
++/// mix layers, normalize, write <c>out/library/audio/&lt;bank&gt;/&lt;event&gt;.wav</c>, and merge the R1
++/// <c>audio.manifest</c>. Every failure is an <see cref="InvalidDataException"/> naming the event
++/// (the CLI turns it into exit 1).
++/// </summary>
++/// <remarks>
++/// <para>
++/// Resident payload: <c>wave_record_offset + 0x24 + start</c>, length <c>bytes</c>, inside the
++/// <c>DATA</c> body (recon §7.1, ruling R8). Music payload: <c>start</c> absolute in the
++/// companion <c>.sxd2</c> (recon §2). A range outside those regions is rejected as a non-tiling
++/// range, never clamped.
++/// </para>
++/// <para>
++/// Layers are decoded with <c>normalize: false</c> and summed with <c>1/N</c> gain from t=0,
++/// padded to the longest layer (the gate's mix), then downmixed (already done per layer) and
++/// normalized once, so the manifest's <c>gain_db</c> is the level the mixer actually sees.
++/// </para>
++/// </remarks>
++public static class AudioConverter
++{
++    private const int ResidentPayloadOffset = 0x24;
++    private const int StreamPayloadBase = 0x60;
++    private const double SilenceFloorRms = 1e-3; // the gate's -60 dBFS
++    private const string ManifestFileName = "audio.manifest";
++
++    /// <summary>Runs the conversion; idempotent unless <see cref="AudioConvertOptions.Force"/>.</summary>
++    /// <param name="options">Roots and scope.</param>
++    /// <param name="log">Optional one-line progress sink (the CLI passes <c>Console.WriteLine</c>).</param>
++    /// <exception cref="InvalidDataException">
++    /// The map is unreadable/incomplete, a selected event/music name is not in the map, a bank,
++    /// wave, name or payload is missing, a range does not tile, or a decode fails/silences.
++    /// </exception>
++    public static AudioConvertResult Run(AudioConvertOptions options, Action<string>? log = null)
++    {
++        ArgumentNullException.ThrowIfNull(options);
++        ArgumentException.ThrowIfNullOrWhiteSpace(options.Root);
++        ArgumentException.ThrowIfNullOrWhiteSpace(options.OutLibrary);
++        ArgumentException.ThrowIfNullOrWhiteSpace(options.MapPath);
++        ArgumentNullException.ThrowIfNull(options.Events);
++
++        var cues = Select(LoadMap(options.MapPath), options);
++        var manifestPath = Path.Combine(options.OutLibrary, "audio", ManifestFileName);
++
++        // The manifest is cumulative: a run scoped to one event must not drop the other entries.
++        var entries = new Dictionary<(string Bank, string Name), AudioEntry>();
++        if (File.Exists(manifestPath))
++            foreach (var entry in AudioManifest.Read(manifestPath))
++                entries[(entry.Bank, entry.Name)] = entry;
++
++        var banks = new Dictionary<string, BankContext>(StringComparer.Ordinal);
++        var written = new List<string>();
++        var reused = new List<string>();
++
++        foreach (var cue in cues)
++        {
++            var key = (cue.Bank, cue.Event);
++            if (!options.Force && entries.TryGetValue(key, out var existing)
++                && File.Exists(Path.Combine(options.OutLibrary,
++                    existing.File.Replace('/', Path.DirectorySeparatorChar))))
++            {
++                reused.Add(cue.Event);
++                log?.Invoke($"  reuse {cue.Bank}/{cue.Event}  {existing.Seconds:F3} s  "
++                    + $"{existing.Rate} Hz  gain {existing.GainDb:F2} dB");
++                continue;
++            }
++
++            var entry = ConvertCue(options, cue, banks);
++            entries[key] = entry;
++            written.Add(cue.Event);
++            log?.Invoke($"  write {cue.Bank}/{cue.Event}  {entry.Seconds:F3} s  "
++                + $"{entry.Rate} Hz {entry.Channels} ch  gain {entry.GainDb:F2} dB  ({entry.Codec})");
++        }
++
++        var merged = entries.Values
++            .OrderBy(entry => entry.Bank, StringComparer.Ordinal)
++            .ThenBy(entry => entry.Name, StringComparer.Ordinal)
++            .ToList();
++        AudioManifest.Write(manifestPath, merged);
++        log?.Invoke($"manifest: {manifestPath} ({merged.Count} entries)");
++        return new AudioConvertResult(merged, written, reused, manifestPath);
++    }
++
++    private static AudioEntry ConvertCue(
++        AudioConvertOptions options, AudioCue cue, Dictionary<string, BankContext> banks)
++    {
++        try
++        {
++            if (!banks.TryGetValue(cue.Bank, out var bank))
++            {
++                bank = LoadBank(options.Root, cue.Bank);
++                banks[cue.Bank] = bank;
++            }
++
++            ValidateName(bank, cue);
++
++            var layers = new List<DecodedAudio>(cue.Layers.Count);
++            var codecs = new HashSet<byte>();
++            foreach (var layer in cue.Layers)
++            {
++                if (layer < 0 || layer >= bank.Waves.Count)
++                    throw new InvalidDataException(
++                        $"wave {layer} is not in {bank.Bank.Path} (0..{bank.Waves.Count - 1})");
++                var wave = bank.Waves[layer];
++                var codec = (byte)(wave.FormatWord & 0xFF);
++                codecs.Add(codec);
++                if (codec == 0x42 && wave.CodecConfig == 0)
++                    throw new InvalidDataException(
++                        $"wave {layer} is ATRAC9 but has no config word at its record");
++                var payload = Carve(bank, wave);
++                layers.Add(AudioCodec.Decode(
++                    payload, wave.FormatWord, wave.CodecConfig, wave.SampleRate,
++                    normalize: false));
++            }
++
++            var rate = layers[0].Rate;
++            if (layers.Any(layer => layer.Rate != rate))
++                throw new InvalidDataException(
++                    "the layers disagree on sample rate: "
++                    + string.Join(", ", layers.Select(layer => layer.Rate).Distinct()));
++            var channels = layers.Max(layer => layer.Channels);
++            if (channels is not (1 or 2))
++                throw new InvalidDataException($"the mix has {channels} channels (the runtime is stereo)");
++
++            var mix = Mix(layers, channels);
++            var normalized = AudioCodec.Normalize(new DecodedAudio(mix, channels, rate));
++            if (normalized.Rms <= SilenceFloorRms)
++                throw new InvalidDataException(
++                    $"the decoded clip is silent (RMS {normalized.Rms:0.######})");
++
++            var entry = new AudioEntry(
++                cue.Bank, cue.Event, $"audio/{cue.Bank}/{cue.Event}.wav", rate, channels,
++                normalized.Frames, Canonical(normalized.Seconds, "F6"), CodecName(codecs),
++                cue.Loop, Canonical(normalized.GainDb, "0.####"));
++            var path = Path.Combine(options.OutLibrary,
++                entry.File.Replace('/', Path.DirectorySeparatorChar));
++            WavWriter.Write(path, normalized.Samples, normalized.Channels, normalized.Rate);
++            return entry;
++        }
++        catch (InvalidDataException e)
++        {
++            throw new InvalidDataException($"{cue.Event}: {e.Message}", e);
++        }
++        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
++        {
++            throw new InvalidDataException($"{cue.Event}: {e.Message}", e);
++        }
++    }
++
++    /// <summary>
++    /// Rounds to exactly what <see cref="AudioManifest"/> prints, so the in-memory entry and the
++    /// manifest line are the same value (the round-trip test compares records).
++    /// </summary>
++    private static double Canonical(double value, string format) =>
++        double.Parse(value.ToString(format, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
++
++    /// <summary>Equal-gain mix from t=0, padded to the longest layer.</summary>
++    private static float[] Mix(IReadOnlyList<DecodedAudio> layers, int channels)
++    {
++        var frames = layers.Max(layer => layer.Frames);
++        var mix = new float[frames * channels];
++        var gain = 1f / layers.Count;
++        foreach (var layer in layers)
++        {
++            for (var frame = 0; frame < layer.Frames; frame++)
++            {
++                if (layer.Channels == channels)
++                {
++                    for (var channel = 0; channel < channels; channel++)
++                        mix[frame * channels + channel] +=
++                            layer.Samples[frame * layer.Channels + channel] * gain;
++                }
++                else
++                {
++                    // A mono layer feeds both channels of a stereo mix.
++                    var sample = layer.Samples[frame] * gain;
++                    for (var channel = 0; channel < channels; channel++)
++                        mix[frame * channels + channel] += sample;
++                }
++            }
++        }
++
++        return mix;
++    }
++
++    private static string CodecName(HashSet<byte> codecs) => codecs.Count == 1
++        ? codecs.Single() switch
++        {
++            0x21 => "psadpcm",
++            0x42 => "at9",
++            var other => $"0x{other:X2}",
++        }
++        : "mixed";
++
++    /// <summary>Carves one record's exact payload, rejecting a range outside the bank's region.</summary>
++    private static byte[] Carve(BankContext context, WaveRecord wave)
++    {
++        long start;
++        byte[] source;
++        long limitStart;
++        long limitEnd;
++        if (context.Bank.HasData)
++        {
++            start = wave.RecordOffset + ResidentPayloadOffset + wave.Start;
++            source = context.IndexBytes;
++            limitStart = context.Bank.DataOffset + 0x10;
++            limitEnd = context.Bank.DataOffset + 8 + context.Bank.DataSize;
++        }
++        else
++        {
++            start = wave.Start;
++            source = context.PayloadBytes
++                ?? throw new InvalidDataException(
++                    $"bank {context.Bank.Name} has no companion .sxd2 payload");
++            limitStart = StreamPayloadBase;
++            limitEnd = source.Length;
++        }
++
++        if (start < limitStart || start + wave.ByteLength > limitEnd)
++            throw new InvalidDataException(
++                $"wave {wave.Index} payload [{start:#x}, +{wave.ByteLength}) escapes "
++                + $"[{limitStart:#x}, {limitEnd:#x}) — the record does not tile the payload");
++        return source.AsSpan((int)start, wave.ByteLength).ToArray();
++    }
++
++    /// <summary>Reads a bank and validates the cue's name against its own naming table.</summary>
++    private static BankContext LoadBank(string root, string bankName)
++    {
++        var soundDir = Path.Combine(root, "sound", "shadow");
++        var residentPath = Path.Combine(soundDir, bankName + ".sxd");
++        var indexPath = Path.Combine(soundDir, bankName + ".sxd1");
++        string path;
++        if (File.Exists(residentPath))
++            path = residentPath;
++        else if (File.Exists(indexPath))
++            path = indexPath;
++        else
++            throw new InvalidDataException(
++                $"bank file not found: {residentPath} or {indexPath}");
++
++        var bank = SxdContainer.Read(path);
++        var waves = SxdTables.Waves(bank);
++        if (waves.Count == 0)
++            throw new InvalidDataException($"{path} has no WAVE records");
++
++        var context = new BankContext(path, bank, waves, File.ReadAllBytes(path));
++        if (bank.HasData)
++            context.Names = SxdTables.Names(bank)
++                .Select(record => record.Name)
++                .ToHashSet(StringComparer.Ordinal);
++        else
++            context.PayloadBytes = ReadCompanion(path);
++        return context;
++    }
++
++    private static byte[] ReadCompanion(string indexPath)
++    {
++        var payloadPath = Path.ChangeExtension(indexPath, ".sxd2");
++        if (!File.Exists(payloadPath))
++            throw new InvalidDataException($"companion payload not found: {payloadPath}");
++        return File.ReadAllBytes(payloadPath);
++    }
++
++    /// <summary>Resolves and cross-checks the cue's name against the bank's table.</summary>
++    private static void ValidateName(BankContext context, AudioCue cue)
++    {
++        if (context.Bank.HasData)
++        {
++            if (context.Names is null || !context.Names.Contains(cue.Name))
++                throw new InvalidDataException(
++                    $"name \"{cue.Name}\" is not in {context.Path}'s NAME table");
++            return;
++        }
++
++        context.TrackNames ??= SxdTables.TrackNames(context.Bank);
++        var tracks = context.TrackNames;        if (cue.Wave >= tracks.Count)
++            throw new InvalidDataException(
++                $"wave {cue.Wave} has no REQD track name (the bank has {tracks.Count})");
++        if (!string.Equals(tracks[cue.Wave], cue.Name, StringComparison.Ordinal))
++            throw new InvalidDataException(
++                $"wave {cue.Wave} is the track \"{tracks[cue.Wave]}\", not \"{cue.Name}\"");
++    }
++
++    private static List<AudioCue> Select(List<AudioCue> cues, AudioConvertOptions options)
++    {
++        if (options.Events.Count == 0 && options.Music is null)
++            return cues;
++
++        var selected = new HashSet<string>(StringComparer.Ordinal);
++        foreach (var eventName in options.Events)
++        {
++            var cue = cues.FirstOrDefault(candidate => candidate.Event == eventName)
++                ?? throw new InvalidDataException(
++                    $"event '{eventName}' is not in {options.MapPath}");
++            selected.Add(cue.Event);
++        }
++
++        if (options.Music is not null)
++        {
++            var cue = cues.FirstOrDefault(candidate =>
++                    candidate.Bank == "music" && candidate.Name == options.Music)
++                ?? throw new InvalidDataException(
++                    $"music track '{options.Music}' is not in {options.MapPath}");
++            selected.Add(cue.Event);
++        }
++
++        return cues.Where(cue => selected.Contains(cue.Event)).ToList();
++    }
++
++    /// <summary>Reads the curated map (the Task 1 JSON schema, ruling R2).</summary>
++    private static List<AudioCue> LoadMap(string path)
++    {
++        using var document = JsonDocument.Parse(File.ReadAllText(path));
++        var root = document.RootElement;
++        if (root.ValueKind != JsonValueKind.Object
++            || !root.TryGetProperty("cues", out var cues)
++            || cues.ValueKind != JsonValueKind.Array)
++            throw new InvalidDataException($"{path}: no \"cues\" array");
++
++        var result = new List<AudioCue>();
++        var events = new HashSet<string>(StringComparer.Ordinal);
++        foreach (var element in cues.EnumerateArray())
++        {
++            var eventName = RequiredString(element, "event", path);
++            var bank = RequiredString(element, "bank", path);
++            var name = RequiredString(element, "name", path);
++            if (!element.TryGetProperty("wave", out var waveElement)
++                || !waveElement.TryGetInt32(out var wave) || wave < 0)
++                throw new InvalidDataException($"{path}: cue '{eventName}' has no valid wave index");
++            if (!events.Add(eventName))
++                throw new InvalidDataException($"{path}: duplicate cue event '{eventName}'");
++
++            var layers = new List<int>();
++            if (element.TryGetProperty("layers", out var layerElement))
++            {
++                if (layerElement.ValueKind != JsonValueKind.Array)
++                    throw new InvalidDataException($"{path}: cue '{eventName}' has a non-array layers");
++                foreach (var layer in layerElement.EnumerateArray())
++                {
++                    if (!layer.TryGetInt32(out var index) || index < 0)
++                        throw new InvalidDataException(
++                            $"{path}: cue '{eventName}' has a bad layer index");
++                    layers.Add(index);
++                }
++            }
++
++            if (layers.Count == 0)
++                layers.Add(wave);
++            if (layers[0] != wave)
++                throw new InvalidDataException(
++                    $"{path}: cue '{eventName}' must list its primary wave first in layers");
++            if (layers.Distinct().Count() != layers.Count)
++                throw new InvalidDataException($"{path}: cue '{eventName}' repeats a layer");
++
++            var loop = element.TryGetProperty("loop", out var loopElement)
++                && loopElement.ValueKind is JsonValueKind.True or JsonValueKind.False
++                    ? loopElement.GetBoolean()
++                    : bank == "music";
++            result.Add(new AudioCue(eventName, bank, name, wave, layers, loop));
++        }
++
++        return result;
++    }
++
++    private static string RequiredString(JsonElement element, string key, string path)
++    {
++        if (!element.TryGetProperty(key, out var value)
++            || value.ValueKind != JsonValueKind.String
++            || string.IsNullOrWhiteSpace(value.GetString()))
++            throw new InvalidDataException($"{path}: a cue is missing a non-empty \"{key}\"");
++        return value.GetString()!;
++    }
++
++    /// <summary>A bank opened once per run, with its payload and name table cached.</summary>
++    private sealed class BankContext
++    {
++        public BankContext(string path, SxdBank bank, IReadOnlyList<WaveRecord> waves, byte[] indexBytes)
++        {
++            Path = path;
++            Bank = bank;
++            Waves = waves;
++            IndexBytes = indexBytes;
++        }
++
++        public string Path { get; }
++        public SxdBank Bank { get; }
++        public IReadOnlyList<WaveRecord> Waves { get; }
++        public byte[] IndexBytes { get; }
++        public byte[]? PayloadBytes { get; set; }
++        public HashSet<string>? Names { get; set; }
++        public IReadOnlyList<string>? TrackNames { get; set; }
++    }
++}
+diff --git a/src/BpConvert.Core/Audio/AudioManifest.cs b/src/BpConvert.Core/Audio/AudioManifest.cs
+new file mode 100644
+index 0000000..2d05830
+--- /dev/null
++++ b/src/BpConvert.Core/Audio/AudioManifest.cs
+@@ -0,0 +1,225 @@
++using System.Globalization;
++using System.Text;
++
++namespace BpConvert.Core.Audio;
++
++/// <summary>
++/// One line of <c>audio.manifest</c> (ruling R1): the decoded clip's identity, its WAV path
++/// relative to the library root, and the measured PCM facts. The viewer loads the manifest and
++/// never opens a <c>.sxd</c>.
++/// </summary>
++/// <param name="Bank">Source bank name, e.g. <c>boss01</c> or <c>music</c>.</param>
++/// <param name="Name">Clip name — the curated event key, e.g. <c>valus.impact</c>.</param>
++/// <param name="File">
++/// WAV path relative to the library root with forward slashes, e.g.
++/// <c>audio/boss01/valus.impact.wav</c>.
++/// </param>
++/// <param name="Rate">Measured sample rate (48 000).</param>
++/// <param name="Channels">1 or 2 (5.1 was downmixed at conversion time, ruling R6).</param>
++/// <param name="Frames">Measured per-channel frame count (not the record's declared count).</param>
++/// <param name="Seconds">Measured duration, <paramref name="Frames"/> / <paramref name="Rate"/>.</param>
++/// <param name="Codec">Source codec: <c>at9</c>, <c>psadpcm</c>, or <c>mixed</c> for a layer mix.</param>
++/// <param name="Loop">True for the streamed music tracks.</param>
++/// <param name="GainDb">
++/// The attenuation <see cref="AudioCodec.Normalize"/> applied when bringing the clip to peak
++/// ≤ 0.99 (0 when no scaling was needed). Informational: the WAV is already normalized.
++/// </param>
++public sealed record AudioEntry(
++    string Bank, string Name, string File, int Rate, int Channels, long Frames, double Seconds,
++    string Codec, bool Loop, double GainDb);
++
++/// <summary>
++/// Reads and writes the line-based <c>audio.manifest</c> (ruling R1):
++/// <code>
++/// version=1
++/// name=valus.impact bank=boss01 file=audio/boss01/valus.impact.wav rate=48000 channels=2 frames=362068 seconds=7.543083 codec=psadpcm loop=0 gain_db=-0.0864
++/// </code>
++/// One entry per line, keys in that order, sorted by <c>(bank, name)</c>. Values are
++/// space-free: the clip name is the curated event key, so the <c>key=value</c> pairs stay
++/// unambiguous for the viewer's simple parser. The first line is <c>version=1</c>; the path key is
++/// relative to the library root (<c>out/library</c>), which is exactly what
++/// <c>AudioEngine::load_manifest(manifestPath, libraryRoot)</c> receives.
++/// </summary>
++public static class AudioManifest
++{
++    /// <summary>The only manifest schema version this converter writes/reads.</summary>
++    public const int Version = 1;
++
++    private static readonly string[] Keys =
++    {
++        "name", "bank", "file", "rate", "channels", "frames", "seconds", "codec", "loop", "gain_db",
++    };
++
++    /// <summary>
++    /// Writes <paramref name="entries"/> sorted by <c>(bank, name)</c>, creating the parent
++    /// directory. Returns <paramref name="path"/> so a caller can log it directly.
++    /// </summary>
++    /// <exception cref="InvalidDataException">
++    /// A field is empty/out of range, a value contains whitespace (the line format is
++    /// space-separated), or two entries share a <c>(bank, name)</c> key.
++    /// </exception>
++    public static string Write(string path, IReadOnlyList<AudioEntry> entries)
++    {
++        ArgumentException.ThrowIfNullOrWhiteSpace(path);
++        ArgumentNullException.ThrowIfNull(entries);
++
++        var seen = new HashSet<(string Bank, string Name)>();
++        foreach (var entry in entries)
++        {
++            Validate(path, null, entry);
++            if (!seen.Add((entry.Bank, entry.Name)))
++                throw Invalid(path, $"duplicate entry {entry.Bank}/{entry.Name}");
++        }
++
++        var builder = new StringBuilder();
++        builder.Append("version=").Append(Version).Append('\n');
++        foreach (var entry in entries.OrderBy(entry => entry.Bank, StringComparer.Ordinal)
++                     .ThenBy(entry => entry.Name, StringComparer.Ordinal))
++        {
++            builder.Append("name=").Append(entry.Name)
++                .Append(" bank=").Append(entry.Bank)
++                .Append(" file=").Append(entry.File)
++                .Append(" rate=").Append(entry.Rate.ToString(CultureInfo.InvariantCulture))
++                .Append(" channels=").Append(entry.Channels.ToString(CultureInfo.InvariantCulture))
++                .Append(" frames=").Append(entry.Frames.ToString(CultureInfo.InvariantCulture))
++                .Append(" seconds=").Append(entry.Seconds.ToString("F6", CultureInfo.InvariantCulture))
++                .Append(" codec=").Append(entry.Codec)
++                .Append(" loop=").Append(entry.Loop ? '1' : '0')
++                .Append(" gain_db=").Append(entry.GainDb.ToString("0.####", CultureInfo.InvariantCulture))
++                .Append('\n');
++        }
++
++        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
++        if (!string.IsNullOrEmpty(directory))
++            Directory.CreateDirectory(directory);
++        File.WriteAllText(path, builder.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
++        return path;
++    }
++
++    /// <summary>
++    /// Reads a manifest written by <see cref="Write"/> and returns its entries sorted by
++    /// <c>(bank, name)</c> (the on-disk order is already sorted; sorting here makes a hand-edited
++    /// file stable too).
++    /// </summary>
++    /// <exception cref="InvalidDataException">
++    /// The version line is missing/unknown, a line has an unknown/duplicate/missing key or an
++    /// unparsable value, or two entries share a <c>(bank, name)</c> key.
++    /// </exception>
++    public static IReadOnlyList<AudioEntry> Read(string path)
++    {
++        ArgumentException.ThrowIfNullOrWhiteSpace(path);
++
++        var lines = File.ReadAllLines(path);
++        var entries = new List<AudioEntry>(Math.Max(0, lines.Length - 1));
++        var seen = new HashSet<(string Bank, string Name)>();
++        var sawVersion = false;
++
++        for (var i = 0; i < lines.Length; i++)
++        {
++            var line = lines[i].Trim();
++            if (line.Length == 0)
++                continue;
++
++            if (!sawVersion)
++            {
++                if (line != $"version={Version}")
++                    throw Invalid(path, $"line {i + 1}: expected version={Version}, got \"{line}\"");
++                sawVersion = true;
++                continue;
++            }
++
++            var values = new Dictionary<string, string>(StringComparer.Ordinal);
++            foreach (var token in line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
++            {
++                var equals = token.IndexOf('=');
++                if (equals <= 0 || equals == token.Length - 1)
++                    throw Invalid(path, $"line {i + 1}: \"{token}\" is not key=value");
++                var key = token[..equals];
++                if (Array.IndexOf(Keys, key) < 0)
++                    throw Invalid(path, $"line {i + 1}: unknown key \"{key}\"");
++                if (!values.TryAdd(key, token[(equals + 1)..]))
++                    throw Invalid(path, $"line {i + 1}: duplicate key \"{key}\"");
++            }
++
++            foreach (var key in Keys)
++                if (!values.ContainsKey(key))
++                    throw Invalid(path, $"line {i + 1}: missing key \"{key}\"");
++
++            var entry = new AudioEntry(
++                values["bank"], values["name"], values["file"],
++                ParseInt(path, i, "rate", values["rate"]),
++                ParseInt(path, i, "channels", values["channels"]),
++                ParseLong(path, i, "frames", values["frames"]),
++                ParseDouble(path, i, "seconds", values["seconds"]),
++                values["codec"],
++                ParseLoop(path, i, values["loop"]),
++                ParseDouble(path, i, "gain_db", values["gain_db"]));
++            Validate(path, $"line {i + 1}: ", entry);
++            if (!seen.Add((entry.Bank, entry.Name)))
++                throw Invalid(path, $"line {i + 1}: duplicate entry {entry.Bank}/{entry.Name}");
++            entries.Add(entry);
++        }
++
++        if (!sawVersion)
++            throw Invalid(path, "missing version=1 line");
++        return entries.OrderBy(entry => entry.Bank, StringComparer.Ordinal)
++            .ThenBy(entry => entry.Name, StringComparer.Ordinal)
++            .ToList();
++    }
++
++    private static void Validate(string path, string? location, AudioEntry entry)
++    {
++        var at = $"{location}{entry.Bank}/{entry.Name}";
++        if (entry.Bank.Length == 0 || entry.Name.Length == 0 || entry.File.Length == 0
++            || entry.Codec.Length == 0)
++            throw Invalid(path, $"{location}entry has an empty bank/name/file/codec");
++        if (ContainsWhitespace(entry.Bank) || ContainsWhitespace(entry.Name)
++            || ContainsWhitespace(entry.File) || ContainsWhitespace(entry.Codec))
++            throw Invalid(path,
++                $"{at} has a value with whitespace (the line format is space-separated)");
++        if (entry.Rate <= 0)
++            throw Invalid(path, $"{at} has rate {entry.Rate}");
++        if (entry.Channels is not (1 or 2))
++            throw Invalid(path, $"{at} has {entry.Channels} channels (the runtime is stereo)");
++        if (entry.Frames < 0)
++            throw Invalid(path, $"{at} has {entry.Frames} frames");
++        if (!double.IsFinite(entry.Seconds) || entry.Seconds < 0)
++            throw Invalid(path, $"{at} has seconds {entry.Seconds}");
++        if (!double.IsFinite(entry.GainDb) || entry.GainDb > 0)
++            throw Invalid(path, $"{at} has gain {entry.GainDb} dB (normalization only attenuates)");
++    }
++
++    private static bool ContainsWhitespace(string value) =>
++        value.Any(char.IsWhiteSpace);
++
++    private static int ParseInt(string path, int line, string key, string value)
++    {
++        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
++            throw Invalid(path, $"line {line + 1}: {key}=\"{value}\" is not an integer");
++        return parsed;
++    }
++
++    private static long ParseLong(string path, int line, string key, string value)
++    {
++        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
++            throw Invalid(path, $"line {line + 1}: {key}=\"{value}\" is not an integer");
++        return parsed;
++    }
++
++    private static double ParseDouble(string path, int line, string key, string value)
++    {
++        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
++            || !double.IsFinite(parsed))
++            throw Invalid(path, $"line {line + 1}: {key}=\"{value}\" is not a finite number");
++        return parsed;
++    }
++
++    private static bool ParseLoop(string path, int line, string value) => value switch
++    {
++        "0" => false,
++        "1" => true,
++        _ => throw Invalid(path, $"line {line + 1}: loop=\"{value}\" is not 0/1"),
++    };
++
++    private static InvalidDataException Invalid(string path, string detail) => new($"{path}: {detail}");
++}
+diff --git a/src/BpConvert.Core/Audio/SxdTables.cs b/src/BpConvert.Core/Audio/SxdTables.cs
+index 8ce2413..8b2e730 100644
+--- a/src/BpConvert.Core/Audio/SxdTables.cs
++++ b/src/BpConvert.Core/Audio/SxdTables.cs
+@@ -18,23 +18,29 @@ namespace BpConvert.Core.Audio;
+ /// <param name="FormatWord">The <c>+0x04</c> word; byte 1 is the channel count, the low byte the codec id.</param>
+ /// <param name="SampleRate">The <c>+0x08</c> rate (48 000 on every shipped record).</param>
+ /// <param name="Frames">The <c>+0x14</c> per-channel sample count.</param>
+ /// <param name="Start">
+ /// The <c>+0x24</c> value. It is <b>absolute in the companion <c>.sxd2</c></b> for a music bank
+ /// (no <c>DATA</c> chunk), and <b>relative to this record</b> for a resident bank, where the
+ /// payload is at <see cref="RecordOffset"/> + 0x24 + <see cref="Start"/> for
+ /// <see cref="ByteLength"/> bytes (the loader formula, <c>FUN_00983220</c>, recon §7.1).
+ /// </param>
+ /// <param name="ByteLength">The <c>+0x20</c> payload length in bytes.</param>
++/// <param name="CodecConfig">
++/// The ATRAC9 config word for the <c>0x42</c> codec family, or 0 for PS-ADPCM (<c>0x21</c>).
++/// Music/76-byte records carry it at <c>+0x40</c> (<c>0xFE761DF0</c> on all 33 tracks); resident
++/// <c>0x42</c> records carry it at <c>+0x2C</c> on the 56-byte form and <c>+0x40</c> on the
++/// 76-byte form (recon §5.0/§7.3). The AT9 decoder re-emits it big-endian as extradata.
++/// </param>
+ public sealed record WaveRecord(
+     int Index, long RecordOffset, int RecordSize, uint FormatWord, uint SampleRate, uint Frames,
+-    long Start, int ByteLength);
++    long Start, int ByteLength, uint CodecConfig);
+ 
+ /// <summary>
+ /// One <c>NAME</c> table entry: the request name in table (and string-pool) order.
+ /// </summary>
+ /// <param name="Index">
+ /// The NAME entry index (0-based). This is <b>not</b> the <c>REQD</c> key and <b>not</b> a
+ /// <c>WAVE</c> index: entry 0 of <c>boss01</c> is <c>boss01_atk_hit_ground1</c> (REQD 303,
+ /// wave 26). Use <see cref="ReqdId"/> for the request chain.
+ /// </param>
+ /// <param name="Name">The NUL-terminated request name, decoded one byte per char (Latin-1).</param>
+@@ -71,22 +77,26 @@ public sealed record NameRecord(int Index, string Name, uint ReqdId);
+ public static class SxdTables
+ {
+     private const int TableCountOffset = 0x0C;
+     private const int TableBodyOffset = 0x10;
+     private const int WavePrefixLength = 0x28;
+     private const int WaveFormatOffset = 0x04;
+     private const int WaveRateOffset = 0x08;
+     private const int WaveFramesOffset = 0x14;
+     private const int WaveByteLengthOffset = 0x20;
+     private const int WaveStartOffset = 0x24;
++    private const int WaveAt9ConfigOffsetShort = 0x2C;
++    private const int WaveAt9ConfigOffsetLong = 0x40;
+     private const int NameEntryLength = 12;
+     private const int NameReqdIdOffset = 8;
++    private const int TrackNameOffset = 0x20;
++    private const int TrackNameLength = 0x40;
+     private const uint NameHashMultiplier = 0x83;
+ 
+     /// <summary>Reads the <c>WAVE</c> table in table order.</summary>
+     /// <param name="bank">A bank from <see cref="SxdContainer.Read"/>; <see cref="SxdBank.Path"/> is re-read.</param>
+     /// <returns>All records, or an empty list when the bank has no <c>WAVE</c> chunk.</returns>
+     /// <exception cref="InvalidDataException">
+     /// The table header, an <c>offsets[]</c> entry or a record prefix is out of bounds, or the
+     /// records are not strictly increasing (an overlap).
+     /// </exception>
+     public static IReadOnlyList<WaveRecord> Waves(SxdBank bank)
+@@ -115,35 +125,105 @@ public static class SxdTables
+             if (i > 0 && record <= offsets[i - 1])
+                 throw Invalid(path, $"WAVE record {i} at 0x{record:X} overlaps record {i - 1} at 0x{offsets[i - 1]:X}");
+             offsets[i] = record;
+         }
+ 
+         var waves = new List<WaveRecord>((int)count);
+         for (var i = 0; i < count; i++)
+         {
+             var record = offsets[i];
+             var size = (int)((i + 1 < count ? offsets[i + 1] : chunkEnd) - record);
++            var formatWord = ReadU32(path, data, record + WaveFormatOffset);
+             var byteLength = ReadU32(path, data, record + WaveByteLengthOffset);
+             if (byteLength > int.MaxValue)
+                 throw Invalid(path, $"WAVE record {i} byte length {byteLength} exceeds int.MaxValue");
+             waves.Add(new WaveRecord(
+                 i, record, size,
+-                ReadU32(path, data, record + WaveFormatOffset),
++                formatWord,
+                 ReadU32(path, data, record + WaveRateOffset),
+                 ReadU32(path, data, record + WaveFramesOffset),
+                 ReadU32(path, data, record + WaveStartOffset),
+-                (int)byteLength));
++                (int)byteLength,
++                ReadCodecConfig(path, data, record, size, formatWord, chunkEnd)));
+         }
+ 
+         return waves;
+     }
+ 
++    /// <summary>
++    /// Reads the ATRAC9 config word of a <c>0x42</c> record: <c>+0x2C</c> on the 56-byte
++    /// (and shorter) resident form, <c>+0x40</c> on the 76-byte music/resident form; 0 for
++    /// every other codec and for a record too short to carry the field.
++    /// </summary>
++    /// <remarks>
++    /// The position is the record's own layout, not a scan: the gate's "first <c>0xFE</c> dword
++    /// at/after <c>+0x28</c>" search lands on exactly these offsets on every shipped record
++    /// (recon §5.0/§7.3) and a scan would also accept an accidental byte pattern.
++    /// </remarks>
++    private static uint ReadCodecConfig(
++        string path, byte[] data, long record, int recordSize, uint formatWord, long chunkEnd)
++    {
++        if ((formatWord & 0xFF) != 0x42)
++            return 0;
++
++        var offset = recordSize >= 0x44 ? WaveAt9ConfigOffsetLong : WaveAt9ConfigOffsetShort;
++        if (offset + 4 > recordSize || record + offset + 4 > chunkEnd)
++            return 0; // Decode rejects a 0x42 payload without a config word.
++        return ReadU32(path, data, record + offset);
++    }
++
++    /// <summary>
++    /// Reads the <c>0x40</c>-byte track-name slot at <c>+0x20</c> of every <c>REQD</c> record, in
++    /// table order. Music index banks name their 33 tracks there ("Prologue", "Boss 1", …; recon
++    /// §2/§6); resident banks use the <c>NAME</c> table instead and usually leave these slots
++    /// empty.
++    /// </summary>
++    /// <param name="bank">A bank from <see cref="SxdContainer.Read"/>; <see cref="SxdBank.Path"/> is re-read.</param>
++    /// <returns>The slots in table order, or an empty list when the bank has no <c>REQD</c> chunk.</returns>
++    /// <exception cref="InvalidDataException">The table or a name slot is out of bounds.</exception>
++    public static IReadOnlyList<string> TrackNames(SxdBank bank)
++    {
++        ArgumentNullException.ThrowIfNull(bank);
++
++        var chunk = FindChunk(bank, "REQD");
++        if (chunk is null)
++            return Array.Empty<string>();
++
++        var path = bank.Path;
++        var data = File.ReadAllBytes(path);
++        var count = ReadCount(path, data, chunk);
++        var body = chunk.Offset + TableBodyOffset;
++        var chunkEnd = chunk.Offset + ChunkLength(chunk);
++        if (body + 4L * count > chunkEnd)
++            throw Invalid(path, $"REQD count {count} overruns the chunk");
++
++        var names = new List<string>((int)count);
++        for (var i = 0L; i < count; i++)
++        {
++            var relative = BinaryPrimitives.ReadUInt32LittleEndian(
++                data.AsSpan((int)(body + 4L * i)));
++            var record = body + relative + 4L * i;
++            // The 0x40-byte slot is not inside the chunk on every record (music record 31
++            // reaches 8 bytes into the following NAME header), so bound it by the file, exactly
++            // like the gate's `buf[rec+0x20:rec+0x60].split(b"\0")[0]`.
++            var start = record + TrackNameOffset;
++            if (start >= data.Length)
++                throw Invalid(path, $"REQD record {i} name slot is beyond EOF");
++            var length = (int)Math.Min(TrackNameLength, data.Length - start);
++            var slot = data.AsSpan((int)start, length);
++            var nul = slot.IndexOf((byte)0);
++            names.Add(Encoding.Latin1.GetString(nul < 0 ? slot : slot[..nul]));
++        }
++
++        return names;
++    }
++
+     /// <summary>Reads the <c>NAME</c> table (request-name namespace) in table order.</summary>
+     /// <param name="bank">A bank from <see cref="SxdContainer.Read"/>; <see cref="SxdBank.Path"/> is re-read.</param>
+     /// <returns>All entries, or an empty list when the bank has no <c>NAME</c> chunk.</returns>
+     /// <exception cref="InvalidDataException">
+     /// The entry array is out of bounds, neither the 12-byte entries nor the string pool resolve,
+     /// or a name is empty, contains a C0/DEL byte, or is duplicated inside the bank.
+     /// </exception>
+     public static IReadOnlyList<NameRecord> Names(SxdBank bank)
+     {
+         ArgumentNullException.ThrowIfNull(bank);
+diff --git a/src/BpConvert.Core/Audio/WavWriter.cs b/src/BpConvert.Core/Audio/WavWriter.cs
+new file mode 100644
+index 0000000..af97a62
+--- /dev/null
++++ b/src/BpConvert.Core/Audio/WavWriter.cs
+@@ -0,0 +1,74 @@
++using System.Text;
++
++namespace BpConvert.Core.Audio;
++
++/// <summary>
++/// Writes the converter's deliverable WAV: float32 RIFF/WAVE (<c>fmt</c> tag 3), 48 kHz,
++/// mono or stereo. The format is pinned in <c>AudioTests.Wav_RoundTrips_Float32</c> and read by
++/// the viewer's <c>wav_io</c>; PCM16 would clamp the normalized mixes a second time, which is why
++/// the converter keeps IEEE float end-to-end.
++/// </summary>
++public static class WavWriter
++{
++    private const int HeaderLength = 44;
++    private const int FmtChunkLength = 16;
++    private const int FloatBytes = 4;
++    private const ushort IeeeFloat = 3;
++
++    /// <summary>
++    /// Writes <paramref name="samples"/> (interleaved) to <paramref name="path"/>, creating the
++    /// parent directory if needed.
++    /// </summary>
++    /// <param name="path">Destination <c>.wav</c>.</param>
++    /// <param name="samples">Interleaved float samples; length must be a multiple of <paramref name="channels"/>.</param>
++    /// <param name="channels">1 (mono) or 2 (stereo).</param>
++    /// <param name="rate">Sample rate in Hz; the converter always writes 48 000.</param>
++    /// <exception cref="ArgumentException">
++    /// An empty path, no samples, a length that is not whole frames, or a rate that does not
++    /// fit the RIFF fields.
++    /// </exception>
++    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channels"/> is not 1 or 2.</exception>
++    public static void Write(string path, ReadOnlySpan<float> samples, int channels, int rate)
++    {
++        ArgumentException.ThrowIfNullOrWhiteSpace(path);
++        if (channels is not (1 or 2))
++            throw new ArgumentOutOfRangeException(
++                nameof(channels), channels, "the converter writes mono or stereo only");
++        if (rate <= 0)
++            throw new ArgumentOutOfRangeException(nameof(rate), rate, "rate must be positive");
++        if (samples.Length == 0)
++            throw new ArgumentException("no samples to write", nameof(samples));
++        if (samples.Length % channels != 0)
++            throw new ArgumentException(
++                $"{samples.Length} samples do not form whole {channels}-channel frames", nameof(samples));
++
++        var dataLength = checked(samples.Length * FloatBytes);
++        var riffLength = HeaderLength - 8L + dataLength;
++        if (riffLength > uint.MaxValue)
++            throw new ArgumentException($"data is too long for a RIFF file ({dataLength} B)", nameof(samples));
++
++        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
++        if (!string.IsNullOrEmpty(directory))
++            Directory.CreateDirectory(directory);
++
++        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
++        using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: false);
++
++        writer.Write("RIFF"u8);
++        writer.Write((uint)riffLength);
++        writer.Write("WAVE"u8);
++        writer.Write("fmt "u8);
++        writer.Write((uint)FmtChunkLength);
++        writer.Write(IeeeFloat);
++        writer.Write((ushort)channels);
++        writer.Write((uint)rate);
++        writer.Write((uint)(rate * channels * FloatBytes)); // byte rate
++        writer.Write((ushort)(channels * FloatBytes)); // block align
++        writer.Write((ushort)(FloatBytes * 8)); // bits per sample
++        writer.Write("data"u8);
++        writer.Write((uint)dataLength);
++
++        foreach (var sample in samples)
++            writer.Write(sample);
++    }
++}
+diff --git a/tests/BpConvert.Tests/AudioTests.cs b/tests/BpConvert.Tests/AudioTests.cs
+index 3469ebd..faaa13f 100644
+--- a/tests/BpConvert.Tests/AudioTests.cs
++++ b/tests/BpConvert.Tests/AudioTests.cs
+@@ -1,22 +1,25 @@
+ using System.Buffers.Binary;
+ using System.Text;
+ using BpConvert.Core.Audio;
+ 
+ /// <summary>
+ /// Pinned cases for the SXDF container and its index tables (S5 Task 2;
+ /// <c>tools/re/audio/s5_decode_gate.py</c> and <c>docs/notes/s5-audio-recon.md</c> are the
+ /// parsing reference): the 0x60-byte header, the chunk chain from <c>0x60</c>, the shared
+ /// <c>count/offsets[]</c> table (<c>record_i = body + offsets[i] + 4*i</c>, never a fixed
+ /// stride), the absolute music starts, and the loader-derived resident payload formula
+-/// <c>record + 0x24 + start</c> (recon §7.1). Real-tree cases are env-gated through
+-/// <see cref="TestAssets"/> (fail fast when <c>SOTC_GAME_ROOT</c> is unset — never skips).
++/// <c>record + 0x24 + start</c> (recon §7.1). Task 3 adds the codec-config field, the WAV
++/// writer, the R1 manifest, and the decode/mix pipeline. Real-tree cases are env-gated
++/// through <see cref="TestAssets"/> (fail fast when <c>SOTC_GAME_ROOT</c> is unset — never
++/// skips); the AT9 cases need <c>ffmpeg</c> with its built-in <c>atrac9</c> decoder, exactly
++/// like the gate.
+ /// </summary>
+ public class AudioTests
+ {
+     private static string Bank(string fileName) =>
+         TestAssets.Sample(Path.Combine("sound", "shadow", fileName));
+ 
+     [Fact]
+     public void Read_Boss01_HasTheChunkChainAndData()
+     {
+         var path = Bank("boss01.sxd");
+@@ -247,20 +250,311 @@ public class AudioTests
+             Assert.Equal(7u, names[0].ReqdId);
+             Assert.Equal("beta", names[1].Name);
+             Assert.Equal(9u, names[1].ReqdId);
+         }
+         finally
+         {
+             File.Delete(path);
+         }
+     }
+ 
++    [Fact]
++    public void Waves_CodecConfig_Pinned()
++    {
++        // Music records carry the AT9 config word verbatim at +0x40 (recon §2); resident 0x42
++        // records carry it at +0x2C (56-byte) or +0x40 (76-byte) (recon §5.0/§7.3); the 0x21
++        // PS-ADPCM family has no AT9 config and reads 0.
++        var music = SxdTables.Waves(SxdContainer.Read(Bank("music.sxd1")));
++        Assert.All(music, wave => Assert.Equal(0xFE761DF0u, wave.CodecConfig));
++
++        var boss = SxdTables.Waves(SxdContainer.Read(Bank("boss01.sxd")));
++        Assert.All(boss.Where(wave => (wave.FormatWord & 0xFF) == 0x21),
++            wave => Assert.Equal(0u, wave.CodecConfig));
++        Assert.All(boss.Where(wave => wave.FormatWord == 0x00FF0242),
++            wave => Assert.Equal(0xFE740FE0u, wave.CodecConfig));
++        Assert.All(boss.Where(wave => wave.FormatWord == 0x00FF0142),
++            wave => Assert.Equal(0xFE7007E0u, wave.CodecConfig));
++
++        // Both record strides appear on the 0x42 family, and both carry the same config.
++        Assert.Contains(boss, wave => wave.FormatWord == 0x00FF0242 && wave.RecordSize == 56);
++        Assert.Contains(boss, wave => wave.FormatWord == 0x00FF0242 && wave.RecordSize == 76);
++    }
++
++    [Fact]
++    public void Wav_RoundTrips_Float32()
++    {
++        var dir = TempDir();
++        try
++        {
++            var path = Path.Combine(dir, "tone.wav");
++            var samples = new float[480]; // 240 stereo frames
++            for (var i = 0; i < samples.Length; i++)
++                samples[i] = (float)(Math.Sin(2 * Math.PI * 1000 * i / 48000.0) * 0.5);
++
++            WavWriter.Write(path, samples, 2, 48000);
++
++            var bytes = File.ReadAllBytes(path);
++            Assert.Equal("RIFF", Encoding.ASCII.GetString(bytes, 0, 4));
++            Assert.Equal((uint)(bytes.Length - 8), BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4)));
++            Assert.Equal("WAVE", Encoding.ASCII.GetString(bytes, 8, 4));
++            Assert.Equal("fmt ", Encoding.ASCII.GetString(bytes, 12, 4));
++            Assert.Equal(16u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(16)));
++            Assert.Equal(3, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(20))); // IEEE float
++            Assert.Equal(2, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(22)));
++            Assert.Equal(48000u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(24)));
++            Assert.Equal(48000u * 2 * 4, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(28)));
++            Assert.Equal(8, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(32)));
++            Assert.Equal(32, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(34)));
++            Assert.Equal("data", Encoding.ASCII.GetString(bytes, 36, 4));
++            Assert.Equal(1920u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(40)));
++            Assert.Equal(44 + 1920, bytes.Length);
++
++            var (channels, rate, frames, roundTrip) = ReadFloatWav(path);
++            Assert.Equal(2, channels);
++            Assert.Equal(48000, rate);
++            Assert.Equal(240, frames);
++            Assert.Equal(samples, roundTrip);
++        }
++        finally
++        {
++            Directory.Delete(dir, true);
++        }
++    }
++
++    [Fact]
++    public void Manifest_RoundTrips_StableSorted()
++    {
++        var dir = TempDir();
++        try
++        {
++            var path = Path.Combine(dir, "audio.manifest");
++            var music = new AudioEntry("music", "music.boss", "audio/music/music.boss.wav",
++                48000, 2, 6044367, 125.924312, "at9", true, -12.3456);
++            var impact = new AudioEntry("boss01", "valus.impact", "audio/boss01/valus.impact.wav",
++                48000, 2, 362068, 7.543083, "psadpcm", false, 0);
++
++            // Written in reverse bank order: the file is sorted by (bank, name).
++            Assert.Equal(path, AudioManifest.Write(path, new[] { music, impact }));
++            var lines = File.ReadAllLines(path);
++            Assert.Equal("version=1", lines[0]);
++            Assert.StartsWith("name=valus.impact bank=boss01 file=audio/boss01/valus.impact.wav",
++                lines[1]);
++            Assert.StartsWith("name=music.boss bank=music file=audio/music/music.boss.wav",
++                lines[2]);
++            Assert.Contains("codec=psadpcm loop=0 gain_db=0", lines[1]);
++            Assert.Contains("codec=at9 loop=1 gain_db=-12.3456", lines[2]);
++
++            var read = AudioManifest.Read(path);
++            Assert.Equal(2, read.Count);
++            Assert.Equal(impact, read[0]);
++            Assert.Equal(music, read[1]);
++        }
++        finally
++        {
++            Directory.Delete(dir, true);
++        }
++    }
++
++    [Fact]
++    public void Manifest_DuplicateBankName_Throws()
++    {
++        var dir = TempDir();
++        try
++        {
++            var path = Path.Combine(dir, "audio.manifest");
++            var entry = new AudioEntry("boss01", "valus.impact", "audio/boss01/valus.impact.wav",
++                48000, 2, 100, 100 / 48000.0, "psadpcm", false, 0);
++            Assert.Throws<InvalidDataException>(() => AudioManifest.Write(path, new[] { entry, entry }));
++        }
++        finally
++        {
++            Directory.Delete(dir, true);
++        }
++    }
++
++    [Fact]
++    public void Decode_0x42_Is48kNonSilent()
++    {
++        var bank = SxdContainer.Read(Bank("boss01.sxd"));
++        var waves = SxdTables.Waves(bank);
++
++        // The 0x42 family is ATRAC9 at the record's own config (recon §5.0/§7.3): record 108 is
++        // the stereo/mono pair 108/109 at 232 800 frames (4.8587 s).
++        foreach (var index in new[] { 108, 109 })
++        {
++            var wave = waves[index];
++            Assert.Equal(0x42u, wave.FormatWord & 0xFF);
++            Assert.NotEqual(0u, wave.CodecConfig);
++
++            var audio = AudioCodec.Decode(CarveResident(bank, wave), wave.FormatWord,
++                wave.CodecConfig, wave.SampleRate);
++
++            Assert.Equal(48000, audio.Rate);
++            Assert.Equal((int)((wave.FormatWord >> 8) & 0xFF), audio.Channels);
++            Assert.True(audio.Frames > 0);
++            Assert.True(audio.Rms > 1e-3, $"record {index} RMS {audio.Rms}");
++            Assert.InRange(audio.Peak, 0.1f, 0.99f);
++            var error = Math.Abs(audio.Frames - wave.Frames) / 48000.0;
++            Assert.InRange(error, 0, 0.050); // the gate's 50 ms tolerance
++        }
++    }
++
++    [Fact]
++    public void Decode_RejectedConfigAndNonFinite_Throw()
++    {
++        var bank = SxdContainer.Read(Bank("boss01.sxd"));
++        var wave = SxdTables.Waves(bank)[108]; // 0x0242, 2ch ATRAC9
++        var payload = CarveResident(bank, wave);
++
++        // No silent fallback: a 0x42 record without its config, a config whose channel layout
++        // disagrees with the record, and an unsupported codec all reject.
++        Assert.Throws<InvalidDataException>(() =>
++            AudioCodec.Decode(payload, wave.FormatWord, 0, wave.SampleRate));
++        Assert.Throws<InvalidDataException>(() =>
++            AudioCodec.Decode(payload, wave.FormatWord, 0xFE761DF0, wave.SampleRate));
++        Assert.Throws<InvalidDataException>(() =>
++            AudioCodec.Decode(payload, 0x00FF0104, 0, wave.SampleRate));
++
++        // A non-finite sample never reaches a WAV.
++        Assert.Throws<InvalidDataException>(() =>
++            AudioCodec.Normalize(new DecodedAudio(new[] { float.NaN }, 1, 48000)));
++    }
++
++    [Fact]
++    public void Decode_0x21_Is48kNonSilent()
++    {
++        var bank = SxdContainer.Read(Bank("boss01.sxd"));
++        var waves = SxdTables.Waves(bank);
++
++        foreach (var index in new[] { 3, 26 }) // 0x0121 mono / 0x0221 stereo
++        {
++            var wave = waves[index];
++            Assert.Equal(0x21u, wave.FormatWord & 0xFF);
++
++            var audio = AudioCodec.Decode(CarveResident(bank, wave), wave.FormatWord,
++                wave.CodecConfig, wave.SampleRate);
++
++            Assert.Equal(48000, audio.Rate);
++            Assert.Equal((int)((wave.FormatWord >> 8) & 0xFF), audio.Channels);
++            Assert.True(audio.Rms > 1e-3, $"wave {index} RMS {audio.Rms}");
++            Assert.InRange(audio.Peak, 0.1f, 0.99f);
++            // 16-byte blocks of 28 samples: the decoded length trails the declared count by at
++            // most one block per channel (the gate allows 1 ms for this family).
++            var error = Math.Abs(audio.Frames - wave.Frames) / 48000.0;
++            Assert.InRange(error, 0, 0.001);
++        }
++    }
++
++    [Fact]
++    public void Decode_Music_IsStereo48k()
++    {
++        var bank = SxdContainer.Read(Bank("music.sxd1"));
++        var waves = SxdTables.Waves(bank);
++        var wave = waves[6];
++        Assert.Equal("Boss 1", SxdTables.TrackNames(bank)[6]);
++        Assert.Equal(0x00FF0642u, wave.FormatWord); // 6 channels, AT9
++        Assert.Equal(0xFE761DF0u, wave.CodecConfig);
++
++        var payload = File.ReadAllBytes(Bank("music.sxd2"));
++        var slice = payload.AsSpan((int)wave.Start, wave.ByteLength).ToArray();
++        var audio = AudioCodec.Decode(slice, wave.FormatWord, wave.CodecConfig, wave.SampleRate);
++
++        Assert.Equal(2, audio.Channels); // 5.1 downmixed (R6)
++        Assert.Equal(48000, audio.Rate);
++        Assert.InRange(audio.Seconds, 125.8, 126.1); // measured 125.93 s (recon §6)
++        Assert.True(audio.Rms > 1e-3);
++        Assert.InRange(audio.Peak, 0.98f, 0.99f);
++        // The unclipped stereo downmix peaks ~3.16 (the 5.1 master overshoots unity), so the
++        // normalization must attenuate by ~10 dB; clipping the sum first would report ~0 dB.
++        Assert.InRange(audio.GainDb, -12, -8);
++    }
++
++    [Fact]
++    public void Verb_WritesManifestAndFiles()
++    {
++        var outLib = TempDir();
++        try
++        {
++            var options = new AudioConvertOptions(TestAssets.Root, outLib,
++                RepoFile(Path.Combine("tools", "re", "audio", "s5_map.json")),
++                new[] { "player.swing" }, null, Force: true);
++
++            var result = AudioConverter.Run(options);
++            var entry = Assert.Single(result.Entries);
++            Assert.Single(result.Written);
++            Assert.Empty(result.Reused);
++            Assert.Equal("com_obj", entry.Bank);
++            Assert.Equal("player.swing", entry.Name);
++            Assert.Equal("audio/com_obj/player.swing.wav", entry.File);
++            Assert.Equal(48000, entry.Rate);
++            Assert.Equal(1, entry.Channels);
++            Assert.Equal("psadpcm", entry.Codec);
++            Assert.False(entry.Loop);
++
++            var wavPath = Path.Combine(outLib, entry.File);
++            Assert.True(File.Exists(wavPath), wavPath);
++            var (channels, rate, frames, samples) = ReadFloatWav(wavPath);
++            Assert.Equal(entry.Channels, channels);
++            Assert.Equal(entry.Rate, rate);
++            Assert.Equal(entry.Frames, frames);
++            Assert.True(Peak(samples) > 0.1f);
++
++            var manifestPath = Path.Combine(outLib, "audio", "audio.manifest");
++            Assert.Equal(manifestPath, result.ManifestPath);
++            var read = AudioManifest.Read(manifestPath);
++            Assert.Single(read);
++            Assert.Equal(entry, read[0]);
++
++            // Without --force the existing WAV and manifest entry are reused, not re-decoded.
++            var again = AudioConverter.Run(options with { Force = false });
++            Assert.Single(again.Reused);
++            Assert.Empty(again.Written);
++            Assert.Equal(entry, Assert.Single(again.Entries));
++        }
++        finally
++        {
++            Directory.Delete(outLib, true);
++        }
++    }
++
++    [Fact]
++    public void Layers_Mix_NonSilent()
++    {
++        var outLib = TempDir();
++        try
++        {
++            var options = new AudioConvertOptions(TestAssets.Root, outLib,
++                RepoFile(Path.Combine("tools", "re", "audio", "s5_map.json")),
++                new[] { "valus.impact" }, null, Force: true);
++
++            var result = AudioConverter.Run(options);
++            var entry = Assert.Single(result.Entries);
++            Assert.Equal(2, entry.Channels);
++
++            var (channels, rate, frames, samples) = ReadFloatWav(Path.Combine(outLib, entry.File));
++            Assert.Equal(2, channels);
++            Assert.Equal(48000, rate);
++            Assert.True(Peak(samples) <= 0.99f + 1e-6f);
++            Assert.True(Rms(samples) > 1e-3);
++
++            // The gate mixes from t=0 and pads to the longest layer, so the mix is exactly the
++            // longest decoded layer (no layer is longer than it).
++            var waves = SxdTables.Waves(SxdContainer.Read(Bank("boss01.sxd")));
++            var maxDeclared = waves.Skip(26).Take(5).Max(wave => (int)wave.Frames);
++            Assert.InRange(frames, maxDeclared, maxDeclared + 64);
++        }
++        finally
++        {
++            Directory.Delete(outLib, true);
++        }
++    }
++
+     /// <summary>
+     /// Builds a minimal SXDF with one NAME chunk: count entries at +0x0C whose 12-byte records
+     /// all carry a zero string offset, followed by <paramref name="pool"/>. The REQD key is the
+     /// entry's third word, so it survives the pool fallback.
+     /// </summary>
+     private static byte[] BuildNameOnlyBank(string pool, uint[] reqdIds)
+     {
+         var poolBytes = Encoding.Latin1.GetBytes(pool);
+         var body = new byte[0x08 + 12 * reqdIds.Length + poolBytes.Length]; // body = chunk + 8
+         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(0x04), (uint)reqdIds.Length); // chunk + 0x0C
+@@ -294,11 +588,103 @@ public class AudioTests
+         {
+             if (merged.Count > 0 && offset <= merged[^1].End)
+                 merged[^1] = (merged[^1].Offset, Math.Max(merged[^1].End, end));
+             else
+                 merged.Add((offset, end));
+         }
+ 
+         Assert.Single(merged);
+         return merged[0];
+     }
++
++    /// <summary>A unique temporary directory, removed by the caller.</summary>
++    private static string TempDir()
++    {
++        var path = Path.Combine(Path.GetTempPath(), $"bpconvert-audio-{Guid.NewGuid():N}");
++        Directory.CreateDirectory(path);
++        return path;
++    }
++
++    /// <summary>Resolves a repository-relative fixture (the cue map) from the test bin directory.</summary>
++    private static string RepoFile(string relative)
++    {
++        var dir = new DirectoryInfo(AppContext.BaseDirectory);
++        while (dir is not null)
++        {
++            var candidate = Path.Combine(dir.FullName, relative);
++            if (File.Exists(candidate))
++                return candidate;
++            if (File.Exists(Path.Combine(dir.FullName, "BpConvert.sln")))
++                throw new FileNotFoundException($"fixture {relative} is missing", candidate);
++            dir = dir.Parent;
++        }
++
++        throw new FileNotFoundException($"repository root not found for {relative}");
++    }
++
++    /// <summary>The loader formula (recon §7.1): payload = record + 0x24 + start, length = bytes.</summary>
++    private static byte[] CarveResident(SxdBank bank, WaveRecord wave)
++    {
++        var data = File.ReadAllBytes(bank.Path);
++        var start = (int)(wave.RecordOffset + 0x24 + wave.Start);
++        return data.AsSpan(start, wave.ByteLength).ToArray();
++    }
++
++    /// <summary>Reads the float32 RIFF/WAVE that <see cref="WavWriter"/> writes.</summary>
++    private static (int Channels, int Rate, int Frames, float[] Samples) ReadFloatWav(string path)
++    {
++        var bytes = File.ReadAllBytes(path);
++        Assert.Equal("RIFF", Encoding.ASCII.GetString(bytes, 0, 4));
++        Assert.Equal("WAVE", Encoding.ASCII.GetString(bytes, 8, 4));
++
++        int channels = 0, rate = 0, bits = 0, format = 0;
++        var dataStart = -1;
++        var dataLength = 0;
++        var position = 12;
++        while (position + 8 <= bytes.Length)
++        {
++            var id = Encoding.ASCII.GetString(bytes, position, 4);
++            var size = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(position + 4));
++            var body = position + 8;
++            if (id == "fmt ")
++            {
++                format = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(body));
++                channels = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(body + 2));
++                rate = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(body + 4));
++                bits = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(body + 14));
++            }
++            else if (id == "data")
++            {
++                dataStart = body;
++                dataLength = size;
++            }
++
++            position = body + size + (size & 1);
++        }
++
++        Assert.Equal(3, format); // IEEE float
++        Assert.Equal(32, bits);
++        Assert.True(dataStart >= 0);
++        var samples = new float[dataLength / 4];
++        for (var i = 0; i < samples.Length; i++)
++            samples[i] = BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(dataStart + 4 * i));
++
++        Assert.Equal(0, samples.Length % channels);
++        return (channels, rate, samples.Length / channels, samples);
++    }
++
++    private static float Peak(IEnumerable<float> samples) =>
++        samples.Select(Math.Abs).DefaultIfEmpty(0).Max();
++
++    private static double Rms(IEnumerable<float> samples)
++    {
++        double sum = 0;
++        var count = 0;
++        foreach (var sample in samples)
++        {
++            sum += (double)sample * sample;
++            count++;
++        }
++
++        return count == 0 ? 0 : Math.Sqrt(sum / count);
++    }
+ }
+diff --git a/tools/re/audio/s5_audition.py b/tools/re/audio/s5_audition.py
+index 64cb152..2db39c6 100644
+--- a/tools/re/audio/s5_audition.py
++++ b/tools/re/audio/s5_audition.py
+@@ -79,20 +79,80 @@ def load_bank(root, bank):
+                 break
+         r["payload"] = r["offset"] + 0x24 + r["start"]
+         if r["payload"] < payload_base or r["payload"] + r["bytes"] > payload_end:
+             raise AuditionError(
+                 f"{path}: record {k} payload escapes DATA")
+     names = bank_names(buf, chunks)
+     return {"path": path, "buf": buf, "chunks": chunks, "records": records,
+             "names": names, "payload_base": payload_base}
+ 
+ 
++def load_music_index(root):
++    """Return the streamed music index: WAVE records plus their REQD track names.
++
++    The music index has no DATA chunk: `start` is absolute in `music.sxd2` (recon §2), so no
++    payload is carved here. This reader exists only to check a music cue's identity/config; the
++    converter decodes the track.
++    """
++    path = os.path.join(root, "sound", "shadow", "music.sxd1")
++    buf = gate.read_bytes(path)
++    chunks = gate.chunk_map(buf, path)
++    for need in ("WAVE", "REQD"):
++        if need not in chunks:
++            raise AuditionError(f"{path}: no {need} chunk")
++    tracks = []
++    for rec, _tag in gate.table_records(buf, chunks["REQD"][0], path):
++        tracks.append(buf[rec + 0x20:rec + 0x60].split(b"\0")[0].decode("latin1"))
++    records = [gate.read_wave_record(buf, rec, path)
++               for rec, _tag in gate.table_records(buf, chunks["WAVE"][0], path)]
++    return {"path": path, "buf": buf, "chunks": chunks, "records": records,
++            "tracks": tracks}
++
++
++def check_music_cue(root, cue, problems):
++    """Check one streamed-music cue: wave exists, REQD name matches, 5.1 AT9 config present.
++
++    Returns the cue's rate so `--check` still reports it. The full decode is the converter's
++    job (Task 3); this keeps the map's music row honest without a 126 s audition pass.
++    """
++    event = cue.get("event", "?")
++    try:
++        bank = load_music_index(root)
++    except (AuditionError, gate.GateError) as exc:
++        problems.append(f"{event}: {exc}")
++        return None
++    wave = cue.get("wave")
++    if not isinstance(wave, int) or not 0 <= wave < len(bank["records"]):
++        problems.append(
++            f"{event}: wave {wave} is not in music.sxd1 (0..{len(bank['records']) - 1})")
++        return None
++    record = bank["records"][wave]
++    track = bank["tracks"][wave] if wave < len(bank["tracks"]) else ""
++    if track != cue.get("name"):
++        problems.append(
++            f"{event}: wave {wave} is the track {track!r}, not {cue.get('name')!r}")
++    if cue.get("method") != "table":
++        problems.append(f"{event}: a music row must use method 'table'")
++    if record["channels"] != 6:
++        problems.append(f"{event}: wave {wave} is {record['channels']}ch, not 5.1")
++    layers = cue.get("layers") or [wave]
++    if not isinstance(layers, list) or not layers or layers[0] != wave or wave not in layers:
++        problems.append(f"{event}: layers must start with the primary wave")
++    hint = struct.unpack_from("<I", bank["buf"], record["offset"] + 0x40)[0]
++    if hint >> 24 != 0xFE:
++        problems.append(f"{event}: wave {wave} has no AT9 config at +0x40")
++    print(f"  {event:<16} music: track {track!r} wave {wave} "
++          f"{record['samples'] / record['rate']:.3f} s {record['channels']}ch "
++          f"{record['rate']} Hz (identity/config; decoded by bp-convert)")
++    return record["rate"]
++
++
+ def name_hash(name):
+     """The engine's name hash (`FUN_00987a80`): u = c + u*0x83."""
+     u = 0
+     for c in name.encode("latin1"):
+         u = (c + u * 0x83) & 0xFFFFFFFF
+     return u
+ 
+ 
+ def lookup_name_id(buf, chunks, name):
+     """NAME hash -> REQD id, or None (the exact `FUN_00987a80` walk)."""
+@@ -409,20 +469,26 @@ def main(argv=None):
+ 
+     rates_used = set()
+     # --- identity + decode, including every layer ---
+     for cue in cues:
+         event = cue.get("event", "?")
+         if cue.get("status") == "deferred" or cue.get("wave") is None:
+             print(f"  {event:<16} deferred: {cue.get('reason', 'no wave')}")
+             if event in CORE_EVENTS:
+                 problems.append(f"{event}: core cue is deferred")
+             continue
++        if cue.get("bank") == "music":
++            rate = check_music_cue(args.root, cue, problems)
++            if rate:
++                rates_used.add(rate)
++            decoded += 1
++            continue
+         bank = load_bank(args.root, cue["bank"])
+         reqd = lookup_name_id(bank["buf"], bank["chunks"], cue.get("name", ""))
+         if reqd is None:
+             problems.append(f"{event}: name {cue.get('name')!r} is not in the NAME table")
+         elif cue.get("reqd") is None:
+             problems.append(f"{event}: row is missing reqd")
+         elif int(cue["reqd"]) != reqd:
+             problems.append(f"{event}: reqd {cue['reqd']} != NAME lookup {reqd}")
+         method = cue.get("method")
+         wave = int(cue["wave"])
+@@ -513,21 +579,21 @@ def main(argv=None):
+                 problems.append(f"{event}: mix failed: {exc}")
+         decoded += 1
+     if args.check and problems:
+         print(f"AUDITION FAILED: {len(problems)} problem(s)", file=sys.stderr)
+         for p in problems:
+             print(f"  {p}", file=sys.stderr)
+         return 1
+     if args.check:
+         rate_text = ", ".join(f"{r}" for r in sorted(rates_used)) or "none"
+         print(f"AUDITION PASSED: {decoded} cue(s), {len(rates_used)} rate(s) "
+-              f"({rate_text} Hz), all layers non-silent")
++              f"({rate_text} Hz), resident layers non-silent; music rows identity/config-checked")
+     else:
+         print(f"decoded {decoded} mapped cue(s) (run with --check to gate)")
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     try:
+         sys.exit(main())
+     except (AuditionError, gate.GateError) as exc:
+         print(f"AUDITION ERROR: {exc}", file=sys.stderr)
+diff --git a/tools/re/audio/s5_map.json b/tools/re/audio/s5_map.json
+index 8525748..25a8b0b 100644
+--- a/tools/re/audio/s5_map.json
++++ b/tools/re/audio/s5_map.json
+@@ -107,20 +107,32 @@
+       "tone": null,
+       "wave": 657,
+       "layers": [657],
+       "method": "audition",
+       "confidence": "medium",
+       "fidelity": "medium",
+       "verified_index": true,
+       "chain": "NAME hash -> REQD 1573 -> SEQD 0xD710; no PLAY_TONE op decoded; com_b_h TONE table is not flat",
+       "wave_pool_label": "b_dead_by_boss",
+       "note": "Audition pick: wave 657 is a 0.811 s 0x21 vocal. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
++    },
++    {
++      "event": "music.boss",
++      "bank": "music",
++      "name": "Boss 1",
++      "wave": 6,
++      "layers": [6],
++      "method": "table",
++      "confidence": "high",
++      "fidelity": "high",
++      "chain": "music.sxd1 REQD track 6 is \"Boss 1\"; the 76-byte WAVE record 6 is 5.1 ATRAC9 (config FE761DF0 at +0x40) with start 0x22C6860 absolute in music.sxd2 (recon §2/§4)",
++      "note": "Streamed music, not a resident SFX: 5.1 downmixed to stereo at conversion time (R6), looped by the runtime. Selected with --music \"Boss 1\"."
+     }
+   ],
+   "deferred": [
+     {"event": "valus.death", "bank": "boss01", "reason": "mavo_death resolves to tones 97-99 -> waves 75-77 (0x21) but the death roar is not one of the seven core cues and the sequence layering is unresolved."},
+     {"event": "valus.grab", "bank": "boss01", "reason": "grab/body-movement cues are layered 0x21 sequences; not required by the core set."},
+     {"event": "valus.fall", "bank": "boss01", "reason": "fall/rise cues are layered 0x21 sequences; not required by the core set."},
+     {"event": "valus.breath", "bank": "boss01", "reason": "breath/ambience cues are layered 0x21 sequences; not required by the core set."},
+     {"event": "valus.ambience", "bank": "boss01", "reason": "boss01_FS_* / mammo_* ambience beds are layered 0x21 sequences; not required by the core set."},
+     {"event": "player.grab", "bank": "com_b_h", "reason": "grab/hand cues are layered com_b_h sequences; not required by the core set."},
+     {"event": "player.fall", "bank": "com_v", "reason": "bvo_fall* names are beyond the 63 resident com_v waves; streamed or layered."},

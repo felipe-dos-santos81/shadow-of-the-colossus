@@ -30,7 +30,14 @@ public sealed record AudioConvertOptions(
 /// <summary>What one run produced: the merged manifest entries, plus which cues were decoded.</summary>
 public sealed record AudioConvertResult(
     IReadOnlyList<AudioEntry> Entries, IReadOnlyList<string> Written, IReadOnlyList<string> Reused,
-    string ManifestPath);
+    string ManifestPath)
+{
+    /// <summary>
+    /// Entries dropped as stale by a full-map run (<c>bank/name</c>, plus their WAVs); empty for a
+    /// scoped run, which keeps the cumulative manifest.
+    /// </summary>
+    public IReadOnlyList<string> Pruned { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>
 /// The converter pipeline behind <c>bp-convert audio</c> (plan Task 3): read the curated map,
@@ -59,12 +66,18 @@ public static class AudioConverter
     private const double SilenceFloorRms = 1e-3; // the gate's -60 dBFS
     private const string ManifestFileName = "audio.manifest";
 
-    /// <summary>Runs the conversion; idempotent unless <see cref="AudioConvertOptions.Force"/>.</summary>
+    /// <summary>
+    /// Runs the conversion; idempotent unless <see cref="AudioConvertOptions.Force"/>. A full-map
+    /// run (no <c>--events</c>/<c>--music</c>) is a re-conversion: it prunes manifest entries the
+    /// map no longer selects and deletes their WAVs, so a dropped cue cannot linger. A scoped run
+    /// merges into the manifest and prunes nothing.
+    /// </summary>
     /// <param name="options">Roots and scope.</param>
     /// <param name="log">Optional one-line progress sink (the CLI passes <c>Console.WriteLine</c>).</param>
     /// <exception cref="InvalidDataException">
     /// The map is unreadable/incomplete, a selected event/music name is not in the map, a bank,
-    /// wave, name or payload is missing, a range does not tile, or a decode fails/silences.
+    /// wave, name or payload is missing, a range does not tile, a decode fails/silences, or a
+    /// stale manifest entry points outside the output library.
     /// </exception>
     public static AudioConvertResult Run(AudioConvertOptions options, Action<string>? log = null)
     {
@@ -74,14 +87,30 @@ public static class AudioConverter
         ArgumentException.ThrowIfNullOrWhiteSpace(options.MapPath);
         ArgumentNullException.ThrowIfNull(options.Events);
 
+        var fullMap = options.Events.Count == 0 && options.Music is null;
         var cues = Select(LoadMap(options.MapPath), options);
         var manifestPath = Path.Combine(options.OutLibrary, "audio", ManifestFileName);
 
-        // The manifest is cumulative: a run scoped to one event must not drop the other entries.
+        // The manifest is cumulative for a scoped run: a run scoped to one event must not drop the
+        // other entries. A full-map run prunes first, so the selected set is the whole manifest.
         var entries = new Dictionary<(string Bank, string Name), AudioEntry>();
         if (File.Exists(manifestPath))
             foreach (var entry in AudioManifest.Read(manifestPath))
                 entries[(entry.Bank, entry.Name)] = entry;
+
+        var pruned = new List<string>();
+        if (fullMap)
+        {
+            var selected = cues.Select(cue => (cue.Bank, cue.Event)).ToHashSet();
+            foreach (var key in entries.Keys.Where(key => !selected.Contains(key)).ToList())
+            {
+                var entry = entries[key];
+                DeleteStaleFile(options, entry);
+                entries.Remove(key);
+                pruned.Add($"{entry.Bank}/{entry.Name}");
+                log?.Invoke($"  prune {entry.Bank}/{entry.Name}  {entry.File}");
+            }
+        }
 
         var banks = new Dictionary<string, BankContext>(StringComparer.Ordinal);
         var written = new List<string>();
@@ -113,7 +142,27 @@ public static class AudioConverter
             .ToList();
         AudioManifest.Write(manifestPath, merged);
         log?.Invoke($"manifest: {manifestPath} ({merged.Count} entries)");
-        return new AudioConvertResult(merged, written, reused, manifestPath);
+        return new AudioConvertResult(merged, written, reused, manifestPath) { Pruned = pruned };
+    }
+
+    /// <summary>
+    /// Deletes a pruned entry's WAV. A stale entry is data read from disk, so its absolute,
+    /// lexically normalized path must stay under the output library before anything is removed
+    /// (an absolute or <c>..</c> path in a stale manifest line is refused).
+    /// </summary>
+    private static void DeleteStaleFile(AudioConvertOptions options, AudioEntry entry)
+    {
+        var root = Path.GetFullPath(options.OutLibrary);
+        var path = Path.GetFullPath(Path.Combine(root,
+            entry.File.Replace('/', Path.DirectorySeparatorChar)));
+        var prefix = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
+            throw new InvalidDataException(
+                $"{entry.Bank}/{entry.Name}: stale file '{entry.File}' is outside the output library");
+        if (File.Exists(path))
+            File.Delete(path);
     }
 
     private static AudioEntry ConvertCue(

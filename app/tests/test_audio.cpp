@@ -451,6 +451,17 @@ TEST_CASE("load_manifest rejects a duplicate or a missing file") {
         CHECK(engine.last_error().find("libraryRoot-relative") != std::string::npos);
         CHECK_FALSE(engine.has("escape"));
     }
+
+    SUBCASE("a .. component escapes the library") {
+        const TempDir dir;
+        const std::filesystem::path manifest =
+            write_manifest(dir, {{"dotdot", "../../escape.wav", 1, 24000, 0}});
+
+        AudioEngine engine;
+        CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
+        CHECK(engine.last_error().find("escapes libraryRoot") != std::string::npos);
+        CHECK_FALSE(engine.has("dotdot"));
+    }
 }
 
 TEST_CASE("render_mixdown writes a 48 kHz float WAV") {
@@ -529,7 +540,49 @@ TEST_CASE("music and ambience each own one replaceable voice") {
     CHECK_FALSE(engine.is_playing("music"));
     CHECK(engine.is_playing("wind"));
     CHECK(engine.active_voices() == 1);
-    // stop_music drops the prebuffer so the cue stops now, not after the lead.
+    // stop_music leaves the queued mix to drain (the frame may carry an SFX);
+    // only mute/reset drop it.
+    CHECK(engine.queued_audio_bytes() > 0);
+}
+
+TEST_CASE("stopping the music leaves the queued SFX intact") {
+    const TempDir dir;
+    write_tone_wav(dir, "audio/test/score.wav", 2.0f, 0.5f, 1);
+    write_tone_wav(dir, "audio/test/kill.wav", 2.0f, 0.4f, 1);
+    const std::filesystem::path manifest =
+        write_manifest(dir, {{"score", "audio/test/score.wav", 1, 96000, 1},
+                             {"kill", "audio/test/kill.wav", 1, 96000, 0}});
+
+    AudioEngine engine;
+    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                    engine.last_error());
+    engine.play_music("score");
+    engine.play_ui("kill");  // the killing blow's SFX, queued the same frame
+    REQUIRE(engine.queued_audio_bytes() > 0);
+
+    engine.stop_music();
+    CHECK_FALSE(engine.is_playing("score"));  // the music voice is inactive
+    CHECK(engine.is_playing("kill"));
+    const int after_first = engine.queued_audio_bytes();
+    CHECK(after_first > 0);  // ~50 ms of lead: not chopped by the stop
+
+    // The defeat path calls stop_music every frame: the second call (and every
+    // later one) is a no-op. A flush here would read exactly 0.
+    engine.stop_music();
+    CHECK(engine.queued_audio_bytes() > 0);
+    CHECK(engine.is_playing("kill"));
+
+    // The SFX is still audible in the following window, and it is alone: the
+    // 0.4 clip at the master stage peaks at 0.34, while the music (0.5 x 0.7)
+    // plus SFX would peak near 0.64.
+    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "after-stop.wav").string(), 1),
+                    engine.last_error());
+    const AudioClip after = read_mixdown(dir.path() / "after-stop.wav");
+    CHECK(peak(after) == doctest::Approx(0.4f * AudioEngine::kMasterGain).epsilon(0.02));
+    CHECK(stereo_rms(after) > 0.1f);
+
+    // reset() is still the call that drops the queue.
+    engine.reset();
     CHECK(engine.queued_audio_bytes() == 0);
 }
 

@@ -1,0 +1,867 @@
+# Review package: 6fdd9f2..HEAD
+
+## Commits
+256fe69 fix(re): verify the S5 cue identity through the loader chain
+
+## Files changed
+ docs/notes/s5-audio-attribution.md | 155 ++++++++++++++++++++++---------------
+ docs/notes/s5-audio-recon.md       |  46 +++++++----
+ tools/re/audio/s5_audition.py      | 114 +++++++++++++++++++++++++--
+ tools/re/audio/s5_decode_gate.py   |  45 +++++++++--
+ tools/re/audio/s5_map.json         |  70 ++++++++++++-----
+ 5 files changed, 321 insertions(+), 109 deletions(-)
+
+## Diff
+diff --git a/docs/notes/s5-audio-attribution.md b/docs/notes/s5-audio-attribution.md
+index 6e9e79b..af474d8 100644
+--- a/docs/notes/s5-audio-attribution.md
++++ b/docs/notes/s5-audio-attribution.md
+@@ -2,91 +2,118 @@
+ 
+ Status: **core cues mapped** (2026-10-21, Task 1). The machine-readable authority is
+ `tools/re/audio/s5_map.json`; `tools/re/audio/s5_audition.py --map … --check` decodes every
+ mapped wave with the loader-derived payload formula (`wave_record_offset + 0x24 + start`,
+ `docs/notes/s5-audio-recon.md` §7) and fails on a missing, silent or short wave.
+ 
+ ```
+ caffeinate -dimsu python3 tools/re/audio/s5_audition.py \
+     --root "$SOTC_GAME_ROOT" --map tools/re/audio/s5_map.json \
+     --out out/s5/audition --check
+-  valus.telegraph  boss01  w003 boss01_vo_atk1            1.202 s  RMS -15.6 dBFS
+-  valus.impact     boss01  w026 boss01_atk_hit_ground1    7.543 s  RMS -13.3 dBFS
+-  valus.hurt       boss01  w006 boss01_vo_dmg1            1.051 s  RMS -12.4 dBFS
+-  player.swing     com_obj w007 wnd_LifeSwd_swish_t1_01   0.465 s  RMS -10.2 dBFS
+-  player.hit       com_obj w021 wnd_swd_hit_gravel_t1_01  0.709 s  RMS -12.2 dBFS
+-  player.hurt      com_v   w040 bvo_dmg_m                 0.270 s  RMS  -8.6 dBFS
+-  player.death     com_b_h w657 b_dead_by_boss            0.812 s  RMS -15.4 dBFS
+-AUDITION PASSED: 7 mapped wave(s) decoded, 48 kHz, non-silent
++  valus.telegraph  chain: reqd 340 -> tone 20 -> wave 3
++  valus.telegraph  boss01  w003 boss01_vo_atk1            1.202 s  48000 Hz  RMS -15.6 dBFS
++  valus.impact     chain: reqd 303 -> tone 43 -> wave 26
++  valus.impact     boss01  w026 boss01_atk_hit_ground1    7.543 s  48000 Hz  RMS -13.3 dBFS
++  valus.hurt       chain: reqd 331 -> tone 23 -> wave 6
++  valus.hurt       boss01  w006 boss01_vo_dmg1            1.051 s  48000 Hz  RMS -12.4 dBFS
++  player.swing     audition: wave 7 (identity not chain-proven)
++  player.swing     com_obj w007 wnd_LifeSwd_swish_t1_01   0.465 s  48000 Hz  RMS -10.2 dBFS
++  player.hit       audition: wave 21 (identity not chain-proven)
++  player.hit       com_obj w021 wnd_swd_hit_gravel_t1_01  0.709 s  48000 Hz  RMS -12.2 dBFS
++  player.hurt      audition: wave 40 (identity not chain-proven)
++  player.hurt      com_v   w040 bvo_dmg_m                 0.270 s  48000 Hz  RMS  -8.6 dBFS
++  player.death     audition: wave 657 (identity not chain-proven)
++  player.death     com_b_h w657 b_dead_by_boss            0.812 s  48000 Hz  RMS -15.4 dBFS
++AUDITION PASSED: 7 mapped wave(s), all 48000 Hz, non-silent
+ ```
+ 
+ ## The map
+ 
+-| event | bank | name | WAVE index | method | confidence |
+-|---|---|---|---|---|---|
+-| `valus.telegraph` | boss01 | `boss01_vo_atk1` | 3 | table | medium |
+-| `valus.impact` | boss01 | `boss01_atk_hit_ground1` | 26 | ghidra | high |
+-| `valus.hurt` | boss01 | `boss01_vo_dmg1` | 6 | table | medium |
+-| `player.swing` | com_obj | `wnd_LifeSwd_swish_t1_01` | 7 | table | high |
+-| `player.hit` | com_obj | `wnd_swd_hit_gravel_t1_01` | 21 | table | medium |
+-| `player.hurt` | com_v | `bvo_dmg_m` | 40 | table | medium |
+-| `player.death` | com_b_h | `b_dead_by_boss` | 657 | table | medium |
+-
+-**`ghidra`** = the name resolves through the bank's `NAME` hash table to a `REQD` record,
+-whose `+0x0C` points into `SEQD`; the sequence's first `0xa4` (`SFX_PLAY_TONE`) operand is
+-a tone id, and the boss01 `TONE` table (12-byte entries at `TONE+0x20`, fields
+-`key, key, flags, next, wave, 0`) gives the WAVE index. This chain is binary-derived.
+-
+-**`table`** = the WAVE table order matches the bank's name-pool insertion order for the
+-resident subset; the mapped wave's duration matches the cue's semantic class. This is
+-strong for `com_obj`/`com_v`/`com_b_h` (see the evidence below) but is an inference from
+-the shipped table order, not a decoded pointer — hence `medium` except where the duration
+-is unmistakable (`player.swing`).
+-
+-**`audition`** = decoded and inspected (spectrogram + envelope) without a table link.
++`name` is the **sound-request name** (the `NAME`/`REQD` namespace), not a per-wave label.
++`wave` is the WAVE index the request plays; `layers` lists the other layers of a layered
++sound. `reqd` is the `REQD` record index (NAME hash); `tone` is the `PLAY_TONE` operand
++where the chain is walked. `wave_pool_label` (in the JSON) is the pool string at that WAVE
++index — a label for the record, **not** an identity claim.
++
++| event | bank | request name | reqd | tone | wave | layers | method | confidence |
++|---|---|---|---|---|---|---|---|---|
++| `valus.telegraph` | boss01 | `boss01_vo_atk1` | 340 | 20 | 3 | — | ghidra | medium |
++| `valus.impact` | boss01 | `boss01_atk_hit_ground1` | 303 | 43 | 26 | 26-30 | ghidra | high |
++| `valus.hurt` | boss01 | `boss01_vo_dmg1` | 331 | 23 | 6 | — | ghidra | medium |
++| `player.swing` | com_obj | `wnd_LifeSwd_swish_t1_01` | 118 | — | 7 | — | audition | medium |
++| `player.hit` | com_obj | `wnd_swd_hit_gravel_t1_01` | 60 | — | 21 | — | audition | medium |
++| `player.hurt` | com_v | `bvo_dmg_m` | 172 | — | 40 | — | audition | medium |
++| `player.death` | com_b_h | `b_dead_by_boss` | 1573 | — | 657 | — | audition | medium |
++
++**`ghidra`** = the row carries a walked chain. `NAME` hash → `REQD` id → `SEQD` offset →
++`PLAY_TONE` → `TONE[tone].wave`, and `s5_audition.py --check` re-runs the `NAME` hash and
++asserts `TONE[tone].wave == wave`. The boss01 `TONE` table is the flat 12-byte form at
++`TONE+0x20` (`key, key, flags, next, wave, 0`). For `valus.telegraph`/`valus.hurt` the
++tone→wave step is binary; the name→tone step is the request/play-list order
++(`TONE[18..24] → waves 1..7`), hence `medium`.
++
++**`audition`** = no chain could be completed (the com_obj/com_v/com_b_h `TONE` tables are
++not the flat 12-byte form), so the row is explicitly re-scoped to a **verified index**:
++`verified_index: true` in the JSON, and the script prints "identity not chain-proven".
++The ear remains the final identity check. The scripted check verifies the requirement is
++present, the name is in the `NAME` table, the wave decodes at 48 kHz and is non-silent —
++it does **not** claim identity for these rows.
+ 
+ ## Evidence per cue
+ 
+-* **`valus.impact` — boss01 w026 (`boss01_atk_hit_ground1`).** `NAME` hash lookup of
+-  `boss01_atk_hit_ground1` → REQD record 303 → `SEQD` timeline at `+0x13E4` → bytecode at
+-  `+0x23BA` → `PLAY_TONE 43`; `TONE[43].wave = 26`. The cue is a 5-layer sequence
+-  (tones 43-47 → waves 26-30); wave 26 is the first and longest layer (7.54 s, 2 ch).
+-  The decode is a low-frequency evolving rumble, consistent with a colossus stomp with a
+-  long debris tail.
+-* **`valus.telegraph` — boss01 w003 (`boss01_vo_atk1`).** Name-pool order: the first 108
+-  WAVE records match the first 108 names in duration class (wave 0 4.12 s 2 ch ground
+-  rumble; waves 1-2 the shorter ground hits; waves 3-5 the three attack vocals at 1.20 /
+-  0.93 / 1.08 s; waves 6-13 the eight damage vocals). Wave 3's spectrogram is a 1.2 s
+-  broadband roar with formant bands. Alternative if the order breaks: the 0x42 pair
+-  108/109 (AT9, 4.86 s) is a large roar; recorded in the map's `note`.
+-* **`valus.hurt` — boss01 w006 (`boss01_vo_dmg1`).** Same order; wave 6 is the first
+-  damage vocal (1.05 s), spectrogram a 1.05 s roar. The dedicated `mavo_damage_l/s` names
+-  are later sequences, not the seven core cues.
+-* **`player.swing` — com_obj w007 (`wnd_LifeSwd_swish_t1_01`).** Name-pool order; wave 7 is
+-  a 0.464 s whoosh. The name is the first of the four LifeSword swish variants at names
+-  7-10; waves 7-10 are 0.464 / 1.561 / 1.561 / 1.476 s, the first being the short variant
+-  a combat swing uses. The `PLAY_TONE` chain for this name resolves to tones 16/17, but the
+-  com_obj `TONE` chunk is not the flat 12-byte form used by boss01, so the chain cannot be
+-  completed; the duration match is the deciding evidence.
+-* **`player.hit` — com_obj w021 (`wnd_swd_hit_gravel_t1_01`).** Name-pool order; wave 21 is
+-  a 0.708 s impact, first of the four gravel-hit variants (names 21-24 → waves 21-24 at
+-  0.708 / 0.621 / 0.668 / 0.792 s).
+-* **`player.hurt` — com_v w040 (`bvo_dmg_m`).** Name-pool order; wave 40 is a 0.270 s
+-  grunt, one of the ten resident damage vocals (`bvo_dmg10/11/12`, `bvo_dmg_m/s`,
+-  `bvo_dmg_feeler`, `bvo_dmg_m1/m2/s1/s2` at names 37-46 → waves 37-46, all 0.17-0.81 s).
+-  `bvo_dmg_m` is the medium-strength default; the longer `bvo_dmg10` (0.807 s) is the
+-  heavier hit.
+-* **`player.death` — com_b_h w657 (`b_dead_by_boss`).** Name-pool order at name 657 of
+-  1 161 resident waves; wave 657 is a 0.811 s vocal, between the water-landing sounds
+-  (654-656) and the grass-walk set (658+). The dedicated `bvo_die_fall` / `bvo_die_dmg`
+-  names in com_v are **sequence names beyond the 63 resident com_v waves**, so they cannot
+-  be decoded as a single resident wave.
++* **`valus.impact` — boss01 w026 (`boss01_atk_hit_ground1`).** `NAME` hash → `REQD` 303 →
++  `SEQD` timeline `+0x13E4` → bytecode `+0x23BA` → `a4 01 43` (`PLAY_TONE 43`) →
++  `TONE[43] = (key 57, wave 26)`. The sequence then plays tones 44-47 → waves 27-30, so the
++  request is a 5-layer ground impact and wave 26 is the first/longest layer (7.54 s, 2 ch).
++  The pool label at index 26 is `boss01_FS_far3_0`, **not** the request name — proof that
++  the pool is a request namespace, not a per-wave name list.
++* **`valus.telegraph` — boss01 w003 (`boss01_vo_atk1`).** `REQD` 340 (sequence `0x10B1`) →
++  request-order tone 20 → `TONE[20] = (key 34, wave 3)`. The `TONE[18..24] → waves 1..7`
++  range and the request order (ground2, ground3, vo_atk1, vo_atk2, vo_atk3, vo_dmg1,
++  vo_dmg2) put vo_atk1 on tone 20. Wave 3 is a 1.2 s broadband roar with formant bands.
++* **`valus.hurt` — boss01 w006 (`boss01_vo_dmg1`).** `REQD` 331 (sequence `0x11B6`) →
++  request-order tone 23 → `TONE[23] = (key 37, wave 6)`. Wave 6 is a 1.05 s roar.
++* **`player.swing` — com_obj w007 (`wnd_LifeSwd_swish_t1_01`).** `REQD` 118 (sequence
++  `0x227A`) → `PLAY_TONE 16/17`; the com_obj `TONE` chunk is not flat, so no tone→wave
++  proof. Audition pick: wave 7 is a 0.464 s 0x21 whoosh; the pool label at 7 is the same
++  request string, but that is a label only.
++* **`player.hit` — com_obj w021 (`wnd_swd_hit_gravel_t1_01`).** `REQD` 60 (sequence
++  `0x2779`); no `PLAY_TONE` in the first window. Audition pick: wave 21 is a 0.708 s
++  0x21 impact, the first of the gravel-hit variants.
++* **`player.hurt` — com_v w040 (`bvo_dmg_m`).** `REQD` 172 (sequence `0x0FD0`); no
++  `PLAY_TONE` decoded. Audition pick: wave 40 is a 0.270 s 0x21 grunt; the `bvo_dmg10/11/
++  12`, `bvo_dmg_m/s`, `bvo_dmg_feeler`, `bvo_dmg_m1/m2/s1/s2` set is the resident damage
++  vocal range.
++* **`player.death` — com_b_h w657 (`b_dead_by_boss`).** `REQD` 1573 (sequence `0xD710`);
++  no `PLAY_TONE` decoded. Audition pick: wave 657 is a 0.811 s 0x21 vocal, between the
++  water-landing sounds (654-656) and the grass-walk set (658+). The dedicated `bvo_die_*`
++  names in com_v are sequence names beyond the 63 resident com_v waves.
++
++## Fidelity of the 0x21 rows
++
++All seven cues are 0x21 PS-ADPCM. Filters 5-7 are fitted, not firmware-exact; the
++per-cue distribution and boundary metric are in `s5-audio-recon.md` §7.2. In short:
++
++| cue | wave | filter 5-7 blocks | boundary ratio |
++|---|---|---|---|
++| `valus.telegraph` | 3 | 10.5 % | 2.73 |
++| `valus.impact` | 26 | 11.1 % | 0.98 |
++| `valus.hurt` | 6 | 21.0 % | 2.86 |
++| `player.swing` | 7 | 29.9 % | 2.66 |
++| `player.hit` | 21 | 39.3 % | 1.64 |
++| `player.hurt` | 40 | 23.3 % | 1.26 |
++| `player.death` | 657 | 27.8 % | 2.52 |
++
++The gate proves existence, rate, length and non-silence — **not fidelity**. No PS-ADPCM
++coefficient table was found in `eboot.elf` (exact/approximate int16, int32×64 and float
++scans: 0 hits), so the true filters 5-7 live in the NGS2 firmware. The user's ear is the
++final fidelity check; the 0x21 map confidence is `medium` for this reason.
+ 
+ ## Deferred (with reasons)
+ 
+ | event | bank | reason |
+ |---|---|---|
+ | `valus.death` | boss01 | `mavo_death` resolves to tones 97-99 → waves 75-77 (0x21, 3.7-5.3 s), but the layering is unresolved and it is not a core cue. |
+ | `valus.grab` | boss01 | layered 0x21 body-movement sequences; not a core cue. |
+ | `valus.fall` | boss01 | layered 0x21 rise/fall sequences; not a core cue. |
+ | `valus.breath` | boss01 | layered 0x21 ambience; not a core cue. |
+ | `valus.ambience` | boss01 | `boss01_FS_*` / `mammo_*` beds are layered 0x21 sequences; not a core cue. |
+diff --git a/docs/notes/s5-audio-recon.md b/docs/notes/s5-audio-recon.md
+index ed844a3..40024d7 100644
+--- a/docs/notes/s5-audio-recon.md
++++ b/docs/notes/s5-audio-recon.md
+@@ -131,32 +131,34 @@ chunk's payload begins at `DATA + 0x10`. The formula tiles the DATA payload with
+ gaps** on boss01 (payload 15 881 920 B), com_obj and com_v; the duplicate records that
+ made the old heap mapping overlap share a range instead of drifting. §7 has the full
+ proof.
+ 
+ ---
+ 
+ ## 4. Codec — ATRAC9, 5.1, and the exact decode
+ 
+ ### 4.1 The config word
+ 
+-The AT9 config is 4 bytes, big-endian:
++The AT9 config is a 4-byte **big-endian bit layout**:
+ 
+ ```
+ FE  <sri:4><blockconfig:3><verify:1>  <frame_bytes−1:11><superframe:2>
+ ```
+ 
+ For the music: `sri = 7` (48 kHz), `blockconfig = 3` (**5.1**), `frame_bytes = 240`,
+ `superframe = 2` (4 frames/superframe) → **`FE761DF0`**.
+ 
+-The record also carries that word verbatim at `+0x40` (`0xFE761DF0` on all 33 music
+-records), and the script asserts that the derived word equals it — so the derivation and
+-the shipped bytes check each other. Tasks 2/3 can simply read `WAVE+0x40`.
++The record stores that word as a **little-endian u32** (`0xFE761DF0`, bytes
++`f0 1d 76 fe`) at `+0x40` on all 33 music records. The code unpacks the u32
++little-endian and re-emits the four bytes big-endian into the AT9 extradata; the
++assertion is on the integer value, not on the byte order. Tasks 2/3 can simply read the
++u32 at `WAVE+0x40` and call `to_bytes(4, "big")`.
+ 
+ That split is not a guess: the engine's own validator at `eboot.elf` vaddr `0x00984240`
+ reads a `u32`, compares its top byte with `0xFE000000`, extracts **bits 5..15** with
+ `bextr …,0xB05` and adds 1 (frame bytes), and **bits 17..19** with `bextr …,0x311` (block
+ config), then walks the channel table. ffmpeg's `atrac9` decoder wants the same 4 bytes as
+ 12-byte extradata (`LE32 version 0` + config + 4 zero bytes) inside a
+ `WAVEFORMATEXTENSIBLE` `fmt ` chunk whose GUID is the AT9 one.
+ 
+ ### 4.2 Channel count — the thing that blocked the first attempts
+ 
+@@ -335,24 +337,25 @@ Three functions in `eboot.elf` give the address arithmetic:
+ | `0x00983ea0` | the format switch (low byte of `+0x04`): `0x20/0x21` sets 16-byte blocks of 28 samples (`0x594 = channels<<4`, `0x590 = 0x1C`); `0x42` validates the AT9 config word. |
+ 
+ So the payload address is **relative to the WAVE record**, not to the DATA heap:
+ 
+ ```
+ payload = wave_record_offset + 0x24 + start        # length = bytes
+ ```
+ 
+ and the DATA chunk's payload starts at `DATA + 0x10` (8-byte chunk header + 8 zero
+ bytes). On `boss01` the 138 ranges tile `[DATA+0x10, DATA+8+size)` with **zero gaps**;
+-`com_obj` (241 records) and `com_v` (63) tile their payloads exactly too. The 17
+-duplicate groups (e.g. records 21/24, 22/25) share a range instead of drifting. `edp01`
+-is the exception: 11 merged segments with 70 bytes of gaps, so its bank has unlisted or
+-streamed data — the gate does not carve it.
++`com_obj` (241 records) and `com_v` (63) tile their payloads exactly too. Duplicate
++records share a range instead of drifting: **9 groups / 18 records** on boss01
++(identical `(payload, length)`; e.g. records 21/24, 22/25), 24 / 60 on com_obj, 7 / 14 on
++com_v and 89 / 302 on com_b_h. `edp01` is the exception: 11 merged segments with 70 bytes
++of gaps, so its bank has unlisted or streamed data — the gate does not carve it.
+ 
+ Why the raw `start` values overlap: the old `heap + (start − min(start))` reading ignored
+ the per-record `+0x24 + record_offset` term. Since the records have different addresses in
+ the WAVE table, the same payload can be addressed from two records; `Σ bytes` (18 407 584)
+ exceeds the span (15 874 512) because the duplicates count twice and because `bytes` is the
+ payload length, not a distance between `start`s. The old block-header "uniformity" was the
+ same arithmetic error: the headers were being read at the wrong offsets.
+ 
+ ### 7.2 `0x21` — PS-ADPCM, 16 B / 28 samples, 8 filters
+ 
+@@ -374,24 +377,39 @@ for each 16-byte block:
+ 
+ `COEF[0..4]` is the standard VAG table `{0,0}, {60,0}, {115,-52}, {98,-55}, {122,-60}`.
+ Filters 5-7 are **not** in eboot.elf (no coefficient table anywhere in the image — the
+ decoder lives in the NGS2 firmware), so they were fitted from block-boundary continuity
+ on records 1-99:
+ 
+ ```
+ COEF[5] = (126, -62)   COEF[6] = (128, -64)   COEF[7] = (126, -63)
+ ```
+ 
+-Evidence: with filters 5-7 treated as 0 the boundary jump (`|x[28k] − x[28k−1]|`) is
+-2.5-4.8× the mean sample step; with the fitted table it drops to 1.0-2.8× on records not
+-used in the fit (7, 10, 20, 30). The gate uses the fitted table. The exact firmware table
+-is still open, but the duration and envelope are unaffected.
++The fitted table is a **fidelity compromise, not a firmware proof**. Per mapped cue
++(block count, fraction of blocks using filters 5-7, boundary-jump ratio
++`|x[28k]−x[28k−1]| / mean|Δx|`):
++
++| cue | wave | blocks | filter 5-7 | boundary ratio |
++|---|---|---|---|---|
++| `valus.telegraph` | 3 | 2 060 | 10.5 % | 2.73 |
++| `valus.impact` | 26 | 25 862 | 11.1 % | 0.98 |
++| `valus.hurt` | 6 | 1 802 | 21.0 % | 2.86 |
++| `player.swing` | 7 | 797 | 29.9 % | 2.66 |
++| `player.hit` | 21 | 1 215 | 39.3 % | 1.64 |
++| `player.hurt` | 40 | 463 | 23.3 % | 1.26 |
++| `player.death` | 657 | 1 392 | 27.8 % | 2.52 |
++
++The metric is neutral or worse for w006/w007/w657, so the earlier "1.0-2.8×" claim was
++selective. A targeted search of `eboot.elf` found **no** PS-ADPCM coefficient table (exact
++and approximate int16, int32×64 and float scans: 0 hits), so the real filters 5-7 live in
++the NGS2 firmware. The gate proves existence, rate, length and non-silence — **not
++fidelity**; the user's ear is the final identity/fidelity check for the 0x21 cues.
+ 
+ ### 7.3 `0x42` — ATRAC9 at 96 kbps/channel
+ 
+ The record's own config word is the first dword with top byte `0xFE` at/after `+0x28`
+ (56-byte records: `+0x2C`; 76-byte: `+0x40`). All 30 boss01 `0x42` records decode with
+ `at9_riff_with_config()` at that word, within 9.3 ms of the declared duration, RMS
+ −17.1 dBFS, no decoder errors. The stereo/mono pairs (108/109, 110/111, …) are the same
+ performance in both layouts, which is why they share a duration.
+ 
+ ### 7.4 Exact invocation (for the converter)
+@@ -399,22 +417,22 @@ performance in both layouts, which is why they share a duration.
+ ```bash
+ # resident 0x21: the gate writes a 48 kHz pcm_s16le WAV itself (ps_adpcm_decode)
+ # resident 0x42: AT9 with the record's config word, exactly like the music path
+ ffmpeg -hide_banner -v error -y -i boss01_fmt00FF0142.at9.wav -c:a pcm_s16le out.wav
+ ```
+ 
+ Open (Task 2 must not assume otherwise):
+ 
+ 1. the exact NGS2 filter-5..7 coefficients (the fitted table is documented above);
+ 2. the name→wave resolution for banks whose `TONE` table is not the flat 12-byte form
+-   used by boss01; the attribution note uses the name-pool/WAVE order plus audition for
+-   those.
++   used by boss01; the attribution note uses the boss01 request-order/TONE chain and
++   explicit audition indices for the other banks.
+ 
+ ## 8. Converter policy (from the measured facts)
+ 
+ Rulings R6-R9 in `.superpowers/sdd/2026-10-21-s5-audio/progress.md` are the binding record;
+ the measurements that drive them:
+ 
+ * **Music is 5.1 / 48 kHz, and every master overshoots unity** — decoded float peak 0.50 …
+   4.22 across the 33 tracks, s16 export clamping 0.0000 … 0.54 % of samples (§6).
+ * The app mixer is **stereo** (R6). The converter therefore:
+ 
+diff --git a/tools/re/audio/s5_audition.py b/tools/re/audio/s5_audition.py
+index 650f620..6244f56 100644
+--- a/tools/re/audio/s5_audition.py
++++ b/tools/re/audio/s5_audition.py
+@@ -1,18 +1,26 @@
+ #!/usr/bin/env python3
+ """S5 audition — decode the curated cue map to WAV and gate it.
+ 
+ Reads `tools/re/audio/s5_map.json`, decodes each mapped `(bank, wave)` with the
+ loader-derived payload formula (`wave_record_offset + 0x24 + start`, see
+ `docs/notes/s5-audio-recon.md` §7), writes WAVs under
+-`out/s5/audition/<bank>/`, and with `--check` fails if any mapped wave is
+-missing, silent, or not 48 kHz.
++`out/s5/audition/<bank>/`, and with `--check` fails if:
++
++* any of the seven core events has no cue row with a valid wave (or is also
++  listed as deferred);
++* a `ghidra` row's `reqd` does not match the NAME hash, or its
++  `TONE[tone].wave` does not equal the mapped wave;
++* an `audition` row does not set `verified_index` (identity is not claimed);
++* two cue rows share a name;
++* a mapped wave is missing, silent, not 48 kHz, or shorter/longer than the
++  record by more than 50 ms.
+ 
+ Usage
+   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
+       --map tools/re/audio/s5_map.json --out out/s5/audition --check
+   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
+       --bank boss01 --all --out out/s5/audition     # decode every wave
+ 
+ Read-only on the game tree; every artifact lands under `--out`.
+ """
+ 
+@@ -68,20 +76,58 @@ def load_bank(root, bank):
+                 break
+         r["payload"] = r["offset"] + 0x24 + r["start"]
+         if r["payload"] < payload_base or r["payload"] + r["bytes"] > payload_end:
+             raise AuditionError(
+                 f"{path}: record {k} payload escapes DATA")
+     names = bank_names(buf, chunks)
+     return {"path": path, "buf": buf, "chunks": chunks, "records": records,
+             "names": names, "payload_base": payload_base}
+ 
+ 
++def name_hash(name):
++    """The engine's name hash (`FUN_00987a80`): u = c + u*0x83."""
++    u = 0
++    for c in name.encode("latin1"):
++        u = (c + u * 0x83) & 0xFFFFFFFF
++    return u
++
++
++def lookup_name_id(buf, chunks, name):
++    """NAME hash -> REQD id, or None (the exact `FUN_00987a80` walk)."""
++    if "NAME" not in chunks:
++        return None
++    no, ns = chunks["NAME"]
++    count = struct.unpack_from("<I", buf, no + 0x0C)[0]
++    base = no + 0x10
++    hv = name_hash(name)
++    for i in range(count):
++        e = base + 12 * i
++        so, h, idx = struct.unpack_from("<III", buf, e)
++        if h != hv:
++            continue
++        s = buf[e + so:buf.find(b"\0", e + so)].decode("latin1")
++        if s == name:
++            return idx
++    return None
++
++
++def tone_wave(buf, chunks, tone):
++    """TONE[tone].wave from the flat 12-byte table at TONE+0x20 (boss01 form)."""
++    if "TONE" not in chunks or tone is None:
++        return None
++    to, ts = chunks["TONE"]
++    off = to + 0x20 + 12 * tone
++    if tone < 0 or off + 12 > to + 8 + ts:
++        return None
++    return struct.unpack_from("<6H", buf, off)[4]
++
++
+ def bank_names(buf, chunks):
+     """The name pool in insertion order (WAVE order follows it for the first N)."""
+     if "NAME" not in chunks:
+         return []
+     no, ns = chunks["NAME"]
+     count = struct.unpack_from("<I", buf, no + 0x0C)[0]
+     pool = no + 0x10 + 12 * count
+     return [x.decode("latin1") for x in buf[pool:no + 8 + ns].split(b"\0") if x]
+ 
+ 
+@@ -124,21 +170,21 @@ def decode_wave(bank, index, out_dir, label=None):
+             for v in c:
+                 acc += v * v
+                 peak = max(peak, abs(v))
+         rms = math.sqrt(acc / total) / 32768.0 if total else 0.0
+         stats = {"codec": "ps_adpcm", "frames": frames,
+                  "duration_s": frames / rec["rate"],
+                  "expected_frames": rec["samples"],
+                  "expected_duration_s": rec["samples"] / rec["rate"],
+                  "duration_error_ms": abs(frames - rec["samples"]) / rec["rate"] * 1e3,
+                  "rms_dbfs": 20.0 * math.log10(rms) if rms > 0 else -999.0,
+-                 "peak": peak / 32768.0, "finite": True}
++                 "peak": peak / 32768.0, "finite": True, "rate": rec["rate"]}
+         return wav_path, stats
+     if codec == 0x42:
+         if not rec["at9_hint"]:
+             raise AuditionError(f"{bank['path']}: wave {index} has no AT9 config")
+         hint = rec["at9_hint"]
+         frame_bytes = ((hint >> 5) & 0x7FF) + 1
+         superframe = (hint >> 3) & 3
+         riff = gate.at9_riff_with_config(blob, rec["channels"], rec["rate"],
+                                          frame_bytes << superframe,
+                                          hint.to_bytes(4, "big"))
+@@ -148,27 +194,30 @@ def decode_wave(bank, index, out_dir, label=None):
+         raw_path = os.path.join(out_dir, name + ".f32")
+         cmd = ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", at9_path,
+                "-map", "0:a", "-c:a", "pcm_f32le", "-f", "f32le", raw_path,
+                "-c:a", "pcm_s16le", wav_path]
+         proc = subprocess.run(cmd, capture_output=True, text=True)
+         if proc.returncode != 0:
+             raise AuditionError(f"ffmpeg failed for {name}: {proc.stderr.strip()}")
+         stats = gate.analyze_f32(raw_path, wav_path, rec["channels"],
+                                  rec["rate"], rec["samples"])
+         stats["codec"] = "atrac9"
++        stats["rate"] = rec["rate"]
+         return wav_path, stats
+     raise AuditionError(f"{bank['path']}: wave {index} format 0x{codec:02X} "
+                         "has no decoder in this audition")
+ 
+ 
+ def check_stats(stats):
+     problems = []
++    if stats.get("rate") != 48000:
++        problems.append(f"rate {stats.get('rate')} Hz != 48000")
+     if not stats.get("finite", True):
+         problems.append("non-finite samples")
+     if stats["duration_error_ms"] > 50.0:
+         problems.append(f"duration error {stats['duration_error_ms']:.1f} ms")
+     if stats["rms_dbfs"] <= RMS_FLOOR_DBFS:
+         problems.append(f"RMS {stats['rms_dbfs']:.1f} dBFS <= {RMS_FLOOR_DBFS:.0f}")
+     return problems
+ 
+ 
+ def main(argv=None):
+@@ -203,49 +252,100 @@ def main(argv=None):
+             return 2
+         bank = load_bank(args.root, args.bank)
+         for i, rec in enumerate(bank["records"]):
+             print(f"w{i:03d}\t{wave_name(bank, i)}\t{rec['fmt']:#010x}\t"
+                   f"{rec['samples'] / rec['rate']:.3f}s")
+         return 0
+ 
+     with open(args.map) as fh:
+         cue_map = json.load(fh)
+     cues = cue_map.get("cues", [])
++    deferred = cue_map.get("deferred", [])
+     problems = []
+     decoded = 0
++
++    # --- map structure: every core event needs one cue row with a valid wave ---
++    seen_events = {}
++    seen_names = {}
++    for cue in cues:
++        event = cue.get("event")
++        if event in seen_events:
++            problems.append(f"duplicate cue event {event!r}")
++        seen_events[event] = cue
++        name = cue.get("name")
++        if name:
++            if name in seen_names:
++                problems.append(f"duplicate cue name {name!r}")
++            seen_names[name] = event
++    deferred_events = {d.get("event") for d in deferred}
++    for event in CORE_EVENTS:
++        cue = seen_events.get(event)
++        if cue is None:
++            problems.append(f"{event}: core cue has no row in cues")
++        elif not isinstance(cue.get("wave"), int) or cue["wave"] < 0:
++            problems.append(f"{event}: core cue has no valid wave")
++        if event in deferred_events:
++            problems.append(f"{event}: core cue is also listed as deferred")
++
++    # --- identity: chain-verified rows must walk, audition rows must be explicit ---
+     for cue in cues:
+         event = cue.get("event", "?")
+         if cue.get("status") == "deferred" or cue.get("wave") is None:
+             print(f"  {event:<16} deferred: {cue.get('reason', 'no wave')}")
+-            if event in CORE_EVENTS and args.check:
+-                problems.append(f"{event}: core cue is deferred")
+             continue
+         bank = load_bank(args.root, cue["bank"])
++        reqd = lookup_name_id(bank["buf"], bank["chunks"], cue.get("name", ""))
++        if reqd is None:
++            problems.append(f"{event}: name {cue.get('name')!r} is not in the NAME table")
++        elif cue.get("reqd") is not None and int(cue["reqd"]) != reqd:
++            problems.append(f"{event}: reqd {cue['reqd']} != NAME lookup {reqd}")
++        method = cue.get("method")
++        if method == "ghidra":
++            tone = cue.get("tone")
++            if tone is None:
++                problems.append(f"{event}: ghidra row is missing tone")
++            else:
++                tw = tone_wave(bank["buf"], bank["chunks"], int(tone))
++                if tw != int(cue["wave"]):
++                    problems.append(
++                        f"{event}: TONE[{tone}].wave={tw} != mapped wave {cue['wave']}")
++                else:
++                    print(f"  {event:<16} chain: reqd {reqd} -> tone {tone} -> wave {tw}")
++        elif method == "audition":
++            if not cue.get("verified_index"):
++                problems.append(f"{event}: audition row must set verified_index")
++            else:
++                print(f"  {event:<16} audition: wave {cue['wave']} "
++                      "(identity not chain-proven)")
++        else:
++            problems.append(f"{event}: unknown method {method!r}")
++
+         out_dir = os.path.join(args.out, cue["bank"].split(".")[0])
+         wav, stats = decode_wave(bank, int(cue["wave"]), out_dir,
+                                  label=cue.get("name"))
+         cue_problems = check_stats(stats)
+         decoded += 1
+         if cue_problems:
+             problems.extend(f"{event}: {p}" for p in cue_problems)
+             print(f"  {event:<16} FAIL {'; '.join(cue_problems)}")
+         else:
+             print(f"  {event:<16} {cue['bank']:<12} w{int(cue['wave']):03d} "
+                   f"{cue.get('name', ''):<28} "
+-                  f"{stats['duration_s']:.3f} s  RMS {stats['rms_dbfs']:.1f} dBFS")
++                  f"{stats['duration_s']:.3f} s  {stats['rate']} Hz  "
++                  f"RMS {stats['rms_dbfs']:.1f} dBFS")
+     if args.check and problems:
+         print(f"AUDITION FAILED: {len(problems)} problem(s)", file=sys.stderr)
+         for p in problems:
+             print(f"  {p}", file=sys.stderr)
+         return 1
+     if args.check:
+-        print(f"AUDITION PASSED: {decoded} mapped wave(s) decoded, 48 kHz, non-silent")
++        print(f"AUDITION PASSED: {decoded} mapped wave(s), all 48000 Hz, non-silent")
+     else:
+         print(f"decoded {decoded} mapped wave(s) (run with --check to gate)")
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     try:
+         sys.exit(main())
+     except (AuditionError, gate.GateError) as exc:
+         print(f"AUDITION ERROR: {exc}", file=sys.stderr)
+diff --git a/tools/re/audio/s5_decode_gate.py b/tools/re/audio/s5_decode_gate.py
+index 5cae1ac..7a8484d 100644
+--- a/tools/re/audio/s5_decode_gate.py
++++ b/tools/re/audio/s5_decode_gate.py
+@@ -734,25 +734,41 @@ def parse_fmt_list(text):
+     """Parse '0x0142,0x0242' (or bare hex) into [int]."""
+     out = []
+     for tok in (text or "").replace(";", ",").split(","):
+         tok = tok.strip()
+         if not tok:
+             continue
+         try:
+             value = int(tok, 16)
+         except ValueError:
+             raise GateError(f"bad format word {tok!r} (expected hex, e.g. 0x0142)")
+-        # Resident formats are 0x00FF____; accept the short 0x0142 form.
+-        out.append(0x00FF0000 | value if value <= 0xFFFF else value)
++        # Resident formats are 0x00FF____; accept the short 0x0142 form and the
++        # 24-bit 0xFF0642 form, and normalize both to 0x00FF____.
++        if value <= 0xFFFF:
++            value |= 0x00FF0000
++        elif value >> 16 == 0xFF:
++            value = 0x00FF0000 | (value & 0xFFFF)
++        out.append(value)
+     return out
+ 
+ 
++def bank_format_words(root, bank):
++    """Return every format word present in a resident bank (read-only)."""
++    path = os.path.join(root, "sound", "shadow", bank)
++    buf = read_bytes(path)
++    chunks = chunk_map(buf, path)
++    if "WAVE" not in chunks:
++        raise GateError(f"{path}: no WAVE chunk")
++    table = table_records(buf, chunks["WAVE"][0], path)
++    return sorted(set(read_wave_record(buf, rec, path)["fmt"] for rec, _tag in table))
++
++
+ def probe_0x42(root, out_dir, bank, log):
+     """Bounded identification attempt for the 0x42 family (note §5).
+ 
+     Three hypotheses are tried against the first 0x42 record of each channel
+     count, all with the record's declared byte range at the loader payload
+     (`record + 0x24 + start`): (a) ATRAC9 with the config word the record
+     itself carries, (b) PS-ADPCM at 16 B / 64 samples through ffmpeg's
+     adpcm_psx, (c) the other ADPCM decoders whose block geometry can express
+     64 samples per 16 bytes.  Nothing is written as a WAV: the probe reports
+     and exits.
+@@ -889,20 +905,33 @@ def main(argv=None):
+     if shutil.which("ffmpeg") is None:
+         print("GATE ERROR: ffmpeg (with the built-in atrac9 decoder) is not on PATH",
+               file=sys.stderr)
+         return 2
+     os.makedirs(args.out, exist_ok=True)
+     log = print
+ 
+     log(f"SXDF/AT9 decode gate — root {args.root}")
+     manifest = {"music": None, "resident": None, "checks": []}
+ 
++    resident_skipped = False
++    if args.no_resident and args.check:
++        allowed = parse_fmt_list(args.allow_unresolved)
++        variants = bank_format_words(args.root, args.bank)
++        unnamed = [f for f in variants if f not in allowed]
++        if unnamed:
++            log("GATE ERROR: --no-resident --check requires --allow-unresolved for every "
++                "resident variant: %s" % ", ".join(fmt_word(f) for f in unnamed))
++            return 2
++        resident_skipped = True
++        log("  resident skipped: all %d variant(s) named in --allow-unresolved"
++            % len(variants))
++
+     if args.probe42:
+         probe_0x42(args.root, args.out, args.bank, log)
+         return 0
+ 
+     music = carve_music(args.root, args.out, args.tracks, log, args.first)
+     manifest["music"] = music
+     log(f"  music.sxd1: {music['record_count']} WAVE records, "
+         f"partition {music['partition']['payload_bytes']} B, gaps {music['partition']['gaps']}")
+ 
+     if not args.no_resident:
+@@ -916,21 +945,21 @@ def main(argv=None):
+     failures = 0
+     skipped = 0
+     gaps = []
+     for group in ("music", "resident"):
+         if not manifest[group]:
+             continue
+         for rec in manifest[group]["records"]:
+             if "stats" not in rec:
+                 skipped += 1
+                 gaps.append(rec.get("fmt_value"))
+-                manifest["checks"].append({"name": rec["name"], "ok": True,
++                manifest["checks"].append({"name": rec["name"], "ok": False,
+                                            "skipped": True, "problems": [],
+                                            "reason": rec.get("status", "")})
+                 continue
+             ok, problems, warnings = check_analysis(rec["stats"], args.check)
+             manifest["checks"].append({"name": rec["name"], "ok": ok,
+                                        "problems": problems, "warnings": warnings})
+             if not ok:
+                 failures += 1
+                 log(f"  FAIL {rec['name']}: {'; '.join(problems)}")
+             elif warnings and args.verbose:
+@@ -995,23 +1024,27 @@ def main(argv=None):
+                 "explicitly with --allow-unresolved")
+         return 1
+     if gaps:
+         log("  ALLOWED GAPS: %s (%d resident variant(s) not decoded) — see "
+             "docs/notes/s5-audio-recon.md §5" % (", ".join(fmt_word(f) for f in gaps), len(gaps)))
+         log("  POLICY: the curated cues must come from the decoded families (%s); "
+             "if Task 1 attributes a core cue to %s the milestone stops at Task 1."
+             % (", ".join(fmt_word(f) for f in decoded) or "none",
+                ", ".join(fmt_word(f) for f in gaps)))
+     if args.check:
+-        log(f"GATE PASSED: music 48 kHz non-silent; resident variants decoded "
+-            f"{', '.join(fmt_word(f) for f in decoded) or 'none'}"
+-            + (f"; accepted gaps {', '.join(fmt_word(f) for f in gaps)}" if gaps else ""))
++        if resident_skipped:
++            log("GATE PASSED: music 48 kHz non-silent; resident skipped "
++                "(all variants allow-listed)")
++        else:
++            log(f"GATE PASSED: music 48 kHz non-silent; resident variants decoded "
++                f"{', '.join(fmt_word(f) for f in decoded) or 'none'}"
++                + (f"; accepted gaps {', '.join(fmt_word(f) for f in gaps)}" if gaps else ""))
+     else:
+         log("carve complete (run with --check to gate)")
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     try:
+         sys.exit(main())
+     except GateError as exc:
+         print(f"GATE ERROR: {exc}", file=sys.stderr)
+diff --git a/tools/re/audio/s5_map.json b/tools/re/audio/s5_map.json
+index 7ba6342..432fef6 100644
+--- a/tools/re/audio/s5_map.json
++++ b/tools/re/audio/s5_map.json
+@@ -1,80 +1,114 @@
+ {
+-  "version": 1,
++  "version": 2,
+   "generated": "2026-10-21",
+   "payload_formula": "wave_record_offset + 0x24 + start (length = bytes); see docs/notes/s5-audio-recon.md §7",
++  "identity_policy": "name is the sound-request name (NAME/REQD); wave is the verified WAVE index. ghidra rows carry reqd+tone and must satisfy TONE[tone].wave == wave. audition rows carry verified_index=true and are explicitly not chain-proven.",
+   "cues": [
+     {
+       "event": "valus.telegraph",
+       "bank": "boss01",
+       "name": "boss01_vo_atk1",
++      "reqd": 340,
++      "tone": 20,
+       "wave": 3,
+-      "method": "table",
++      "method": "ghidra",
+       "confidence": "medium",
+-      "note": "WAVE table order matches the name-pool order for the first 108 records; wave 3 is a 1.201 s 0x21 vocal. The 0x42 pair 108/109 is the alternative (AT9, 4.85 s) if the name order breaks."
++      "chain": "NAME hash(boss01_vo_atk1) -> REQD 340 -> SEQD 0x10B1 -> request-order tone 20 -> TONE[20] = (key 34, wave 3); TONE[18..24] -> waves 1..7 and the request order after ground1 is ground2, ground3, vo_atk1, vo_atk2, vo_atk3, vo_dmg1, vo_dmg2",
++      "wave_pool_label": "boss01_vo_atk1",
++      "note": "The tone->wave step is binary (flat boss01 TONE table); the name->tone step is the request/play-list order, hence medium confidence. The 0x42 pair 108/109 is a large roar alternative, not this row."
+     },
+     {
+       "event": "valus.impact",
+       "bank": "boss01",
+       "name": "boss01_atk_hit_ground1",
++      "reqd": 303,
++      "tone": 43,
+       "wave": 26,
++      "layers": [26, 27, 28, 29, 30],
+       "method": "ghidra",
+       "confidence": "high",
+-      "note": "REQD 303 -> SEQD timeline -> PLAY_TONE 43 -> TONE[43].wave = 26 (FUN_00983220 payload formula). The cue is a 5-layer sequence (tones 43-47 -> waves 26-30); wave 26 is the first and longest layer."
++      "chain": "NAME hash(boss01_atk_hit_ground1) -> REQD 303 -> SEQD timeline 0x13E4 -> bytecode 0x23BA -> a4 01 43 -> TONE[43] = (key 57, wave 26); the sequence then plays tones 44-47 -> waves 27-30",
++      "wave_pool_label": "boss01_FS_far3_0",
++      "note": "Layered sound: the request is the 5-layer ground impact; wave 26 is the first and longest layer. wave_pool_label is the pool string at index 26, which is not the request name."
+     },
+     {
+       "event": "valus.hurt",
+       "bank": "boss01",
+       "name": "boss01_vo_dmg1",
++      "reqd": 331,
++      "tone": 23,
+       "wave": 6,
+-      "method": "table",
++      "method": "ghidra",
+       "confidence": "medium",
+-      "note": "Name-pool order; wave 6 is a 1.051 s 0x21 vocal, the first damage roar."
++      "chain": "NAME hash(boss01_vo_dmg1) -> REQD 331 -> SEQD 0x11B6 -> request-order tone 23 -> TONE[23] = (key 37, wave 6); TONE[18..24] -> waves 1..7",
++      "wave_pool_label": "boss01_vo_dmg1",
++      "note": "The tone->wave step is binary; the name->tone step is the request/play-list order, hence medium confidence."
+     },
+     {
+       "event": "player.swing",
+       "bank": "com_obj",
+       "name": "wnd_LifeSwd_swish_t1_01",
++      "reqd": 118,
++      "tone": null,
+       "wave": 7,
+-      "method": "table",
+-      "confidence": "high",
+-      "note": "Name-pool order; wave 7 is a 0.464 s 0x21 whoosh. PLAY_TONE for this name resolves to tone 16/17, but the com_obj TONE table layout is not the flat 12-byte form used by boss01."
++      "method": "audition",
++      "confidence": "medium",
++      "verified_index": true,
++      "chain": "NAME hash -> REQD 118 -> SEQD 0x227A -> PLAY_TONE 16/17; com_obj TONE chunk is not the flat 12-byte form, so no tone->wave proof",
++      "wave_pool_label": "wnd_LifeSwd_swish_t1_01",
++      "note": "Audition pick: wave 7 is a 0.464 s 0x21 whoosh; identity is the ear, not a chain."
+     },
+     {
+       "event": "player.hit",
+       "bank": "com_obj",
+       "name": "wnd_swd_hit_gravel_t1_01",
++      "reqd": 60,
++      "tone": null,
+       "wave": 21,
+-      "method": "table",
++      "method": "audition",
+       "confidence": "medium",
+-      "note": "Name-pool order; wave 21 is a 0.708 s 0x21 impact, first gravel hit variant."
++      "verified_index": true,
++      "chain": "NAME hash -> REQD 60 -> SEQD 0x2779; no PLAY_TONE op decoded in the first window; com_obj TONE table is not flat",
++      "wave_pool_label": "wnd_swd_hit_gravel_t1_01",
++      "note": "Audition pick: wave 21 is a 0.708 s 0x21 impact, first gravel-hit variant."
+     },
+     {
+       "event": "player.hurt",
+       "bank": "com_v",
+       "name": "bvo_dmg_m",
++      "reqd": 172,
++      "tone": null,
+       "wave": 40,
+-      "method": "table",
++      "method": "audition",
+       "confidence": "medium",
+-      "note": "Name-pool order; wave 40 is a 0.270 s 0x21 grunt. The com_v WAVE table holds the first 63 names only; the bvo_dmg1..9 names are later and not resident."
++      "verified_index": true,
++      "chain": "NAME hash -> REQD 172 -> SEQD 0xFD0; no PLAY_TONE op decoded; com_v TONE table is not flat",
++      "wave_pool_label": "bvo_dmg_m",
++      "note": "Audition pick: wave 40 is a 0.270 s 0x21 grunt."
+     },
+     {
+       "event": "player.death",
+       "bank": "com_b_h",
+       "name": "b_dead_by_boss",
++      "reqd": 1573,
++      "tone": null,
+       "wave": 657,
+-      "method": "table",
++      "method": "audition",
+       "confidence": "medium",
+-      "note": "Name-pool order; wave 657 is a 0.811 s 0x21 vocal. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
++      "verified_index": true,
++      "chain": "NAME hash -> REQD 1573 -> SEQD 0xD710; no PLAY_TONE op decoded; com_b_h TONE table is not flat",
++      "wave_pool_label": "b_dead_by_boss",
++      "note": "Audition pick: wave 657 is a 0.811 s 0x21 vocal, between the water-landing and grass-walk sets. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
+     }
+   ],
+   "deferred": [
+-    {"event": "valus.death", "bank": "boss01", "reason": "mavo_death resolves to TONE tones 97-99 -> waves 75-77 (0x21) but the death roar is not one of the seven core cues and the sequence layering is unresolved."},
++    {"event": "valus.death", "bank": "boss01", "reason": "mavo_death resolves to tones 97-99 -> waves 75-77 (0x21) but the death roar is not one of the seven core cues and the sequence layering is unresolved."},
+     {"event": "valus.grab", "bank": "boss01", "reason": "grab/body-movement cues are layered 0x21 sequences; not required by the core set."},
+     {"event": "valus.fall", "bank": "boss01", "reason": "fall/rise cues are layered 0x21 sequences; not required by the core set."},
+     {"event": "valus.breath", "bank": "boss01", "reason": "breath/ambience cues are layered 0x21 sequences; not required by the core set."},
+     {"event": "valus.ambience", "bank": "boss01", "reason": "boss01_FS_* / mammo_* ambience beds are layered 0x21 sequences; not required by the core set."},
+-    {"event": "player.grab", "bank": "com_obj", "reason": "grab/hand cues are in com_b_h and are layered; not required by the core set."},
++    {"event": "player.grab", "bank": "com_b_h", "reason": "grab/hand cues are layered com_b_h sequences; not required by the core set."},
+     {"event": "player.fall", "bank": "com_v", "reason": "bvo_fall* names are beyond the 63 resident com_v waves; streamed or layered."},
+-    {"event": "player.breath", "bank": "com_v", "reason": "bvo_breath/run_breath names are beyond the 63 resident com_v waves; streamed or layered."}
++    {"event": "player.breath", "bank": "com_v", "reason": "bvo_breath* / bvo_run_breath* names are beyond the 63 resident com_v waves; streamed or layered."}
+   ]
+ }

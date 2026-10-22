@@ -311,16 +311,21 @@ s5-event t=18.933 event=club_start clip=valus.telegraph gain=0.60
 s5-event t=19.367 event=club_impact clip=valus.impact gain=0.50
 s5-event t=19.367 event=death clip=player.death gain=0.80
 s5-event t=20.483 event=music_stop clip=music.boss gain=0.00
-s5-mix frames=2139200 rms=0.0514 peak=0.9022 window_rms=0.1520
-s5-status mixdown=…/out/s5/mix.wav events=18 music=1
+s5-event t=44.566 event=music_start clip=music.boss gain=0.45
+s5-event t=44.566 event=music_stop clip=music.boss gain=0.00
+s5-mix frames=2140000 rms=0.0514 peak=0.9022 window_rms=0.1520
+s5-status mixdown=…/out/s5/mix.wav events=20 music=1 defeat_stop=1
 ```
 
 The first strike (1.017 s) is the foot clang: it swings but deals no damage, so
 it plays no hit and starts no music. The first landed hit starts Boss 1;
 `hurt_heavy` is the same `player.hurt` clip pushed to 1.25; the music stops at
 the reset (20.483 s), **1.116 s after the death at 19.367 s**, because the reset is what ends
-the fight in this timeline. With audio off the timeline prints the same
-`s42-*` lines byte for byte.
+the fight in this timeline. The last two lines are a **synthetic post-reset defeat phase**
+(R18): the score starts again and one step with `encounter.defeated` set runs the app's own
+`if (encounter.defeated) audio.stop_music()`, so the stop wiring is proven here. The real
+weakpoint defeat is the S4.1 acceptance (audio off) plus the user's walk. With audio off the
+timeline prints the same `s42-*` lines byte for byte.
 
 A manifest with an `entity` is an encounter: the player's combat clips
 (`player_a_grip_loop`, `player_a_grip_move_f1`,

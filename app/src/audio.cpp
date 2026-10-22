@@ -66,6 +66,32 @@ std::vector<std::string> split_tokens(const std::string& line) {
     return tokens;
 }
 
+// True when `target` stays inside `root`: the existing prefix of both is
+// weakly canonicalized (a symlink that resolves out of the library fails) and
+// the rest is normalized lexically, so no `..` component can climb out. `root`
+// is the library root and exists.
+bool path_is_within(const std::filesystem::path& root,
+                    const std::filesystem::path& target) {
+    std::error_code error;
+    const std::filesystem::path canonical_root =
+        std::filesystem::weakly_canonical(root, error);
+    if (error) {
+        return false;
+    }
+    const std::filesystem::path canonical_target =
+        std::filesystem::weakly_canonical(canonical_root / target, error);
+    if (error) {
+        return false;
+    }
+    const std::string root_text = canonical_root.generic_string();
+    const std::string target_text = canonical_target.generic_string();
+    if (target_text.size() <= root_text.size() ||
+        target_text.compare(0, root_text.size(), root_text) != 0) {
+        return false;
+    }
+    return root_text.back() == '/' || target_text[root_text.size()] == '/';
+}
+
 }  // namespace
 
 AudioEngine::AudioEngine() {
@@ -156,13 +182,19 @@ bool AudioEngine::load_manifest(const std::string& manifestPath,
             return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
                         "' has no file=");
         }
-        if (std::filesystem::path(file_it->second).is_absolute()) {
+        const std::filesystem::path relative_file = file_it->second;
+        if (relative_file.is_absolute()) {
             return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
                         "' file= must be libraryRoot-relative, got '" + file_it->second +
                         "'");
         }
+        if (!path_is_within(libraryRoot, relative_file)) {
+            return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
+                        "' file= escapes libraryRoot (a path component leaves the library), got '" +
+                        file_it->second + "'");
+        }
         const std::filesystem::path wav_path =
-            std::filesystem::path(libraryRoot) / file_it->second;
+            std::filesystem::path(libraryRoot) / relative_file;
 
         AudioClip clip;
         std::string wav_error;
@@ -281,10 +313,17 @@ void AudioEngine::play_music(const std::string& name, float gain) {
 }
 
 void AudioEngine::stop_music() {
+    if (!voices_[kMusicSlot].active) {
+        // Nothing to stop: the defeat path calls this every frame, and a call
+        // with no music must not touch the queue (it is not a flush).
+        return;
+    }
     stop_slot(kMusicSlot);
-    // The prebuffer still holds the last ~50 ms of music; drop it so the stop
-    // is heard now rather than after the lead.
-    clear_stream();
+    // Deliberately does NOT clear the stream. The ~50 ms prebuffer also holds
+    // the killing blow's own SFX (queued in the same frame), so dropping it
+    // chops the hit the user just heard and speeds the voice clock up; letting
+    // it drain costs a ~50 ms music tail that is imperceptible. `set_muted`
+    // and `reset` still drop the queue when an immediate silence is required.
 }
 
 void AudioEngine::play_ambience(const std::string& name, float gain) {

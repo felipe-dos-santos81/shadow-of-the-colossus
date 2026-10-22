@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
 using BpConvert.Core.Audio;
 
@@ -444,6 +445,54 @@ public class AudioTests
         }
     }
 
+    /// <summary>
+    /// Ties the shipped PS-ADPCM decoder to the audited gate: the predictor table is a hand copy
+    /// of <c>tools/re/audio/s5_decode_gate.py</c> (<c>VAG_COEF</c>), so a drift in either
+    /// implementation must fail here, not in the user's ears.
+    /// </summary>
+    [Fact]
+    public void Decode_0x21_MatchesTheAuditedGateHash()
+    {
+        // com_obj wave 7 is the player.swing cue (map v3): a mono 0x21 record, fmt 0x00FF0121,
+        // 12752 B, 22288 declared samples. The first 4800 decoded samples (100 ms) are quantized
+        // to s16 little-endian and SHA-256'd.
+        //
+        // The expected digest came from the gate's own Python, verbatim:
+        //   SOTC_GAME_ROOT=... python3 - <<'PY'
+        //   import hashlib, os, struct, sys
+        //   sys.path.insert(0, "tools/re/audio")
+        //   import s5_decode_gate as g
+        //   path = os.path.join(os.environ["SOTC_GAME_ROOT"], "sound", "shadow", "com_obj.sxd")
+        //   buf = g.read_bytes(path)
+        //   rec, _ = g.table_records(buf, g.chunk_map(buf, path)["WAVE"][0], path)[7]
+        //   r = g.read_wave_record(buf, rec, path)
+        //   pcm = g.ps_adpcm_decode(buf[rec + 0x24 + r["start"]:][:r["bytes"]], r["channels"])[0]
+        //   print(hashlib.sha256(struct.pack("<%dh" % 4800, *pcm[:4800])).hexdigest())
+        //   PY
+        // -> f99204f54a08b6b935960a97b690ec9d9dff07f885434e32b378dbbb5e3c6005
+        const string expected = "f99204f54a08b6b935960a97b690ec9d9dff07f885434e32b378dbbb5e3c6005";
+
+        var bank = SxdContainer.Read(Bank("com_obj.sxd"));
+        var wave = SxdTables.Waves(bank)[7];
+        Assert.Equal(0x00FF0121u, wave.FormatWord);
+        Assert.Equal(12752, wave.ByteLength);
+
+        var audio = AudioCodec.Decode(CarveResident(bank, wave), wave.FormatWord,
+            wave.CodecConfig, wave.SampleRate, normalize: false);
+        Assert.Equal(1, audio.Channels);
+        Assert.True(audio.Frames >= 4800);
+
+        var bytes = new byte[4800 * 2];
+        for (var i = 0; i < 4800; i++)
+        {
+            // The decoder stores s / 32768f exactly, so the round trip is lossless.
+            var sample = (short)Math.Round(audio.Samples[i] * 32768.0);
+            BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(2 * i), sample);
+        }
+
+        Assert.Equal(expected, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+    }
+
     [Fact]
     public void Decode_Music_IsStereo48k()
     {
@@ -509,6 +558,54 @@ public class AudioTests
             Assert.Single(again.Reused);
             Assert.Empty(again.Written);
             Assert.Equal(entry, Assert.Single(again.Entries));
+        }
+        finally
+        {
+            Directory.Delete(outLib, true);
+        }
+    }
+
+    [Fact]
+    public void FullMapRun_PrunesStaleEntries_ScopedRunKeepsThem()
+    {
+        var outLib = TempDir();
+        try
+        {
+            var map = RepoFile(Path.Combine("tools", "re", "audio", "s5_map.json"));
+            var manifestPath = Path.Combine(outLib, "audio", "audio.manifest");
+
+            // Two scoped runs build a cumulative manifest.
+            AudioConverter.Run(new AudioConvertOptions(TestAssets.Root, outLib, map,
+                new[] { "player.swing" }, null, Force: true));
+            AudioConverter.Run(new AudioConvertOptions(TestAssets.Root, outLib, map,
+                new[] { "player.hit" }, null, Force: true));
+            Assert.Equal(2, AudioManifest.Read(manifestPath).Count);
+
+            // A stale entry from an earlier map revision: one manifest line plus its WAV.
+            var staleFile = Path.Combine(outLib, "audio", "test", "stale.wav");
+            Directory.CreateDirectory(Path.GetDirectoryName(staleFile)!);
+            WavWriter.Write(staleFile, new float[4800], 1, 48000);
+            var withStale = AudioManifest.Read(manifestPath).ToList();
+            withStale.Add(new AudioEntry("test", "stale", "audio/test/stale.wav", 48000, 1,
+                48000, 1.0, "psadpcm", false, 0));
+            AudioManifest.Write(manifestPath, withStale);
+
+            // A scoped run merges: it keeps the stale entry and its file.
+            var scoped = AudioConverter.Run(new AudioConvertOptions(TestAssets.Root, outLib, map,
+                new[] { "player.swing" }, null, Force: false));
+            Assert.Empty(scoped.Pruned);
+            Assert.Equal(3, AudioManifest.Read(manifestPath).Count);
+            Assert.True(File.Exists(staleFile));
+
+            // The full map is a re-conversion: the stale entry and its WAV are gone.
+            var full = AudioConverter.Run(new AudioConvertOptions(TestAssets.Root, outLib, map,
+                Array.Empty<string>(), null, Force: false));
+            Assert.Equal(new[] { "test/stale" }, full.Pruned);
+            Assert.Equal(8, full.Entries.Count);
+            Assert.DoesNotContain(AudioManifest.Read(manifestPath), entry => entry.Name == "stale");
+            Assert.False(File.Exists(staleFile));
+            // The map's own clips survive the prune.
+            Assert.True(File.Exists(Path.Combine(outLib, "audio", "com_obj", "player.swing.wav")));
         }
         finally
         {

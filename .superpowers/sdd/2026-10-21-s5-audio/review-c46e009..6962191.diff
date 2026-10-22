@@ -1,0 +1,503 @@
+# Review package: c46e009..HEAD
+
+## Commits
+6962191 fix(convert): expose the NAME REQD key and pin the WAVE fields
+
+## Files changed
+ src/BpConvert.Core/Audio/SxdContainer.cs |  15 +++--
+ src/BpConvert.Core/Audio/SxdTables.cs    |  37 ++++++++---
+ tests/BpConvert.Tests/AudioTests.cs      | 106 ++++++++++++++++++++++++++++++-
+ 3 files changed, 143 insertions(+), 15 deletions(-)
+
+## Diff
+diff --git a/src/BpConvert.Core/Audio/SxdContainer.cs b/src/BpConvert.Core/Audio/SxdContainer.cs
+index eb8e8e6..0ddd59c 100644
+--- a/src/BpConvert.Core/Audio/SxdContainer.cs
++++ b/src/BpConvert.Core/Audio/SxdContainer.cs
+@@ -20,21 +20,22 @@ public sealed record SxdChunk(string Magic, long Offset, int Size);
+ /// <param name="Version">The u16 at 0x04; 4 on every shipped container.</param>
+ /// <param name="HashHex">The 16-byte bank GUID at 0x10 as lowercase hex; identical inside a pair.</param>
+ /// <param name="Name">The NUL-padded bank name at 0x20.</param>
+ /// <param name="Chunks">
+ /// The chunk chain from 0x60, in file order. Empty for an <c>SXDS</c>: its body is raw payload,
+ /// not a chunk chain (the +0x08 field is a stream count there).
+ /// </param>
+ /// <param name="DataOffset">
+ /// The <c>DATA</c> chunk header offset on an <c>SXDF</c> (the payload starts at
+ /// <c>DataOffset + 0x10</c>: 8 header + 8 zero bytes, recon §7.1), or 0x60 on an
+-/// <c>SXDS</c>, where the body itself is the payload.
++/// <c>SXDS</c>, where the body itself is the payload. Zero when <paramref name="HasData"/> is
++/// false (no <c>DATA</c> chunk).
+ /// </param>
+ /// <param name="DataSize">
+ /// The <c>DATA</c> chunk body size on an <c>SXDF</c>, or the <c>SXDS</c> payload size from +0x0C.
+ /// </param>
+ /// <param name="HasData">True when the file carries wave payload bytes (a <c>DATA</c> chunk or an <c>SXDS</c> body).</param>
+ /// <param name="CompanionSize">
+ /// The u32 at 0x0C: the companion <c>.sxd2</c> file size on an <c>SXDF</c> index (0 when the bank
+ /// is self-contained), or the payload size on an <c>SXDS</c>.
+ /// </param>
+ public sealed record SxdBank(
+@@ -59,21 +60,22 @@ public static class SxdContainer
+ 
+     private const int ChunkHeaderLength = 8;
+     private const int VersionOffset = 0x04;
+     private const int SizeOrStreamsOffset = 0x08;
+     private const int CompanionSizeOffset = 0x0C;
+     private const int HashOffset = 0x10;
+     private const int HashLength = 16;
+     private const int NameOffset = 0x20;
+     private const int NameLength = 32;
+ 
+-    // The gate's tag rule: every byte of a four-character tag is in 0x30..0x5A ([0-9A-Z]).
++    // The gate's tag rule: every byte of a four-character tag is in its 0x30..0x5A range (which
++    // also admits the punctuation between '9' and 'A'; the shipped tags are all letters).
+     private const byte TagMin = 0x30;
+     private const byte TagMax = 0x5A;
+ 
+     /// <summary>Reads one <c>SXDF</c> bank/index or <c>SXDS</c> stream payload.</summary>
+     /// <param name="path">Path to the <c>.sxd</c>/<c>.sxd1</c>/<c>.sxd2</c> file.</param>
+     /// <exception cref="InvalidDataException">
+     /// The file is shorter than the 0x60-byte header, its magic is neither <c>SXDF</c> nor
+     /// <c>SXDS</c>, the declared size disagrees with the file, or a chunk header/body is
+     /// truncated or duplicated.
+     /// </exception>
+@@ -103,23 +105,24 @@ public static class SxdContainer
+         if (magic == "SXDF")
+         {
+             var dataChunk = chunks.FirstOrDefault(chunk => chunk.Magic == "DATA");
+             dataOffset = dataChunk?.Offset ?? 0;
+             dataSize = dataChunk?.Size ?? 0;
+             hasData = dataChunk is not null;
+         }
+         else
+         {
+             // An SXDS has no chunk chain: +0x08 is a stream count and +0x0C the payload size,
+-            // with the payload starting at the end of the header.
+-            if (HeaderLength + (long)companionSize > data.Length)
+-                throw Invalid(path, $"payload size @0x0C = {companionSize} overruns the file ({data.Length} B)");
++            // with the payload starting at the end of the header and running to EOF.
++            if (HeaderLength + (long)companionSize != data.Length)
++                throw Invalid(path,
++                    $"payload size @0x0C = {companionSize} does not match the file ({data.Length - HeaderLength} B after the header)");
+             dataOffset = HeaderLength;
+             dataSize = (int)companionSize;
+             hasData = true;
+         }
+ 
+         return new SxdBank(
+             path, version, Convert.ToHexStringLower(data.AsSpan(HashOffset, HashLength)),
+             ReadName(path, data), chunks, dataOffset, dataSize, hasData, companionSize);
+     }
+ 
+@@ -155,21 +158,21 @@ public static class SxdContainer
+         if (chunks.Count == 0)
+             throw Invalid(path, "no chunks at 0x60");
+         return chunks;
+     }
+ 
+     private static string ReadTag(string path, byte[] data, long offset)
+     {
+         var tag = data.AsSpan((int)offset, 4);
+         foreach (var b in tag)
+             if (b is < TagMin or > TagMax)
+-                throw Invalid(path, $"chunk tag at 0x{offset:X} is not [0-9A-Z]");
++                throw Invalid(path, $"chunk tag at 0x{offset:X} is outside 0x30..0x5A");
+         return Encoding.ASCII.GetString(tag);
+     }
+ 
+     private static string ReadName(string path, byte[] data)
+     {
+         var field = data.AsSpan(NameOffset, NameLength);
+         var nul = field.IndexOf((byte)0);
+         var name = Encoding.Latin1.GetString(nul < 0 ? field : field[..nul]);
+         return name.Length > 0 ? name : throw Invalid(path, "empty bank name at 0x20");
+     }
+diff --git a/src/BpConvert.Core/Audio/SxdTables.cs b/src/BpConvert.Core/Audio/SxdTables.cs
+index a69dfde..8ce2413 100644
+--- a/src/BpConvert.Core/Audio/SxdTables.cs
++++ b/src/BpConvert.Core/Audio/SxdTables.cs
+@@ -4,41 +4,53 @@ using System.Text;
+ namespace BpConvert.Core.Audio;
+ 
+ /// <summary>
+ /// One <c>WAVE</c> table record. The field slots are the same for music and resident banks
+ /// (recon §2/§7): <c>+0x04</c> format word, <c>+0x08</c> sample rate, <c>+0x14</c> per-channel
+ /// frame count, <c>+0x20</c> byte length, <c>+0x24</c> start.
+ /// </summary>
+ /// <param name="Index">Record index in the table.</param>
+ /// <param name="RecordOffset">File offset of the record itself (needed by the resident payload formula).</param>
+ /// <param name="RecordSize">
+-/// Bytes from this record to the next one (or to the end of the <c>WAVE</c> chunk): the stride is
+-/// variable (48/56/68/76 on the resident banks, 76 for music).
++/// Bytes from this record to the next one (or to the end of the <c>WAVE</c> chunk). The stride is
++/// variable per bank: 48/56/68/76 on <c>boss01</c> (com_obj 80/264, com_v 80, com_b_h 160) and
++/// 76 on every music record.
+ /// </param>
+ /// <param name="FormatWord">The <c>+0x04</c> word; byte 1 is the channel count, the low byte the codec id.</param>
+ /// <param name="SampleRate">The <c>+0x08</c> rate (48 000 on every shipped record).</param>
+ /// <param name="Frames">The <c>+0x14</c> per-channel sample count.</param>
+ /// <param name="Start">
+ /// The <c>+0x24</c> value. It is <b>absolute in the companion <c>.sxd2</c></b> for a music bank
+ /// (no <c>DATA</c> chunk), and <b>relative to this record</b> for a resident bank, where the
+ /// payload is at <see cref="RecordOffset"/> + 0x24 + <see cref="Start"/> for
+ /// <see cref="ByteLength"/> bytes (the loader formula, <c>FUN_00983220</c>, recon §7.1).
+ /// </param>
+ /// <param name="ByteLength">The <c>+0x20</c> payload length in bytes.</param>
+ public sealed record WaveRecord(
+     int Index, long RecordOffset, int RecordSize, uint FormatWord, uint SampleRate, uint Frames,
+     long Start, int ByteLength);
+ 
+-/// <summary>One <c>NAME</c> table entry: the request name in table (and string-pool) order.</summary>
+-/// <param name="Index">Entry index; also the request id the <c>REQD</c> table is keyed by.</param>
++/// <summary>
++/// One <c>NAME</c> table entry: the request name in table (and string-pool) order.
++/// </summary>
++/// <param name="Index">
++/// The NAME entry index (0-based). This is <b>not</b> the <c>REQD</c> key and <b>not</b> a
++/// <c>WAVE</c> index: entry 0 of <c>boss01</c> is <c>boss01_atk_hit_ground1</c> (REQD 303,
++/// wave 26). Use <see cref="ReqdId"/> for the request chain.
++/// </param>
+ /// <param name="Name">The NUL-terminated request name, decoded one byte per char (Latin-1).</param>
+-public sealed record NameRecord(int Index, string Name);
++/// <param name="ReqdId">
++/// The third u32 of the 12-byte entry: the <c>REQD</c> table key the engine looks up by name hash
++/// (<c>FUN_00987a80</c>). The pool fallback keeps the entry order, so the id stays paired with
++/// <paramref name="Name"/> on the shipped banks.
++/// </param>
++public sealed record NameRecord(int Index, string Name, uint ReqdId);
+ 
+ /// <summary>
+ /// Reader for the <c>WAVE</c> and <c>NAME</c> index tables (recon §1-§3; the C# counterpart of
+ /// <c>s5_decode_gate.py</c>'s <c>table_records</c>/<c>read_wave_record</c> and
+ /// <c>s5_audition.py</c>'s <c>bank_names</c>).
+ /// </summary>
+ /// <remarks>
+ /// <para>
+ /// <c>REQD</c>, <c>NAME</c> (offsets only — see below), <c>WAVE</c> and <c>SEQD</c> share the
+ /// generic table shape <c>{+0x04 size, +0x08 reserved, +0x0C count, +0x10 offsets[count]}</c>
+@@ -60,20 +72,21 @@ public static class SxdTables
+ {
+     private const int TableCountOffset = 0x0C;
+     private const int TableBodyOffset = 0x10;
+     private const int WavePrefixLength = 0x28;
+     private const int WaveFormatOffset = 0x04;
+     private const int WaveRateOffset = 0x08;
+     private const int WaveFramesOffset = 0x14;
+     private const int WaveByteLengthOffset = 0x20;
+     private const int WaveStartOffset = 0x24;
+     private const int NameEntryLength = 12;
++    private const int NameReqdIdOffset = 8;
+     private const uint NameHashMultiplier = 0x83;
+ 
+     /// <summary>Reads the <c>WAVE</c> table in table order.</summary>
+     /// <param name="bank">A bank from <see cref="SxdContainer.Read"/>; <see cref="SxdBank.Path"/> is re-read.</param>
+     /// <returns>All records, or an empty list when the bank has no <c>WAVE</c> chunk.</returns>
+     /// <exception cref="InvalidDataException">
+     /// The table header, an <c>offsets[]</c> entry or a record prefix is out of bounds, or the
+     /// records are not strictly increasing (an overlap).
+     /// </exception>
+     public static IReadOnlyList<WaveRecord> Waves(SxdBank bank)
+@@ -122,59 +135,67 @@ public static class SxdTables
+         }
+ 
+         return waves;
+     }
+ 
+     /// <summary>Reads the <c>NAME</c> table (request-name namespace) in table order.</summary>
+     /// <param name="bank">A bank from <see cref="SxdContainer.Read"/>; <see cref="SxdBank.Path"/> is re-read.</param>
+     /// <returns>All entries, or an empty list when the bank has no <c>NAME</c> chunk.</returns>
+     /// <exception cref="InvalidDataException">
+     /// The entry array is out of bounds, neither the 12-byte entries nor the string pool resolve,
+-    /// or a name is empty, non-printable or duplicated inside the bank.
++    /// or a name is empty, contains a C0/DEL byte, or is duplicated inside the bank.
+     /// </exception>
+     public static IReadOnlyList<NameRecord> Names(SxdBank bank)
+     {
+         ArgumentNullException.ThrowIfNull(bank);
+ 
+         var chunk = FindChunk(bank, "NAME");
+         if (chunk is null)
+             return Array.Empty<NameRecord>();
+ 
+         var path = bank.Path;
+         var data = File.ReadAllBytes(path);
+         var count = ReadCount(path, data, chunk);
+         var body = chunk.Offset + TableBodyOffset;
+         var chunkEnd = chunk.Offset + ChunkLength(chunk);
+         if (body + NameEntryLength * (long)count > chunkEnd)
+             throw Invalid(path, $"NAME count {count} overruns the chunk");
+ 
++        // The third word of each 12-byte entry is the REQD key; it is read from the entry array on
++        // both paths because the pool keeps the entry order.
++        var reqdIds = new uint[count];
++        for (var i = 0L; i < count; i++)
++            reqdIds[i] = ReadU32(path, data, body + NameEntryLength * i + NameReqdIdOffset);
++
+         var names = TryReadEntryTable(data, body, count, chunkEnd);
+         if (names is null)
+         {
+             var pool = ReadPool(data, body + NameEntryLength * (long)count, chunkEnd);
+             if (pool.Count < count)
+                 throw Invalid(path, $"NAME string pool holds {pool.Count} names, expected {count}");
+             names = pool.GetRange(0, (int)count);
+         }
+ 
+         var records = new List<NameRecord>(names.Count);
+         var seen = new HashSet<string>(StringComparer.Ordinal);
+         for (var i = 0; i < names.Count; i++)
+         {
+             if (names[i].Length == 0)
+                 throw Invalid(path, $"NAME entry {i} is empty");
++            // C0 controls and DEL are impossible in a request name; C1 bytes (0x80..0x9F) pass on
++            // purpose because they are the Shift-JIS lead bytes of the Japanese placeholders.
+             foreach (var c in names[i])
+                 if (c is < ' ' or '\x7F')
+-                    throw Invalid(path, $"NAME entry {i} is not printable");
++                    throw Invalid(path, $"NAME entry {i} contains a C0/DEL byte");
+             if (!seen.Add(names[i]))
+                 throw Invalid(path, $"NAME entry {i} duplicates \"{names[i]}\"");
+-            records.Add(new NameRecord(i, names[i]));
++            records.Add(new NameRecord(i, names[i], reqdIds[i]));
+         }
+ 
+         return records;
+     }
+ 
+     /// <summary>
+     /// Resolves the 12-byte NAME entries (<c>name = entry + string_offset</c>) and verifies the
+     /// engine hash on every ASCII name. Returns null when the layout does not resolve, which sends
+     /// the caller to the string pool.
+     /// </summary>
+diff --git a/tests/BpConvert.Tests/AudioTests.cs b/tests/BpConvert.Tests/AudioTests.cs
+index 9c2819f..3469ebd 100644
+--- a/tests/BpConvert.Tests/AudioTests.cs
++++ b/tests/BpConvert.Tests/AudioTests.cs
+@@ -1,10 +1,12 @@
++using System.Buffers.Binary;
++using System.Text;
+ using BpConvert.Core.Audio;
+ 
+ /// <summary>
+ /// Pinned cases for the SXDF container and its index tables (S5 Task 2;
+ /// <c>tools/re/audio/s5_decode_gate.py</c> and <c>docs/notes/s5-audio-recon.md</c> are the
+ /// parsing reference): the 0x60-byte header, the chunk chain from <c>0x60</c>, the shared
+ /// <c>count/offsets[]</c> table (<c>record_i = body + offsets[i] + 4*i</c>, never a fixed
+ /// stride), the absolute music starts, and the loader-derived resident payload formula
+ /// <c>record + 0x24 + start</c> (recon §7.1). Real-tree cases are env-gated through
+ /// <see cref="TestAssets"/> (fail fast when <c>SOTC_GAME_ROOT</c> is unset — never skips).
+@@ -74,20 +76,25 @@ public class AudioTests
+         Assert.Equal(138, waves.Count);
+         // The table's offsets[] absorb the stride: the real records are 48/56/68/76 bytes.
+         Assert.Equal(new[] { 48, 56, 68, 76 },
+             waves.Select(wave => wave.RecordSize).Distinct().OrderBy(size => size).ToArray());
+         for (var i = 0; i < waves.Count; i++)
+         {
+             Assert.Equal(i, waves[i].Index);
+             Assert.InRange(waves[i].RecordSize, 0x28, 0x100);
+         }
+ 
++        // The fixed field slots: 48 kHz and the four codec/channel words of the bank.
++        Assert.All(waves, wave => Assert.Equal(48000u, wave.SampleRate));
++        Assert.Equal(new[] { 0x00FF0121u, 0x00FF0142u, 0x00FF0221u, 0x00FF0242u },
++            waves.Select(wave => wave.FormatWord).Distinct().OrderBy(word => word).ToArray());
++
+         // The loader formula (recon §7.1): payload = record + 0x24 + start, length = bytes.
+         var payloadStart = bank.DataOffset + 0x10;
+         var payloadEnd = bank.DataOffset + 8 + bank.DataSize;
+         Assert.Equal((payloadStart, payloadEnd), MergedUnion(waves
+             .Select(wave => (Offset: wave.RecordOffset + 0x24 + wave.Start, End: wave.RecordOffset + 0x24 + wave.Start + wave.ByteLength))));
+ 
+         // No duplicates on the union: the ranges cover the payload with zero gaps.
+         Assert.Equal(payloadEnd - payloadStart, waves
+             .Select(wave => (wave.RecordOffset + 0x24 + wave.Start, wave.ByteLength))
+             .Distinct()
+@@ -95,20 +102,21 @@ public class AudioTests
+     }
+ 
+     [Fact]
+     public void Waves_Music_StartsAreAbsolute()
+     {
+         var bank = SxdContainer.Read(Bank("music.sxd1"));
+         var waves = SxdTables.Waves(bank);
+ 
+         Assert.Equal(33, waves.Count);
+         Assert.All(waves, wave => Assert.Equal(76, wave.RecordSize));
++        Assert.All(waves, wave => Assert.Equal(48000u, wave.SampleRate));
+ 
+         // `start` is an absolute byte offset in music.sxd2, not relative to the payload base.
+         var ordered = waves.OrderBy(wave => wave.Start).ToList();
+         Assert.Equal(0x60, ordered[0].Start);
+         for (var i = 0; i + 1 < ordered.Count; i++)
+             Assert.Equal(ordered[i].Start + ordered[i].ByteLength, ordered[i + 1].Start);
+ 
+         // 960-byte ATRAC9 superframes (4 frames of 240 B / 256 samples), and the ranges tile
+         // the whole 0x60 .. companion-size payload.
+         Assert.All(waves, wave => Assert.Equal(0, wave.ByteLength % 960));
+@@ -125,69 +133,165 @@ public class AudioTests
+         var payloadStart = bank.DataOffset + 0x10;
+         var payloadEnd = bank.DataOffset + 8 + bank.DataSize;
+         Assert.Equal(16, waves.Select(wave => wave.Start).Distinct().Count());
+         Assert.Equal((payloadStart, payloadEnd), MergedUnion(waves
+             .Select(wave => (Offset: wave.RecordOffset + 0x24 + wave.Start, End: wave.RecordOffset + 0x24 + wave.Start + wave.ByteLength))));
+ 
+         // com_sys has no duplicate ranges, so the declared lengths sum to the payload exactly.
+         Assert.Equal(bank.DataSize - 8, waves.Sum(wave => wave.ByteLength));
+     }
+ 
++    [Fact]
++    public void Waves_ComObj_PartitionTheDataPayload()
++    {
++        // The curated player bank (swing/hit cues), 241 records with 80/264-byte tail records:
++        // the same loader formula must tile it with zero gaps, duplicates and all.
++        var bank = SxdContainer.Read(Bank("com_obj.sxd"));
++        var waves = SxdTables.Waves(bank);
++
++        Assert.Equal(241, waves.Count);
++        var payloadStart = bank.DataOffset + 0x10;
++        var payloadEnd = bank.DataOffset + 8 + bank.DataSize;
++        Assert.Equal((payloadStart, payloadEnd), MergedUnion(waves
++            .Select(wave => (Offset: wave.RecordOffset + 0x24 + wave.Start, End: wave.RecordOffset + 0x24 + wave.Start + wave.ByteLength))));
++    }
++
+     [Fact]
+     public void Names_Boss01_AreReadableAndUnique()
+     {
+         var names = SxdTables.Names(SxdContainer.Read(Bank("boss01.sxd")));
+ 
+         Assert.Equal(343, names.Count);
+         for (var i = 0; i < names.Count; i++)
+         {
+             Assert.Equal(i, names[i].Index);
+             Assert.NotEmpty(names[i].Name);
+             Assert.All(names[i].Name, c => Assert.InRange(c, (char)0x20, (char)0x7E));
+         }
+ 
+         Assert.Equal(names.Count, names.Select(name => name.Name).Distinct(StringComparer.Ordinal).Count());
+         Assert.Contains("boss01", names[0].Name);
+-        // The table resolves to the engine hash: NAME 0 is REQD 303 (recon attribution §1).
++        // Entry 0 is boss01_atk_hit_ground1; its third word is the REQD key (303), not the entry
++        // index and not a WAVE index (attribution: REQD 303 -> tone 43 -> wave 26).
+         Assert.Equal("boss01_atk_hit_ground1", names[0].Name);
++        Assert.Equal(0, names[0].Index);
++        Assert.Equal(303u, names[0].ReqdId);
+     }
+ 
+     [Fact]
+     public void Read_Truncated_Throws()
+     {
+         var source = Bank("boss01.sxd");
+         var path = Path.Combine(Path.GetTempPath(), $"bpconvert-sxd-{Guid.NewGuid():N}.sxd");
+         try
+         {
+             File.WriteAllBytes(path, File.ReadAllBytes(source)[..0x80]);
+ 
+             Assert.Throws<InvalidDataException>(() => SxdContainer.Read(path));
+         }
+         finally
+         {
+             File.Delete(path);
+         }
+     }
+ 
++    [Fact]
++    public void Read_ChunkBodyOverrun_Throws()
++    {
++        // Patch the +0x08 own-size field to the truncated length so that guard passes: the chunk
++        // walk itself must catch the TONE body running past EOF.
++        var path = Path.Combine(Path.GetTempPath(), $"bpconvert-sxd-{Guid.NewGuid():N}.sxd");
++        try
++        {
++            var bytes = File.ReadAllBytes(Bank("boss01.sxd"))[..0x80];
++            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(0x08), (uint)bytes.Length);
++            File.WriteAllBytes(path, bytes);
++
++            var error = Assert.Throws<InvalidDataException>(() => SxdContainer.Read(path));
++            Assert.Contains("overruns the file", error.Message);
++        }
++        finally
++        {
++            File.Delete(path);
++        }
++    }
++
+     [Fact]
+     public void Read_Bridge_AcceptsToneOnly()
+     {
+         var bank = SxdContainer.Read(Bank("bridge.sxd"));
+ 
+         var chunk = Assert.Single(bank.Chunks);
+         Assert.Equal("TONE", chunk.Magic);
+         Assert.Equal(0x60, chunk.Offset);
+         Assert.False(bank.HasData);
++        Assert.Equal(0, bank.DataOffset);
+         Assert.Equal(0, bank.DataSize);
+         Assert.Empty(SxdTables.Waves(bank)); // no WAVE table in this bank
+     }
+ 
++    [Fact]
++    public void Names_FallBackToThePool_WhenTheEntryStrideDoesNotResolve()
++    {
++        // A synthetic NAME table whose 12-byte entries carry a zero string offset: the entry
++        // layout cannot resolve (the "name" would start on its own offset word), so the reader
++        // must read the NUL-terminated pool after the entries and keep the entry order.
++        var path = Path.Combine(Path.GetTempPath(), $"bpconvert-name-{Guid.NewGuid():N}.sxd");
++        try
++        {
++            File.WriteAllBytes(path, BuildNameOnlyBank("alpha\0beta\0", new uint[] { 7, 9 }));
++
++            var names = SxdTables.Names(SxdContainer.Read(path));
++
++            Assert.Equal(2, names.Count);
++            Assert.Equal("alpha", names[0].Name);
++            Assert.Equal(7u, names[0].ReqdId);
++            Assert.Equal("beta", names[1].Name);
++            Assert.Equal(9u, names[1].ReqdId);
++        }
++        finally
++        {
++            File.Delete(path);
++        }
++    }
++
++    /// <summary>
++    /// Builds a minimal SXDF with one NAME chunk: count entries at +0x0C whose 12-byte records
++    /// all carry a zero string offset, followed by <paramref name="pool"/>. The REQD key is the
++    /// entry's third word, so it survives the pool fallback.
++    /// </summary>
++    private static byte[] BuildNameOnlyBank(string pool, uint[] reqdIds)
++    {
++        var poolBytes = Encoding.Latin1.GetBytes(pool);
++        var body = new byte[0x08 + 12 * reqdIds.Length + poolBytes.Length]; // body = chunk + 8
++        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(0x04), (uint)reqdIds.Length); // chunk + 0x0C
++        for (var i = 0; i < reqdIds.Length; i++)
++        {
++            var entry = 0x08 + 12 * i; // chunk + 0x10
++            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(entry), 0); // unresolvable offset
++            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(entry + 4), 0);
++            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(entry + 8), reqdIds[i]);
++        }
++
++        poolBytes.CopyTo(body, 0x08 + 12 * reqdIds.Length);
++
++        var file = new byte[0x60 + 8 + body.Length];
++        Encoding.ASCII.GetBytes("SXDF").CopyTo(file, 0);
++        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(0x04), 4);
++        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(0x08), (uint)file.Length);
++        Encoding.ASCII.GetBytes("test").CopyTo(file, 0x20);
++        Encoding.ASCII.GetBytes("NAME").CopyTo(file, 0x60);
++        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(0x64), (uint)body.Length);
++        body.CopyTo(file, 0x68);
++        return file;
++    }
++
+     /// <summary>Merges the ranges and returns them as one tuple (the tiling assertion shape).</summary>
+     private static (long Offset, long End) MergedUnion(
+         IEnumerable<(long Offset, long End)> ranges)
+     {
+         var merged = new List<(long Offset, long End)>();
+         foreach (var (offset, end) in ranges.Distinct().OrderBy(range => range.Offset))
+         {
+             if (merged.Count > 0 && offset <= merged[^1].End)
+                 merged[^1] = (merged[^1].Offset, Math.Max(merged[^1].End, end));
+             else

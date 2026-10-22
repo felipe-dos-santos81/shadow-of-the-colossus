@@ -1439,6 +1439,7 @@ struct AudioSeam {
     bool failed = false;        // a mapped clip went missing at play time
     bool musicStarted = false;  // the music voice is live
     bool musicEverStarted = false;
+    bool defeatStop = false;    // --s5-selftest's post-reset defeat phase ran
     float clock = 0.0f;         // simulated seconds since the capture began
     int eventCount = 0;         // s5-event lines emitted
 
@@ -1532,13 +1533,15 @@ struct AudioSeam {
     }
 
     void stop_music() {
-        if (!enabled) {
+        // Idempotent by design: the defeat path calls this every frame while
+        // `encounter.defeated`, and only the transition may touch the mixer or
+        // the log. The first stop also leaves the queued SFX alone (audio.cpp).
+        if (!enabled || !musicStarted) {
             return;
         }
         engine.stop_music();
-        const bool was_playing = musicStarted;
         musicStarted = false;
-        if (log && was_playing) {
+        if (log) {
             std::printf("s5-event t=%.3f event=music_stop clip=%s gain=0.00\n", clock,
                         kMusicClip);
             ++eventCount;
@@ -3969,7 +3972,29 @@ int run_app(const AppOptions& opts) {
                 resetHealth, resetStamina, resetMode, resetValus, staminaRemaining,
                 encounter.defeated ? 1 : 0);
 
-            // --- 10. S5 finish: write the mixdown and its proof --------------
+            // --- 10. S5 defeat-stop phase (R18) -----------------------------
+            // The shared S4.2 timeline never defeats Valus (its weakpoints are
+            // struck, the health is restored, and the acceptance's real defeat
+            // lives in S4.1 with audio off). This synthetic phase proves the
+            // stop *wiring* only: it starts the score a second time and runs one
+            // shared-timeline step with `encounter.defeated` set, so the phase
+            // executes the same `if (encounter.defeated) audio.stop_music()`
+            // the interactive loop and step_frame use. No weakpoint is struck,
+            // no damage is dealt, and the entity's death clip is not involved;
+            // identity and the real defeat remain the S4.1 acceptance + the
+            // user's listening walk.
+            if (opts.s5Selftest) {
+                audio.start_music();  // the second music_start, after the s42 status
+                encounter.defeated = true;
+                step_frame(noInput, /*driveAttack=*/false);
+                if (audio.musicStarted) {
+                    throw std::runtime_error(
+                        "s5-selftest: the defeat step did not stop the music voice");
+                }
+                audio.defeatStop = true;
+            }
+
+            // --- 11. S5 finish: write the mixdown and its proof --------------
             // The same timeline just ran with the audio observer on. A cue that
             // pointed at a missing clip, a write failure, or a capture with no
             // audible window is a failed S5 run (exit 1); the acceptance reads
@@ -4038,9 +4063,9 @@ int run_app(const AppOptions& opts) {
                                  mix_peak, best_window_rms, opts.audioMixdownPath.c_str());
                     return 1;
                 }
-                std::printf("s5-status mixdown=%s events=%d music=%d\n",
+                std::printf("s5-status mixdown=%s events=%d music=%d defeat_stop=%d\n",
                             opts.audioMixdownPath.c_str(), audio.eventCount,
-                            audio.musicEverStarted ? 1 : 0);
+                            audio.musicEverStarted ? 1 : 0, audio.defeatStop ? 1 : 0);
             }
             return 0;
         }
@@ -4504,7 +4529,11 @@ int run_app(const AppOptions& opts) {
                             playback.playing = !playback.playing;
                         } else if (event.key.key == SDLK_M) {
                             // S5: mute the whole mixer (design D6: no new UI).
-                            audio.toggle_mute();
+                            // Key repeat must not flap the mixer: only the
+                            // physical press toggles.
+                            if (!event.key.repeat) {
+                                audio.toggle_mute();
+                            }
                         } else if (event.key.key == SDLK_T) {
                             // Camera-only framing: orbit the entity's chest. T
                             // is inert when the manifest has no entity (the S3

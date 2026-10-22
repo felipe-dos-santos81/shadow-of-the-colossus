@@ -1,0 +1,1239 @@
+# Review package: 83360e5..HEAD
+
+## Commits
+a0d1f4a docs: S5 acceptance and results
+
+## Files changed
+ AGENTS.md                |  50 +++--
+ app/README.md            |  96 +++++++++-
+ docs/notes/s5-results.md | 397 ++++++++++++++++++++++++++++++++++++++
+ scripts/s5-acceptance.sh | 490 +++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 1013 insertions(+), 20 deletions(-)
+
+## Diff
+diff --git a/AGENTS.md b/AGENTS.md
+index a527150..4dd9328 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,36 +1,46 @@
+ # AGENTS.md — sotc-native workspace
+ 
+ Personal-use, offline-first native rebuild of *Shadow of the Colossus* for Apple Silicon:
+ C++20 + SDL3 + SDL_GPU/Metal for the viewer, a .NET 10 converter for the game's assets.
+ This file is workspace guidance and is tracked with the project.
+ 
+ ## Status (2026-10-21)
+ 
+-**Milestone S4.2 "He fights back" — implemented; scripted acceptance green, user walk PENDING.**
+-The encounter is now a fight: damage only lands on the two shipped shell weakpoints
+-(`weakpoint_03` forehead, `weakpoint_04` right upper arm), the body is climbable around bands
+-(`A`/`D`) and through the chest→shoulder→arm branch (`W+D`), Valus turns, stomps and swings his
+-club, and Wander has health, hurt/death clips and the full `R` soft reset. The deterministic
+-timeline is `--s42-selftest` (six HUD stills with `--s42-stills DIR`), the acceptance script is
+-`scripts/s42-acceptance.sh`, and the recorded numbers are in `docs/notes/s42-results.md`.
+-S4.1/S4/S3 acceptance regressions are green; the interactive checklist (feel, scale, telegraph
+-readability, cursor, gamepad hardware, fps) is still the user's to fill in.
++**Milestone S5 "The sound of the forbidden land" — implemented; scripted acceptance green, user
++listening walk PENDING.**
++The encounter now has the game's own voice: `bp-convert audio` decodes the seven attributed cues
++plus `Boss 1` from the SXDF/SXDS banks at build time into `out/library/audio/` (48 kHz WAV +
++`audio.manifest`), and the viewer mixes them (32 voices, distance attenuation and bearing pan for
++world sounds, `M` mute). Music starts on the first landed hit, loops, and stops at the `R` reset.
++The deterministic proof is `--s5-selftest --audio-mixdown out/s5/mix.wav` (18 ordered `s5-event`
++lines over the unchanged S4.2 steps, the `s5-mix` line, `s5-status`); the acceptance script is
++`scripts/s5-acceptance.sh`, and the recorded numbers are in `docs/notes/s5-results.md`.
++S4.2/S4.1/S4/S3 acceptance regressions are green; the listening checklist (music start/loop/stop,
++Valus's telegraph/impact/hurt, Wander's swing/hit/hurt/death, the swing/hit sync, `M`, clipping,
++fps) is still the user's to fill in. Deferred cues (silent, not placeholders): Valus's death, the
++club whoosh, the player's fall, ambience, grab/climb and footsteps.
++
++S4.2 "He fights back" is implemented and scripted green: damage only lands on the two shipped
++shell weakpoints (`weakpoint_03` forehead, `weakpoint_04` right upper arm), the body is climbable
++around bands (`A`/`D`) and through the chest→shoulder→arm branch (`W+D`), Valus turns, stomps and
++swings his club, and Wander has health, hurt/death clips and the full `R` soft reset. Its numbers
++are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
+ 
+ ## Layout
+ 
+ | Path | Contents |
+ |---|---|
+ | `app/` | the native viewer (`app/src/`), shaders, headless tests, `app/README.md` (controls/options) |
+ | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
+-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`); `s3`/`s4`/`s41` are frozen for S4.2 |
+-| `docs/notes/` | RE records and per-milestone results notes (`s42-results.md` is this milestone's) |
++| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`); `s3`/`s4`/`s41`/`s42` are invoked unchanged as later milestones' regressions |
++| `docs/notes/` | RE records and per-milestone results notes (`s5-results.md` is this milestone's; `s5-audio-recon.md` and `s5-audio-attribution.md` are its gates) |
+ | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
+ | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
+ | `out/` | gitignored: symlink to the 12 GB converted library, manifests, captures, run logs |
+ 
+ ## Environment
+ 
+ ```bash
+ export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+ export SOTC_LIB=<repo>/out/library
+ ```
+@@ -40,36 +50,44 @@ wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Neve
+ acceptances concurrently.
+ 
+ ## Build and test
+ 
+ ```bash
+ dotnet build BpConvert.sln
+ dotnet test tests/BpConvert.Tests -v q
+ cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release
+ cmake --build app/build -j
+ ctest --test-dir app/build --output-on-failure
++# the curated audio slice (8 cues: seven + Boss 1) into <SOTC_LIB>/audio/
++dotnet publish src/BpConvert.Cli -c Release -o out/bin
++caffeinate -dimsu dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" \
++  --out "$SOTC_LIB" --map tools/re/audio/s5_map.json --force
+ ```
+ 
+ Dependencies: SDL3 and SDL3_ttf via Homebrew (`brew install sdl3 sdl3_ttf`).
+ 
+ ## Running the game
+ 
+ ```bash
+ app/build/sotc-viewer --library "$SOTC_LIB" \
+   --manifest out/re/stage/encounter.manifest \
+   --model models/shadow/characters/wander/_cmn/wander.glb
+ ```
+ 
+ Windowed, cursor never captured. `WASD` move (Shift runs), `E` grab (hold), `J` strike (hold to
+ charge), `W`/`S` climb, `A`/`D` shimmy, `W+D` at the chest top branches to the right shoulder,
+-`R` soft-resets the encounter, `Escape` quits. Gamepad:
++`R` soft-resets the encounter, `M` mutes the mixer, `Escape` quits. Gamepad:
+ left stick move, right stick camera, RT grip, west/X/square strike, Start pause.
+ 
++The fight's audio loads from `<SOTC_LIB>/audio/audio.manifest` (convert it with the `bp-convert
++audio` command above); without it the game is silent with one warning, and an encounter that is
++missing a curated cue fails loudly.
++
+ ## Acceptance
+ 
+ ```bash
+-caffeinate -dimsu ./scripts/s42-acceptance.sh   # S4.2 + S4.1 (which runs S4 → S3)
++caffeinate -dimsu ./scripts/s5-acceptance.sh   # S5 + S4.2 (which runs S4.1 → S4 → S3)
+ ```
+ 
+-Never modify `scripts/s4-acceptance.sh` or `scripts/s41-acceptance.sh` for an S4.2 change: they
+-are the regression. Assets and derived glbs are gitignored and never committed; results notes
+-quote measured values, not adjectives.
++Never modify `scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh`
++for an S5 change: they are the regression. Assets, derived glbs and the decoded audio are
++gitignored and never committed; results notes quote measured values, not adjectives.
+diff --git a/app/README.md b/app/README.md
+index 9cc99b9..17363ef 100644
+--- a/app/README.md
++++ b/app/README.md
+@@ -1,18 +1,20 @@
+ # sotc-viewer
+ 
+ The native macOS viewer for the converted *Shadow of the Colossus* asset library:
+ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
+-(`out/library`: `.glb` + `.png`) — never the game tree or original containers.
++(`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
++original containers.
+ 
+-**Status (milestone S4.2): he fights back — shell weakpoints, Valus's stomp and club, Wander's
+-health and death, the R reset (user walk pending).**
++**Status (milestone S5): the sound of the forbidden land — the game's own audio decoded at
++build time (the seven attributed cues plus Boss 1), a deterministic mixer, `M` to mute (user
++walk pending).**
+ The app opens a resizable window, loads a converted model with its PNGs, draws
+ it (offscreen target → swapchain → present) at vsync, and frames the scene
+ bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
+ is evaluated on the CPU per frame (`worldJoint × inverseBind`) and uploaded as a
+ vertex storage buffer, blended per vertex by four joint weights. A model whose
+ glb carries baked animation clips plays its first clip by default; the built-in
+ `procedural-wave` is only the fallback for a skinned model with no clips.
+ `--anim` selects a clip and `--anim-time` pins a time for deterministic
+ captures. In a composed arena (`--manifest`) the player's state drives the loop
+ instead — still stands, movement walks, Shift runs — with hard clip switches;
+@@ -51,20 +53,34 @@ carries (`c01_minotaur_a_weapon.glb`, attached to `OptBone_sword`) within 14 m;
+ both attacks have the clip as telegraph and a pinned impact window. Wander takes
+ 35 (stomp) or 45 (club) damage, is invulnerable for 1.0 s after a hit, and dies
+ at zero: the death clip plays once and freezes on its last frame. Valus dies the
+ same way and the fight stops reacting. `R` soft-resets the whole encounter —
+ player health, stamina, i-frames, mode, spawn and camera, and Valus's health,
+ pose and cooldown — without reloading the scene. A gamepad is mapped the same
+ way (left stick move, right stick camera, RT grip, west/X/square strike, Start
+ pause) and hot-plugs without latching an input. `--s41-selftest` and
+ `--s42-selftest` run the deterministic acceptance timelines described below.
+ 
++The encounter has its own voice. The library's converted audio slice is loaded at start
++(a missing manifest degrades to silence with one warning; an encounter whose manifest lacks
++a curated cue is a load error naming the event) and played through a 32-voice software mixer
++into one SDL3 stream at 48 kHz: the music is non-positional, world sounds attenuate with
++distance and pan by the player's relative bearing. Music starts on the first landed hit
++and loops, and stops at the `R` reset (and on Valus's defeat). `M` mutes and unmutes the whole
++mixer; there is no other audio UI. The curated slice is the seven attributed cues
++(`player.swing`, `player.hit`, `player.hurt`, `player.death`, `valus.telegraph`,
++`valus.impact`, `valus.hurt`) plus `music.boss` (`Boss 1`, 5.1 downmixed to stereo, looped).
++Valus's death, the club whoosh, the player's fall, ambience, grab/climb and footsteps are
++**deferred** — they are not in the cue map, so they are silent rather than placeholders.
++`--s5-selftest --audio-mixdown PATH` runs the S4.2 timeline with the audio observer on and
++writes the proof.
++
+ ## Build
+ 
+ ```bash
+ cmake -S app -B app/build      # from the repo root
+ cmake --build app/build -j
+ ```
+ 
+ Requires CMake ≥ 3.25 and SDL3 ≥ 3.4 with SDL3_ttf via Homebrew
+ (`brew install sdl3 sdl3_ttf`; the HUD uses SDL3_ttf for the stamina label). If
+ CMake does not find them on its own, configure with
+@@ -99,20 +115,22 @@ is required. Escape or the close button quits.
+ | `--camera-target player\|entity` | initial framing for captures: `player` (default) is the normal follow camera; `entity` starts in the chest-framing target mode and needs a `--manifest` whose scene has an entity |
+ | `--screenshot PNG` | render `--frames` frames into the offscreen target, write the PNG, exit |
+ | `--frames N` | frames the `--screenshot` path renders first (default 3) |
+ | `--width N` / `--height N` | window size in points (default 1280 × 720) |
+ | `--selftest` | render one frame, print `s1-status …`, exit |
+ | `--s4-selftest` | compose the encounter `--manifest`, pin the entity at t=0, assert the spawn is clear and the entity's feet are on the ground, walk the player into the nearest leg capsule until the collision stops it, print the `s4-status`/`s4-spawn`/`s4-entity`/`s4-walk` lines, exit; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
+ | `--s41-selftest` | compose the encounter `--manifest` and run the deterministic climb/fight timeline through fixed 1/60 s steps with no window input: S4's approach, grab, 240-frame climb, full-charge head strike, catch, missed catch, forced stamina fall, killing blow, and the post-kill settle to a landed player; prints the `s41-*` lines and `s41-status`, exits 1 on a failed invariant; saves the final frame with `--screenshot`; needs `--manifest` (with an entity) and `--model` |
+ | `--s41-stills DIR` | with `--s41-selftest`, write `grab.png`, `mid-climb.png`, `strike.png` and `reaction.png` into `DIR`, plus the defeat still (to `--screenshot`, else `DIR/defeat.png`) and the pixel controls under `DIR/control/`; both `DIR` and `DIR/control/` must exist (the acceptance script creates them) |
+ | `--s42-selftest` | compose the encounter `--manifest` and run the deterministic S4.2 fight timeline through fixed 1/60 s steps with no window input: both shell proxies, the foot/head damage gate, the chest→shoulder→arm route, a stomp and a club hit (with the i-frame gate), the 4 m club miss and the 3 m stomp shockwave, a lethal club with the pinned death clip, the R soft reset, and the teleport-free foot→head stamina climb; prints the `s42-*` lines and `s42-status`, exits 1 on a failed invariant; needs `--manifest` (with an entity) and `--model` |
+ | `--s42-stills DIR` | with `--s42-selftest`, write six HUD-bearing stills into `DIR`: `stomp-telegraph.png`, `stomp-impact.png`, `club-swing.png`, `hurt.png`, `death.png`, `arm-weakpoint.png`; each capture restores the playback clocks, so the `s42-*` event lines are identical with and without stills; `DIR` must exist (the acceptance script creates it) |
++| `--s5-selftest` | compose the encounter `--manifest` and run the S4.2 timeline with the S5 audio observer on: the same fixed 1/60 s steps, one `s5-event t= event= clip=<manifest name> gain=` line per played cue, then the `s5-mix` quality line and `s5-status` last; writes the mixdown to `--audio-mixdown` and exits 1 on a missing cue clip or a silent capture; needs `--manifest` (with an entity) and `--audio-mixdown`; cannot be combined with another selftest |
++| `--audio-mixdown PATH` | with `--s5-selftest`, the 48 kHz float stereo WAV the mixer's disk sink writes — the headless acceptance capture; needs `--s5-selftest` |
+ 
+ ## Manifests
+ 
+ `--manifest` composes a scene from a line-oriented text file: the static arena
+ instances, the player (`--model`), and — in S4.0 — one placed, animated entity
+ (the encounter's Valus). The format accepts more, but framing targets the first
+ entity and the collision capsule table is Valus's bone names and radii for
+ every rig, so multiple entities are not a shipping configuration.
+ The committed schema is `docs/notes/scene-manifest.md`; the directives are:
+ 
+@@ -143,21 +161,22 @@ Controls (no mouse capture: the cursor stays visible and free):
+ | --- | --- |
+ | `W` / `A` / `S` / `D` | Move (camera-relative); Shift runs. While gripping: `W`/`S` climb up/down the band, `A`/`D` shimmy around it; `W+D` at the chest top takes the branch to the right shoulder |
+ | `E` | Grab (held): attach to the nearest climb band, release to drop. While falling inside the 0.6 s catch window, a fresh press catches the nearest band |
+ | `J` | Strike (held): charge over 0.9 s, release to plunge. One damage event per swing; a landed hit shakes the player off |
+ | Left-drag | Orbit: yaw freely, pitch stops at ±89°; in entity target mode, orbit the entity's chest (pitch ±80°); while gripping, orbit the climb camera (pitch ±45°) |
+ | Scroll | Zoom: distance clamped to [0.5, 500]; in entity target mode, [22, 30] m; while gripping, [5, 8] m |
+ | `F` | Reframe the scene bounds (single model) / recenter behind the player (manifest mode) / re-seed the climb orbit outward at 6 m (while gripping) |
+ | `T` | Toggle entity target framing: orbit the entity's chest; `T` again restores the follow view without a snap. Inert when the manifest has no entity (the S3 arena) |
+ | `Space` | Play/pause the current clip |
+ | `[` / `]` | Previous / next clip (restarts the clip at t = 0); single-model mode — in arena mode the player's state owns the clip (use `--anim` to pin one) |
+-| `R` | Soft-reset the encounter (player HP/stamina/i-frames/mode/spawn/camera and Valus HP/pose/cooldown); without an encounter, restart the current clip |
++| `R` | Soft-reset the encounter (player HP/stamina/i-frames/mode/spawn/camera, Valus HP/pose/cooldown, and the music); without an encounter, restart the current clip |
++| `M` | Mute/unmute the whole mixer (music and SFX); the only audio UI |
+ | Escape / close button | Quit |
+ 
+ Gamepad (standard SDL3 mapping, polled once per frame, hot-plugged):
+ 
+ | Gesture | Action |
+ | --- | --- |
+ | Left stick | Move (camera-relative); while gripping, up/down the band and lateral shimmy |
+ | Right stick | Turn the camera (same drag channel as the mouse) |
+ | RT (right trigger, past half) | Grab, held |
+ | West / X / square (west face button) | Strike, held to charge |
+@@ -259,35 +278,104 @@ s42-status proxy=2 gate_foot=0 gate_head=34 arm_band=right_arm arm_weakpoint=1 a
+ The full foot→head climb gains **15.059 m** and leaves **39** of the 100-point
+ pool — the measured margin at the sigil, not an assertion against tuning. With
+ `--s42-stills DIR` the run also writes six HUD-bearing captures
+ (`stomp-telegraph`, `stomp-impact`, `club-swing`, `hurt`, `death`,
+ `arm-weakpoint`); each capture snapshots and restores the playback clocks, so
+ the timeline's `s42-*` values are byte-identical with and without stills. The
+ acceptance script (`scripts/s42-acceptance.sh`) parses every line, guards the
+ stills, measures the marginal frame cost and runs the S4.1 acceptance unchanged;
+ `docs/notes/s42-results.md` records the measured values and the walk checklist.
+ 
++`--s5-selftest` is the same S4.2 timeline with the S5 audio observer on and a
++disk-sink capture. It prints one `s5-event` line per played cue, in order,
++each naming the manifest entry (not `bank/name`), then the mixdown's quality
++line and `s5-status` last:
++
++```text
++s5-event t=1.017 event=strike clip=player.swing gain=0.60
++s5-event t=2.050 event=strike clip=player.swing gain=0.60
++s5-event t=2.050 event=strike_hit clip=player.hit gain=0.60
++s5-event t=2.050 event=valus_reaction clip=valus.hurt gain=0.60
++s5-event t=2.050 event=music_start clip=music.boss gain=0.45
++s5-event t=13.667 event=strike clip=player.swing gain=0.60
++s5-event t=13.667 event=strike_hit clip=player.hit gain=0.60
++s5-event t=13.667 event=valus_reaction clip=valus.hurt gain=0.60
++s5-event t=15.700 event=stomp_start clip=valus.telegraph gain=0.60
++s5-event t=16.233 event=stomp_impact clip=valus.impact gain=0.50
++s5-event t=16.233 event=hurt_light clip=player.hurt gain=1.00
++s5-event t=17.250 event=club_start clip=valus.telegraph gain=0.60
++s5-event t=17.683 event=club_impact clip=valus.impact gain=0.50
++s5-event t=17.683 event=hurt_heavy clip=player.hurt gain=1.25
++s5-event t=18.933 event=club_start clip=valus.telegraph gain=0.60
++s5-event t=19.367 event=club_impact clip=valus.impact gain=0.50
++s5-event t=19.367 event=death clip=player.death gain=0.80
++s5-event t=20.483 event=music_stop clip=music.boss gain=0.00
++s5-mix frames=2139200 rms=0.0514 peak=0.9022 window_rms=0.1520
++s5-status mixdown=…/out/s5/mix.wav events=18 music=1
++```
++
++The first strike (1.017 s) is the foot clang: it swings but deals no damage, so
++it plays no hit and starts no music. The first landed hit starts Boss 1;
++`hurt_heavy` is the same `player.hurt` clip pushed to 1.25; the music stops at
++the reset (20.483 s), one step after the death, because the reset is what ends
++the fight in this timeline. With audio off the timeline prints the same
++`s42-*` lines byte for byte.
++
+ A manifest with an `entity` is an encounter: the player's combat clips
+ (`player_a_grip_loop`, `player_a_grip_move_f1`,
+ `player_a_grip_float_u_hi_attack`, `player_a_damage_m_fly2`,
+ `player_a_damage_h_fly1`, `player_a_damage_h_fly_end`,
+ `player_a_fall_damage_to_death`) and the entity's reaction, attack and death
+ clips (`minotaur_a_add_head_damage`, `minotaur_a_add_ude_r_damage`,
+ `minotaur_a_add_mune_r_damage`, `minotaur_a_atk_leg_l`,
+ `minotaur_a_atk_leg_r`, `minotaur_a_atk_weapon2_a`, `minotaur_a_death_front`)
+ must all be in the loaded glbs; the club (`c01_minotaur_a_weapon.glb`) must be in
+ the library and `OptBone_sword` in the entity rig. A missing clip (or a missing
+ club glb) is a load error (exit 2) naming the glb and the clip — never a silent
+ fallback to the first clip. A rig without `OptBone_sword` degrades instead: one
+ line on stderr and no club drawn, so the fight still loads without its prop. The
+ S3 arena has no entity and needs none of them.
+ 
++## Audio
++
++The viewer plays only converted audio. `bp-convert audio` decodes the curated cues from the
++game's resident `SXDF` banks and the `music.sxd1`/`music.sxd2` pair at **build time** into
++`<library>/audio/<bank>/<event>.wav` (48 kHz float PCM) plus
++`<library>/audio/audio.manifest`; the runtime never parses `.sxd`/`.sxd2`. A cue name that is
++not in the manifest is a load error naming the event, never a silent fallback.
++
++```bash
++export SOTC_GAME_ROOT=…/SOTC-extract/extracted/game
++dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" --out out/library \
++  --map tools/re/audio/s5_map.json --force
++# -> manifest: out/library/audio/audio.manifest (8 entries)
++# -> audio: 8 written, 0 reused, 8 manifest entries
++```
++
++`tools/re/audio/s5_map.json` is the slice's authority: seven attributed cues (`player.swing`,
++`player.hit`, `player.hurt`, `player.death`, `valus.telegraph`, `valus.impact`,
++`valus.hurt`) and `music.boss`. Only `valus.impact` is chain-verified (`NAME` → `REQD` →
++`SEQD` → `PLAY_TONE` → `WAVE`); the other six are audition picks, and every 0x21 PS-ADPCM
++row is a fitted-filter decode. Each row's method, identity confidence and fidelity are in
++`docs/notes/s5-audio-attribution.md`; the decode itself is in
++`docs/notes/s5-audio-recon.md`. **Deferred** (not in the map, therefore silent rather than
++replaced): Valus's death, the club whoosh, the player's fall, ambience, grab/climb and
++footsteps. The user's ear is the identity check (`docs/notes/s5-results.md`).
++
++The mixer is a 32-voice software mix at 48 kHz float stereo into one SDL3 stream: category
++gains, distance attenuation and bearing pan for world sounds, whole-track loops for music,
++oldest/quietest voice stealing, a 0.85 master headroom before the clamp, and `M` to mute.
++`--s5-selftest --audio-mixdown out/s5/mix.wav` proves it headlessly (no audio device); the
++acceptance script (`scripts/s5-acceptance.sh`) runs it, checks the sequence / the WAV /
++`ffmpeg astats`, proves the `s42-*` lines are unchanged with audio off, then runs the S4.2
++acceptance unchanged.
++
+ ## Tests
+ 
+ ```bash
+ export SOTC_LIB=…/out/library   # repo convention: app tests fail fast without it
+ ctest --test-dir app/build --output-on-failure
+ ```
+ 
+ - `unit_tests` — doctest cases (asset IO, camera math, quaternion/pose math,
+   animation sampling).
+ - `windowed_selftest` — opens the window, compiles the shader, renders one
+diff --git a/docs/notes/s5-results.md b/docs/notes/s5-results.md
+new file mode 100644
+index 0000000..aa860eb
+--- /dev/null
++++ b/docs/notes/s5-results.md
+@@ -0,0 +1,397 @@
++# S5 acceptance results (2026-10-21) — the sound of the forbidden land
++
++Spec milestone S5 (`docs/superpowers/specs/2026-10-21-s5-audio-design.md` §2): **"decode the
++game's own audio at build time, play it from the existing simulation through SDL3, and prove the
++result by a deterministic headless mixdown plus the user's ears."** The fight now has its own
++voice: the seven attributed combat cues plus `Boss 1`, decoded from the shipped `SXDF`/`SXDS`
++banks into 48 kHz WAV and mixed by the viewer.
++
++**Status: the app/converter acceptance is PASS (script) — the user's listening walk is PENDING.**
++`scripts/s5-acceptance.sh` runs green end to end: both builds, both suites, the curated decode
++(8 manifest entries, every WAV present at 48 kHz), the deterministic `s5-*` timeline parsed field
++by field, the mixdown checked by the viewer and independently by `ffmpeg astats`, the `s42-*`
++lines proven identical with the mixer off, and the unchanged S4.2 acceptance (which runs
++S4.1 → S4 → S3). The milestone's done-line is **not** claimed here: whether a cue is the *right*
++sound, the loop point, the swing/hit sync, `M`, clipping and the fps are the user's ear (§12).
++
++| | |
++|---|---|
++| Date | 2026-10-21 (local −03; the recorded run is stamped `2026-10-22T00:37:34Z`–`00:46:17Z`) |
++| Machine | Apple M3 Max, macOS 27.0.1 (26A434), arm64; 1280×720 points → 2560×1440 px captures |
++| Repo / branch | `sotc-native`, worktree `s5-audio` |
++| Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
++| Library (gitignored) | `SOTC_LIB=<worktree>/out/library` (symlinked 12 GB library) |
++| Cue map | `tools/re/audio/s5_map.json` (version 3) |
++| Audio manifest (gitignored) | `out/library/audio/audio.manifest` — **8 entries**, names exactly the map's |
++| Encounter manifest (gitignored) | `out/re/stage/encounter.manifest` (the S4.0 composition, unchanged) |
++| Mixdown (gitignored) | `out/s5/mix.wav` — pcm_f32le, 48 kHz stereo, 2,139,200 frames (44.5667 s) |
++| Acceptance script | **`scripts/s5-acceptance.sh`** (bash 3.2) |
++| Run log (gitignored) | `out/s5-acceptance-run.log` — ends `s5-acceptance: PASS —` |
++| S4.2 regression log (gitignored) | `out/s5-s42-regression.log` — ends `s42-acceptance: PASS —` |
++
++## 1 · The acceptance run
++
++```bash
++export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
++export SOTC_LIB=<worktree>/out/library
++caffeinate -dimsu ./scripts/s5-acceptance.sh   # exit 0; everything below is from
++                                               # out/s5-acceptance-run.log
++```
++
++The recorded run is stamped **`2026-10-22T00:37:34Z` → `00:46:17Z`** (8 min 43 s; the S4.2
++regression alone is ~7 min). Its steps, all under `caffeinate`:
++
++- **Builds.** `dotnet build BpConvert.sln -v q` (clean, 0 warnings / 0 errors), `dotnet publish
++  src/BpConvert.Cli -c Release -o out/bin`, and the app `cmake -DCMAKE_BUILD_TYPE=Release` +
++  `cmake --build` (both targets up to date).
++- **Suites.** `dotnet test` **140 passed, 0 failed** (50 s); `ctest` **2/2** (10.69 s unit,
++  0.18 s windowed; 10.87 s total). §9.
++- **Decode.** `bp-convert audio … --force` wrote **8/8** cues and the manifest:
++  `audio: 8 written, 0 reused, 8 manifest entries`. Every file is 48 kHz; the manifest's names
++  are exactly the map's `cues`; the channel count and duration match ffprobe. §4.
++- **Timeline.** `--s5-selftest --audio-mixdown out/s5/mix.wav` exited 0 with **18** well-formed
++  `s5-event` lines, `s5-mix` and `s5-status` last. §5–§6.
++- **Mixdown.** pcm_f32le, 48 kHz, stereo, 2,139,200 frames (44.5667 s), rms 0.0514, peak 0.9022,
++  loudest-window rms 0.1520; `ffmpeg astats` Overall peak −0.894 dBFS, RMS −25.778 dBFS, 0 NaNs.
++  §6.
++- **Identity.** `--s42-selftest` with the mixer off: its **11** `s42-*` lines are byte-identical
++  to the S5 run's (empty diff). §7.
++- **Regression.** the unchanged `scripts/s42-acceptance.sh` printed
++  `s42-acceptance: PASS — …` and a marginal of **6.92 ms/frame (~144.5 fps)**, under the 16.7 ms
++  gate; S4.1/S4/S3 green. §8.
++- **Summary.** the script's final line is the block below, verbatim.
++
++```text
++s5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present), 18 ordered s5-events (music on the first landed hit at 2.050 s, telegraph before every stomp/club impact, hurt light/heavy at their impacts, death at 19.367 s, music stop at the reset 20.483 s), mixdown 2139200 frames / 44.566667 s pcm_f32le 2 ch (rms 0.0514, peak 0.9022, window_rms 0.1520; astats peak -0.894302 dBFS, RMS -25.777860 dBFS, no NaN), s42-* identical with audio off, marginal 6.92 ms/frame, S4.2+S4.1+S4+S3 regressions green
++```
++
++Artifact hashes from the run: the audio manifest sha256 is
++`7ce2ea6c9a46a8bce68f192b9c9b165f51b47f3296a3af12dc9252be6064e117`; the mixdown sha256 is
++`612a66d9f9a6075a9f9107ec5dd84e62286d7c41342bdffef7e889136457f023`.
++
++The individual steps, for reproduction (the script is the source of truth):
++
++```bash
++dotnet build BpConvert.sln -v q
++dotnet publish src/BpConvert.Cli -c Release -o out/bin
++cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release && cmake --build app/build -j
++dotnet test tests/BpConvert.Tests -v q
++ctest --test-dir app/build --output-on-failure
++caffeinate -dimsu dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" \
++    --out "$SOTC_LIB" --map tools/re/audio/s5_map.json --force
++caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
++    --manifest out/re/stage/encounter.manifest \
++    --model models/shadow/characters/wander/_cmn/wander.glb \
++    --s5-selftest --audio-mixdown out/s5/mix.wav
++caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
++    --manifest out/re/stage/encounter.manifest \
++    --model models/shadow/characters/wander/_cmn/wander.glb --s42-selftest   # audio off
++caffeinate -dimsu ./scripts/s42-acceptance.sh   # the S4.2 + S4.1 + S4 + S3 regressions
++```
++
++Every viewer and acceptance run is wrapped in `caffeinate -dimsu` (the machine suspends idle
++background work; an unwrapped 1-frame run has been observed at 907 s). The script deletes the
++acceptance's own `out/s5/` artifacts before the decode, so no stale `mix.wav` can mask a failed
++write; the gate/attribution evidence (`out/s5/gate/`, `out/s5/audition/`) is another task's and
++is left alone.
++
++## 2 · The decode gate
++
++**Container.** `sound/shadow/` is 42 files / 1.9 GB of `SXDF` (resident banks and the music
++index) and `SXDS` (the streamed payload). Chunks are `char[4] magic` + `u32 size`; the index
++tables (`REQD`, `NAME`, `WAVE`, `SEQD`) share `magic/size` + `0` + `count` + `offsets[count]`
++with `record_i = chunk + 0x10 + offsets[i] + 4·i` (the offsets are short by 4 bytes per entry —
++the format, not a quirk). The chunk walk lands exactly on both tested files' ends (9,872 B and
++15,967,712 B).
++
++**Music.** `music.sxd1` is a **33-track catalog**; `music.sxd2` is 172,367,136 B. Each `WAVE`
++record is 76 B: format word `0x00FF0642` (byte 1 = channel count = **6 → 5.1**), 48,000 Hz,
++samples at `+0x14`, bytes at `+0x20`, start at `+0x24`, and the AT9 config word **`FE761DF0`**
++at `+0x40` (identical on all 33). The 33 `(start, bytes)` pairs partition the payload gap-free
++(32/32 consecutive pairs, last end = file size), every length is a multiple of 960 B = 1,024
++samples, and every track is 360 kbps CBR. **33/33 decode at 48 kHz, 5.1, 63.84 min, non-silent
++and within 24 ms of the declared duration.**
++
++**Resident banks — the loader formula.** The payload of a resident wave is
++**`wave_record_offset + 0x24 + start`**, and that formula **tiles** the `DATA` payload exactly on
++`boss01`, `com_obj` and `com_v`. Records are variable-stride (the `+4·i` rule absorbs it) and
++carry a **per-record** format word. `boss01.sxd` (15,967,712 B) has 343 `REQD` / 343 `NAME` /
++138 `WAVE` and four format words, all four decoded by the gate:
++
++| format word | records | channels | codec | gate duration | gate RMS |
++|---|---:|---:|---|---:|---:|
++| `0x00FF0121` | 64 | 1 | PS-ADPCM, 16 B / 28 samples | 1.135 s | −12.4 dBFS |
++| `0x00FF0221` | 44 | 2 | PS-ADPCM, 16 B / 28 samples | 4.118 s | −9.5 dBFS |
++| `0x00FF0142` | 15 | 1 | ATRAC9, 64 B/frame (`0xFE7007E0`) | 4.859 s | −17.1 dBFS |
++| `0x00FF0242` | 15 | 2 | ATRAC9, 128 B/frame (`0xFE740FE0`) | 4.859 s | −17.1 dBFS |
++
++The gate's final line:
++
++```text
++GATE PASSED: music 48 kHz non-silent; resident variants decoded 0x00FF0121, 0x00FF0142, 0x00FF0221, 0x00FF0242
++```
++
++The seven curated cues are all `0x21` PS-ADPCM; its filters 5–7 are fitted (no coefficient table
++exists in `eboot.elf`), so every `0x21` row is **medium fidelity** — the gate proves existence,
++rate, length and non-silence, not fidelity. Full evidence: `docs/notes/s5-audio-recon.md`
++(§2 music, §3 resident records, §5.0 the `0x42` family, §7 the payload formula and ADPCM).
++
++## 3 · Attribution — the seven cues
++
++The machine-readable authority is `tools/re/audio/s5_map.json`; the record is
++`docs/notes/s5-audio-attribution.md`. `name` is the sound-request name (`NAME`/`REQD` namespace),
++`wave` the `WAVE` index it plays, `layers` the full set (primary included).
++
++| event | bank | request name | REQD | tone | wave | layers | method | identity | fidelity |
++|---|---|---|---:|---:|---|---:|---|---|---|---|
++| `player.swing` | com_obj | `wnd_LifeSwd_swish_t1_01` | 118 | — | 7 | [7] | audition | medium | medium |
++| `player.hit` | com_obj | `wnd_swd_hit_gravel_t1_01` | 60 | — | 21 | [21] | audition | medium | medium |
++| `player.hurt` | com_v | `bvo_dmg_m` | 172 | — | 40 | [40] | audition | medium | medium |
++| `player.death` | com_b_h | `b_dead_by_boss` | 1573 | — | 657 | [657] | audition | medium | medium |
++| `valus.telegraph` | boss01 | `boss01_vo_atk1` | 340 | — | 3 | [3] | audition | medium | medium |
++| `valus.impact` | boss01 | `boss01_atk_hit_ground1` | 303 | **43** | 26 | 26–30 | **ghidra** | **high** | medium |
++| `valus.hurt` | boss01 | `boss01_vo_dmg1` | 331 | — | 6 | [6] | audition | medium | medium |
++
++- **`valus.impact` is chain-verified.** `NAME` hash → `REQD` 303 → `SEQD` timeline `0x13E4` →
++  bytecode `0x23BA` → `a4 01 43` (PLAY_TONE 43) → `TONE[43] = (key 57, wave 26)`; the sequence
++  then plays tones 44–47 → waves 27–30, so the sound is a **five-layer** ground impact. Its pool
++  label at index 26 is `boss01_FS_far3_0`, **not** the request name — proof that the string pool
++  is a request namespace, not a per-wave name list. `s5_audition.py --check` re-parses the
++  bytecode and requires the walked tone and the `TONE[tone].wave` match.
++- **The six audition rows are not chain-proven.** The `boss01` voice bytecode at `0x6ABC` is a
++  parameter envelope (`a9` SET_PARAM) whose PLAY_TONE operands are complex/random (`a4 02 03 …`),
++  so no fixed tone can be walked; the `com_obj`/`com_v`/`com_b_h` `TONE` chunks are not the flat
++  12-byte form either. Each row is a verified index with an explicit ear pick: w3 (1.202 s roar),
++  w6 (1.051 s roar), w7 (0.464 s whoosh), w21 (0.708 s impact), w40 (0.270 s grunt), w657
++  (0.811 s vocal). Identity confidence is **medium**; the ear is the final identity check.
++- **Music is the table path, high confidence.** `music.sxd1` track 6 is `"Boss 1"`; its 76-byte
++  record is 5.1 ATRAC9 (`FE761DF0`) with `start` absolute in `music.sxd2`. It is streamed music,
++  not a resident SFX, and is looped by the runtime.
++
++## 4 · The curated eight entries
++
++`bp-convert audio --map tools/re/audio/s5_map.json --force` wrote **8/8** cues (`8 written, 0
++reused, 8 manifest entries`); the manifest's `name=` set is exactly the map's `cues` events. Every
++file exists under the library, every one is 48 kHz, and the channel count and duration match the
++manifest. Measured from the shipped WAVs (`ffprobe`/`ffmpeg volumedetect`):
++
++| event | bank | seconds | ch | bytes | mean | max | `gain_db` |
++|---|---|---:|---:|---:|---:|---:|---:|
++| `valus.telegraph` | boss01 | 1.201667 | 1 | 230,764 | −15.7 dB | −0.1 dB | −0.0873 |
++| `valus.impact` | boss01 | 8.153250 | 2 | 3,130,892 | −20.9 dB | −5.7 dB | 0 |
++| `valus.hurt` | boss01 | 1.051167 | 1 | 201,868 | −12.5 dB | −0.1 dB | −0.0873 |
++| `player.swing` | com_obj | 0.464917 | 1 | 89,308 | −10.3 dB | −0.1 dB | −0.0873 |
++| `player.hit` | com_obj | 0.708750 | 1 | 136,124 | −12.3 dB | −0.1 dB | −0.0873 |
++| `player.hurt` | com_v | 0.270083 | 1 | 51,900 | −8.7 dB | −0.1 dB | −0.0873 |
++| `player.death` | com_b_h | 0.812000 | 1 | 155,948 | −15.5 dB | −0.1 dB | −0.0873 |
++| `music.boss` | music | 125.930667 | 2 | 48,357,420 | −18.8 dB | −0.1 dB | −10.0912 |
++
++Two conversions are audible design decisions:
++
++- **R6 — 5.1 → stereo at conversion time.** `Boss 1` decodes as 5.1 and is downmixed to stereo
++  (`L/R + 0.707·C + 0.5·LFE/surround`, clipped); the runtime mixer stays stereo.
++- **R12 — normalize once, then clamp; `gain_db` is informational.** Every delivered WAV is
++  normalized to peak ≤ 0.99 (the mono `0x21` rows by −0.0873 dB, `Boss 1` by −10.0912 dB), and
++  the app does **not** re-apply `gain_db`. The `valus.impact` mix of five layers already peaks at
++  −5.7 dB, so its gain is 0.
++
++## 5 · The event sequence
++
++`--s5-selftest --audio-mixdown out/s5/mix.wav` runs the S4.2 timeline through fixed 1/60 s steps
++with the audio observer on. Exactly **18** `s5-event` lines, in order:
++
++```text
++s5-event t=1.017 event=strike clip=player.swing gain=0.60
++s5-event t=2.050 event=strike clip=player.swing gain=0.60
++s5-event t=2.050 event=strike_hit clip=player.hit gain=0.60
++s5-event t=2.050 event=valus_reaction clip=valus.hurt gain=0.60
++s5-event t=2.050 event=music_start clip=music.boss gain=0.45
++s5-event t=13.667 event=strike clip=player.swing gain=0.60
++s5-event t=13.667 event=strike_hit clip=player.hit gain=0.60
++s5-event t=13.667 event=valus_reaction clip=valus.hurt gain=0.60
++s5-event t=15.700 event=stomp_start clip=valus.telegraph gain=0.60
++s5-event t=16.233 event=stomp_impact clip=valus.impact gain=0.50
++s5-event t=16.233 event=hurt_light clip=player.hurt gain=1.00
++s5-event t=17.250 event=club_start clip=valus.telegraph gain=0.60
++s5-event t=17.683 event=club_impact clip=valus.impact gain=0.50
++s5-event t=17.683 event=hurt_heavy clip=player.hurt gain=1.25
++s5-event t=18.933 event=club_start clip=valus.telegraph gain=0.60
++s5-event t=19.367 event=club_impact clip=valus.impact gain=0.50
++s5-event t=19.367 event=death clip=player.death gain=0.80
++s5-event t=20.483 event=music_stop clip=music.boss gain=0.00
++s5-mix frames=2139200 rms=0.0514 peak=0.9022 window_rms=0.1520
++s5-status mixdown=…/out/s5/mix.wav events=18 music=1
++```
++
++What the acceptance pins, beyond the count:
++
++- **Music starts on the first landed hit** — `music_start` is at 2.050 s, after the first
++  `strike_hit` (the 1.017 s foot clang is a swing with no hit and starts nothing), and it plays
++  `music.boss` at gain 0.45 exactly once.
++- **Every attack telegraphs** — `stomp_start` (grabbed the `valus.telegraph` roar) precedes
++  `stomp_impact`, and `club_start` precedes `club_impact`; both impacts play `valus.impact`.
++- **Hurt lands with its impact** — `hurt_light` is on the same line time as `stomp_impact`
++  (16.233 s, `player.hurt`, gain 1.00) and `hurt_heavy` on the same time as `club_impact`
++  (17.683 s, gain 1.25: the same clip pushed).
++- **The death is its own cue** — `death` at 19.367 s plays `player.death` at gain 0.80.
++- **The music stops at the reset, not at the death** — `music_stop` is at **20.483 s**, after the
++  death and exactly at the `R` reset; the script explicitly rejects a `music_stop` at 19.367 s.
++  (The commit `fix(app): stop the music on defeat and reset, not death` is what the assertion
++  guards: the death cue is the last thing the player hears before the reset.)
++- **`clip=` is the manifest name** (R16), e.g. `valus.impact`, never `bank/name`: the anchored
++  pattern only admits a dotted lowercase name, and every clip must exist in the manifest.
++- **`s5-status` is last** and agrees: `events=18 music=1`.
++
++## 6 · The mixdown
++
++| property | measured | gate |
++|---|---|---|
++| codec / layout | `pcm_f32le`, 48 kHz, stereo | exactly that |
++| length | 2,139,200 frames = 44.5667 s | 44.57 s ± 0.2 |
++| RMS | 0.0514 (−25.8 dBFS) | > 0.01 |
++| peak | 0.9022 (−0.9 dBFS) | ≤ 0.99 |
++| loudest 1 s window RMS | 0.1520 | > 0.05 (music **and** SFX present) |
++| `ffmpeg astats` Overall | peak **−0.894 dBFS**, RMS **−25.778 dBFS**, **0 NaNs**, 0 Infs | peak < 0 dBFS, RMS > −40 dBFS, no NaN |
++
++The viewer's own `s5-mix` line and the independent `astats` decode agree (0.9022 ≈ −0.894 dBFS).
++`astats` reads the samples, so the "non-silent and non-clipping" claim is not self-reported.
++
++## 7 · The audio-off identity
++
++`--s42-selftest` without `--audio-mixdown` (the mixer observer off) was run into
++`out/s5/s42-audio-off.txt`; its **11** `s42-*` lines were diffed against the S5 run's own `s42-*`
++lines: **empty diff** (`out/s5/s42-identity.diff`). The audio layer is an additive observer
++(design D11): turning it on changes no damage, no window, no status value, and the frozen
++`scripts/s42-acceptance.sh` is only invoked.
++
++## 8 · The S4.2 acceptance (which runs S4.1, S4 and S3)
++
++`scripts/s42-acceptance.sh` is unmodified by this task and ran green under `caffeinate -dimsu`
++(exit 0; log `out/s5-s42-regression.log`). Its final line:
++
++```text
++s42-acceptance: PASS — build, both suites, s42 timeline (weakpoint proxies 1.955 m and 2.165 m, gate foot 0 / head 34, arm weakpoint 1 damage 34, stomp 35 health 100->65 hurt, club 45 health 65->20 hurt, range split club 0 at 4 m / stomp 15 at 3 m, death player_a_fall_damage_to_death, reset 100/100/grounded/Valus 100, stamina 28.425 -> 43.484 m leaving 39 of 100), six stills (2560x1440, span >= 30, > 5000 B), marginal 6.92 ms/frame (~144.5 fps), S4.1+S4+S3 regressions green
++```
++
++Its measured perf (same `--frames 1` vs `--frames 240` pair, both under `caffeinate`):
++
++| run | wall time |
++|---|---:|
++| `--frames 1` (load-dominated) | **9.255 s** |
++| `--frames 240` | **10.910 s** |
++| marginal (239 frames) | **6.92 ms/frame ≈ 144.5 fps** |
++
++The gate is **≤ 16.7 ms** (60 fps). The pair is the same viewer, encounter and audio slice the S5
++run loads, so the audio layer adds no frame spike inside that class; the S5 selftest itself (the
++observer plus the disk sink) runs the same timeline and does not slow the steps. The nested
++statuses, unchanged:
++
++```text
++s41-status grab=left_foot climb=4.77 strikes=3 entity_health=0 mode=grounded defeated=1
++s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=builder-pick spawn=data-position+builder-yaw feet=ok entity_bbox=993,237,1485,751 pos=378.187,28.430,369.028 frames=423
++s3-status instances=30 spawn=309.312,4.394,285.403 pos=309.312,29.802,305.405 ground=ok frames=240
++```
++
++The S4.1 acceptance's own final line (nested inside the S4.2 run) is `s41-acceptance: PASS — …`,
++so S4.2 → S4.1 → S4 → S3 are green in this run.
++
++## 9 · Suites
++
++- `dotnet build BpConvert.sln -v q`: clean (0 warnings, 0 errors).
++- `dotnet publish src/BpConvert.Cli -c Release -o out/bin`: clean.
++- `dotnet test tests/BpConvert.Tests -v q`: **140 passed**, 0 failed (50 s).
++- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 10.69 s, windowed
++  0.18 s; total 10.87 s).
++
++## 10 · Provenance and rulings
++
++- **R6 — music is 5.1, the runtime is stereo.** §4.
++- **R12 — normalize then clamp; `gain_db` is informational.** §4.
++- **R14 — master headroom.** The mixer's output stage applies a `0.85` master gain before the
++  `[-1, 1]` clamp, so music (0.45) + SFX gains sum under 0.99; the mixdown's peak (−0.9 dBFS)
++  is measured, not asserted from the arithmetic.
++- **R15 — the first slice is the gate's seven cues + music.** §11.
++- **R16 — `s5-event clip=` is the manifest name**, not `bank/name`; §5.
++- **Gate records:** `docs/notes/s5-audio-recon.md` (decode, container, codec, payload formula)
++  and `docs/notes/s5-audio-attribution.md` (the seven cues, method, confidence, deferred).
++- **Map:** `tools/re/audio/s5_map.json`; **gate tools:** `tools/re/audio/s5_decode_gate.py`,
++  `tools/re/audio/s5_audition.py`.
++
++## 11 · Deferred cues (R15)
++
++`valus.death`, the club whoosh, the player's fall, ambience (wind), grab/climb and footsteps are
++**deferred**: they are absent from the cue map, so the app is silent for them — never a
++placeholder. The reasons are recorded per event in the map's `deferred` array and in
++`s5-audio-attribution.md`: the boss death roar's sequence layering is unresolved, the ambience
++beds are layered `0x21` sequences, and the `bvo_fall*`/`bvo_breath*` names live beyond the 63
++resident `com_v` waves.
++
++The design's §12 walk list names some of these; they are marked **deferred**, not failed:
++
++| design §12 item | state |
++|---|---|
++| music starts/loops/stops on reset | **shipped** (stop on defeat is implemented; the scripted timeline does not defeat Valus) |
++| Valus telegraph roar, club/stomp impact, hurt | **shipped** |
++| club whoosh | **deferred** |
++| Valus death (roar) | **deferred** |
++| Wander swing, hit, hurt, death | **shipped** |
++| Wander fall | **deferred** |
++| wind ambience | **deferred** |
++| `M` mute, no clipping, windowed, cursor | **shipped** |
++| fps ≥ 60 | **shipped** (measured in §8) |
++
++## 12 · The user's listening checklist — PENDING
++
++The scripted pass proves presence, order, timing and non-silence — **not identity**. Run the
++encounter from the repo root, turn the speakers on, and fill the cells:
++
++```bash
++export SOTC_LIB=<worktree>/out/library
++caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
++    --manifest out/re/stage/encounter.manifest \
++    --model models/shadow/characters/wander/_cmn/wander.glb
++```
++
++| # | check | do this | expected | result |
++|---|---|---|---|---|
++| 1 | music starts on the fight | climb to a weakpoint and land the first hit (hold `J`, release at the forehead or the arm) | `Boss 1` starts on the first landed hit and loops without a seam | ☐ |
++| 2 | music stops on the reset, not the death | let the club kill you, wait through the death clip, press `R` | the music keeps playing over the death, then stops at the reset; the next fight's first hit restarts it | ☐ |
++| 3 | Valus's telegraph and impact | stand within 4.5 m of a foot, then within the club's reach | the telegraph roar precedes the stomp and the club, and the layered ground impact is distinct from it | ☐ |
++| 4 | Valus hurt reaction | land a weakpoint hit | his hurt vocal plays with the reaction clip | ☐ |
++| 5 | Wander's swing and hit | hold `J` and release next to a weakpoint | the swish precedes the hit; one hit per swing, tight sync | ☐ |
++| 6 | Wander hurt (light and heavy) | take a stomp (35), then a club (45) | two grunts; the heavy one is louder (1.25) | ☐ |
++| 7 | Wander's death | let the club empty the amber bar | the death vocal plays once, with the death clip | ☐ |
++| 8 | `M` mute | press `M` mid-fight, then again | the whole mix mutes/unmutes with no pop; the state is obvious without UI | ☐ |
++| 9 | no clipping | fight through the heaviest moment (music + impact + hurt together) | no crackle or distortion | ☐ |
++| 10 | windowed, cursor, fps | move the mouse over the window; read the title | a 1280×720 window, the cursor visible and free, the fps in the ≥ 60 class | ☐ |
++
++**Deferred — do not mark as failures:** the club whoosh, Valus's death roar, Wander's fall, the
++wind ambience, and grab/climb/footstep sounds. Their absence is R15, not a regression.
++
++**Verdict: PENDING — the user's ear.** S5's done-line closes only when this table is filled and
++passes; nothing in §1–§11 claims it.
++
++## 13 · Evidence files (all gitignored)
++
++- `out/s5-acceptance-run.log` — the recorded run's full output (ends with the PASS line).
++- `out/s5/mix.wav` — the 44.5667 s stereo mixdown; `out/s5/s5-selftest.txt` — the captured log.
++- `out/s5/events.txt`, `out/s5/event-clips.txt`, `out/s5/manifest-names.txt`,
++  `out/s5/map-names.txt` — the parsed event stream and the manifest/map name sets.
++- `out/s5/s42-audio-off.txt`, `out/s5/s42-audio-off.lines`, `out/s5/s42-audio-on.lines`,
++  `out/s5/s42-identity.diff` — the audio-off identity (empty diff).
++- `out/s5-s42-regression.log` — the unchanged S4.2 acceptance's full output, ending `PASS —`.
++- `out/s5/gate/`, `out/s5/audition/` — the decode and attribution gate artifacts (Tasks 0/1).
++- `out/library/audio/audio.manifest` + `out/library/audio/<bank>/*.wav` — the shipped slice.
++
++## 14 · Cross-references
++
++- Design: `docs/superpowers/specs/2026-10-21-s5-audio-design.md` (§2 goals, §6 recon, §7.1 gates,
++  §7.2 converter, §7.3 curation, §7.4 mixer, §7.5 acceptance, §12 the user's walk).
++- Plan: `docs/superpowers/plans/2026-10-21-s5-audio.md`; rulings R1–R16 in
++  `.superpowers/sdd/2026-10-21-s5-audio/progress.md`.
++- Gates: `docs/notes/s5-audio-recon.md`, `docs/notes/s5-audio-attribution.md`.
++- Task records: `.superpowers/sdd/2026-10-21-s5-audio/task-*-report.md` (this one is Task 6).
++- S4.2 results: `docs/notes/s42-results.md`; S4.1: `s41-results.md`; S4: `s4-results.md`;
++  S3: `s3-results.md`.
++- Script: `scripts/s5-acceptance.sh` (this pass); the regression is `scripts/s42-acceptance.sh`
++  (which runs `s41` → `s4` → `s3`).
+diff --git a/scripts/s5-acceptance.sh b/scripts/s5-acceptance.sh
+new file mode 100755
+index 0000000..16b6529
+--- /dev/null
++++ b/scripts/s5-acceptance.sh
+@@ -0,0 +1,490 @@
++#!/usr/bin/env bash
++#
++# s5-acceptance.sh — the S5 "The sound of the forbidden land" acceptance pass,
++# re-runnable end to end.
++#
++# Steps (the milestone: the game's own audio decoded at build time, played from
++# the existing simulation, and proven by a deterministic headless mixdown):
++#
++#   1. build the converter solution and the published CLI, and app/ (Release;
++#      viewer, tests, shaders copied);
++#   2. both suites — `dotnet test tests/BpConvert.Tests` and
++#      `ctest --test-dir app/build --output-on-failure`;
++#   3. the curated decode — `bp-convert audio` over `tools/re/audio/s5_map.json`
++#      into the library: eight manifest entries (the seven attributed cues plus
++#      Boss 1), the manifest's names exactly the map's events, every WAV present
++#      under the library at 48 kHz with the channel count and duration the
++#      manifest claims;
++#   4. the deterministic audio timeline — `--s5-selftest --audio-mixdown
++#      out/s5/mix.wav` over the S4.2 encounter: exactly 18 ordered `s5-event`
++#      lines parsed field by field (music on the first landed hit, a telegraph
++#      before every stomp/club impact, hurt light and heavy, the death, the
++#      music stop at the reset — not at the death), the `s5-mix` line, and
++#      `s5-status` last;
++#   5. the mixdown — pcm_f32le, 48 kHz stereo, 44.57 s; RMS/peak/loudest-window
++#      from the viewer's own accounting, plus an independent ffmpeg `astats`
++#      pass (non-silent, peak below 0 dBFS, no NaN);
++#   6. the audio-off identity — `--s42-selftest` with the mixer off, its `s42-*`
++#      lines diffed byte for byte against the S5 run's (empty: the audio layer
++#      is an additive observer, design D11);
++#   7. the S4.2 regression — `scripts/s42-acceptance.sh` unchanged (it runs
++#      S4.1, which runs S4, which runs S3), its final `PASS —` and its measured
++#      marginal frame cost;
++#   8. a summary block with every measured number.
++#
++# Every viewer and acceptance run is wrapped in `caffeinate -dimsu`: the machine
++# suspends idle background work, and an unwrapped 1-frame run has been observed
++# at 907 s. Never run two acceptances concurrently.
++#
++# Environment:
++#   SOTC_GAME_ROOT  the extracted game tree (the converter decodes it; required
++#                   — never silently skipped)
++#   SOTC_LIB        the converted asset library (default: <repo>/out/library)
++#
++# The mixdown, logs and diffs are written into a cleaned out/s5/, so a stale
++# mix.wav can never pass as this run's evidence. The decode/attribution gates'
++# evidence (out/s5/gate/, out/s5/audition/) belongs to Tasks 0/1 and is kept:
++# this script neither reads nor writes it.
++#
++# Identity is not scriptable: these checks prove presence, order, timing and
++# non-silence, not that a cue is the right sound. docs/notes/s5-results.md
++# records each attribution method and confidence; the user's ear is the
++# identity check, and its listening checklist is PENDING there.
++
++set -euo pipefail
++
++repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++lib="${SOTC_LIB:-$repo_root/out/library}"
++game_root="${SOTC_GAME_ROOT:-}"
++build_dir="$repo_root/app/build"
++viewer="$build_dir/sotc-viewer"
++encounter_manifest="$repo_root/out/re/stage/encounter.manifest"
++player="models/shadow/characters/wander/_cmn/wander.glb"
++wander_glb="$lib/$player"
++audio_map="$repo_root/tools/re/audio/s5_map.json"
++audio_manifest="$lib/audio/audio.manifest"
++cli="$repo_root/out/bin/bp-convert.dll"
++out_dir="$repo_root/out/s5"
++mix_wav="$out_dir/mix.wav"
++run_log="$repo_root/out/s5-acceptance-run.log"
++s42_log="$repo_root/out/s5-s42-regression.log"
++
++stamp() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
++fail() { echo "s5-acceptance: $*" >&2; exit 1; }
++
++# Every line this script prints lands in the recorded run log as well.
++mkdir -p "$repo_root/out"
++exec > >(tee "$run_log") 2>&1
++
++need() {
++  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
++}
++
++need dotnet
++need cmake
++need ctest
++need caffeinate
++need ffprobe
++need ffmpeg
++need shasum
++need awk
++need grep
++need sed
++need sort
++need wc
++
++[[ -n "$game_root" ]] || fail "SOTC_GAME_ROOT is not set — the converter decodes the game tree"
++[[ -d "$game_root" ]] || fail "SOTC_GAME_ROOT not found: $game_root"
++[[ -d "$lib" ]] || fail "asset library not found: $lib (set SOTC_LIB)"
++[[ -f "$wander_glb" ]] || fail "player glb not found under the library: $wander_glb"
++[[ -f "$encounter_manifest" ]] ||
++  fail "encounter manifest not found: $encounter_manifest — run ./scripts/s4-acceptance.sh once (it composes it; the S4.2 regression runs it unchanged)"
++[[ -f "$audio_map" ]] || fail "audio cue map not found: $audio_map"
++
++export SOTC_GAME_ROOT="$game_root"
++export SOTC_LIB="$lib"
++
++# --- Step 1: builds -----------------------------------------------------------
++
++stamp "build: BpConvert.sln"
++dotnet build "$repo_root/BpConvert.sln" -v q
++
++stamp "publish: src/BpConvert.Cli -> out/bin"
++dotnet publish "$repo_root/src/BpConvert.Cli" -c Release -o "$repo_root/out/bin"
++[[ -f "$cli" ]] || fail "publish did not produce $cli (invoke it as 'dotnet exec $cli')"
++
++stamp "build: app -> app/build (Release)"
++cmake -S "$repo_root/app" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
++cmake --build "$build_dir" -j
++[[ -x "$viewer" ]] || fail "build did not produce $viewer"
++
++# --- Step 2: both suites ------------------------------------------------------
++
++stamp "dotnet test: tests/BpConvert.Tests"
++dotnet test "$repo_root/tests/BpConvert.Tests" -v q
++
++stamp "ctest: $build_dir"
++ctest --test-dir "$build_dir" --output-on-failure
++
++# --- Step 3: the curated decode ----------------------------------------------
++
++# The acceptance's own artifacts are removed first; the gate/audition evidence
++# (out/s5/gate, out/s5/audition) is another task's and is left alone.
++stamp "clean: $out_dir (except gate/ and audition/)"
++mkdir -p "$out_dir"
++for stale in "$out_dir"/*; do
++  [[ -e "$stale" ]] || continue
++  case "$stale" in
++    "$out_dir/gate" | "$out_dir/audition") continue ;;
++  esac
++  rm -rf "$stale"
++done
++
++stamp "bp-convert audio: $audio_map"
++if ! convert_out="$(caffeinate -dimsu dotnet exec "$cli" audio \
++  --root "$game_root" --out "$lib" --map "$audio_map" --force 2>&1)"; then
++  printf '%s\n' "$convert_out" >&2
++  fail "bp-convert audio exited non-zero"
++fi
++printf '%s\n' "$convert_out"
++grep -q '8 manifest entries' <<<"$convert_out" ||
++  fail "bp-convert audio did not report 8 manifest entries"
++
++# field LINE KEY — the value after KEY= up to the next space.
++field() {
++  local line="$1" key="$2" rest
++  rest="${line#*"$key"=}"
++  [[ "$rest" != "$line" ]] || fail "field $key missing from: $line"
++  printf '%s' "${rest%% *}"
++}
++
++stamp "audio manifest: $audio_manifest"
++[[ -f "$audio_manifest" ]] || fail "no audio manifest at $audio_manifest after the decode"
++manifest_entries="$(grep -c '^name=' "$audio_manifest" || true)"
++[[ "$manifest_entries" = "8" ]] ||
++  fail "the audio manifest lists $manifest_entries entries (expected 8: seven cues + Boss 1)"
++
++# The manifest must carry exactly the map's curated events: a cue that silently
++# failed to decode is a missing name here, not a silent game.
++manifest_names="$out_dir/manifest-names.txt"
++grep '^name=' "$audio_manifest" | sed 's/^name=//; s/ .*$//' | sort > "$manifest_names"
++map_names="$out_dir/map-names.txt"
++sed -n '/"cues": \[/,/"deferred": \[/p' "$audio_map" |
++  grep -o '"event": "[^"]*"' | sed 's/.*: "//; s/"$//' | sort > "$map_names"
++if ! diff -u "$map_names" "$manifest_names" > "$out_dir/manifest-names.diff"; then
++  cat "$out_dir/manifest-names.diff" >&2
++  fail "the manifest's names are not the map's curated events"
++fi
++grep '^name=' "$audio_manifest" > "$out_dir/manifest-entries.txt"
++
++cue_rows=""
++while IFS= read -r entry; do
++  name="$(field "$entry" name)"
++  file="$(field "$entry" file)"
++  rate="$(field "$entry" rate)"
++  channels="$(field "$entry" channels)"
++  seconds="$(field "$entry" seconds)"
++  wav="$lib/$file"
++  [[ -f "$wav" ]] || fail "manifest entry $name: no file at $wav"
++  [[ "$rate" = "48000" ]] || fail "manifest entry $name: rate=$rate (expected 48000)"
++  info="$(ffprobe -v error -select_streams a:0 \
++    -show_entries stream=sample_rate,channels,duration -of csv=p=0 "$wav")" ||
++    fail "ffprobe failed on $wav"
++  IFS=, read -r probe_rate probe_channels probe_seconds <<<"$info"
++  [[ "$probe_rate" = "48000" ]] || fail "ffprobe $wav: ${probe_rate} Hz (expected 48 kHz)"
++  [[ "$probe_channels" = "$channels" ]] ||
++    fail "ffprobe $wav: ${probe_channels} ch but the manifest claims $channels"
++  awk -v a="$probe_seconds" -v b="$seconds" '
++    BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= 0.05) }' ||
++    fail "ffprobe $wav: ${probe_seconds} s but the manifest claims ${seconds} s"
++  cue_rows="${cue_rows}${cue_rows:+, }${name} ${probe_seconds}s/${probe_channels}ch"
++  printf 's5-acceptance: cue %-16s %s s  %s ch  %s Hz  %s\n' \
++    "$name" "$probe_seconds" "$probe_channels" "$probe_rate" "$file"
++done < "$out_dir/manifest-entries.txt"
++
++# --- Step 4: the deterministic audio timeline ---------------------------------
++
++stamp "s5-selftest + mixdown: $encounter_manifest"
++if ! selftest_out="$(caffeinate -dimsu "$viewer" --library "$lib" \
++  --manifest "$encounter_manifest" --model "$player" \
++  --s5-selftest --audio-mixdown "$mix_wav" 2>&1)"; then
++  printf '%s\n' "$selftest_out" >&2
++  fail "--s5-selftest --audio-mixdown exited non-zero"
++fi
++printf '%s\n' "$selftest_out"
++printf '%s\n' "$selftest_out" > "$out_dir/s5-selftest.txt"
++
++events_file="$out_dir/events.txt"
++printf '%s\n' "$selftest_out" | grep -E '^s5-event ' > "$events_file" || true
++
++# t= is %.3f, gain= is %.2f, and clip= is the manifest name (a dotted event
++# name, never bank/name — ruling R16), so the anchored pattern rejects a
++# malformed or re-namespaced line instead of matching a substring.
++event_re='^s5-event t=[0-9]+\.[0-9][0-9][0-9] event=[a-z_]+ clip=[a-z_]+\.[a-z_]+ gain=[0-9]+\.[0-9][0-9]$'
++event_total="$(wc -l < "$events_file" | tr -d '[:space:]')"
++[[ "$event_total" = "18" ]] || fail "expected 18 s5-event lines, found $event_total"
++event_well_formed="$(grep -c -E "$event_re" "$events_file" || true)"
++[[ "$event_well_formed" = "18" ]] ||
++  fail "expected 18 well-formed s5-event lines (t=%.3f event=... clip=<manifest name> gain=%.2f), $event_well_formed of $event_total match"
++
++# event_line EVENT — the 1-based line number of the first s5-event whose event=
++# is EVENT, empty when absent.
++event_line() {
++  awk -v want="$1" '
++    $1 == "s5-event" {
++      name = $3; sub(/^event=/, "", name)
++      if (name == want) { print NR; exit }
++    }
++  ' "$events_file"
++}
++
++# event_field EVENT KEY — the KEY= value on the first s5-event line for EVENT.
++event_field() {
++  awk -v want="$1" -v key="$2" '
++    $1 == "s5-event" {
++      name = $3; sub(/^event=/, "", name)
++      if (name != want) next
++      for (i = 2; i <= 5; ++i) {
++        if (index($i, key "=") == 1) { print substr($i, length(key) + 2); exit }
++      }
++    }
++  ' "$events_file"
++}
++
++# count_events EVENT — how many s5-event lines name EVENT (0 when none).
++count_events() {
++  awk -v want="$1" '
++    $1 == "s5-event" {
++      name = $3; sub(/^event=/, "", name)
++      if (name == want) count += 1
++    }
++    END { print count + 0 }
++  ' "$events_file"
++}
++
++for name in strike strike_hit valus_reaction music_start stomp_start stomp_impact \
++  hurt_light club_start club_impact hurt_heavy death music_stop; do
++  [[ -n "$(event_line "$name")" ]] || fail "missing s5-event $name"
++done
++
++# --- music starts on the first landed hit -------------------------------------
++first_hit_line="$(event_line strike_hit)"
++first_hit_t="$(event_field strike_hit t)"
++[[ "$first_hit_t" = "2.050" ]] ||
++  fail "the first strike_hit is at t=$first_hit_t (expected 2.050)"
++music_start_line="$(event_line music_start)"
++music_start_t="$(event_field music_start t)"
++[[ "$music_start_t" = "2.050" ]] ||
++  fail "music_start is at t=$music_start_t (expected 2.050, the first landed hit)"
++[[ "$music_start_line" -gt "$first_hit_line" ]] ||
++  fail "music_start (line $music_start_line) is not after the first strike_hit (line $first_hit_line)"
++[[ "$(event_field music_start clip)" = "music.boss" ]] ||
++  fail "music_start plays clip=$(event_field music_start clip) (expected music.boss)"
++[[ "$(count_events music_start)" = "1" ]] ||
++  fail "music_start appears $(count_events music_start) times (expected once)"
++[[ "$(event_field music_start gain)" = "0.45" ]] ||
++  fail "music_start gain=$(event_field music_start gain) (expected 0.45)"
++
++# --- every attack telegraphs before it lands ----------------------------------
++stomp_start_line="$(event_line stomp_start)"
++stomp_impact_line="$(event_line stomp_impact)"
++[[ "$stomp_start_line" -lt "$stomp_impact_line" ]] ||
++  fail "stomp_impact (line $stomp_impact_line) is not after stomp_start (line $stomp_start_line)"
++[[ "$(event_field stomp_start clip)" = "valus.telegraph" ]] ||
++  fail "stomp_start plays clip=$(event_field stomp_start clip) (expected valus.telegraph)"
++[[ "$(event_field stomp_impact clip)" = "valus.impact" ]] ||
++  fail "stomp_impact plays clip=$(event_field stomp_impact clip) (expected valus.impact)"
++club_start_line="$(event_line club_start)"
++club_impact_line="$(event_line club_impact)"
++[[ "$club_start_line" -lt "$club_impact_line" ]] ||
++  fail "club_impact (line $club_impact_line) is not after club_start (line $club_start_line)"
++[[ "$(event_field club_start clip)" = "valus.telegraph" ]] ||
++  fail "club_start plays clip=$(event_field club_start clip) (expected valus.telegraph)"
++[[ "$(event_field club_impact clip)" = "valus.impact" ]] ||
++  fail "club_impact plays clip=$(event_field club_impact clip) (expected valus.impact)"
++
++# --- hurt light/heavy land on their impacts, with their own gains --------------
++[[ "$(event_field hurt_light t)" = "$(event_field stomp_impact t)" ]] ||
++  fail "hurt_light (t=$(event_field hurt_light t)) does not land with stomp_impact (t=$(event_field stomp_impact t))"
++[[ "$(event_field hurt_light clip)" = "player.hurt" ]] ||
++  fail "hurt_light plays clip=$(event_field hurt_light clip) (expected player.hurt)"
++[[ "$(event_field hurt_light gain)" = "1.00" ]] ||
++  fail "hurt_light gain=$(event_field hurt_light gain) (expected 1.00)"
++[[ "$(event_field hurt_heavy t)" = "$(event_field club_impact t)" ]] ||
++  fail "hurt_heavy (t=$(event_field hurt_heavy t)) does not land with club_impact (t=$(event_field club_impact t))"
++[[ "$(event_field hurt_heavy clip)" = "player.hurt" ]] ||
++  fail "hurt_heavy plays clip=$(event_field hurt_heavy clip) (expected player.hurt)"
++[[ "$(event_field hurt_heavy gain)" = "1.25" ]] ||
++  fail "hurt_heavy gain=$(event_field hurt_heavy gain) (expected 1.25)"
++
++# --- the death, then the music stop at the reset (not at the death) -----------
++death_line="$(event_line death)"
++death_t="$(event_field death t)"
++[[ "$death_t" = "19.367" ]] || fail "the death is at t=$death_t (expected 19.367)"
++[[ "$(event_field death clip)" = "player.death" ]] ||
++  fail "the death plays clip=$(event_field death clip) (expected player.death)"
++music_stop_line="$(event_line music_stop)"
++music_stop_t="$(event_field music_stop t)"
++[[ "$music_stop_t" = "20.483" ]] ||
++  fail "music_stop is at t=$music_stop_t (expected 20.483, the reset)"
++[[ "$music_stop_line" -gt "$death_line" ]] ||
++  fail "music_stop (line $music_stop_line) is not after the death (line $death_line)"
++[[ "$(printf '%s\n' "$selftest_out" | grep -c -E '^s5-event t=19\.367 event=music_stop ' || true)" = "0" ]] ||
++  fail "the music stops at the death (t=19.367); it must stop at the reset"
++[[ "$(event_field music_stop clip)" = "music.boss" ]] ||
++  fail "music_stop plays clip=$(event_field music_stop clip) (expected music.boss)"
++[[ "$(count_events music_stop)" = "1" ]] ||
++  fail "music_stop appears $(count_events music_stop) times (expected once)"
++[[ "$(event_field music_stop gain)" = "0.00" ]] ||
++  fail "music_stop gain=$(event_field music_stop gain) (expected 0.00)"
++
++# --- every clip= is a manifest name (R16), never bank/name --------------------
++awk '$1 == "s5-event" { c = $4; sub(/^clip=/, "", c); print c }' "$events_file" |
++  sort -u > "$out_dir/event-clips.txt"
++while IFS= read -r clip; do
++  [[ -n "$clip" ]] || continue
++  case "$clip" in
++    */*) fail "clip=$clip is bank/name; the log carries the manifest name (R16)" ;;
++  esac
++  grep -q -x -F "$clip" "$manifest_names" ||
++    fail "clip=$clip is not one of the audio manifest's names"
++done < "$out_dir/event-clips.txt"
++
++# --- s5-status is last and agrees with the stream -----------------------------
++status_line="$(printf '%s\n' "$selftest_out" | grep -E '^s5-status ' || true)"
++[[ -n "$status_line" ]] || fail "no s5-status line"
++[[ "$(printf '%s\n' "$selftest_out" | grep -c -E '^s5-status ' || true)" = "1" ]] ||
++  fail "expected exactly one s5-status line"
++[[ "$status_line" = "s5-status mixdown=$mix_wav events=18 music=1" ]] ||
++  fail "s5-status is '$status_line' (expected 's5-status mixdown=$mix_wav events=18 music=1')"
++last_line="$(printf '%s\n' "$selftest_out" | awk 'NF { line = $0 } END { print line }')"
++[[ "$last_line" = "$status_line" ]] ||
++  fail "s5-status is not the last line; the last line is '$last_line'"
++
++# --- Step 5: the mixdown ------------------------------------------------------
++
++[[ -s "$mix_wav" ]] || fail "the selftest wrote no mixdown at $mix_wav"
++mix_line="$(printf '%s\n' "$selftest_out" | grep -m1 -E '^s5-mix ' || true)"
++[[ -n "$mix_line" ]] || fail "no s5-mix line"
++mix_frames="$(field "$mix_line" frames)"
++mix_rms="$(field "$mix_line" rms)"
++mix_peak="$(field "$mix_line" peak)"
++mix_window="$(field "$mix_line" window_rms)"
++awk -v v="$mix_rms" 'BEGIN { exit !(v > 0.01) }' ||
++  fail "s5-mix rms=$mix_rms is silent (need > 0.01)"
++awk -v v="$mix_peak" 'BEGIN { exit !(v <= 0.99) }' ||
++  fail "s5-mix peak=$mix_peak clips (need <= 0.99)"
++awk -v v="$mix_window" 'BEGIN { exit !(v > 0.05) }' ||
++  fail "s5-mix window_rms=$mix_window is too quiet (need > 0.05: music and SFX both audible)"
++awk -v f="$mix_frames" 'BEGIN { exit !(f >= 2129760 && f <= 2148960) }' ||
++  fail "s5-mix frames=$mix_frames is not 44.57 s ± 0.2 s at 48 kHz"
++
++mix_info="$(ffprobe -v error -select_streams a:0 \
++  -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$mix_wav")" ||
++  fail "ffprobe failed on $mix_wav"
++IFS=, read -r mix_codec mix_rate mix_channels <<<"$mix_info"
++[[ "$mix_codec" = "pcm_f32le" ]] || fail "mixdown codec is $mix_codec (expected pcm_f32le)"
++[[ "$mix_rate" = "48000" ]] || fail "mixdown rate is $mix_rate (expected 48000)"
++[[ "$mix_channels" = "2" ]] || fail "mixdown channels is $mix_channels (expected 2)"
++mix_duration="$(ffprobe -v error -select_streams a:0 -show_entries format=duration \
++  -of default=nw=1:nk=1 "$mix_wav")"
++awk -v d="$mix_duration" 'BEGIN { exit !(d >= 44.37 && d <= 44.77) }' ||
++  fail "mixdown duration is $mix_duration s (expected 44.57 s ± 0.2)"
++awk -v frames="$mix_frames" -v d="$mix_duration" '
++  BEGIN { diff = frames - d * 48000; if (diff < 0) diff = -diff; exit !(diff <= 1.0) }' ||
++  fail "s5-mix frames=$mix_frames disagrees with the WAV's ${mix_duration} s at 48 kHz"
++
++# The independent decode: astats reads the samples, not the viewer's summary.
++astats_out="$(ffmpeg -hide_banner -nostats -i "$mix_wav" \
++  -af astats=metadata=1:reset=0 -f null - 2>&1)" || fail "ffmpeg astats failed on $mix_wav"
++astats_overall="$(printf '%s\n' "$astats_out" | awk '/\] Overall$/ { grab = 1; next } grab')"
++[[ -n "$astats_overall" ]] || fail "ffmpeg astats printed no Overall block"
++astats_peak="$(printf '%s\n' "$astats_overall" | awk -F': ' '/Peak level dB/ { print $2; exit }')"
++astats_rms="$(printf '%s\n' "$astats_overall" | awk -F': ' '/RMS level dB/ { print $2; exit }')"
++astats_nans="$(printf '%s\n' "$astats_overall" | awk -F': ' '/Number of NaNs/ { print $2; exit }')"
++[[ -n "$astats_peak" && -n "$astats_rms" && -n "$astats_nans" ]] ||
++  fail "could not parse the astats Overall block"
++awk -v p="$astats_peak" 'BEGIN { exit !(p < 0.0) }' ||
++  fail "astats peak ${astats_peak} dBFS is at or above 0 dBFS"
++awk -v r="$astats_rms" 'BEGIN { exit !(r > -40.0) }' ||
++  fail "astats RMS ${astats_rms} dBFS is silent"
++awk -v n="$astats_nans" 'BEGIN { exit !(n == 0) }' ||
++  fail "astats reports ${astats_nans} NaNs in the mixdown"
++
++# --- Step 6: the audio-off identity (the observer changes no s42-* value) -----
++
++stamp "s42-selftest with audio off (identity check)"
++if ! s42_off_out="$(caffeinate -dimsu "$viewer" --library "$lib" \
++  --manifest "$encounter_manifest" --model "$player" --s42-selftest 2>&1)"; then
++  printf '%s\n' "$s42_off_out" >&2
++  fail "--s42-selftest with audio off exited non-zero"
++fi
++printf '%s\n' "$s42_off_out" > "$out_dir/s42-audio-off.txt"
++printf '%s\n' "$s42_off_out" | grep -E '^s42-' > "$out_dir/s42-audio-off.lines" || true
++printf '%s\n' "$selftest_out" | grep -E '^s42-' > "$out_dir/s42-audio-on.lines" || true
++s42_off_count="$(wc -l < "$out_dir/s42-audio-off.lines" | tr -d '[:space:]')"
++[[ "$s42_off_count" -ge 10 ]] ||
++  fail "the audio-off run printed only $s42_off_count s42-* lines"
++if ! diff -u "$out_dir/s42-audio-off.lines" "$out_dir/s42-audio-on.lines" \
++  > "$out_dir/s42-identity.diff"; then
++  cat "$out_dir/s42-identity.diff" >&2
++  fail "the audio layer changed the s42-* lines (design D11): see $out_dir/s42-identity.diff"
++fi
++stamp "identity: $s42_off_count s42-* lines identical with the mixer on and off"
++
++# --- Step 7: the S4.2 regression (which runs S4.1, S4 and S3) -----------------
++
++stamp "s42 regression: scripts/s42-acceptance.sh (it runs S4.1, S4 and S3)"
++if ! SOTC_LIB="$lib" SOTC_GAME_ROOT="$game_root" \
++  caffeinate -dimsu "$repo_root/scripts/s42-acceptance.sh" > "$s42_log" 2>&1; then
++  tail -40 "$s42_log" >&2
++  fail "the S4.2 acceptance regression failed (log: $s42_log)"
++fi
++grep -q '^s42-acceptance: PASS — ' "$s42_log" ||
++  fail "the S4.2 regression did not print its final PASS — line"
++s42_perf_line="$(grep -m1 -E '^s42-acceptance: perf ' "$s42_log" || true)"
++[[ -n "$s42_perf_line" ]] || fail "the S4.2 regression printed no perf line"
++s42_marginal="$(printf '%s\n' "$s42_perf_line" | sed -E 's/.*marginal ([0-9.]+) ms.*/\1/')"
++[[ "$s42_marginal" != "$s42_perf_line" ]] ||
++  fail "could not parse the marginal frame cost from: $s42_perf_line"
++awk -v ms="$s42_marginal" 'BEGIN { exit !(ms <= 16.7) }' ||
++  fail "the marginal frame cost ${s42_marginal} ms is outside the 60 fps budget (16.7 ms)"
++s41_status_line="$(grep -m1 '^s42-acceptance: s41 status ' "$s42_log" |
++  sed 's/^s42-acceptance: s41 status *//' || true)"
++s4_status_line="$(grep -m1 '^s42-acceptance: s4 status ' "$s42_log" |
++  sed 's/^s42-acceptance: s4 status *//' || true)"
++s3_status_line="$(grep -m1 '^s42-acceptance: s3 status ' "$s42_log" |
++  sed 's/^s42-acceptance: s3 status *//' || true)"
++[[ -n "$s41_status_line" && -n "$s4_status_line" && -n "$s3_status_line" ]] ||
++  fail "the S4.2 regression printed an empty S4.1/S4/S3 status line"
++printf '%s\n' "$s42_perf_line"
++
++# --- Step 8: summary ----------------------------------------------------------
++
++stamp "summary"
++printf 's5-acceptance: library      %s\n' "$lib"
++printf 's5-acceptance: map          %s\n' "$audio_map"
++printf 's5-acceptance: manifest     %s\n' "$audio_manifest"
++printf 's5-acceptance: manifest sha %s\n' "$(shasum -a 256 "$audio_manifest" | cut -d' ' -f1)"
++printf 's5-acceptance: mixdown      %s\n' "$mix_wav"
++printf 's5-acceptance: mixdown sha  %s\n' "$(shasum -a 256 "$mix_wav" | cut -d' ' -f1)"
++printf 's5-acceptance: cues         %s\n' "$cue_rows"
++while IFS= read -r event_line_out; do
++  printf 's5-acceptance: %s\n' "$event_line_out"
++done < "$events_file"
++printf 's5-acceptance: mix          %s\n' "$mix_line"
++printf 's5-acceptance: astats       peak %s dBFS, RMS %s dBFS, NaNs %s\n' \
++  "$astats_peak" "$astats_rms" "$astats_nans"
++printf 's5-acceptance: wav          %s  %s Hz  %s ch  %s s\n' \
++  "$mix_codec" "$mix_rate" "$mix_channels" "$mix_duration"
++printf 's5-acceptance: identity     %s s42-* lines identical with the mixer on and off\n' \
++  "$s42_off_count"
++printf 's5-acceptance: status       %s\n' "$status_line"
++printf 's5-acceptance: s42 perf     %s\n' "$s42_perf_line"
++printf 's5-acceptance: s41 status   %s\n' "$s41_status_line"
++printf 's5-acceptance: s4 status    %s\n' "$s4_status_line"
++printf 's5-acceptance: s3 status    %s\n' "$s3_status_line"
++printf 's5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present), %s ordered s5-events (music on the first landed hit at %s s, telegraph before every stomp/club impact, hurt light/heavy at their impacts, death at %s s, music stop at the reset %s s), mixdown %s frames / %s s %s %s ch (rms %s, peak %s, window_rms %s; astats peak %s dBFS, RMS %s dBFS, no NaN), s42-* identical with audio off, marginal %s ms/frame, S4.2+S4.1+S4+S3 regressions green\n' \
++  "$event_total" "$music_start_t" "$death_t" "$music_stop_t" "$mix_frames" \
++  "$mix_duration" "$mix_codec" "$mix_channels" "$mix_rms" "$mix_peak" "$mix_window" \
++  "$astats_peak" "$astats_rms" "$s42_marginal"

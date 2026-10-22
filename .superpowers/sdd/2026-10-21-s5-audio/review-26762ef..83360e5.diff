@@ -1,0 +1,231 @@
+# Review package: 26762ef..HEAD
+
+## Commits
+83360e5 fix(app): stop the music on defeat and reset, not death
+
+## Files changed
+ app/src/app.cpp  | 42 ++++++++++++++++++++++++++++++++++--------
+ app/src/main.cpp |  6 ++++--
+ 2 files changed, 38 insertions(+), 10 deletions(-)
+
+## Diff
+diff --git a/app/src/app.cpp b/app/src/app.cpp
+index 636d25c..1bf92bd 100644
+--- a/app/src/app.cpp
++++ b/app/src/app.cpp
+@@ -1455,20 +1455,31 @@ struct AudioSeam {
+         const Sfx missing =
+             missing_cue([this](const char* clip) { return engine.has(clip); });
+         if (missing != Sfx::Count) {
+             const SoundCue* cue = cue_for(missing);
+             std::fprintf(stderr,
+                          "sotc-viewer: audio: cue %s names clip '%s', which %s does not load\n",
+                          sfx_name(missing), cue != nullptr ? cue->clip : "?", manifest.c_str());
+             engine.reset();
+             return false;
+         }
++        // The music is not an `Sfx`, so `missing_cue` cannot see it; the score
++        // is as mandatory as the fight cues (D5), so gate it here — a manifest
++        // without it fails at load, not as "a cue clip was missing at play time".
++        if (!engine.has(kMusicClip)) {
++            std::fprintf(
++                stderr,
++                "sotc-viewer: audio: music cue names clip '%s', which %s does not load\n",
++                kMusicClip, manifest.c_str());
++            engine.reset();
++            return false;
++        }
+         enabled = true;
+         return true;
+     }
+ 
+     // The one place a queued cue becomes a voice (and an s5-event line).
+     void play_event(const SfxEvent& event) {
+         const SoundCue* cue = cue_for(event.id);
+         if (cue == nullptr || !enabled) {
+             return;  // deferred, or audio off: deliberately silent
+         }
+@@ -1478,20 +1489,24 @@ struct AudioSeam {
+             failed = true;
+             return;
+         }
+         const float gain = cue->gain * event.gain;
+         if (event.spatial) {
+             engine.play(cue->clip, event.position, gain);
+         } else {
+             engine.play_ui(cue->clip, gain);
+         }
+         if (log) {
++            // `clip=` is the R1 manifest `name=` (e.g. `valus.impact`), not
++            // `bank/name`: the engine indexes clips by that name and exposes no
++            // bank. Ledger R16 makes the manifest name the log contract; Task 6
++            // parses these tokens.
+             std::printf("s5-event t=%.3f event=%s clip=%s gain=%.2f\n", clock,
+                         sfx_name(event.id), cue->clip, gain);
+             ++eventCount;
+         }
+     }
+ 
+     void play_all(SfxQueue& queue) {
+         for (int i = 0; i < queue.count; ++i) {
+             play_event(queue.items[static_cast<std::size_t>(i)]);
+         }
+@@ -1527,22 +1542,25 @@ struct AudioSeam {
+             std::printf("s5-event t=%.3f event=music_stop clip=%s gain=0.00\n", clock,
+                         kMusicClip);
+             ++eventCount;
+         }
+     }
+ 
+     void reset() {
+         if (!enabled) {
+             return;
+         }
++        // D5's reset stop must be observable: the reset emits the same
++        // `music_stop` the defeat path does (only while the music is actually
++        // live — stop_music is idempotent), then every voice goes.
++        stop_music();
+         engine.reset();  // every voice, music included
+-        musicStarted = false;
+     }
+ 
+     void toggle_mute() {
+         if (enabled) {
+             engine.set_muted(!engine.muted());
+         }
+     }
+ 
+     void update(float dt, const Vec3& listener, float yaw) {
+         if (!enabled) {
+@@ -2862,35 +2880,39 @@ int run_app(const AppOptions& opts) {
+             // the autonomous selection is off for this run so nothing races the
+             // assertions. Only the stamina phase is teleport-free; the gate and
+             // route phases use the same attach scaffolding S4.1 established.
+             //
+             // --s5-selftest runs this same stepper with the S5 observer on
+             // (design §7.4, ruling D11): the cues are translated once per step,
+             // the mix is captured, and `s5-event`/`s5-status` are printed. With
+             // audio off every audio branch is skipped, so the `s42-*` values
+             // are byte-identical (the audio-off diff is the proof).
+             const bool audioOn = audio.enabled;
++            // One shared stepper serves two flags: name the invoked one in the
++            // load/shape errors so an S5 run never blames --s42-selftest.
++            const char* const selftestFlag =
++                opts.s5Selftest ? "--s5-selftest" : "--s42-selftest";
+             if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
+                 entityRig >= playbacks.size()) {
+-                std::fprintf(stderr,
+-                             "sotc-viewer: --s42-selftest: the manifest has no entity\n");
++                std::fprintf(stderr, "sotc-viewer: %s: the manifest has no entity\n",
++                             selftestFlag);
+                 return 2;
+             }
+             if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
+                 entityClips.body < 0 || entityClips.death < 0 || entityClips.stompL < 0 ||
+                 entityClips.stompR < 0 || entityClips.club < 0 || playerClips.gripLoop < 0 ||
+                 playerClips.gripMove < 0 || playerClips.strike < 0 || playerClips.fall < 0 ||
+                 playerClips.death < 0) {
+                 // The load gate above already refused this case; keep the
+                 // invariant explicit so no future path can reach a fallback.
+-                throw std::runtime_error(
+-                    "s42-selftest: a fight clip is missing despite the load gate");
++                throw std::runtime_error(std::string(selftestFlag) +
++                                         ": a fight clip is missing despite the load gate");
+             }
+ 
+             Playback& entity_playback = playbacks[entityRig];
+             const Vec3 spawn = spawn_position(manifest, scene);
+             const float spawnYaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
+             const float stepSeconds = kFixedFrameSeconds;
+             const PlayerInput noInput;
+ 
+             // The S5 frame queue and capture. The capture starts before the
+             // first play (a cue would otherwise be missed) and is the disk sink
+@@ -2997,26 +3019,28 @@ int run_app(const AppOptions& opts) {
+                     camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
+                                   0.0f,
+                                   input.forward || input.back || input.left || input.right,
+                                   stepSeconds);
+                 }
+                 apply_player_transform(scene, player_rig_record, player,
+                                        active_player_lift(scene, playback, player_rig_record));
+                 if (audioOn) {
+                     flush_sfx();
+                     // The first landed hit is the fight music's downbeat (D5);
+-                    // a death or a defeat stops it. Both transitions land on a
++                    // only Valus's defeat stops it. Wander's death does not: the
++                    // score runs through the death clip (D5 names defeat and
++                    // reset, not the player's death). Both transitions land on a
+                     // step boundary, so the log order is stable.
+                     if (events.damageDealt > 0) {
+                         audio.start_music();
+                     }
+-                    if (combat.mode == PlayerMode::Dead || encounter.defeated) {
++                    if (encounter.defeated) {
+                         audio.stop_music();
+                     }
+                     audio.update(stepSeconds, player.position, camera_look_yaw(camera));
+                 }
+                 return events;
+             };
+ 
+             // Waits out the entity one-shot a landed strike started and returns
+             // the body to one pinned stand frame (the next phase's bands must
+             // not animate under the route).
+@@ -4707,21 +4731,23 @@ int run_app(const AppOptions& opts) {
+ 
+                 apply_player_transform(scene, player_rig_record, player,
+                                        active_player_lift(scene, playback, player_rig_record));
+                 if (audio_on) {
+                     // Cues were pushed in time order (step, reaction, impact,
+                     // hurt); drain once, then the mix advances.
+                     audio.play_all(frameSfx);
+                     if (events.damageDealt > 0) {
+                         audio.start_music();
+                     }
+-                    if (combat.mode == PlayerMode::Dead || encounter.defeated) {
++                    // D5: the score stops on Valus's defeat and on the R reset,
++                    // never on Wander's death — it runs through the death clip.
++                    if (encounter.defeated) {
+                         audio.stop_music();
+                     }
+                     audio.update(dt, player.position, camera_look_yaw(camera));
+                 }
+                 renderer.set_hud(hud_state(/*visible=*/true));
+             } else {
+                 update_all_poses(renderer, scene, playbacks, dt, club);
+             }
+ 
+             renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+diff --git a/app/src/main.cpp b/app/src/main.cpp
+index 8b34cce..f69447c 100644
+--- a/app/src/main.cpp
++++ b/app/src/main.cpp
+@@ -227,23 +227,25 @@ int main(int argc, char** argv) {
+     if (opts.s42Selftest && opts.manifestPath.empty()) {
+         std::fprintf(stderr, "sotc-viewer: --s42-selftest needs --manifest\n");
+         print_usage(stderr);
+         return 2;
+     }
+     if (opts.s5Selftest && opts.manifestPath.empty()) {
+         std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --manifest\n");
+         print_usage(stderr);
+         return 2;
+     }
+-    if (opts.s5Selftest && opts.s42Selftest) {
++    if (opts.s5Selftest &&
++        (opts.selftest || opts.s3Selftest || opts.s4Selftest || opts.s41Selftest ||
++         opts.s42Selftest)) {
+         std::fprintf(stderr,
+-                     "sotc-viewer: --s5-selftest and --s42-selftest run the same timeline; "
++                     "sotc-viewer: --s5-selftest cannot be combined with another selftest; "
+                      "pass one\n");
+         print_usage(stderr);
+         return 2;
+     }
+     if (opts.s5Selftest && opts.audioMixdownPath.empty()) {
+         std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --audio-mixdown PATH\n");
+         print_usage(stderr);
+         return 2;
+     }
+     if (!opts.audioMixdownPath.empty() && !opts.s5Selftest) {

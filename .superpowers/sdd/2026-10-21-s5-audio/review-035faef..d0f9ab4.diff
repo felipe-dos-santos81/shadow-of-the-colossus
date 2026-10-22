@@ -1,0 +1,643 @@
+# Review package: 035faef..HEAD
+
+## Commits
+d0f9ab4 fix(app): prebuffer the audio device and flush on mute
+
+## Files changed
+ app/src/audio.cpp        | 117 +++++++++++++++++++++++++++++++++++++++--------
+ app/src/audio.h          |  39 +++++++++++-----
+ app/src/wav_io.cpp       |   1 +
+ app/tests/test_audio.cpp |  59 +++++++++++++++++++++++-
+ 4 files changed, 182 insertions(+), 34 deletions(-)
+
+## Diff
+diff --git a/app/src/audio.cpp b/app/src/audio.cpp
+index 9e2e138..80e63f8 100644
+--- a/app/src/audio.cpp
++++ b/app/src/audio.cpp
+@@ -1,33 +1,42 @@
+ #include "audio.h"
+ 
+ #include <SDL3/SDL.h>
+ 
+ #include <algorithm>
++#include <cassert>
+ #include <cctype>
+ #include <cmath>
++#include <cstddef>
++#include <cstdint>
+ #include <cstdio>
++#include <filesystem>
+ #include <fstream>
+ #include <string>
+ #include <system_error>
++#include <unordered_map>
++#include <unordered_set>
+ #include <utility>
+ #include <vector>
+ 
+ #include "wav_io.h"
+ 
+ namespace {
+ 
+ constexpr float kCategoryGains[] = {0.7f, 0.5f, 1.0f};  // music, ambience, sfx
+ constexpr float kReferenceDistance = 8.0f;              // attenuation 1/(1 + d/8)
+ constexpr float kPanSpread = 0.7f;
+-constexpr int kMixdownFramesStep = 800;                 // 1/60 s at 48 kHz
++constexpr int kBlockFrames = 800;                       // 1/60 s at 48 kHz
++constexpr int kLeadBlocks = 3;                          // ~50 ms of prebuffer
++constexpr int kTargetQueuedBytes = kLeadBlocks * kBlockFrames * 2 * 4;
+ constexpr int kMaxQueuedBytes = 48000 * 2 * 4 / 2;      // half a second of output
++constexpr int kMaxTopUpBlocks = 8;                      // ~133 ms per call, bounded
+ 
+ float category_gain(AudioCategory category) {
+     return kCategoryGains[static_cast<int>(category)];
+ }
+ 
+ float sanitize_gain(float gain) {
+     if (!std::isfinite(gain)) {
+         return 0.0f;
+     }
+     return std::clamp(gain, 0.0f, 1.0f);
+@@ -140,20 +149,25 @@ bool AudioEngine::load_manifest(const std::string& manifestPath,
+         if (loaded.find(name) != loaded.end()) {
+             return fail(manifestPath + ":" + std::to_string(line_number) +
+                         ": duplicate audio name '" + name + "'");
+         }
+ 
+         const auto file_it = fields.find("file");
+         if (file_it == fields.end() || file_it->second.empty()) {
+             return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
+                         "' has no file=");
+         }
++        if (std::filesystem::path(file_it->second).is_absolute()) {
++            return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
++                        "' file= must be libraryRoot-relative, got '" + file_it->second +
++                        "'");
++        }
+         const std::filesystem::path wav_path =
+             std::filesystem::path(libraryRoot) / file_it->second;
+ 
+         AudioClip clip;
+         std::string wav_error;
+         if (!read_wav(wav_path, clip, &wav_error)) {
+             return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
+                         "': " + wav_error);
+         }
+         if (clip.frames() == 0) {
+@@ -238,52 +252,72 @@ void AudioEngine::play(const std::string& name, const Vec3& position, float gain
+         // All SFX slots are busy: steal the oldest (smallest serial).
+         slot = kFirstSfxSlot;
+         for (std::size_t i = kFirstSfxSlot + 1; i < static_cast<std::size_t>(kMaxVoices);
+              ++i) {
+             if (voices_[i].serial < voices_[slot].serial) {
+                 slot = i;
+             }
+         }
+     }
+     start_voice(slot, clip, AudioCategory::Sfx, gain, position, spatial);
++    // The device opens (and primes) on the first play, so headless timelines
++    // that never play never touch audio hardware.
++    ensure_device();
+ }
+ 
+ void AudioEngine::play_ui(const std::string& name, float gain) {
+     play(name, Vec3{0.0f, 0.0f, 0.0f}, gain, /*spatial=*/false);
+ }
+ 
+ void AudioEngine::play_music(const std::string& name, float gain) {
+     const AudioClip* clip = find_clip(name);
+     if (clip == nullptr || clip->frames() == 0) {
+         warn_missing(name);
+         return;
+     }
+     // Slot 0 is a single voice: a new cue replaces the current music.
+     start_voice(kMusicSlot, clip, AudioCategory::Music, gain, Vec3{0.0f, 0.0f, 0.0f},
+                 /*spatial=*/false);
++    ensure_device();
+ }
+ 
+-void AudioEngine::stop_music() { stop_slot(kMusicSlot); }
++void AudioEngine::stop_music() {
++    stop_slot(kMusicSlot);
++    // The prebuffer still holds the last ~50 ms of music; drop it so the stop
++    // is heard now rather than after the lead.
++    clear_stream();
++}
+ 
+ void AudioEngine::play_ambience(const std::string& name, float gain) {
+     const AudioClip* clip = find_clip(name);
+     if (clip == nullptr || clip->frames() == 0) {
+         warn_missing(name);
+         return;
+     }
+     start_voice(kAmbienceSlot, clip, AudioCategory::Ambience, gain,
+                 Vec3{0.0f, 0.0f, 0.0f}, /*spatial=*/false);
++    ensure_device();
+ }
+ 
+-void AudioEngine::reset() { stop_all_voices(); }
++void AudioEngine::reset() {
++    stop_all_voices();
++    clear_stream();
++}
+ 
+-void AudioEngine::set_muted(bool muted) { muted_ = muted; }
++void AudioEngine::set_muted(bool muted) {
++    if (muted && !muted_) {
++        // Muting must not trail the prebuffer: drop it. Unmuting deliberately
++        // keeps the queue so the stream restarts without a priming gap.
++        clear_stream();
++    }
++    muted_ = muted;
++}
+ 
+ int AudioEngine::active_voices() const {
+     int count = 0;
+     for (const Voice& voice : voices_) {
+         if (voice.active) {
+             ++count;
+         }
+     }
+     return count;
+ }
+@@ -294,22 +328,31 @@ bool AudioEngine::is_playing(const std::string& name) const {
+         return false;
+     }
+     for (const Voice& voice : voices_) {
+         if (voice.active && voice.clip == clip) {
+             return true;
+         }
+     }
+     return false;
+ }
+ 
++int AudioEngine::queued_audio_bytes() const {
++    if (stream_ == nullptr) {
++        return 0;
++    }
++    const int queued = SDL_GetAudioStreamQueued(stream_);
++    return queued > 0 ? queued : 0;
++}
++
+ void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
+                       float listenerYawDeg) {
++    assert(frames * 2 <= mixBuffer_.size());
+     const std::size_t sample_count = frames * 2;
+     std::fill(out, out + sample_count, 0.0f);
+ 
+     // Yaw 0 looks along +Z, so the listener's right is forward x +Y.
+     const float yaw_radians = listenerYawDeg * kDegToRad;
+     const Vec3 right{-std::cos(yaw_radians), 0.0f, std::sin(yaw_radians)};
+ 
+     for (Voice& voice : voices_) {
+         if (!voice.active) {
+             continue;
+@@ -374,20 +417,54 @@ void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
+         return;
+     }
+     // The output stage is the only place samples are clamped: a loud stack may
+     // saturate but never leaves the float WAV's [-1, 1] range.
+     for (std::size_t i = 0; i < sample_count; ++i) {
+         const float sample = out[i];
+         out[i] = std::isfinite(sample) ? std::clamp(sample, -1.0f, 1.0f) : 0.0f;
+     }
+ }
+ 
++void AudioEngine::push_block(std::size_t frames) {
++    if (stream_ == nullptr || frames == 0) {
++        return;
++    }
++    assert(frames * 2 <= mixBuffer_.size());
++    mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
++    const int bytes = static_cast<int>(frames * 2 * sizeof(float));
++    if (!SDL_PutAudioStreamData(stream_, mixBuffer_.data(), bytes)) {
++        std::fprintf(stderr, "sotc-viewer: audio: stream push failed: %s\n",
++                     SDL_GetError());
++        SDL_DestroyAudioStream(stream_);
++        stream_ = nullptr;
++    }
++}
++
++void AudioEngine::top_up() {
++    // Keep ~3 blocks (50 ms) queued. Without this the 60 Hz producer supplies
++    // one block per frame against a ~20 ms device buffer and the beat between
++    // producer and consumer starves the stream (SDL pads silence: clicks).
++    for (int block = 0; stream_ != nullptr && block < kMaxTopUpBlocks; ++block) {
++        const int queued = SDL_GetAudioStreamQueued(stream_);
++        if (queued < 0 || queued >= kMaxQueuedBytes || queued >= kTargetQueuedBytes) {
++            return;
++        }
++        push_block(kBlockFrames);
++    }
++}
++
++void AudioEngine::clear_stream() {
++    if (stream_ != nullptr) {
++        SDL_ClearAudioStream(stream_);
++    }
++}
++
+ void AudioEngine::ensure_device() {
+     if (deviceTried_) {
+         return;
+     }
+     deviceTried_ = true;
+ 
+     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+         std::fprintf(stderr, "sotc-viewer: audio: SDL audio init failed: %s\n",
+                      SDL_GetError());
+         return;
+@@ -409,70 +486,70 @@ void AudioEngine::ensure_device() {
+     if (!SDL_BindAudioStreams(device_, &stream_, 1)) {
+         std::fprintf(stderr, "sotc-viewer: audio: cannot bind stream: %s\n",
+                      SDL_GetError());
+         SDL_DestroyAudioStream(stream_);
+         stream_ = nullptr;
+         SDL_CloseAudioDevice(device_);
+         device_ = 0;
+         return;
+     }
+     SDL_SetAudioStreamGain(stream_, 1.0f);
++    // Prime before the device has a chance to run dry: the lead contains the
++    // voice that just started (play* opens after the slot is filled).
++    top_up();
+ }
+ 
+ void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg) {
+     if (!std::isfinite(dt) || dt <= 0.0f) {
+         return;
+     }
+     listenerPos_ = listenerPos;
+     listenerYawDeg_ = std::isfinite(listenerYawDeg) ? listenerYawDeg : 0.0f;
+ 
+-    ensure_device();
+-
+     const float clamped = std::min(dt, static_cast<float>(kMaxMixFrames) / 48000.0f);
+     const std::size_t frames = static_cast<std::size_t>(std::lround(clamped * 48000.0f));
+     if (frames == 0) {
+         return;
+     }
+-    mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+     if (stream_ == nullptr) {
+-        return;  // silent, already logged once
+-    }
+-    // Never let the device backlog grow: the simulation's clock is the mixer's.
+-    if (SDL_GetAudioStreamQueued(stream_) >= kMaxQueuedBytes) {
++        // Nothing has played yet: the mixer still advances on the simulation
++        // clock, but no audio device is opened by a headless timeline.
++        mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+         return;
+     }
+-    const int bytes = static_cast<int>(frames * 2 * sizeof(float));
+-    if (!SDL_PutAudioStreamData(stream_, mixBuffer_.data(), bytes)) {
+-        std::fprintf(stderr, "sotc-viewer: audio: stream push failed: %s\n",
+-                     SDL_GetError());
+-        SDL_DestroyAudioStream(stream_);
+-        stream_ = nullptr;
++    if (SDL_GetAudioStreamQueued(stream_) < kMaxQueuedBytes) {
++        push_block(frames);
++    } else {
++        // Backlog at the cap: keep the voices on the simulation clock and drop
++        // this block rather than grow the latency.
++        mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
+     }
++    top_up();
+ }
+ 
+ bool AudioEngine::render_mixdown(const std::string& path, int seconds) {
+     last_error_.clear();
+     if (seconds <= 0 || seconds > kMixdownSecondsCap) {
+         last_error_ = path + ": mixdown seconds must be in [1, " +
+                       std::to_string(kMixdownSecondsCap) + "]";
+         return false;
+     }
+ 
+     const std::size_t total_frames =
+         static_cast<std::size_t>(seconds) * 48000u;
+     std::vector<float> samples;
+     samples.reserve(total_frames * 2);
+     for (std::size_t done = 0; done < total_frames;
+-         done += static_cast<std::size_t>(kMixdownFramesStep)) {
+-        mix(mixBuffer_.data(), static_cast<std::size_t>(kMixdownFramesStep), listenerPos_,
++         done += static_cast<std::size_t>(kBlockFrames)) {
++        mix(mixBuffer_.data(), static_cast<std::size_t>(kBlockFrames), listenerPos_,
+             listenerYawDeg_);
+-        const std::size_t produced = static_cast<std::size_t>(kMixdownFramesStep) * 2;
++        const std::size_t produced = static_cast<std::size_t>(kBlockFrames) * 2;
+         samples.insert(samples.end(), mixBuffer_.begin(), mixBuffer_.begin() + produced);
+     }
+ 
+     std::string error;
+     if (!write_wav(path, samples, 2, 48000, &error)) {
+         last_error_ = error;
+         return false;
+     }
+     return true;
+ }
+diff --git a/app/src/audio.h b/app/src/audio.h
+index 2462aa8..5fd29c7 100644
+--- a/app/src/audio.h
++++ b/app/src/audio.h
+@@ -42,98 +42,113 @@ public:
+     // 32 voices: slot 0 music, slot 1 ambience, 2..31 SFX.
+     static constexpr int kMaxVoices = 32;
+     static constexpr int kMaxSfxVoices = kMaxVoices - 2;
+ 
+     AudioEngine();
+     ~AudioEngine();
+     AudioEngine(const AudioEngine&) = delete;
+     AudioEngine& operator=(const AudioEngine&) = delete;
+ 
+     // Parses `manifestPath` (R1 `key=value` lines) and loads every entry's WAV
+-    // from `libraryRoot + "/" + file`. A duplicate name, a malformed line or a
+-    // missing/unsupported file returns false with the offending name/path in
+-    // `last_error()`; a missing manifest leaves the engine empty and warns
+-    // once. A failed load leaves the previous clip set and voices untouched —
+-    // the load is transactional. `gain_db` is provenance only (R12): the clip
+-    // is never rescaled.
++    // from `libraryRoot + "/" + file`. A duplicate name, a malformed line, an
++    // absolute `file=` or a missing/unsupported file returns false with the
++    // offending name/path in `last_error()`; a parse/load failure is
++    // transactional (the previous clip set and voices stay untouched), while a
++    // missing manifest empties the engine and warns once. `gain_db` is
++    // provenance only (R12): the clip is never rescaled.
+     bool load_manifest(const std::string& manifestPath, const std::string& libraryRoot);
+ 
+     bool has(const std::string& name) const;
+     std::size_t clip_count() const { return clips_.size(); }
+ 
+     // World SFX. `spatial` true applies distance attenuation and pan; false
+     // plays centred. A voice at 0 m is unattenuated and centred. `gain` is
+     // clamped into [0, 1]; the category gain is applied on top.
+     void play(const std::string& name, const Vec3& position, float gain = 1.0f,
+               bool spatial = true);
+     // Centred SFX (UI/player-local) — same SFX pool as `play`.
+     void play_ui(const std::string& name, float gain = 1.0f);
+     // Slot 0; a second call replaces the current music.
+     void play_music(const std::string& name, float gain = 1.0f);
+     void stop_music();
+     // Slot 1; a second call replaces the current ambience.
+     void play_ambience(const std::string& name, float gain = 1.0f);
+ 
+-    // Stops every voice (music included); the mute state is kept.
++    // Stops every voice (music included) and clears queued device audio; the
++    // mute state is kept.
+     void reset();
+     void set_muted(bool muted);
+     bool muted() const { return muted_; }
+ 
+-    // Mixes `dt` seconds and pushes to the device (lazy-open). `dt` is clamped
+-    // to [0, 1] s; a non-positive or non-finite dt is a no-op. The listener
+-    // pose is remembered for `render_mixdown`.
++    // Mixes `dt` seconds and tops up the device queue (the device itself opens
++    // on the first play* call). `dt` is clamped to [0, 1] s; a non-positive or
++    // non-finite dt is a no-op. The listener pose is remembered for
++    // `render_mixdown`.
+     void update(float dt, const Vec3& listenerPos, float listenerYawDeg);
+ 
+     // Runs the same mixer for `seconds` at dt = 1/60 (800 frames a step) and
+     // writes float32 stereo 48 kHz RIFF/WAVE to `path`. No device is opened.
+     // Uses the last listener pose passed to `update` (origin, yaw 0 by default).
+     bool render_mixdown(const std::string& path, int seconds);
+ 
+     // Introspection for tests and acceptance: active voice count, whether any
+-    // active voice plays `name`, and the last load/mixdown failure.
++    // active voice plays `name`, the device queue lead in bytes (0 when no
++    // device is open), and the last load/mixdown failure.
+     int active_voices() const;
+     bool is_playing(const std::string& name) const;
++    int queued_audio_bytes() const;
+     const std::string& last_error() const { return last_error_; }
+ 
+ private:
+     struct Voice {
+         const AudioClip* clip = nullptr;
+         AudioCategory category = AudioCategory::Sfx;
+         float gain = 1.0f;
+         bool spatial = true;
+         Vec3 position{};
+         std::size_t cursor = 0;  // frame index into the clip
+         std::uint64_t serial = 0;
+         bool active = false;
+     };
+ 
+     static constexpr std::size_t kMusicSlot = 0;
+     static constexpr std::size_t kAmbienceSlot = 1;
+     static constexpr std::size_t kFirstSfxSlot = 2;
+     // One second of headroom: `update` clamps dt here and the buffer is
+     // preallocated, so the per-frame mix never allocates.
+     static constexpr int kMaxMixFrames = 48000;
+-    static constexpr int kMixdownSecondsCap = 120;
++    // 600 s covers the full 125.93 s `music.boss` with room to spare: the S5
++    // acceptance can dump a whole encounter without truncation.
++    static constexpr int kMixdownSecondsCap = 600;
+ 
+     void start_voice(std::size_t slot, const AudioClip* clip, AudioCategory category,
+                      float gain, const Vec3& position, bool spatial);
+     void stop_slot(std::size_t slot);
+     void stop_all_voices();
+     const AudioClip* find_clip(const std::string& name) const;
+ 
+     // The pure mix: sums every active voice into `out` (interleaved stereo,
+     // `frames` frames), applies category gain, attenuation/pan, mute and the
+     // [-1, 1] clamp, and advances the voices' cursors.
+     void mix(float* out, std::size_t frames, const Vec3& listenerPos,
+              float listenerYawDeg);
+ 
+     void ensure_device();
++    // Mixes one 800-frame block and pushes it to the bound stream. A failed
++    // push destroys the stream (the engine stays silent, already logged once).
++    void push_block(std::size_t frames);
++    // Keeps ~3 blocks (50 ms) queued so the device never starves between
++    // frames; bounded by the 0.5 s cap and a small iteration guard.
++    void top_up();
++    // Drops queued device audio, so mute/stop/reset take effect immediately
++    // instead of trailing the prebuffer.
++    void clear_stream();
+     void warn_missing(const std::string& name);
+ 
+     std::unordered_map<std::string, AudioClip> clips_;
+     std::vector<Voice> voices_;
+     std::vector<float> mixBuffer_;  // kMaxMixFrames * 2, allocated once
+     std::unordered_set<std::string> warnedMissing_;
+     Vec3 listenerPos_{0.0f, 0.0f, 0.0f};
+     float listenerYawDeg_ = 0.0f;
+     std::uint64_t nextSerial_ = 0;
+     bool muted_ = false;
+diff --git a/app/src/wav_io.cpp b/app/src/wav_io.cpp
+index ce721ec..7be538f 100644
+--- a/app/src/wav_io.cpp
++++ b/app/src/wav_io.cpp
+@@ -1,15 +1,16 @@
+ #include "wav_io.h"
+ 
+ #include <bit>
+ #include <cstdint>
+ #include <cstring>
++#include <filesystem>
+ #include <fstream>
+ #include <limits>
+ #include <system_error>
+ #include <utility>
+ #include <vector>
+ 
+ namespace {
+ 
+ void set_error(std::string* error, std::string message) {
+     if (error != nullptr) {
+diff --git a/app/tests/test_audio.cpp b/app/tests/test_audio.cpp
+index 513c70c..eb445b8 100644
+--- a/app/tests/test_audio.cpp
++++ b/app/tests/test_audio.cpp
+@@ -18,20 +18,30 @@
+ #include <stdexcept>
+ #include <string>
+ #include <system_error>
+ #include <vector>
+ 
+ #include "audio.h"
+ #include "wav_io.h"
+ 
+ namespace {
+ 
++// Force SDL's dummy driver for the whole test binary: every play* call now
++// opens (and primes) a device, and the smoke test below needs a deterministic,
++// silent one. This runs during static initialization — before main and before
++// the first SDL audio init — so the driver choice is stable regardless of test
++// order. No other test in this binary initializes SDL audio.
++[[maybe_unused]] const bool kDummyAudioDriver = [] {
++    ::setenv("SDL_AUDIODRIVER", "dummy", 1);
++    return true;
++}();
++
+ // A scratch directory that deletes itself. The counter keeps the cases apart
+ // even when they run inside the same process.
+ class TempDir {
+ public:
+     TempDir() {
+         static int counter = 0;
+         path_ = std::filesystem::temp_directory_path() /
+                 ("sotc-audio-fixture-" + std::to_string(::getpid()) + "-" +
+                  std::to_string(++counter));
+         std::error_code ec;
+@@ -377,22 +387,22 @@ TEST_CASE("mute silences the mix") {
+     CHECK(engine.active_voices() == 0);
+ }
+ 
+ TEST_CASE("voice stealing keeps the newest") {
+     const TempDir dir;
+     std::vector<FixtureEntry> entries;
+     for (int i = 0; i < 33; ++i) {
+         const std::string name = "voice." + (i < 10 ? std::string("0") : std::string()) +
+                                  std::to_string(i);
+         const std::string file = "audio/test/" + name + ".wav";
+-        write_tone_wav(dir, file, 0.05f, 0.1f, 1);
+-        entries.push_back({name, file, 1, 2400, 0});
++        write_tone_wav(dir, file, 0.2f, 0.1f, 1);
++        entries.push_back({name, file, 1, 9600, 0});
+     }
+     const std::filesystem::path manifest = write_manifest(dir, entries);
+ 
+     AudioEngine engine;
+     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                     engine.last_error());
+     REQUIRE(engine.clip_count() == 33);
+     for (const FixtureEntry& entry : entries) {
+         engine.play_ui(entry.name);
+     }
+@@ -423,20 +433,31 @@ TEST_CASE("load_manifest rejects a duplicate or a missing file") {
+     SUBCASE("missing WAV") {
+         const TempDir dir;
+         const std::filesystem::path manifest =
+             write_manifest(dir, {{"ghost", "audio/test/ghost.wav", 1, 24000, 0}});
+ 
+         AudioEngine engine;
+         CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
+         CHECK(engine.last_error().find("ghost") != std::string::npos);
+         CHECK_FALSE(engine.has("ghost"));
+     }
++
++    SUBCASE("absolute file escapes the library") {
++        const TempDir dir;
++        const std::filesystem::path manifest =
++            write_manifest(dir, {{"escape", "/tmp/escape.wav", 1, 24000, 0}});
++
++        AudioEngine engine;
++        CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
++        CHECK(engine.last_error().find("libraryRoot-relative") != std::string::npos);
++        CHECK_FALSE(engine.has("escape"));
++    }
+ }
+ 
+ TEST_CASE("render_mixdown writes a 48 kHz float WAV") {
+     const TempDir dir;
+     write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
+     const std::filesystem::path manifest =
+         write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
+ 
+     AudioEngine engine;
+     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+@@ -492,28 +513,62 @@ TEST_CASE("music and ambience each own one replaceable voice") {
+     write_tone_wav(dir, "audio/test/music.wav", 0.5f, 0.2f, 2);
+     write_tone_wav(dir, "audio/test/wind.wav", 0.5f, 0.2f, 1);
+     const std::filesystem::path manifest =
+         write_manifest(dir, {{"music", "audio/test/music.wav", 2, 24000, 1},
+                              {"wind", "audio/test/wind.wav", 1, 24000, 1}});
+ 
+     AudioEngine engine;
+     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                     engine.last_error());
+     engine.play_music("music");
++    CHECK(engine.queued_audio_bytes() > 0);  // primed on the first play
+     engine.play_music("music");
+     CHECK(engine.active_voices() == 1);  // a second cue replaces the first
+     engine.play_ambience("wind");
+     CHECK(engine.active_voices() == 2);  // separate slots
+     engine.stop_music();
+     CHECK_FALSE(engine.is_playing("music"));
+     CHECK(engine.is_playing("wind"));
+     CHECK(engine.active_voices() == 1);
++    // stop_music drops the prebuffer so the cue stops now, not after the lead.
++    CHECK(engine.queued_audio_bytes() == 0);
++}
++
++TEST_CASE("the dummy device gets a primed lead and clears on mute") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/device.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"device", "audio/test/device.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    REQUIRE(engine.queued_audio_bytes() == 0);  // no device before a play
++
++    engine.play_ui("device");
++    CHECK(engine.active_voices() == 1);
++    CHECK(engine.queued_audio_bytes() > 0);  // ~3 blocks of lead
++
++    engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
++    CHECK(engine.queued_audio_bytes() > 0);  // top-up keeps the lead
++    CHECK(engine.active_voices() == 1);
++
++    engine.set_muted(true);
++    CHECK(engine.queued_audio_bytes() == 0);  // no mute trail
++    engine.set_muted(false);
++    engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
++    CHECK(engine.queued_audio_bytes() > 0);  // unmute keeps pushing
++
++    engine.reset();
++    CHECK(engine.queued_audio_bytes() == 0);  // reset clears too
++    engine.update(1.0f / 60.0f, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
++    CHECK(engine.queued_audio_bytes() > 0);  // top-up resumes even with no voice
+ }
+ 
+ TEST_CASE("the shipped audio manifest loads every entry") {
+     const std::filesystem::path library = test_library();
+     const std::filesystem::path manifest = library / "audio" / "audio.manifest";
+     REQUIRE_MESSAGE(std::filesystem::is_regular_file(manifest),
+                     ("missing " + manifest.string()).c_str());
+ 
+     AudioEngine engine;
+     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),

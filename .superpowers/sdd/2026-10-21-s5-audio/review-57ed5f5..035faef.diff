@@ -1,0 +1,1532 @@
+# Review package: 57ed5f5..HEAD
+
+## Commits
+035faef feat(app): the S5 audio engine
+
+## Files changed
+ app/CMakeLists.txt       |   7 +-
+ app/src/audio.cpp        | 478 ++++++++++++++++++++++++++++++++++++++++++
+ app/src/audio.h          | 144 +++++++++++++
+ app/src/wav_io.cpp       | 264 ++++++++++++++++++++++++
+ app/src/wav_io.h         |  24 +++
+ app/tests/test_audio.cpp | 526 +++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 1440 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index 41bc859..8a1e58c 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -1,21 +1,22 @@
+ cmake_minimum_required(VERSION 3.25)
+ project(sotc_viewer CXX)
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ find_package(SDL3 CONFIG REQUIRED)
+ find_package(SDL3_ttf CONFIG REQUIRED)
+ 
+ add_executable(sotc-viewer
+   src/main.cpp src/app.cpp src/asset_io.cpp src/renderer.cpp src/camera.cpp src/anim.cpp
+   src/manifest.cpp src/heightmap.cpp src/player.cpp src/collision.cpp src/grab.cpp
+-  src/player_state.cpp src/hud.cpp src/valus.cpp src/gamepad_map.h)
++  src/player_state.cpp src/hud.cpp src/valus.cpp src/audio.cpp src/wav_io.cpp
++  src/gamepad_map.h)
+ target_link_libraries(sotc-viewer PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+ target_include_directories(sotc-viewer PRIVATE third_party)
+ 
+ # Plan ruling R2: the Metal shaders are compiled by SDL at runtime from MSL
+ # source, so the build only copies `mesh.metal` and `hud.metal` next to the
+ # binary (the renderer locates them via SDL_GetBasePath()). No xcrun Metal
+ # toolchain needed. LINK_DEPENDS makes a shader-only edit relink the target,
+ # which reruns the POST_BUILD copy — without it the build directory would keep
+ # a stale shader.
+ set_property(TARGET sotc-viewer APPEND PROPERTY
+@@ -26,20 +27,20 @@ add_custom_command(TARGET sotc-viewer POST_BUILD
+           ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.metal
+           $<TARGET_FILE_DIR:sotc-viewer>/mesh.metal
+   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+           ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hud.metal
+           $<TARGET_FILE_DIR:sotc-viewer>/hud.metal)
+ 
+ enable_testing()
+ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/test_asset_io.cpp
+   tests/test_anim.cpp tests/test_manifest.cpp tests/test_heightmap.cpp tests/test_player.cpp
+   tests/test_grab.cpp tests/test_player_state.cpp tests/test_hud.cpp tests/test_valus.cpp
+-  tests/test_gamepad.cpp
++  tests/test_gamepad.cpp tests/test_audio.cpp
+   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
+   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
+-  src/gamepad_map.h)
++  src/audio.cpp src/wav_io.cpp src/gamepad_map.h)
+ target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+ target_include_directories(sotc-app-tests PRIVATE third_party src)
+ add_test(NAME unit_tests COMMAND sotc-app-tests)
+ add_test(NAME windowed_selftest COMMAND sotc-viewer --selftest)
+ set_tests_properties(windowed_selftest PROPERTIES
+   PASS_REGULAR_EXPRESSION "s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0")
+diff --git a/app/src/audio.cpp b/app/src/audio.cpp
+new file mode 100644
+index 0000000..9e2e138
+--- /dev/null
++++ b/app/src/audio.cpp
+@@ -0,0 +1,478 @@
++#include "audio.h"
++
++#include <SDL3/SDL.h>
++
++#include <algorithm>
++#include <cctype>
++#include <cmath>
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <system_error>
++#include <utility>
++#include <vector>
++
++#include "wav_io.h"
++
++namespace {
++
++constexpr float kCategoryGains[] = {0.7f, 0.5f, 1.0f};  // music, ambience, sfx
++constexpr float kReferenceDistance = 8.0f;              // attenuation 1/(1 + d/8)
++constexpr float kPanSpread = 0.7f;
++constexpr int kMixdownFramesStep = 800;                 // 1/60 s at 48 kHz
++constexpr int kMaxQueuedBytes = 48000 * 2 * 4 / 2;      // half a second of output
++
++float category_gain(AudioCategory category) {
++    return kCategoryGains[static_cast<int>(category)];
++}
++
++float sanitize_gain(float gain) {
++    if (!std::isfinite(gain)) {
++        return 0.0f;
++    }
++    return std::clamp(gain, 0.0f, 1.0f);
++}
++
++// Whitespace-separated tokens; `#` starts a comment. `\r` counts as
++// whitespace, so CRLF manifests parse.
++std::vector<std::string> split_tokens(const std::string& line) {
++    std::vector<std::string> tokens;
++    std::string token;
++    for (const char character : line) {
++        if (character == '#') {
++            break;
++        }
++        if (std::isspace(static_cast<unsigned char>(character)) != 0) {
++            if (!token.empty()) {
++                tokens.push_back(std::move(token));
++                token.clear();
++            }
++        } else {
++            token.push_back(character);
++        }
++    }
++    if (!token.empty()) {
++        tokens.push_back(std::move(token));
++    }
++    return tokens;
++}
++
++}  // namespace
++
++AudioEngine::AudioEngine() {
++    voices_.resize(kMaxVoices);
++    mixBuffer_.resize(static_cast<std::size_t>(kMaxMixFrames) * 2);
++}
++
++AudioEngine::~AudioEngine() {
++    if (stream_ != nullptr) {
++        SDL_DestroyAudioStream(stream_);
++        stream_ = nullptr;
++    }
++    if (device_ != 0) {
++        SDL_CloseAudioDevice(device_);
++        device_ = 0;
++    }
++}
++
++bool AudioEngine::load_manifest(const std::string& manifestPath,
++                                const std::string& libraryRoot) {
++    last_error_.clear();
++
++    auto fail = [this](const std::string& message) {
++        last_error_ = message;
++        std::fprintf(stderr, "sotc-viewer: audio: %s\n", message.c_str());
++        return false;
++    };
++
++    std::error_code file_error;
++    if (!std::filesystem::is_regular_file(manifestPath, file_error)) {
++        // A missing manifest degrades to silence with one warning; the engine
++        // is left empty rather than keeping a stale clip set.
++        stop_all_voices();
++        clips_.clear();
++        warnedMissing_.clear();
++        return fail(manifestPath + ": cannot open audio manifest");
++    }
++    std::ifstream in(manifestPath);
++    if (!in) {
++        stop_all_voices();
++        clips_.clear();
++        warnedMissing_.clear();
++        return fail(manifestPath + ": cannot open audio manifest");
++    }
++
++    std::unordered_map<std::string, AudioClip> loaded;
++    std::string line;
++    int line_number = 0;
++    while (std::getline(in, line)) {
++        ++line_number;
++        const std::vector<std::string> tokens = split_tokens(line);
++        if (tokens.empty()) {
++            continue;
++        }
++
++        std::unordered_map<std::string, std::string> fields;
++        for (const std::string& token : tokens) {
++            const std::size_t equals = token.find('=');
++            if (equals == std::string::npos || equals == 0) {
++                return fail(manifestPath + ":" + std::to_string(line_number) +
++                            ": expected key=value, got '" + token + "'");
++            }
++            fields.emplace(token.substr(0, equals), token.substr(equals + 1));
++        }
++
++        const auto version = fields.find("version");
++        if (version != fields.end() && version->second != "1") {
++            return fail(manifestPath + ":" + std::to_string(line_number) +
++                        ": unsupported audio manifest version '" + version->second + "'");
++        }
++        if (version != fields.end() && fields.find("name") == fields.end()) {
++            continue;  // the format line
++        }
++
++        const auto name_it = fields.find("name");
++        if (name_it == fields.end() || name_it->second.empty()) {
++            return fail(manifestPath + ":" + std::to_string(line_number) +
++                        ": audio entry has no name=");
++        }
++        const std::string& name = name_it->second;
++        if (loaded.find(name) != loaded.end()) {
++            return fail(manifestPath + ":" + std::to_string(line_number) +
++                        ": duplicate audio name '" + name + "'");
++        }
++
++        const auto file_it = fields.find("file");
++        if (file_it == fields.end() || file_it->second.empty()) {
++            return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
++                        "' has no file=");
++        }
++        const std::filesystem::path wav_path =
++            std::filesystem::path(libraryRoot) / file_it->second;
++
++        AudioClip clip;
++        std::string wav_error;
++        if (!read_wav(wav_path, clip, &wav_error)) {
++            return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
++                        "': " + wav_error);
++        }
++        if (clip.frames() == 0) {
++            return fail(manifestPath + ":" + std::to_string(line_number) + ": audio '" + name +
++                        "': " + wav_path.string() + " carries no sample frames");
++        }
++        const auto loop = fields.find("loop");
++        if (loop != fields.end() && loop->second == "1") {
++            clip.loop = true;
++        }
++        loaded.emplace(name, std::move(clip));
++    }
++    if (in.bad()) {
++        return fail(manifestPath + ": read error");
++    }
++
++    // Commit: the previous clip set stays untouched on any failure above, so a
++    // voice never outlives the samples it points at.
++    stop_all_voices();
++    clips_ = std::move(loaded);
++    warnedMissing_.clear();
++    return true;
++}
++
++bool AudioEngine::has(const std::string& name) const {
++    return clips_.find(name) != clips_.end();
++}
++
++const AudioClip* AudioEngine::find_clip(const std::string& name) const {
++    const auto it = clips_.find(name);
++    return it == clips_.end() ? nullptr : &it->second;
++}
++
++void AudioEngine::start_voice(std::size_t slot, const AudioClip* clip, AudioCategory category,
++                              float gain, const Vec3& position, bool spatial) {
++    Voice& voice = voices_[slot];
++    voice.clip = clip;
++    voice.category = category;
++    voice.gain = sanitize_gain(gain);
++    voice.spatial = spatial;
++    voice.position = position;
++    voice.cursor = 0;
++    voice.serial = nextSerial_++;
++    voice.active = clip != nullptr && clip->frames() > 0;
++}
++
++void AudioEngine::stop_slot(std::size_t slot) {
++    voices_[slot].active = false;
++    voices_[slot].clip = nullptr;
++}
++
++void AudioEngine::stop_all_voices() {
++    for (Voice& voice : voices_) {
++        voice.active = false;
++        voice.clip = nullptr;
++        voice.cursor = 0;
++    }
++}
++
++void AudioEngine::warn_missing(const std::string& name) {
++    if (warnedMissing_.insert(name).second) {
++        std::fprintf(stderr, "sotc-viewer: audio: no clip named '%s'\n", name.c_str());
++    }
++}
++
++void AudioEngine::play(const std::string& name, const Vec3& position, float gain,
++                       bool spatial) {
++    const AudioClip* clip = find_clip(name);
++    if (clip == nullptr || clip->frames() == 0) {
++        warn_missing(name);
++        return;
++    }
++
++    std::size_t slot = static_cast<std::size_t>(kMaxVoices);
++    for (std::size_t i = kFirstSfxSlot; i < static_cast<std::size_t>(kMaxVoices); ++i) {
++        if (!voices_[i].active) {
++            slot = i;
++            break;
++        }
++    }
++    if (slot == static_cast<std::size_t>(kMaxVoices)) {
++        // All SFX slots are busy: steal the oldest (smallest serial).
++        slot = kFirstSfxSlot;
++        for (std::size_t i = kFirstSfxSlot + 1; i < static_cast<std::size_t>(kMaxVoices);
++             ++i) {
++            if (voices_[i].serial < voices_[slot].serial) {
++                slot = i;
++            }
++        }
++    }
++    start_voice(slot, clip, AudioCategory::Sfx, gain, position, spatial);
++}
++
++void AudioEngine::play_ui(const std::string& name, float gain) {
++    play(name, Vec3{0.0f, 0.0f, 0.0f}, gain, /*spatial=*/false);
++}
++
++void AudioEngine::play_music(const std::string& name, float gain) {
++    const AudioClip* clip = find_clip(name);
++    if (clip == nullptr || clip->frames() == 0) {
++        warn_missing(name);
++        return;
++    }
++    // Slot 0 is a single voice: a new cue replaces the current music.
++    start_voice(kMusicSlot, clip, AudioCategory::Music, gain, Vec3{0.0f, 0.0f, 0.0f},
++                /*spatial=*/false);
++}
++
++void AudioEngine::stop_music() { stop_slot(kMusicSlot); }
++
++void AudioEngine::play_ambience(const std::string& name, float gain) {
++    const AudioClip* clip = find_clip(name);
++    if (clip == nullptr || clip->frames() == 0) {
++        warn_missing(name);
++        return;
++    }
++    start_voice(kAmbienceSlot, clip, AudioCategory::Ambience, gain,
++                Vec3{0.0f, 0.0f, 0.0f}, /*spatial=*/false);
++}
++
++void AudioEngine::reset() { stop_all_voices(); }
++
++void AudioEngine::set_muted(bool muted) { muted_ = muted; }
++
++int AudioEngine::active_voices() const {
++    int count = 0;
++    for (const Voice& voice : voices_) {
++        if (voice.active) {
++            ++count;
++        }
++    }
++    return count;
++}
++
++bool AudioEngine::is_playing(const std::string& name) const {
++    const AudioClip* clip = find_clip(name);
++    if (clip == nullptr) {
++        return false;
++    }
++    for (const Voice& voice : voices_) {
++        if (voice.active && voice.clip == clip) {
++            return true;
++        }
++    }
++    return false;
++}
++
++void AudioEngine::mix(float* out, std::size_t frames, const Vec3& listenerPos,
++                      float listenerYawDeg) {
++    const std::size_t sample_count = frames * 2;
++    std::fill(out, out + sample_count, 0.0f);
++
++    // Yaw 0 looks along +Z, so the listener's right is forward x +Y.
++    const float yaw_radians = listenerYawDeg * kDegToRad;
++    const Vec3 right{-std::cos(yaw_radians), 0.0f, std::sin(yaw_radians)};
++
++    for (Voice& voice : voices_) {
++        if (!voice.active) {
++            continue;
++        }
++        const AudioClip* clip = voice.clip;
++        if (clip == nullptr || clip->frames() == 0) {
++            voice.active = false;
++            continue;
++        }
++
++        float gain = voice.gain * category_gain(voice.category);
++        float left_gain = gain;
++        float right_gain = gain;
++        if (voice.spatial) {
++            const Vec3 delta{voice.position.x - listenerPos.x,
++                             voice.position.y - listenerPos.y,
++                             voice.position.z - listenerPos.z};
++            const float distance = std::sqrt(vec3_dot(delta, delta));
++            gain *= 1.0f / (1.0f + distance / kReferenceDistance);
++            const Vec3 direction =
++                distance > 0.0f ? Vec3{delta.x / distance, delta.y / distance,
++                                       delta.z / distance}
++                                : Vec3{0.0f, 0.0f, 0.0f};
++            const float pan =
++                std::clamp(vec3_dot(right, direction), -1.0f, 1.0f) * kPanSpread;
++            // Constant-power pan: centre is -3 dB on each side, hard pan puts
++            // the energy on one channel.
++            const float angle = (pan + 1.0f) * (kPi / 4.0f);
++            left_gain = gain * std::cos(angle);
++            right_gain = gain * std::sin(angle);
++        }
++
++        const std::size_t clip_frames = clip->frames();
++        const int channels = clip->channels;
++        std::size_t cursor = voice.cursor;
++        for (std::size_t frame = 0; frame < frames; ++frame) {
++            if (cursor >= clip_frames) {
++                if (clip->loop) {
++                    cursor %= clip_frames;
++                } else {
++                    voice.active = false;
++                    break;
++                }
++            }
++            const float* source =
++                clip->samples.data() + cursor * static_cast<std::size_t>(channels);
++            const std::size_t out_index = frame * 2;
++            if (channels == 1) {
++                out[out_index] += source[0] * left_gain;
++                out[out_index + 1] += source[0] * right_gain;
++            } else {
++                out[out_index] += source[0] * left_gain;
++                out[out_index + 1] += source[1] * right_gain;
++            }
++            ++cursor;
++        }
++        voice.cursor = cursor;
++    }
++
++    if (muted_) {
++        std::fill(out, out + sample_count, 0.0f);
++        return;
++    }
++    // The output stage is the only place samples are clamped: a loud stack may
++    // saturate but never leaves the float WAV's [-1, 1] range.
++    for (std::size_t i = 0; i < sample_count; ++i) {
++        const float sample = out[i];
++        out[i] = std::isfinite(sample) ? std::clamp(sample, -1.0f, 1.0f) : 0.0f;
++    }
++}
++
++void AudioEngine::ensure_device() {
++    if (deviceTried_) {
++        return;
++    }
++    deviceTried_ = true;
++
++    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
++        std::fprintf(stderr, "sotc-viewer: audio: SDL audio init failed: %s\n",
++                     SDL_GetError());
++        return;
++    }
++    device_ = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr);
++    if (device_ == 0) {
++        std::fprintf(stderr, "sotc-viewer: audio: no output device: %s\n", SDL_GetError());
++        return;
++    }
++    const SDL_AudioSpec source_format{SDL_AUDIO_F32, 2, 48000};
++    stream_ = SDL_CreateAudioStream(&source_format, nullptr);
++    if (stream_ == nullptr) {
++        std::fprintf(stderr, "sotc-viewer: audio: cannot create stream: %s\n",
++                     SDL_GetError());
++        SDL_CloseAudioDevice(device_);
++        device_ = 0;
++        return;
++    }
++    if (!SDL_BindAudioStreams(device_, &stream_, 1)) {
++        std::fprintf(stderr, "sotc-viewer: audio: cannot bind stream: %s\n",
++                     SDL_GetError());
++        SDL_DestroyAudioStream(stream_);
++        stream_ = nullptr;
++        SDL_CloseAudioDevice(device_);
++        device_ = 0;
++        return;
++    }
++    SDL_SetAudioStreamGain(stream_, 1.0f);
++}
++
++void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg) {
++    if (!std::isfinite(dt) || dt <= 0.0f) {
++        return;
++    }
++    listenerPos_ = listenerPos;
++    listenerYawDeg_ = std::isfinite(listenerYawDeg) ? listenerYawDeg : 0.0f;
++
++    ensure_device();
++
++    const float clamped = std::min(dt, static_cast<float>(kMaxMixFrames) / 48000.0f);
++    const std::size_t frames = static_cast<std::size_t>(std::lround(clamped * 48000.0f));
++    if (frames == 0) {
++        return;
++    }
++    mix(mixBuffer_.data(), frames, listenerPos_, listenerYawDeg_);
++    if (stream_ == nullptr) {
++        return;  // silent, already logged once
++    }
++    // Never let the device backlog grow: the simulation's clock is the mixer's.
++    if (SDL_GetAudioStreamQueued(stream_) >= kMaxQueuedBytes) {
++        return;
++    }
++    const int bytes = static_cast<int>(frames * 2 * sizeof(float));
++    if (!SDL_PutAudioStreamData(stream_, mixBuffer_.data(), bytes)) {
++        std::fprintf(stderr, "sotc-viewer: audio: stream push failed: %s\n",
++                     SDL_GetError());
++        SDL_DestroyAudioStream(stream_);
++        stream_ = nullptr;
++    }
++}
++
++bool AudioEngine::render_mixdown(const std::string& path, int seconds) {
++    last_error_.clear();
++    if (seconds <= 0 || seconds > kMixdownSecondsCap) {
++        last_error_ = path + ": mixdown seconds must be in [1, " +
++                      std::to_string(kMixdownSecondsCap) + "]";
++        return false;
++    }
++
++    const std::size_t total_frames =
++        static_cast<std::size_t>(seconds) * 48000u;
++    std::vector<float> samples;
++    samples.reserve(total_frames * 2);
++    for (std::size_t done = 0; done < total_frames;
++         done += static_cast<std::size_t>(kMixdownFramesStep)) {
++        mix(mixBuffer_.data(), static_cast<std::size_t>(kMixdownFramesStep), listenerPos_,
++            listenerYawDeg_);
++        const std::size_t produced = static_cast<std::size_t>(kMixdownFramesStep) * 2;
++        samples.insert(samples.end(), mixBuffer_.begin(), mixBuffer_.begin() + produced);
++    }
++
++    std::string error;
++    if (!write_wav(path, samples, 2, 48000, &error)) {
++        last_error_ = error;
++        return false;
++    }
++    return true;
++}
+diff --git a/app/src/audio.h b/app/src/audio.h
+new file mode 100644
+index 0000000..2462aa8
+--- /dev/null
++++ b/app/src/audio.h
+@@ -0,0 +1,144 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++#include "math3d.h"
++
++// S5 audio engine (design §7.4): a software mixer at 48 kHz float stereo that
++// reads the converter's R1 audio manifest (Task 3) and feeds one SDL3 audio
++// stream. The mix itself is pure math over preallocated buffers — no SDL call
++// and no allocation on the per-frame path — so `render_mixdown` drives exactly
++// what the device path pushes.
++//
++// The device is opened lazily on the first `update`; a failure stays silent and
++// logs once, never throwing. `render_mixdown` never opens a device.
++
++enum class AudioCategory { Music, Ambience, Sfx };
++
++// One decoded clip, interleaved float32 at 48 kHz. `loop` comes from the
++// manifest's `loop=` flag (the mixer wraps a cursor, not an SDL flag).
++struct AudioClip {
++    std::vector<float> samples;  // interleaved
++    int channels = 1;
++    int rate = 48000;
++    bool loop = false;
++
++    std::size_t frames() const {
++        return channels > 0 ? samples.size() / static_cast<std::size_t>(channels) : 0;
++    }
++};
++
++// Forwards the SDL audio types without pulling SDL into the mixer's header: the
++// engine only ever passes these handles through to audio.cpp.
++struct SDL_AudioStream;
++
++class AudioEngine {
++public:
++    // 32 voices: slot 0 music, slot 1 ambience, 2..31 SFX.
++    static constexpr int kMaxVoices = 32;
++    static constexpr int kMaxSfxVoices = kMaxVoices - 2;
++
++    AudioEngine();
++    ~AudioEngine();
++    AudioEngine(const AudioEngine&) = delete;
++    AudioEngine& operator=(const AudioEngine&) = delete;
++
++    // Parses `manifestPath` (R1 `key=value` lines) and loads every entry's WAV
++    // from `libraryRoot + "/" + file`. A duplicate name, a malformed line or a
++    // missing/unsupported file returns false with the offending name/path in
++    // `last_error()`; a missing manifest leaves the engine empty and warns
++    // once. A failed load leaves the previous clip set and voices untouched —
++    // the load is transactional. `gain_db` is provenance only (R12): the clip
++    // is never rescaled.
++    bool load_manifest(const std::string& manifestPath, const std::string& libraryRoot);
++
++    bool has(const std::string& name) const;
++    std::size_t clip_count() const { return clips_.size(); }
++
++    // World SFX. `spatial` true applies distance attenuation and pan; false
++    // plays centred. A voice at 0 m is unattenuated and centred. `gain` is
++    // clamped into [0, 1]; the category gain is applied on top.
++    void play(const std::string& name, const Vec3& position, float gain = 1.0f,
++              bool spatial = true);
++    // Centred SFX (UI/player-local) — same SFX pool as `play`.
++    void play_ui(const std::string& name, float gain = 1.0f);
++    // Slot 0; a second call replaces the current music.
++    void play_music(const std::string& name, float gain = 1.0f);
++    void stop_music();
++    // Slot 1; a second call replaces the current ambience.
++    void play_ambience(const std::string& name, float gain = 1.0f);
++
++    // Stops every voice (music included); the mute state is kept.
++    void reset();
++    void set_muted(bool muted);
++    bool muted() const { return muted_; }
++
++    // Mixes `dt` seconds and pushes to the device (lazy-open). `dt` is clamped
++    // to [0, 1] s; a non-positive or non-finite dt is a no-op. The listener
++    // pose is remembered for `render_mixdown`.
++    void update(float dt, const Vec3& listenerPos, float listenerYawDeg);
++
++    // Runs the same mixer for `seconds` at dt = 1/60 (800 frames a step) and
++    // writes float32 stereo 48 kHz RIFF/WAVE to `path`. No device is opened.
++    // Uses the last listener pose passed to `update` (origin, yaw 0 by default).
++    bool render_mixdown(const std::string& path, int seconds);
++
++    // Introspection for tests and acceptance: active voice count, whether any
++    // active voice plays `name`, and the last load/mixdown failure.
++    int active_voices() const;
++    bool is_playing(const std::string& name) const;
++    const std::string& last_error() const { return last_error_; }
++
++private:
++    struct Voice {
++        const AudioClip* clip = nullptr;
++        AudioCategory category = AudioCategory::Sfx;
++        float gain = 1.0f;
++        bool spatial = true;
++        Vec3 position{};
++        std::size_t cursor = 0;  // frame index into the clip
++        std::uint64_t serial = 0;
++        bool active = false;
++    };
++
++    static constexpr std::size_t kMusicSlot = 0;
++    static constexpr std::size_t kAmbienceSlot = 1;
++    static constexpr std::size_t kFirstSfxSlot = 2;
++    // One second of headroom: `update` clamps dt here and the buffer is
++    // preallocated, so the per-frame mix never allocates.
++    static constexpr int kMaxMixFrames = 48000;
++    static constexpr int kMixdownSecondsCap = 120;
++
++    void start_voice(std::size_t slot, const AudioClip* clip, AudioCategory category,
++                     float gain, const Vec3& position, bool spatial);
++    void stop_slot(std::size_t slot);
++    void stop_all_voices();
++    const AudioClip* find_clip(const std::string& name) const;
++
++    // The pure mix: sums every active voice into `out` (interleaved stereo,
++    // `frames` frames), applies category gain, attenuation/pan, mute and the
++    // [-1, 1] clamp, and advances the voices' cursors.
++    void mix(float* out, std::size_t frames, const Vec3& listenerPos,
++             float listenerYawDeg);
++
++    void ensure_device();
++    void warn_missing(const std::string& name);
++
++    std::unordered_map<std::string, AudioClip> clips_;
++    std::vector<Voice> voices_;
++    std::vector<float> mixBuffer_;  // kMaxMixFrames * 2, allocated once
++    std::unordered_set<std::string> warnedMissing_;
++    Vec3 listenerPos_{0.0f, 0.0f, 0.0f};
++    float listenerYawDeg_ = 0.0f;
++    std::uint64_t nextSerial_ = 0;
++    bool muted_ = false;
++    bool deviceTried_ = false;
++    std::uint32_t device_ = 0;
++    SDL_AudioStream* stream_ = nullptr;
++    std::string last_error_;
++};
+diff --git a/app/src/wav_io.cpp b/app/src/wav_io.cpp
+new file mode 100644
+index 0000000..ce721ec
+--- /dev/null
++++ b/app/src/wav_io.cpp
+@@ -0,0 +1,264 @@
++#include "wav_io.h"
++
++#include <bit>
++#include <cstdint>
++#include <cstring>
++#include <fstream>
++#include <limits>
++#include <system_error>
++#include <utility>
++#include <vector>
++
++namespace {
++
++void set_error(std::string* error, std::string message) {
++    if (error != nullptr) {
++        *error = std::move(message);
++    }
++}
++
++std::string path_error(const std::filesystem::path& path, const std::string& reason) {
++    return path.string() + ": " + reason;
++}
++
++std::uint16_t read_le16(const unsigned char* bytes) {
++    return static_cast<std::uint16_t>(bytes[0]) |
++           static_cast<std::uint16_t>(bytes[1] << 8);
++}
++
++std::uint32_t read_le32(const unsigned char* bytes) {
++    return static_cast<std::uint32_t>(bytes[0]) |
++           (static_cast<std::uint32_t>(bytes[1]) << 8) |
++           (static_cast<std::uint32_t>(bytes[2]) << 16) |
++           (static_cast<std::uint32_t>(bytes[3]) << 24);
++}
++
++void append_le16(std::vector<unsigned char>& out, std::uint16_t value) {
++    out.push_back(static_cast<unsigned char>(value & 0xFFu));
++    out.push_back(static_cast<unsigned char>((value >> 8) & 0xFFu));
++}
++
++void append_le32(std::vector<unsigned char>& out, std::uint32_t value) {
++    for (int shift = 0; shift < 32; shift += 8) {
++        out.push_back(static_cast<unsigned char>((value >> shift) & 0xFFu));
++    }
++}
++
++void append_id(std::vector<unsigned char>& out, const char* id) {
++    out.insert(out.end(), id, id + 4);
++}
++
++bool read_file(const std::filesystem::path& path, std::vector<unsigned char>& bytes,
++               std::string* error) {
++    std::error_code file_error;
++    if (!std::filesystem::is_regular_file(path, file_error)) {
++        set_error(error, path_error(path, "cannot open WAV file"));
++        return false;
++    }
++    std::ifstream in(path, std::ios::binary);
++    if (!in) {
++        set_error(error, path_error(path, "cannot open WAV file"));
++        return false;
++    }
++    in.seekg(0, std::ios::end);
++    const std::streamoff size = in.tellg();
++    if (size < 0) {
++        set_error(error, path_error(path, "read error"));
++        return false;
++    }
++    in.seekg(0, std::ios::beg);
++    bytes.resize(static_cast<std::size_t>(size));
++    if (!bytes.empty()) {
++        in.read(reinterpret_cast<char*>(bytes.data()), size);
++    }
++    if (!in) {
++        set_error(error, path_error(path, "read error"));
++        return false;
++    }
++    return true;
++}
++
++}  // namespace
++
++bool read_wav(const std::filesystem::path& path, AudioClip& out, std::string* error) {
++    std::vector<unsigned char> bytes;
++    if (!read_file(path, bytes, error)) {
++        return false;
++    }
++    if (bytes.size() < 12 || std::memcmp(bytes.data(), "RIFF", 4) != 0 ||
++        std::memcmp(bytes.data() + 8, "WAVE", 4) != 0) {
++        set_error(error, path_error(path, "not a RIFF/WAVE file"));
++        return false;
++    }
++
++    bool have_format = false;
++    bool have_data = false;
++    std::uint16_t format_tag = 0;
++    std::uint16_t channels = 0;
++    std::uint16_t block_align = 0;
++    std::uint16_t bits = 0;
++    std::uint32_t rate = 0;
++    const unsigned char* data = nullptr;
++    std::size_t data_bytes = 0;
++
++    std::size_t offset = 12;
++    while (offset + 8 <= bytes.size()) {
++        const unsigned char* header = bytes.data() + offset;
++        const std::uint32_t chunk_size = read_le32(header + 4);
++        const std::size_t payload = offset + 8;
++        if (chunk_size > bytes.size() - payload) {
++            set_error(error, path_error(path, "truncated WAV chunk"));
++            return false;
++        }
++        if (std::memcmp(header, "fmt ", 4) == 0) {
++            if (chunk_size < 16) {
++                set_error(error, path_error(path, "fmt chunk is shorter than 16 bytes"));
++                return false;
++            }
++            const unsigned char* fmt = bytes.data() + payload;
++            format_tag = read_le16(fmt + 0);
++            channels = read_le16(fmt + 2);
++            rate = read_le32(fmt + 4);
++            block_align = read_le16(fmt + 12);
++            bits = read_le16(fmt + 14);
++            if (format_tag == 0xFFFE) {  // WAVE_FORMAT_EXTENSIBLE: the sub-format GUID
++                if (chunk_size < 40) {   // starts with the ordinary format tag.
++                    set_error(error,
++                              path_error(path, "extensible fmt chunk is shorter than 40 bytes"));
++                    return false;
++                }
++                format_tag = read_le16(fmt + 24);
++            }
++            have_format = true;
++        } else if (std::memcmp(header, "data", 4) == 0) {
++            data = bytes.data() + payload;
++            data_bytes = chunk_size;
++            have_data = true;
++        }
++        // RIFF chunks are word-aligned: an odd payload is followed by a pad byte.
++        offset = payload + chunk_size + (chunk_size & 1u);
++    }
++
++    if (!have_format) {
++        set_error(error, path_error(path, "WAV has no fmt chunk"));
++        return false;
++    }
++    if (!have_data) {
++        set_error(error, path_error(path, "WAV has no data chunk"));
++        return false;
++    }
++    if (channels != 1 && channels != 2) {
++        set_error(error, path_error(path, "unsupported channel count " +
++                                             std::to_string(channels) +
++                                             " (mono or stereo only)"));
++        return false;
++    }
++    if (rate != 48000) {
++        set_error(error, path_error(path, "sample rate " + std::to_string(rate) +
++                                             " Hz is not 48 kHz (the mixer does not resample)"));
++        return false;
++    }
++    const bool is_float = format_tag == 3 && bits == 32;
++    const bool is_pcm16 = format_tag == 1 && bits == 16;
++    if (!is_float && !is_pcm16) {
++        set_error(error, path_error(path, "unsupported WAV encoding (format tag " +
++                                             std::to_string(format_tag) + ", " +
++                                             std::to_string(bits) + "-bit); float32 or PCM16"));
++        return false;
++    }
++    const std::size_t bytes_per_sample = is_float ? 4u : 2u;
++    const std::size_t frame_bytes = bytes_per_sample * channels;
++    if (block_align != frame_bytes) {
++        set_error(error, path_error(path, "fmt block alignment " +
++                                             std::to_string(block_align) +
++                                             " does not match " + std::to_string(channels) +
++                                             " x " + std::to_string(bytes_per_sample) + " bytes"));
++        return false;
++    }
++    if (data_bytes % frame_bytes != 0) {
++        set_error(error, path_error(path, "data chunk is not a whole number of frames"));
++        return false;
++    }
++    const std::size_t frames = data_bytes / frame_bytes;
++
++    out.samples.resize(frames * channels);
++    for (std::size_t i = 0; i < out.samples.size(); ++i) {
++        if (is_float) {
++            const std::uint32_t raw = read_le32(data + i * 4);
++            out.samples[i] = std::bit_cast<float>(raw);
++        } else {
++            const auto raw = static_cast<std::int16_t>(read_le16(data + i * 2));
++            out.samples[i] = static_cast<float>(raw) / 32768.0f;
++        }
++    }
++    out.channels = static_cast<int>(channels);
++    out.rate = 48000;
++    out.loop = false;
++    return true;
++}
++
++bool write_wav(const std::filesystem::path& path, const std::vector<float>& samples,
++               int channels, int rate, std::string* error) {
++    if (channels != 1 && channels != 2) {
++        set_error(error, path_error(path, "channel count must be 1 or 2, got " +
++                                             std::to_string(channels)));
++        return false;
++    }
++    if (rate <= 0) {
++        set_error(error, path_error(path, "sample rate must be positive"));
++        return false;
++    }
++    if (samples.size() % static_cast<std::size_t>(channels) != 0) {
++        set_error(error, path_error(path, "sample count is not a whole number of frames"));
++        return false;
++    }
++    const std::size_t data_bytes = samples.size() * 4u;
++    if (data_bytes > std::numeric_limits<std::uint32_t>::max() - 36u) {
++        set_error(error, path_error(path, "too large for a RIFF/WAVE file"));
++        return false;
++    }
++
++    std::vector<unsigned char> bytes;
++    bytes.reserve(44 + data_bytes);
++    append_id(bytes, "RIFF");
++    append_le32(bytes, static_cast<std::uint32_t>(36 + data_bytes));
++    append_id(bytes, "WAVE");
++    append_id(bytes, "fmt ");
++    append_le32(bytes, 16);
++    append_le16(bytes, 3);  // IEEE float
++    append_le16(bytes, static_cast<std::uint16_t>(channels));
++    append_le32(bytes, static_cast<std::uint32_t>(rate));
++    const auto block_align =
++        static_cast<std::uint16_t>(channels * 4);
++    append_le32(bytes, static_cast<std::uint32_t>(rate) * block_align);
++    append_le16(bytes, block_align);
++    append_le16(bytes, 32);
++    append_id(bytes, "data");
++    append_le32(bytes, static_cast<std::uint32_t>(data_bytes));
++    for (const float sample : samples) {
++        append_le32(bytes, std::bit_cast<std::uint32_t>(sample));
++    }
++
++    const std::filesystem::path parent = path.parent_path();
++    if (!parent.empty()) {
++        std::error_code ec;
++        std::filesystem::create_directories(parent, ec);
++        if (ec) {
++            set_error(error, path_error(path, "cannot create " + parent.string() + ": " +
++                                                 ec.message()));
++            return false;
++        }
++    }
++    std::ofstream out(path, std::ios::binary | std::ios::trunc);
++    if (!out) {
++        set_error(error, path_error(path, "cannot open for writing"));
++        return false;
++    }
++    out.write(reinterpret_cast<const char*>(bytes.data()),
++              static_cast<std::streamsize>(bytes.size()));
++    if (!out) {
++        set_error(error, path_error(path, "write error"));
++        return false;
++    }
++    return true;
++}
+diff --git a/app/src/wav_io.h b/app/src/wav_io.h
+new file mode 100644
+index 0000000..0aba1e5
+--- /dev/null
++++ b/app/src/wav_io.h
+@@ -0,0 +1,24 @@
++#pragma once
++
++#include <cstddef>
++#include <filesystem>
++#include <string>
++#include <vector>
++
++#include "audio.h"
++
++// Minimal RIFF/WAVE I/O for the S5 audio slice. The mixer owns its own
++// 48 kHz float representation, so the reader accepts exactly what the
++// converter produces (IEEE float32, fmt tag 3) plus PCM16 (tag 1) for
++// robustness; mono or stereo, including the WAVE_FORMAT_EXTENSIBLE wrappers of
++// either. Any rate other than 48 kHz is an error — the mixer does not resample.
++
++// Reads `path` into `out` as interleaved float32. Returns false and fills
++// `error` (when non-null) with a message that names the path and the reason.
++bool read_wav(const std::filesystem::path& path, AudioClip& out,
++              std::string* error = nullptr);
++
++// Writes interleaved float32 frames as a RIFF/WAVE file (fmt tag 3). The
++// mixdown calls this with 2 channels at 48000; tests use it to build monos.
++bool write_wav(const std::filesystem::path& path, const std::vector<float>& samples,
++               int channels, int rate, std::string* error = nullptr);
+diff --git a/app/tests/test_audio.cpp b/app/tests/test_audio.cpp
+new file mode 100644
+index 0000000..513c70c
+--- /dev/null
++++ b/app/tests/test_audio.cpp
+@@ -0,0 +1,526 @@
++// Audio-engine tests (S5 Task 4): the mixer is pure math over preallocated
++// buffers, so every case here runs headless — `render_mixdown` drives the same
++// mix the device path pushes, and no SDL audio device is ever opened. Fixtures
++// are real RIFF/WAVE files written with `wav_io`, plus a temp R1 manifest, so
++// the load path (libraryRoot-relative `file=`) is exercised too.
++#include <doctest.h>
++
++#include <unistd.h>
++
++#include <algorithm>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <stdexcept>
++#include <string>
++#include <system_error>
++#include <vector>
++
++#include "audio.h"
++#include "wav_io.h"
++
++namespace {
++
++// A scratch directory that deletes itself. The counter keeps the cases apart
++// even when they run inside the same process.
++class TempDir {
++public:
++    TempDir() {
++        static int counter = 0;
++        path_ = std::filesystem::temp_directory_path() /
++                ("sotc-audio-fixture-" + std::to_string(::getpid()) + "-" +
++                 std::to_string(++counter));
++        std::error_code ec;
++        std::filesystem::create_directories(path_, ec);
++        if (ec) {
++            throw std::runtime_error("cannot create fixture dir " + path_.string() + ": " +
++                                     ec.message());
++        }
++    }
++    ~TempDir() {
++        std::error_code ec;
++        std::filesystem::remove_all(path_, ec);  // best effort
++    }
++    TempDir(const TempDir&) = delete;
++    TempDir& operator=(const TempDir&) = delete;
++
++    const std::filesystem::path& path() const { return path_; }
++
++    std::filesystem::path make_parent(const std::string& relPath) const {
++        const std::filesystem::path full = path_ / relPath;
++        std::error_code ec;
++        std::filesystem::create_directories(full.parent_path(), ec);
++        if (ec) {
++            throw std::runtime_error("cannot create fixture dir " + full.parent_path().string() +
++                                     ": " + ec.message());
++        }
++        return full;
++    }
++
++private:
++    std::filesystem::path path_;
++};
++
++struct FixtureEntry {
++    std::string name;
++    std::string file;
++    int channels = 1;
++    std::size_t frames = 0;
++    int loop = 0;
++};
++
++// A 1 kHz sine, interleaved on `channels`. 48 kHz keeps every fixture on the
++// mixer's single rate; 1 kHz is far from the block boundaries, so a wrap or a
++// channel swap cannot hide in a zero crossing.
++std::vector<float> tone(float seconds, float amplitude, int channels) {
++    const std::size_t frames =
++        static_cast<std::size_t>(std::lround(seconds * 48000.0f));
++    std::vector<float> samples(frames * static_cast<std::size_t>(channels));
++    for (std::size_t frame = 0; frame < frames; ++frame) {
++        const float value =
++            amplitude * std::sin(2.0f * 3.14159265358979323846f * 1000.0f *
++                                 static_cast<float>(frame) / 48000.0f);
++        for (int channel = 0; channel < channels; ++channel) {
++            samples[frame * static_cast<std::size_t>(channels) +
++                   static_cast<std::size_t>(channel)] = value;
++        }
++    }
++    return samples;
++}
++
++void write_tone_wav(const TempDir& dir, const std::string& relPath, float seconds,
++                    float amplitude, int channels) {
++    const std::vector<float> samples = tone(seconds, amplitude, channels);
++    std::string error;
++    REQUIRE_MESSAGE(write_wav(dir.make_parent(relPath), samples, channels, 48000, &error),
++                    error);
++}
++
++// Writes the R1 manifest next to the fixture WAVs.
++std::filesystem::path write_manifest(const TempDir& dir, const std::vector<FixtureEntry>& entries) {
++    std::ofstream out(dir.path() / "audio.manifest");
++    REQUIRE(out.good());
++    out << "version=1\n";
++    for (const FixtureEntry& entry : entries) {
++        out << "name=" << entry.name << " bank=test file=" << entry.file
++            << " rate=48000 channels=" << entry.channels << " frames=" << entry.frames
++            << " seconds=" << (static_cast<double>(entry.frames) / 48000.0)
++            << " codec=psadpcm loop=" << entry.loop << " gain_db=-0.0873\n";
++    }
++    return dir.path() / "audio.manifest";
++}
++
++AudioClip read_mixdown(const std::filesystem::path& path) {
++    AudioClip clip;
++    std::string error;
++    REQUIRE_MESSAGE(read_wav(path, clip, &error), error);
++    REQUIRE(clip.channels == 2);
++    REQUIRE(clip.rate == 48000);
++    return clip;
++}
++
++float channel_rms(const AudioClip& clip, int channel) {
++    const std::size_t frames = clip.frames();
++    REQUIRE(frames > 0);
++    double sum = 0.0;
++    for (std::size_t frame = 0; frame < frames; ++frame) {
++        const double value =
++            clip.samples[frame * static_cast<std::size_t>(clip.channels) +
++                         static_cast<std::size_t>(channel)];
++        sum += value * value;
++    }
++    return static_cast<float>(std::sqrt(sum / static_cast<double>(frames)));
++}
++
++float stereo_rms(const AudioClip& clip) {
++    const std::size_t frames = clip.frames();
++    REQUIRE(frames > 0);
++    double sum = 0.0;
++    for (std::size_t frame = 0; frame < frames; ++frame) {
++        for (int channel = 0; channel < 2; ++channel) {
++            const double value =
++                clip.samples[frame * 2 + static_cast<std::size_t>(channel)];
++            sum += value * value;
++        }
++    }
++    return static_cast<float>(std::sqrt(sum / static_cast<double>(frames * 2)));
++}
++
++float peak(const AudioClip& clip) {
++    float maximum = 0.0f;
++    for (const float sample : clip.samples) {
++        maximum = std::max(maximum, std::fabs(sample));
++    }
++    return maximum;
++}
++
++// RMS over the second half of the clip — the loop test's window.
++float second_half_rms(const AudioClip& clip) {
++    const std::size_t frames = clip.frames();
++    REQUIRE(frames > 1);
++    double sum = 0.0;
++    std::size_t count = 0;
++    for (std::size_t frame = frames / 2; frame < frames; ++frame) {
++        for (int channel = 0; channel < clip.channels; ++channel) {
++            const double value =
++                clip.samples[frame * static_cast<std::size_t>(clip.channels) +
++                             static_cast<std::size_t>(channel)];
++            sum += value * value;
++            ++count;
++        }
++    }
++    return static_cast<float>(std::sqrt(sum / static_cast<double>(count)));
++}
++
++std::uint32_t read_le32(const unsigned char* bytes) {
++    return static_cast<std::uint32_t>(bytes[0]) |
++           (static_cast<std::uint32_t>(bytes[1]) << 8) |
++           (static_cast<std::uint32_t>(bytes[2]) << 16) |
++           (static_cast<std::uint32_t>(bytes[3]) << 24);
++}
++
++std::uint16_t read_le16(const unsigned char* bytes) {
++    return static_cast<std::uint16_t>(bytes[0]) |
++           static_cast<std::uint16_t>(bytes[1] << 8);
++}
++
++void append_le16(std::vector<unsigned char>& out, std::uint16_t value) {
++    out.push_back(static_cast<unsigned char>(value & 0xFFu));
++    out.push_back(static_cast<unsigned char>((value >> 8) & 0xFFu));
++}
++
++void append_le32(std::vector<unsigned char>& out, std::uint32_t value) {
++    for (int shift = 0; shift < 32; shift += 8) {
++        out.push_back(static_cast<unsigned char>((value >> shift) & 0xFFu));
++    }
++}
++
++void append_id(std::vector<unsigned char>& out, const char* id) {
++    out.insert(out.end(), id, id + 4);
++}
++
++// A PCM16 RIFF/WAVE fixture, for the reader's compatibility path. Written by
++// hand because `wav_io`'s writer is float-only by design.
++std::filesystem::path write_pcm16_wav(const TempDir& dir, const std::string& relPath,
++                                      const std::vector<float>& samples, int channels,
++                                      int rate) {
++    const std::filesystem::path path = dir.make_parent(relPath);
++    const std::uint32_t data_bytes =
++        static_cast<std::uint32_t>(samples.size() * 2);
++    const std::uint16_t block_align =
++        static_cast<std::uint16_t>(channels * 2);
++    std::vector<unsigned char> bytes;
++    append_id(bytes, "RIFF");
++    append_le32(bytes, 36 + data_bytes);
++    append_id(bytes, "WAVE");
++    append_id(bytes, "fmt ");
++    append_le32(bytes, 16);
++    append_le16(bytes, 1);  // PCM
++    append_le16(bytes, static_cast<std::uint16_t>(channels));
++    append_le32(bytes, static_cast<std::uint32_t>(rate));
++    append_le32(bytes, static_cast<std::uint32_t>(rate * block_align));
++    append_le16(bytes, block_align);
++    append_le16(bytes, 16);
++    append_id(bytes, "data");
++    append_le32(bytes, data_bytes);
++    for (const float sample : samples) {
++        const auto value = static_cast<std::int16_t>(
++            std::lround(std::clamp(sample, -1.0f, 1.0f) * 32767.0f));
++        append_le16(bytes, static_cast<std::uint16_t>(value));
++    }
++    std::ofstream out(path, std::ios::binary);
++    REQUIRE(out.good());
++    out.write(reinterpret_cast<const char*>(bytes.data()),
++              static_cast<std::streamsize>(bytes.size()));
++    REQUIRE(out.good());
++    return path;
++}
++
++std::filesystem::path test_library() {
++    const char* value = std::getenv("SOTC_LIB");
++    if (value == nullptr || value[0] == '\0') {
++        throw std::runtime_error("Set SOTC_LIB to the converted asset library.");
++    }
++    std::filesystem::path library = value;
++    if (library.is_relative()) {
++        const std::filesystem::path repo_root =
++            std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
++        library = repo_root / library;
++    }
++    return library;
++}
++
++}  // namespace
++
++TEST_CASE("mixdown of a played tone is non-silent and does not clip") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    REQUIRE(engine.has("tone"));
++    CHECK(engine.clip_count() == 1);
++
++    engine.play_ui("tone");
++    const std::filesystem::path mix = dir.path() / "mix.wav";
++    REQUIRE_MESSAGE(engine.render_mixdown(mix.string(), 1), engine.last_error());
++
++    const AudioClip clip = read_mixdown(mix);
++    CHECK(clip.frames() == 48000);
++    CHECK(channel_rms(clip, 0) > 0.05f);
++    CHECK(channel_rms(clip, 1) > 0.05f);
++    CHECK(peak(clip) <= 1.0f);
++    CHECK(peak(clip) > 0.1f);
++}
++
++TEST_CASE("pan moves the energy between channels") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++
++    // Listener yaw 0 looks along +Z, so its right is -X: +X is the left side.
++    engine.play("tone", Vec3{4.0f, 0.0f, 0.0f}, 1.0f);
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "left.wav").string(), 1),
++                    engine.last_error());
++    const AudioClip left = read_mixdown(dir.path() / "left.wav");
++    CHECK(channel_rms(left, 0) > channel_rms(left, 1) * 1.5f);
++
++    engine.reset();
++    engine.play("tone", Vec3{-4.0f, 0.0f, 0.0f}, 1.0f);
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "right.wav").string(), 1),
++                    engine.last_error());
++    const AudioClip right = read_mixdown(dir.path() / "right.wav");
++    CHECK(channel_rms(right, 1) > channel_rms(right, 0) * 1.5f);
++}
++
++TEST_CASE("distance attenuates a spatial voice") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++
++    engine.play("tone", Vec3{0.0f, 0.0f, 1.0f}, 1.0f);
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "near.wav").string(), 1),
++                    engine.last_error());
++    const float near_rms = stereo_rms(read_mixdown(dir.path() / "near.wav"));
++
++    engine.reset();
++    engine.play("tone", Vec3{0.0f, 0.0f, 20.0f}, 1.0f);
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "far.wav").string(), 1),
++                    engine.last_error());
++    const float far_rms = stereo_rms(read_mixdown(dir.path() / "far.wav"));
++
++    REQUIRE(near_rms > 0.0f);
++    REQUIRE(far_rms > 0.0f);
++    // 1/(1 + 1/8) over 1/(1 + 20/8) = 3.111...
++    CHECK(near_rms / far_rms == doctest::Approx(3.5f / 1.125f).epsilon(0.02));
++}
++
++TEST_CASE("a looping voice wraps and keeps sounding") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/loop.wav", 0.1f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"loop", "audio/test/loop.wav", 1, 4800, 1}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    engine.play_ui("loop");
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "loop.wav").string(), 1),
++                    engine.last_error());
++
++    const AudioClip clip = read_mixdown(dir.path() / "loop.wav");
++    CHECK(second_half_rms(clip) > 0.05f);
++    CHECK(engine.active_voices() == 1);
++}
++
++TEST_CASE("mute silences the mix") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    engine.play_ui("tone");
++    engine.set_muted(true);
++    CHECK(engine.muted());
++
++    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / "muted.wav").string(), 1),
++                    engine.last_error());
++    const AudioClip clip = read_mixdown(dir.path() / "muted.wav");
++    REQUIRE(!clip.samples.empty());
++    for (const float sample : clip.samples) {
++        CHECK(sample == 0.0f);
++    }
++
++    // reset stops voices but keeps the mute state.
++    engine.reset();
++    CHECK(engine.muted());
++    CHECK(engine.active_voices() == 0);
++}
++
++TEST_CASE("voice stealing keeps the newest") {
++    const TempDir dir;
++    std::vector<FixtureEntry> entries;
++    for (int i = 0; i < 33; ++i) {
++        const std::string name = "voice." + (i < 10 ? std::string("0") : std::string()) +
++                                 std::to_string(i);
++        const std::string file = "audio/test/" + name + ".wav";
++        write_tone_wav(dir, file, 0.05f, 0.1f, 1);
++        entries.push_back({name, file, 1, 2400, 0});
++    }
++    const std::filesystem::path manifest = write_manifest(dir, entries);
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    REQUIRE(engine.clip_count() == 33);
++    for (const FixtureEntry& entry : entries) {
++        engine.play_ui(entry.name);
++    }
++
++    // 30 SFX slots: the first three voices were stolen, the newest survives.
++    CHECK(engine.active_voices() == 30);
++    CHECK_FALSE(engine.is_playing("voice.00"));
++    CHECK_FALSE(engine.is_playing("voice.02"));
++    CHECK(engine.is_playing("voice.03"));
++    CHECK(engine.is_playing("voice.32"));
++}
++
++TEST_CASE("load_manifest rejects a duplicate or a missing file") {
++    SUBCASE("duplicate name") {
++        const TempDir dir;
++        write_tone_wav(dir, "audio/test/tone.wav", 0.5f, 0.5f, 1);
++        write_tone_wav(dir, "audio/test/tone2.wav", 0.5f, 0.5f, 1);
++        const std::filesystem::path manifest =
++            write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 24000, 0},
++                                 {"tone", "audio/test/tone2.wav", 1, 24000, 0}});
++
++        AudioEngine engine;
++        CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
++        CHECK(engine.last_error().find("tone") != std::string::npos);
++        CHECK_FALSE(engine.has("tone"));
++    }
++
++    SUBCASE("missing WAV") {
++        const TempDir dir;
++        const std::filesystem::path manifest =
++            write_manifest(dir, {{"ghost", "audio/test/ghost.wav", 1, 24000, 0}});
++
++        AudioEngine engine;
++        CHECK_FALSE(engine.load_manifest(manifest.string(), dir.path().string()));
++        CHECK(engine.last_error().find("ghost") != std::string::npos);
++        CHECK_FALSE(engine.has("ghost"));
++    }
++}
++
++TEST_CASE("render_mixdown writes a 48 kHz float WAV") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/tone.wav", 2.0f, 0.5f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"tone", "audio/test/tone.wav", 1, 96000, 0}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    engine.play_ui("tone");
++    const std::filesystem::path mix = dir.path() / "header.wav";
++    REQUIRE_MESSAGE(engine.render_mixdown(mix.string(), 1), engine.last_error());
++
++    std::ifstream in(mix, std::ios::binary);
++    REQUIRE(in.good());
++    unsigned char header[40] = {};
++    in.read(reinterpret_cast<char*>(header), sizeof(header));
++    REQUIRE(static_cast<std::size_t>(in.gcount()) == sizeof(header));
++
++    CHECK(std::memcmp(header + 0, "RIFF", 4) == 0);
++    CHECK(std::memcmp(header + 8, "WAVE", 4) == 0);
++    CHECK(std::memcmp(header + 12, "fmt ", 4) == 0);
++    CHECK(read_le32(header + 16) == 16);
++    CHECK(read_le16(header + 20) == 3);       // IEEE float
++    CHECK(read_le16(header + 22) == 2);       // stereo
++    CHECK(read_le32(header + 24) == 48000);   // rate
++    CHECK(read_le16(header + 34) == 32);      // bits per sample
++    CHECK(std::memcmp(header + 36, "data", 4) == 0);
++    // 44-byte header + one second of stereo float32 frames.
++    CHECK(std::filesystem::file_size(mix) == 44u + 48000u * 2u * 4u);
++}
++
++TEST_CASE("wav_io reads PCM16 and refuses a non-48 kHz rate") {
++    const TempDir dir;
++    const std::vector<float> samples = tone(0.25f, 0.5f, 1);
++    const std::filesystem::path pcm_path =
++        write_pcm16_wav(dir, "audio/test/pcm16.wav", samples, 1, 48000);
++
++    AudioClip clip;
++    std::string error;
++    REQUIRE_MESSAGE(read_wav(pcm_path, clip, &error), error);
++    CHECK(clip.channels == 1);
++    CHECK(clip.rate == 48000);
++    REQUIRE(clip.samples.size() == samples.size());
++    for (std::size_t i = 0; i < samples.size(); i += 97) {
++        CHECK(clip.samples[i] == doctest::Approx(samples[i]).epsilon(0.001));
++    }
++
++    const std::filesystem::path wrong_rate =
++        write_pcm16_wav(dir, "audio/test/44100.wav", samples, 1, 44100);
++    AudioClip rejected;
++    CHECK_FALSE(read_wav(wrong_rate, rejected, &error));
++    CHECK(error.find("48") != std::string::npos);
++}
++
++TEST_CASE("music and ambience each own one replaceable voice") {
++    const TempDir dir;
++    write_tone_wav(dir, "audio/test/music.wav", 0.5f, 0.2f, 2);
++    write_tone_wav(dir, "audio/test/wind.wav", 0.5f, 0.2f, 1);
++    const std::filesystem::path manifest =
++        write_manifest(dir, {{"music", "audio/test/music.wav", 2, 24000, 1},
++                             {"wind", "audio/test/wind.wav", 1, 24000, 1}});
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
++                    engine.last_error());
++    engine.play_music("music");
++    engine.play_music("music");
++    CHECK(engine.active_voices() == 1);  // a second cue replaces the first
++    engine.play_ambience("wind");
++    CHECK(engine.active_voices() == 2);  // separate slots
++    engine.stop_music();
++    CHECK_FALSE(engine.is_playing("music"));
++    CHECK(engine.is_playing("wind"));
++    CHECK(engine.active_voices() == 1);
++}
++
++TEST_CASE("the shipped audio manifest loads every entry") {
++    const std::filesystem::path library = test_library();
++    const std::filesystem::path manifest = library / "audio" / "audio.manifest";
++    REQUIRE_MESSAGE(std::filesystem::is_regular_file(manifest),
++                    ("missing " + manifest.string()).c_str());
++
++    AudioEngine engine;
++    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
++                    engine.last_error());
++    CHECK(engine.clip_count() == 8);
++    for (const char* name : {"valus.hurt", "valus.impact", "valus.telegraph", "player.death",
++                             "player.hit", "player.swing", "player.hurt", "music.boss"}) {
++        CHECK_MESSAGE(engine.has(name), name);
++    }
++}

@@ -57,6 +57,9 @@ Codec
 Usage
   python3 tools/re/audio/s5_decode_gate.py --root "$SOTC_GAME_ROOT" \
       --out out/s5/gate --check
+
+  Requires Python 3.8+ and `numpy` (the 0x42 analysis reads the ffmpeg float
+  stream with it); `ffmpeg` with its built-in `atrac9` decoder must be on PATH.
 """
 
 from __future__ import annotations
@@ -361,7 +364,11 @@ def write_wav_s16(path, channels, rate, samples_per_channel):
 
 
 def analyze_f32(raw_path, wav_path, channels, rate, expected_frames):
-    import numpy as np
+    try:
+        import numpy as np
+    except ImportError as error:  # one line, not a traceback
+        raise GateError(
+            "analysis needs numpy (pip install numpy); required by analyze_f32") from error
 
     data = np.fromfile(raw_path, dtype="<f4")
     if data.size % channels:

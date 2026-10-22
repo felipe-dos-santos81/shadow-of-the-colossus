@@ -15,7 +15,7 @@
 // and no allocation on the per-frame path — so `render_mixdown` drives exactly
 // what the device path pushes.
 //
-// The device is opened lazily on the first `update`; a failure stays silent and
+// The device is opened lazily on the first `play*`; a failure stays silent and
 // logs once, never throwing. `render_mixdown` never opens a device.
 
 enum class AudioCategory { Music, Ambience, Sfx };
@@ -78,6 +78,10 @@ public:
     void play_ui(const std::string& name, float gain = 1.0f);
     // Slot 0; a second call replaces the current music.
     void play_music(const std::string& name, float gain = 1.0f);
+    // Stops the music voice only while it is live, and leaves the queued device
+    // mix to drain: the frame that stops the music may also have queued the
+    // SFX that caused the stop. Idempotent. `reset` and `set_muted(true)` are
+    // the calls that drop the queue.
     void stop_music();
     // Slot 1; a second call replaces the current ambience.
     void play_ambience(const std::string& name, float gain = 1.0f);
@@ -161,8 +165,8 @@ private:
     // Keeps ~3 blocks (50 ms) queued so the device never starves between
     // frames; bounded by the 0.5 s cap and a small iteration guard.
     void top_up();
-    // Drops queued device audio, so mute/stop/reset take effect immediately
-    // instead of trailing the prebuffer.
+    // Drops queued device audio, so mute/reset take effect immediately instead
+    // of trailing the prebuffer. `stop_music` deliberately does not come here.
     void clear_stream();
     void warn_missing(const std::string& name);
 

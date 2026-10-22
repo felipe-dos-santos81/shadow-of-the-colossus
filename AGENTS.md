@@ -12,7 +12,7 @@ The encounter now has the game's own voice: `bp-convert audio` decodes the seven
 plus `Boss 1` from the SXDF/SXDS banks at build time into `out/library/audio/` (48 kHz WAV +
 `audio.manifest`), and the viewer mixes them (32 voices, distance attenuation and bearing pan for
 world sounds, `M` mute). Music starts on the first landed hit, loops, and stops at the `R` reset.
-The deterministic proof is `--s5-selftest --audio-mixdown out/s5/mix.wav` (18 ordered `s5-event`
+The deterministic proof is `--s5-selftest --audio-mixdown out/s5/mix.wav` (20 ordered `s5-event`
 lines over the unchanged S4.2 steps, the `s5-mix` line, `s5-status`); the acceptance script is
 `scripts/s5-acceptance.sh`, and the recorded numbers are in `docs/notes/s5-results.md`.
 S4.2/S4.1/S4/S3 acceptance regressions are green; the listening checklist (music start/loop/stop,
@@ -79,8 +79,8 @@ charge), `W`/`S` climb, `A`/`D` shimmy, `W+D` at the chest top branches to the r
 left stick move, right stick camera, RT grip, west/X/square strike, Start pause.
 
 The fight's audio loads from `<SOTC_LIB>/audio/audio.manifest` (convert it with the `bp-convert
-audio` command above); without it the game is silent with one warning, and an encounter that is
-missing a curated cue fails loudly.
+audio` command above); without it the interactive game warns once and runs silent, and an
+encounter that is missing a curated cue warns once and is silent (`--s5-selftest` is fatal).
 
 ## Acceptance
 

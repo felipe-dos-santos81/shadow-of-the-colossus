@@ -16,20 +16,24 @@
 #      under the library at 48 kHz with the channel count and duration the
 #      manifest claims;
 #   4. the deterministic audio timeline — `--s5-selftest --audio-mixdown
-#      out/s5/mix.wav` over the S4.2 encounter: exactly 18 ordered `s5-event`
+#      out/s5/mix.wav` over the S4.2 encounter: exactly 20 ordered `s5-event`
 #      lines parsed field by field (music on the first landed hit, a telegraph
 #      before each of the two stomp/club cycles, hurt light and heavy, the
-#      death, the music stop at the reset — not at the death), the `s5-mix`
-#      line, and `s5-status` last;
-#   5. the mixdown — pcm_f32le, 48 kHz stereo, 44.57 s; RMS/peak/loudest-window
+#      death, the music stop at the reset — not at the death — then the R18
+#      post-reset defeat phase: a second music_start and the stop the app's own
+#      `if (encounter.defeated) audio.stop_music()` makes), the `s5-mix` line,
+#      and `s5-status` last;
+#   5. the mixdown — pcm_f32le, 48 kHz stereo, 44.58 s; RMS/peak/loudest-window
 #      from the viewer's own accounting plus an independent ffmpeg `astats`
 #      pass (non-silent, peak below 0 dBFS, no NaN/Inf). The music alone tops
-#      out at 0.45 x 0.85 = ~0.38, so a peak >= 0.5 and a stomp window at least
-#      6 dB above a music-only window prove the SFX voices are in the mix, not
-#      just the score;
-#   6. the audio-off identity — `--s42-selftest` with no audio subsystem
-#      constructed, its `s42-*` lines diffed byte for byte against the S5 run's
-#      (empty: the audio layer is an additive observer, design D11);
+#      out at 0.45 x 0.7 x 0.85 = ~0.27, so a peak >= 0.5 and a stomp window at
+#      least 6 dB above a music-only window prove the SFX voices are in the
+#      mix, not just the score. Every decoded cue is also measured alone
+#      (`astats` per WAV: non-silent RMS, peak <= 0.99) so one quiet cue fails;
+#   6. the audio-off identity — `--s42-selftest` with no audio manifest loaded
+#      (the seam object exists; no clip is loaded and no device is opened), its
+#      `s42-*` lines diffed byte for byte against the S5 run's (empty: the audio
+#      layer is an additive observer, design D11);
 #   7. the S4.2 regression — `scripts/s42-acceptance.sh` unchanged (it runs
 #      S4.1, which runs S4, which runs S3), its final `PASS —` and its measured
 #      marginal frame cost. That pair is the **silent** render path (its
@@ -206,9 +210,26 @@ while IFS= read -r entry; do
   awk -v a="$probe_seconds" -v b="$seconds" '
     BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= 0.05) }' ||
     fail "ffprobe $wav: ${probe_seconds} s but the manifest claims ${seconds} s"
-  cue_rows="${cue_rows}${cue_rows:+, }${name} ${probe_seconds}s/${probe_channels}ch"
-  printf 's5-acceptance: cue %-16s %s s  %s ch  %s Hz  %s\n' \
-    "$name" "$probe_seconds" "$probe_channels" "$probe_rate" "$file"
+  # One quiet or hot cue must fail on its own: measure this WAV, not the mix.
+  # The delivered clips are normalized to peak <= 0.99 (-0.0873 dBFS), so a
+  # peak above -0.08 dBFS is a clipping bug, and RMS at/below -40 dBFS is a
+  # silent cue the manifest would happily list.
+  cue_stats="$(ffmpeg -hide_banner -nostats -i "$wav" \
+    -af astats=metadata=1:reset=0 -f null - 2>&1)" ||
+    fail "ffmpeg astats failed on $wav"
+  cue_overall="$(printf '%s\n' "$cue_stats" | awk '/\] Overall$/ { grab = 1; next } grab')"
+  [[ -n "$cue_overall" ]] || fail "ffmpeg astats printed no Overall block for $wav"
+  cue_peak="$(printf '%s\n' "$cue_overall" | awk -F': ' '/Peak level dB/ { print $2; exit }')"
+  cue_rms="$(printf '%s\n' "$cue_overall" | awk -F': ' '/RMS level dB/ { print $2; exit }')"
+  [[ -n "$cue_peak" && -n "$cue_rms" ]] ||
+    fail "could not parse the astats Overall block for $wav"
+  awk -v v="$cue_rms" 'BEGIN { exit !(v > -40.0 && v < 0.0) }' ||
+    fail "cue $name: RMS ${cue_rms} dBFS is outside (-40, 0) — silent or broken"
+  awk -v v="$cue_peak" 'BEGIN { exit !(v <= -0.08) }' ||
+    fail "cue $name: peak ${cue_peak} dBFS exceeds the 0.99 ceiling (-0.0873 dBFS)"
+  cue_rows="${cue_rows}${cue_rows:+, }${name} ${probe_seconds}s/${probe_channels}ch rms ${cue_rms} dB peak ${cue_peak} dB"
+  printf 's5-acceptance: cue %-16s %s s  %s ch  %s Hz  rms %s dB  peak %s dB  %s\n' \
+    "$name" "$probe_seconds" "$probe_channels" "$probe_rate" "$cue_rms" "$cue_peak" "$file"
 done < "$out_dir/manifest-entries.txt"
 
 # --- Step 4: the deterministic audio timeline ---------------------------------
@@ -231,10 +252,10 @@ printf '%s\n' "$selftest_out" | grep -E '^s5-event ' > "$events_file" || true
 # malformed or re-namespaced line instead of matching a substring.
 event_re='^s5-event t=[0-9]+\.[0-9][0-9][0-9] event=[a-z_]+ clip=[a-z_]+\.[a-z_]+ gain=[0-9]+\.[0-9][0-9]$'
 event_total="$(wc -l < "$events_file" | tr -d '[:space:]')"
-[[ "$event_total" = "18" ]] || fail "expected 18 s5-event lines, found $event_total"
+[[ "$event_total" = "20" ]] || fail "expected 20 s5-event lines, found $event_total"
 event_well_formed="$(grep -c -E "$event_re" "$events_file" || true)"
-[[ "$event_well_formed" = "18" ]] ||
-  fail "expected 18 well-formed s5-event lines (t=%.3f event=... clip=<manifest name> gain=%.2f), $event_well_formed of $event_total match"
+[[ "$event_well_formed" = "20" ]] ||
+  fail "expected 20 well-formed s5-event lines (t=%.3f event=... clip=<manifest name> gain=%.2f), $event_well_formed of $event_total match"
 
 # event_line EVENT — the 1-based line number of the first s5-event whose event=
 # is EVENT, empty when absent.
@@ -271,6 +292,21 @@ count_events() {
   ' "$events_file"
 }
 
+# event_lines EVENT — every 1-based line number naming EVENT, one per line.
+event_lines() {
+  awk -v want="$1" '
+    $1 == "s5-event" {
+      name = $3; sub(/^event=/, "", name)
+      if (name == want) print NR
+    }
+  ' "$events_file"
+}
+
+# event_value_at LINE KEY — the KEY= value on a specific s5-event line.
+event_value_at() {
+  sed -n "${1}p" "$events_file" | sed -n "s/.* $2=\([^ ]*\).*/\1/p"
+}
+
 for name in strike strike_hit valus_reaction music_start stomp_start stomp_impact \
   hurt_light club_start club_impact hurt_heavy death music_stop; do
   [[ -n "$(event_line "$name")" ]] || fail "missing s5-event $name"
@@ -289,8 +325,8 @@ music_start_t="$(event_field music_start t)"
   fail "music_start (line $music_start_line) is not after the first strike_hit (line $first_hit_line)"
 [[ "$(event_field music_start clip)" = "music.boss" ]] ||
   fail "music_start plays clip=$(event_field music_start clip) (expected music.boss)"
-[[ "$(count_events music_start)" = "1" ]] ||
-  fail "music_start appears $(count_events music_start) times (expected once)"
+[[ "$(count_events music_start)" = "2" ]] ||
+  fail "music_start appears $(count_events music_start) times (expected 2: the reset's score and the R18 defeat phase)"
 [[ "$(event_field music_start gain)" = "0.45" ]] ||
   fail "music_start gain=$(event_field music_start gain) (expected 0.45)"
 
@@ -381,10 +417,39 @@ music_stop_t="$(event_field music_stop t)"
   fail "the music stops at the death (t=19.367); it must stop at the reset"
 [[ "$(event_field music_stop clip)" = "music.boss" ]] ||
   fail "music_stop plays clip=$(event_field music_stop clip) (expected music.boss)"
-[[ "$(count_events music_stop)" = "1" ]] ||
-  fail "music_stop appears $(count_events music_stop) times (expected once)"
+[[ "$(count_events music_stop)" = "2" ]] ||
+  fail "music_stop appears $(count_events music_stop) times (expected 2: the reset and the R18 defeat phase)"
 [[ "$(event_field music_stop gain)" = "0.00" ]] ||
   fail "music_stop gain=$(event_field music_stop gain) (expected 0.00)"
+
+# --- the R18 post-reset defeat phase ------------------------------------------
+# The shared timeline never defeats Valus, so --s5-selftest starts the score a
+# second time after the reset, sets `encounter.defeated`, and runs one step of
+# the app's own `if (encounter.defeated) audio.stop_music()`: the two events are
+# adjacent, share a timestamp, and land after every s42-* line (the phase is
+# after the s42-status). This proves the stop wiring, not the defeat itself —
+# that is S4.1 (audio off) plus the user's walk.
+music_start_lines="$(event_lines music_start)"
+music_stop_lines="$(event_lines music_stop)"
+second_start_line="$(printf '%s\n' "$music_start_lines" | sed -n 2p)"
+first_stop_line="$(printf '%s\n' "$music_stop_lines" | sed -n 1p)"
+second_stop_line="$(printf '%s\n' "$music_stop_lines" | sed -n 2p)"
+[[ -n "$second_start_line" && -n "$first_stop_line" && -n "$second_stop_line" ]] ||
+  fail "could not read both music_start/music_stop pairs from the event stream"
+second_start_t="$(event_value_at "$second_start_line" t)"
+second_stop_t="$(event_value_at "$second_stop_line" t)"
+[[ "$second_start_line" -gt "$first_stop_line" ]] ||
+  fail "the defeat phase's music_start (line $second_start_line) does not follow the reset's music_stop (line $first_stop_line)"
+[[ "$second_start_t" = "$second_stop_t" ]] ||
+  fail "the defeat phase's start ($second_start_t) and stop ($second_stop_t) are not the same step"
+[[ "$second_start_t" = "44.566" ]] ||
+  fail "the R18 defeat phase is at t=$second_start_t (expected 44.566, the end of the s42 timeline)"
+[[ "$second_stop_line" -eq $((second_start_line + 1)) ]] ||
+  fail "the defeat music_stop (line $second_stop_line) is not the line after its music_start (line $second_start_line)"
+[[ "$(event_value_at "$second_stop_line" clip)" = "music.boss" ]] ||
+  fail "the defeat music_stop plays clip=$(event_value_at "$second_stop_line" clip) (expected music.boss)"
+[[ "$(event_value_at "$second_stop_line" gain)" = "0.00" ]] ||
+  fail "the defeat music_stop gain=$(event_value_at "$second_stop_line" gain) (expected 0.00)"
 
 # --- every clip= is a manifest name (R16), never bank/name --------------------
 awk '$1 == "s5-event" { c = $4; sub(/^clip=/, "", c); print c }' "$events_file" |
@@ -403,8 +468,8 @@ status_line="$(printf '%s\n' "$selftest_out" | grep -E '^s5-status ' || true)"
 [[ -n "$status_line" ]] || fail "no s5-status line"
 [[ "$(printf '%s\n' "$selftest_out" | grep -c -E '^s5-status ' || true)" = "1" ]] ||
   fail "expected exactly one s5-status line"
-[[ "$status_line" = "s5-status mixdown=$mix_wav events=18 music=1" ]] ||
-  fail "s5-status is '$status_line' (expected 's5-status mixdown=$mix_wav events=18 music=1')"
+[[ "$status_line" = "s5-status mixdown=$mix_wav events=20 music=1 defeat_stop=1" ]] ||
+  fail "s5-status is '$status_line' (expected 's5-status mixdown=$mix_wav events=20 music=1 defeat_stop=1')"
 last_line="$(printf '%s\n' "$selftest_out" | awk 'NF { line = $0 } END { print line }')"
 [[ "$last_line" = "$status_line" ]] ||
   fail "s5-status is not the last line; the last line is '$last_line'"
@@ -422,11 +487,12 @@ awk -v v="$mix_rms" 'BEGIN { exit !(v > 0.01) }' ||
   fail "s5-mix rms=$mix_rms is silent (need > 0.01)"
 awk -v v="$mix_peak" 'BEGIN { exit !(v <= 0.99) }' ||
   fail "s5-mix peak=$mix_peak clips (need <= 0.99)"
-# The music alone cannot reach 0.5: its voice gain is 0.45 and the master
-# headroom 0.85, so the music-only ceiling is ~0.38. A peak at or below that
-# means no SFX voice contributed to the capture at all.
+# The music alone cannot reach 0.5: its voice gain is 0.45, the music category
+# gain 0.7 and the master headroom 0.85, so the music-only ceiling is ~0.27. A
+# peak at or below that (plus the stomp window being flat against the
+# music-only window) means no SFX voice contributed to the capture at all.
 awk -v v="$mix_peak" 'BEGIN { exit !(v >= 0.5) }' ||
-  fail "s5-mix peak=$mix_peak is at or below the music-only ceiling (~0.38): the mix carries no SFX"
+  fail "s5-mix peak=$mix_peak is at or below the music-only ceiling (~0.27): the mix carries no SFX"
 awk -v v="$mix_window" 'BEGIN { exit !(v > 0.05) }' ||
   fail "s5-mix window_rms=$mix_window is too quiet (need > 0.05)"
 
@@ -454,8 +520,8 @@ awk -v m="$music_window_db" -v i="$impact_window_db" 'BEGIN { exit !(i >= m + 6.
   fail "the stomp window (${impact_window_db} dBFS) is not 6 dB above the music-only window (${music_window_db} dBFS): the SFX voices are missing"
 window_delta="$(awk -v m="$music_window_db" -v i="$impact_window_db" \
   'BEGIN { printf "%.1f", i - m }')"
-awk -v f="$mix_frames" 'BEGIN { exit !(f >= 2129760 && f <= 2148960) }' ||
-  fail "s5-mix frames=$mix_frames is not 44.57 s ± 0.2 s at 48 kHz"
+awk -v f="$mix_frames" 'BEGIN { exit !(f >= 2130400 && f <= 2149600) }' ||
+  fail "s5-mix frames=$mix_frames is not 44.58 s ± 0.2 s at 48 kHz"
 
 mix_info="$(ffprobe -v error -select_streams a:0 \
   -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$mix_wav")" ||
@@ -466,8 +532,8 @@ IFS=, read -r mix_codec mix_rate mix_channels <<<"$mix_info"
 [[ "$mix_channels" = "2" ]] || fail "mixdown channels is $mix_channels (expected 2)"
 mix_duration="$(ffprobe -v error -select_streams a:0 -show_entries format=duration \
   -of default=nw=1:nk=1 "$mix_wav")"
-awk -v d="$mix_duration" 'BEGIN { exit !(d >= 44.37 && d <= 44.77) }' ||
-  fail "mixdown duration is $mix_duration s (expected 44.57 s ± 0.2)"
+awk -v d="$mix_duration" 'BEGIN { exit !(d >= 44.3833 && d <= 44.7833) }' ||
+  fail "mixdown duration is $mix_duration s (expected 44.5833 s ± 0.2)"
 awk -v frames="$mix_frames" -v d="$mix_duration" '
   BEGIN { diff = frames - d * 48000; if (diff < 0) diff = -diff; exit !(diff <= 1.0) }' ||
   fail "s5-mix frames=$mix_frames disagrees with the WAV's ${mix_duration} s at 48 kHz"
@@ -567,7 +633,7 @@ printf 's5-acceptance: s42 perf     %s\n' "$s42_perf_line"
 printf 's5-acceptance: s41 status   %s\n' "$s41_status_line"
 printf 's5-acceptance: s4 status    %s\n' "$s4_status_line"
 printf 's5-acceptance: s3 status    %s\n' "$s3_status_line"
-printf 's5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present), %s ordered s5-events (music on the first landed hit at %s s, telegraph before each of the two stomp/club cycles, hurt light/heavy at their impacts, death at %s s, music stop at the reset %s s), mixdown %s frames / %s s %s %s ch (rms %s, peak %s, window_rms %s; stomp window %s dBFS is %s dB above the music-only window %s dBFS; astats peak %s dBFS, RMS %s dBFS, no NaN/Inf), s42-* identical with audio off, marginal %s ms/frame on the unchanged S4.2 render path (the audio-on frame cost is not measured), S4.2+S4.1+S4+S3 regressions green\n' \
+printf 's5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present, every cue non-silent at peak <= 0.99), %s ordered s5-events (music on the first landed hit at %s s, telegraph before each of the two stomp/club cycles, hurt light/heavy at their impacts, death at %s s, music stop at the reset %s s, R18 defeat stop after the reset), mixdown %s frames / %s s %s %s ch (rms %s, peak %s, window_rms %s; stomp window %s dBFS is %s dB above the music-only window %s dBFS; astats peak %s dBFS, RMS %s dBFS, no NaN/Inf), s42-* identical with no audio manifest loaded, marginal %s ms/frame on the unchanged S4.2 render path (the audio-on frame cost is not measured), S4.2+S4.1+S4+S3 regressions green\n' \
   "$event_total" "$music_start_t" "$death_t" "$music_stop_t" "$mix_frames" \
   "$mix_duration" "$mix_codec" "$mix_channels" "$mix_rms" "$mix_peak" "$mix_window" \
   "$impact_window_db" "$window_delta" "$music_window_db" "$astats_peak" "$astats_rms" "$s42_marginal"
