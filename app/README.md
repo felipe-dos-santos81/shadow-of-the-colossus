@@ -61,8 +61,9 @@ pause) and hot-plugs without latching an input. `--s41-selftest` and
 `--s42-selftest` run the deterministic acceptance timelines described below.
 
 The encounter has its own voice. The library's converted audio slice is loaded at start
-(a missing manifest degrades to silence with one warning; an encounter whose manifest lacks
-a curated cue is a load error naming the event) and played through a 32-voice software mixer
+(a missing manifest or one without a curated cue prints one error naming the manifest or the
+event and the scene runs silent; `--s5-selftest` makes the same condition fatal) and played
+through a 32-voice software mixer
 into one SDL3 stream at 48 kHz: the music is non-positional, world sounds attenuate with
 distance and pan by the player's relative bearing. Music starts on the first landed hit
 and loops, and stops at the `R` reset (and on Valus's defeat). `M` mutes and unmutes the whole
@@ -70,9 +71,10 @@ mixer; there is no other audio UI. The curated slice is the seven attributed cue
 (`player.swing`, `player.hit`, `player.hurt`, `player.death`, `valus.telegraph`,
 `valus.impact`, `valus.hurt`) plus `music.boss` (`Boss 1`, 5.1 downmixed to stereo, looped).
 Valus's death, the club whoosh, the player's fall, ambience, grab/climb and footsteps are
-**deferred** — they are not in the cue map, so they are silent rather than placeholders.
-`--s5-selftest --audio-mixdown PATH` runs the S4.2 timeline with the audio observer on and
-writes the proof.
+**deferred** — none is in the cue map's `cues` array, so they are silent rather than
+placeholders (eight of them are listed under the map's `deferred` array with a reason each; the
+club whoosh and footsteps have no entry). `--s5-selftest --audio-mixdown PATH` runs the S4.2
+timeline with the audio observer on and writes the proof.
 
 ## Build
 
@@ -316,7 +318,7 @@ s5-status mixdown=…/out/s5/mix.wav events=18 music=1
 The first strike (1.017 s) is the foot clang: it swings but deals no damage, so
 it plays no hit and starts no music. The first landed hit starts Boss 1;
 `hurt_heavy` is the same `player.hurt` clip pushed to 1.25; the music stops at
-the reset (20.483 s), one step after the death, because the reset is what ends
+the reset (20.483 s), **1.116 s after the death at 19.367 s**, because the reset is what ends
 the fight in this timeline. With audio off the timeline prints the same
 `s42-*` lines byte for byte.
 
@@ -340,8 +342,10 @@ S3 arena has no entity and needs none of them.
 The viewer plays only converted audio. `bp-convert audio` decodes the curated cues from the
 game's resident `SXDF` banks and the `music.sxd1`/`music.sxd2` pair at **build time** into
 `<library>/audio/<bank>/<event>.wav` (48 kHz float PCM) plus
-`<library>/audio/audio.manifest`; the runtime never parses `.sxd`/`.sxd2`. A cue name that is
-not in the manifest is a load error naming the event, never a silent fallback.
+`<library>/audio/audio.manifest`; the runtime never parses `.sxd`/`.sxd2`. A manifest that lacks
+a cue the table names is a **fatal load error naming the event** in `--s5-selftest`; interactive
+play warns once and runs the scene **silent** (the whole mixer is disabled, never a partial mix
+or a placeholder).
 
 ```bash
 export SOTC_GAME_ROOT=…/SOTC-extract/extracted/game
@@ -357,9 +361,14 @@ dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" --out out/libr
 `SEQD` → `PLAY_TONE` → `WAVE`); the other six are audition picks, and every 0x21 PS-ADPCM
 row is a fitted-filter decode. Each row's method, identity confidence and fidelity are in
 `docs/notes/s5-audio-attribution.md`; the decode itself is in
-`docs/notes/s5-audio-recon.md`. **Deferred** (not in the map, therefore silent rather than
-replaced): Valus's death, the club whoosh, the player's fall, ambience, grab/climb and
-footsteps. The user's ear is the identity check (`docs/notes/s5-results.md`).
+`docs/notes/s5-audio-recon.md`. **Deferred**: none of Valus's death, the club whoosh, the
+player's fall, ambience, grab/climb or footsteps is in the map's `cues` array, so they are
+silent rather than replaced. Eight of them are listed under the map's `deferred` array with a
+reason each (`valus.death`, `valus.grab`, `valus.fall`, `valus.breath`, `valus.ambience`,
+`player.grab`, `player.fall`, `player.breath`); the club whoosh and footsteps have no entry.
+The user's ear is the identity check (`docs/notes/s5-results.md`), and `valus.impact` (the
+five-layer ground hit, 8.15 s) rings past the impact window — the checklist asks whether that
+tail reads as an impact or a rumble.
 
 The mixer is a 32-voice software mix at 48 kHz float stereo into one SDL3 stream: category
 gains, distance attenuation and bearing pan for world sounds, whole-track loops for music,

@@ -10,13 +10,14 @@ banks into 48 kHz WAV and mixed by the viewer.
 `scripts/s5-acceptance.sh` runs green end to end: both builds, both suites, the curated decode
 (8 manifest entries, every WAV present at 48 kHz), the deterministic `s5-*` timeline parsed field
 by field, the mixdown checked by the viewer and independently by `ffmpeg astats`, the `s42-*`
-lines proven identical with the mixer off, and the unchanged S4.2 acceptance (which runs
-S4.1 → S4 → S3). The milestone's done-line is **not** claimed here: whether a cue is the *right*
-sound, the loop point, the swing/hit sync, `M`, clipping and the fps are the user's ear (§12).
+lines proven identical with no audio subsystem constructed, and the unchanged S4.2 acceptance
+(which runs S4.1 → S4 → S3). The milestone's done-line is **not** claimed here: whether a cue is
+the *right* sound, the loop point, the swing/hit sync, `M`, clipping and the fps are the user's
+ear (§12).
 
 | | |
 |---|---|
-| Date | 2026-10-21 (local −03; the recorded run is stamped `2026-10-22T00:37:34Z`–`00:46:17Z`) |
+| Date | 2026-10-21 (local −03; the recorded run is stamped `2026-10-22T01:19:16Z`–`01:28:09Z`) |
 | Machine | Apple M3 Max, macOS 27.0.1 (26A434), arm64; 1280×720 points → 2560×1440 px captures |
 | Repo / branch | `sotc-native`, worktree `s5-audio` |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
@@ -38,31 +39,33 @@ caffeinate -dimsu ./scripts/s5-acceptance.sh   # exit 0; everything below is fro
                                                # out/s5-acceptance-run.log
 ```
 
-The recorded run is stamped **`2026-10-22T00:37:34Z` → `00:46:17Z`** (8 min 43 s; the S4.2
-regression alone is ~7 min). Its steps, all under `caffeinate`:
+The recorded run is stamped **`2026-10-22T01:19:16Z` → `01:28:09Z`** (8 min 53 s; the S4.2
+regression alone is ~7 min). Its steps (the viewer and acceptance runs under `caffeinate -dimsu`;
+the builds and suites are plain commands):
 
 - **Builds.** `dotnet build BpConvert.sln -v q` (clean, 0 warnings / 0 errors), `dotnet publish
   src/BpConvert.Cli -c Release -o out/bin`, and the app `cmake -DCMAKE_BUILD_TYPE=Release` +
   `cmake --build` (both targets up to date).
-- **Suites.** `dotnet test` **140 passed, 0 failed** (50 s); `ctest` **2/2** (10.69 s unit,
-  0.18 s windowed; 10.87 s total). §9.
+- **Suites.** `dotnet test` **140 passed, 0 failed** (50 s); `ctest` **2/2** (10.73 s unit,
+  0.21 s windowed; 10.94 s total). §9.
 - **Decode.** `bp-convert audio … --force` wrote **8/8** cues and the manifest:
   `audio: 8 written, 0 reused, 8 manifest entries`. Every file is 48 kHz; the manifest's names
   are exactly the map's `cues`; the channel count and duration match ffprobe. §4.
 - **Timeline.** `--s5-selftest --audio-mixdown out/s5/mix.wav` exited 0 with **18** well-formed
   `s5-event` lines, `s5-mix` and `s5-status` last. §5–§6.
 - **Mixdown.** pcm_f32le, 48 kHz, stereo, 2,139,200 frames (44.5667 s), rms 0.0514, peak 0.9022,
-  loudest-window rms 0.1520; `ffmpeg astats` Overall peak −0.894 dBFS, RMS −25.778 dBFS, 0 NaNs.
+  loudest-window rms 0.1520; `ffmpeg astats` Overall peak −0.894 dBFS, RMS −25.778 dBFS, 0 NaNs,
+  0 Infs; the music-only window −30.509 dBFS and the stomp window −15.408 dBFS (15.1 dB apart).
   §6.
-- **Identity.** `--s42-selftest` with the mixer off: its **11** `s42-*` lines are byte-identical
-  to the S5 run's (empty diff). §7.
+- **Identity.** `--s42-selftest` with no audio subsystem constructed: its **11** `s42-*` lines
+  are byte-identical to the S5 run's (empty diff). §7.
 - **Regression.** the unchanged `scripts/s42-acceptance.sh` printed
-  `s42-acceptance: PASS — …` and a marginal of **6.92 ms/frame (~144.5 fps)**, under the 16.7 ms
+  `s42-acceptance: PASS — …` and a marginal of **9.25 ms/frame (~108.1 fps)**, under the 16.7 ms
   gate; S4.1/S4/S3 green. §8.
 - **Summary.** the script's final line is the block below, verbatim.
 
 ```text
-s5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present), 18 ordered s5-events (music on the first landed hit at 2.050 s, telegraph before every stomp/club impact, hurt light/heavy at their impacts, death at 19.367 s, music stop at the reset 20.483 s), mixdown 2139200 frames / 44.566667 s pcm_f32le 2 ch (rms 0.0514, peak 0.9022, window_rms 0.1520; astats peak -0.894302 dBFS, RMS -25.777860 dBFS, no NaN), s42-* identical with audio off, marginal 6.92 ms/frame, S4.2+S4.1+S4+S3 regressions green
+s5-acceptance: PASS — build, both suites, 8 curated clips (7 attributed cues + Boss 1) decoded at 48 kHz (manifest names = map events, every file present), 18 ordered s5-events (music on the first landed hit at 2.050 s, telegraph before each of the two stomp/club cycles, hurt light/heavy at their impacts, death at 19.367 s, music stop at the reset 20.483 s), mixdown 2139200 frames / 44.566667 s pcm_f32le 2 ch (rms 0.0514, peak 0.9022, window_rms 0.1520; stomp window -15.408139 dBFS is 15.1 dB above the music-only window -30.509470 dBFS; astats peak -0.894302 dBFS, RMS -25.777860 dBFS, no NaN/Inf), s42-* identical with audio off, marginal 9.25 ms/frame on the unchanged S4.2 render path (the audio-on frame cost is not measured), S4.2+S4.1+S4+S3 regressions green
 ```
 
 Artifact hashes from the run: the audio manifest sha256 is
@@ -194,6 +197,11 @@ Two conversions are audible design decisions:
   normalized to peak ≤ 0.99 (the mono `0x21` rows by −0.0873 dB, `Boss 1` by −10.0912 dB), and
   the app does **not** re-apply `gain_db`. The `valus.impact` mix of five layers already peaks at
   −5.7 dB, so its gain is 0.
+- **`valus.impact` is 8.153 s.** It is the five-layer ground impact mixed to the longest layer
+  (w28, 8.153 s), so the cue rings for seconds past the stomp (0.533 s after its telegraph) and
+  club (0.433 s) impact points. That is the sound the game ships — a layered sequence, not a
+  single hit — but whether the ring reads as a decaying impact or as a rumble that muddles the
+  next telegraph is a listening call (checklist item 4).
 
 ## 5 · The event sequence
 
@@ -228,8 +236,10 @@ What the acceptance pins, beyond the count:
 - **Music starts on the first landed hit** — `music_start` is at 2.050 s, after the first
   `strike_hit` (the 1.017 s foot clang is a swing with no hit and starts nothing), and it plays
   `music.boss` at gain 0.45 exactly once.
-- **Every attack telegraphs** — `stomp_start` (grabbed the `valus.telegraph` roar) precedes
-  `stomp_impact`, and `club_start` precedes `club_impact`; both impacts play `valus.impact`.
+- **Every attack telegraphs** — `stomp_start` (the `valus.telegraph` roar) precedes
+  `stomp_impact`, and **both** club cycles are checked in order (17.250 → 17.683 and
+  18.933 → 19.367), so a regression that inverts only the second still fails. Every impact
+  (`stomp_impact` and both `club_impact`s) plays `valus.impact`.
 - **Hurt lands with its impact** — `hurt_light` is on the same line time as `stomp_impact`
   (16.233 s, `player.hurt`, gain 1.00) and `hurt_heavy` on the same time as `club_impact`
   (17.683 s, gain 1.25: the same clip pushed).
@@ -249,20 +259,26 @@ What the acceptance pins, beyond the count:
 | codec / layout | `pcm_f32le`, 48 kHz, stereo | exactly that |
 | length | 2,139,200 frames = 44.5667 s | 44.57 s ± 0.2 |
 | RMS | 0.0514 (−25.8 dBFS) | > 0.01 |
-| peak | 0.9022 (−0.9 dBFS) | ≤ 0.99 |
-| loudest 1 s window RMS | 0.1520 | > 0.05 (music **and** SFX present) |
-| `ffmpeg astats` Overall | peak **−0.894 dBFS**, RMS **−25.778 dBFS**, **0 NaNs**, 0 Infs | peak < 0 dBFS, RMS > −40 dBFS, no NaN |
+| peak | 0.9022 (−0.9 dBFS) | **≤ 0.99 and ≥ 0.5** |
+| loudest 1 s window RMS | 0.1520 | > 0.05 |
+| music-only window (5.000–6.000 s) | **−30.509 dBFS** | non-silent (> −40) |
+| stomp window (16.233–16.733 s) | **−15.408 dBFS** | **≥ 6 dB above the music-only window** (measured **+15.1 dB**) |
+| `ffmpeg astats` Overall | peak **−0.894 dBFS**, RMS **−25.778 dBFS**, **0 NaNs**, **0 Infs** | peak < 0 dBFS, RMS > −40 dBFS, no NaN/Inf |
 
-The viewer's own `s5-mix` line and the independent `astats` decode agree (0.9022 ≈ −0.894 dBFS).
-`astats` reads the samples, so the "non-silent and non-clipping" claim is not self-reported.
+`Boss 1`'s voice gain is 0.45 and the master headroom 0.85, so **music alone tops out at
+~0.38** — it cannot reach the 0.5 peak floor, and the stomp window is 15.1 dB above the
+music-only second. That is what makes the capture evidence of **music *and* SFX**, not just the
+score: dropping every SFX voice fails both the peak floor and the window comparison. The viewer's
+own `s5-mix` line and the independent `astats` decode agree (0.9022 ≈ −0.894 dBFS), and `astats`
+reads the samples, so "non-silent and non-clipping" is not self-reported.
 
 ## 7 · The audio-off identity
 
-`--s42-selftest` without `--audio-mixdown` (the mixer observer off) was run into
-`out/s5/s42-audio-off.txt`; its **11** `s42-*` lines were diffed against the S5 run's own `s42-*`
-lines: **empty diff** (`out/s5/s42-identity.diff`). The audio layer is an additive observer
-(design D11): turning it on changes no damage, no window, no status value, and the frozen
-`scripts/s42-acceptance.sh` is only invoked.
+`--s42-selftest` (which never creates the S5 seam, so no audio subsystem is constructed) was run
+into `out/s5/s42-audio-off.txt`; its **11** `s42-*` lines were diffed against the S5 run's own
+`s42-*` lines: **empty diff** (`out/s5/s42-identity.diff`). The audio layer is an additive
+observer (design D11): turning it on changes no damage, no window, no status value, and the
+frozen `scripts/s42-acceptance.sh` is only invoked.
 
 ## 8 · The S4.2 acceptance (which runs S4.1, S4 and S3)
 
@@ -270,21 +286,24 @@ lines: **empty diff** (`out/s5/s42-identity.diff`). The audio layer is an additi
 (exit 0; log `out/s5-s42-regression.log`). Its final line:
 
 ```text
-s42-acceptance: PASS — build, both suites, s42 timeline (weakpoint proxies 1.955 m and 2.165 m, gate foot 0 / head 34, arm weakpoint 1 damage 34, stomp 35 health 100->65 hurt, club 45 health 65->20 hurt, range split club 0 at 4 m / stomp 15 at 3 m, death player_a_fall_damage_to_death, reset 100/100/grounded/Valus 100, stamina 28.425 -> 43.484 m leaving 39 of 100), six stills (2560x1440, span >= 30, > 5000 B), marginal 6.92 ms/frame (~144.5 fps), S4.1+S4+S3 regressions green
+s42-acceptance: PASS — build, both suites, s42 timeline (weakpoint proxies 1.955 m and 2.165 m, gate foot 0 / head 34, arm weakpoint 1 damage 34, stomp 35 health 100->65 hurt, club 45 health 65->20 hurt, range split club 0 at 4 m / stomp 15 at 3 m, death player_a_fall_damage_to_death, reset 100/100/grounded/Valus 100, stamina 28.425 -> 43.484 m leaving 39 of 100), six stills (2560x1440, span >= 30, > 5000 B), marginal 9.25 ms/frame (~108.1 fps), S4.1+S4+S3 regressions green
 ```
 
 Its measured perf (same `--frames 1` vs `--frames 240` pair, both under `caffeinate`):
 
 | run | wall time |
 |---|---:|
-| `--frames 1` (load-dominated) | **9.255 s** |
-| `--frames 240` | **10.910 s** |
-| marginal (239 frames) | **6.92 ms/frame ≈ 144.5 fps** |
+| `--frames 1` (load-dominated) | **8.709 s** |
+| `--frames 240` | **10.919 s** |
+| marginal (239 frames) | **9.25 ms/frame ≈ 108.1 fps** |
 
-The gate is **≤ 16.7 ms** (60 fps). The pair is the same viewer, encounter and audio slice the S5
-run loads, so the audio layer adds no frame spike inside that class; the S5 selftest itself (the
-observer plus the disk sink) runs the same timeline and does not slow the steps. The nested
-statuses, unchanged:
+The gate is **≤ 16.7 ms** (60 fps) — and the number describes the **unchanged S4.2 render path,
+not the mixer**: the pair passes `--entity-time 0`, which sets `entityTimeSet` and therefore
+`audio_wanted = false` in `app.cpp`, so **no audio subsystem is constructed** and the 9.25 ms
+carries no audio cost. S5 does **not** measure an audio-on frame. The `--s5-selftest` path is an
+offline mixdown of fixed timeline steps, not a timed render loop, so it cannot price the mixer
+either. The audio-on frame cost is **unmeasured**; the user's fps walk (checklist item 11) is the
+check, and this note makes no audio-perf claim. The nested statuses, unchanged:
 
 ```text
 s41-status grab=left_foot climb=4.77 strikes=3 entity_health=0 mode=grounded defeated=1
@@ -300,8 +319,8 @@ so S4.2 → S4.1 → S4 → S3 are green in this run.
 - `dotnet build BpConvert.sln -v q`: clean (0 warnings, 0 errors).
 - `dotnet publish src/BpConvert.Cli -c Release -o out/bin`: clean.
 - `dotnet test tests/BpConvert.Tests -v q`: **140 passed**, 0 failed (50 s).
-- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 10.69 s, windowed
-  0.18 s; total 10.87 s).
+- `ctest --test-dir app/build --output-on-failure`: **2/2 passed** (unit 10.73 s, windowed
+  0.21 s; total 10.94 s).
 
 ## 10 · Provenance and rulings
 
@@ -319,12 +338,14 @@ so S4.2 → S4.1 → S4 → S3 are green in this run.
 
 ## 11 · Deferred cues (R15)
 
-`valus.death`, the club whoosh, the player's fall, ambience (wind), grab/climb and footsteps are
-**deferred**: they are absent from the cue map, so the app is silent for them — never a
-placeholder. The reasons are recorded per event in the map's `deferred` array and in
-`s5-audio-attribution.md`: the boss death roar's sequence layering is unresolved, the ambience
-beds are layered `0x21` sequences, and the `bvo_fall*`/`bvo_breath*` names live beyond the 63
-resident `com_v` waves.
+`valus.death`, the club whoosh, the player's fall, ambience, grab/climb and footsteps are
+**deferred**: none is in the map's `cues` array, so the app is silent for them — never a
+placeholder. **Eight** events are listed under the map's `deferred` array with a reason each
+(`valus.death`, `valus.grab`, `valus.fall`, `valus.breath`, `valus.ambience`, `player.grab`,
+`player.fall`, `player.breath`); the **club whoosh and the footstep set have no entry at all**.
+The reasons are repeated in `s5-audio-attribution.md`: the boss death roar's sequence layering is
+unresolved, the ambience beds are layered `0x21` sequences, and the `bvo_fall*`/`bvo_breath*`
+names live beyond the 63 resident `com_v` waves.
 
 The design's §12 walk list names some of these; they are marked **deferred**, not failed:
 
@@ -338,7 +359,7 @@ The design's §12 walk list names some of these; they are marked **deferred**, n
 | Wander fall | **deferred** |
 | wind ambience | **deferred** |
 | `M` mute, no clipping, windowed, cursor | **shipped** |
-| fps ≥ 60 | **shipped** (measured in §8) |
+| fps ≥ 60 | **implemented**; the silent-path marginal is measured in §8, the audio-on fps is the user's walk (item 11) |
 
 ## 12 · The user's listening checklist — PENDING
 
@@ -357,13 +378,14 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 | 1 | music starts on the fight | climb to a weakpoint and land the first hit (hold `J`, release at the forehead or the arm) | `Boss 1` starts on the first landed hit and loops without a seam | ☐ |
 | 2 | music stops on the reset, not the death | let the club kill you, wait through the death clip, press `R` | the music keeps playing over the death, then stops at the reset; the next fight's first hit restarts it | ☐ |
 | 3 | Valus's telegraph and impact | stand within 4.5 m of a foot, then within the club's reach | the telegraph roar precedes the stomp and the club, and the layered ground impact is distinct from it | ☐ |
-| 4 | Valus hurt reaction | land a weakpoint hit | his hurt vocal plays with the reaction clip | ☐ |
-| 5 | Wander's swing and hit | hold `J` and release next to a weakpoint | the swish precedes the hit; one hit per swing, tight sync | ☐ |
-| 6 | Wander hurt (light and heavy) | take a stomp (35), then a club (45) | two grunts; the heavy one is louder (1.25) | ☐ |
-| 7 | Wander's death | let the club empty the amber bar | the death vocal plays once, with the death clip | ☐ |
-| 8 | `M` mute | press `M` mid-fight, then again | the whole mix mutes/unmutes with no pop; the state is obvious without UI | ☐ |
-| 9 | no clipping | fight through the heaviest moment (music + impact + hurt together) | no crackle or distortion | ☐ |
-| 10 | windowed, cursor, fps | move the mouse over the window; read the title | a 1280×720 window, the cursor visible and free, the fps in the ≥ 60 class | ☐ |
+| 4 | the impact's 8.15 s tail | land a stomp or a club hit, then keep listening through the next telegraph | the five-layer impact decays as part of the hit, not as a rumble that masks the next telegraph | ☐ |
+| 5 | Valus hurt reaction | land a weakpoint hit | his hurt vocal plays with the reaction clip | ☐ |
+| 6 | Wander's swing and hit | hold `J` and release next to a weakpoint | the swish precedes the hit; one hit per swing, tight sync | ☐ |
+| 7 | Wander hurt (light and heavy) | take a stomp (35), then a club (45) | two grunts; the heavy one is louder (1.25) | ☐ |
+| 8 | Wander's death | let the club empty the amber bar | the death vocal plays once, with the death clip | ☐ |
+| 9 | `M` mute | press `M` mid-fight, then again | the whole mix mutes/unmutes with no pop; the state is obvious without UI | ☐ |
+| 10 | no clipping | fight through the heaviest moment (music + impact + hurt together) | no crackle or distortion | ☐ |
+| 11 | windowed, cursor, fps | move the mouse over the window; read the title | a 1280×720 window, the cursor visible and free, the fps in the ≥ 60 class (the scripted perf number is the silent path — this is the audio-on check) | ☐ |
 
 **Deferred — do not mark as failures:** the club whoosh, Valus's death roar, Wander's fall, the
 wind ambience, and grab/climb/footstep sounds. Their absence is R15, not a regression.
