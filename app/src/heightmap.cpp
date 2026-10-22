@@ -77,9 +77,102 @@ int node_index_end(float coordinate, float bound_min, float cellSize, int nodes)
     return clamp_index(std::ceil((coordinate - bound_min) / cellSize), nodes);
 }
 
+// ---- the layered ground ----------------------------------------------------
+
+constexpr float kLayerMerge = 0.05f;
+
+bool is_layered(const Heightmap& hm) {
+    return hm.maxLayers > 0 && hm.width > 0 && hm.height > 0 &&
+           hm.layers.size() >= static_cast<std::size_t>(hm.width) * hm.height * hm.maxLayers &&
+           hm.blocked.size() >= hm.layers.size();
+}
+
+std::size_t layer_base(const Heightmap& hm, int i, int j) {
+    return (static_cast<std::size_t>(j) * hm.width + i) * hm.maxLayers;
+}
+
+// Adds `y` to one node's ascending, NaN-padded list: within kLayerMerge of an
+// existing layer it merges to the higher; a full list drops its lowest.
+void insert_layer(float* node, int capacity, float y) {
+    int count = 0;
+    while (count < capacity && !std::isnan(node[count])) {
+        if (std::fabs(node[count] - y) <= kLayerMerge) {
+            node[count] = std::max(node[count], y);
+            return;
+        }
+        ++count;
+    }
+    int at = 0;
+    while (at < count && node[at] < y) {
+        ++at;
+    }
+    if (count == capacity) {
+        if (at == 0) {
+            return;  // lower than everything kept
+        }
+        for (int k = 0; k + 1 < at; ++k) {
+            node[k] = node[k + 1];  // drop the lowest
+        }
+        node[at - 1] = y;
+        return;
+    }
+    for (int k = count; k > at; --k) {
+        node[k] = node[k - 1];
+    }
+    node[at] = y;
+}
+
+// The layer index a body at height `y` stands on at one node: the highest layer
+// at or below y + step, else the lowest; -1 when the node has no layer.
+int select_layer(const Heightmap& hm, int i, int j, float y, float step) {
+    const float* node = &hm.layers[layer_base(hm, i, j)];
+    int best = -1;
+    for (int k = 0; k < hm.maxLayers && !std::isnan(node[k]); ++k) {
+        if (best < 0 || node[k] <= y + step) {
+            best = k;
+        }
+    }
+    return best;
+}
+
+float layer_height(const Heightmap& hm, int i, int j, float y, float step) {
+    const int k = select_layer(hm, i, j, y, step);
+    return k < 0 ? std::numeric_limits<float>::quiet_NaN() : hm.layers[layer_base(hm, i, j) + k];
+}
+
+// The node nearest `p` (clamped into the grid).
+void nearest_node(const Heightmap& hm, Vec3 p, int& i, int& j) {
+    const float x = clamp_coordinate(p.x, hm.boundsMin.x, hm.boundsMax.x);
+    const float z = clamp_coordinate(p.z, hm.boundsMin.z, hm.boundsMax.z);
+    i = clamp_index(std::floor((x - hm.boundsMin.x) / hm.cellSize + 0.5f), hm.width);
+    j = clamp_index(std::floor((z - hm.boundsMin.z) / hm.cellSize + 0.5f), hm.height);
+}
+
+// Flags, on the nodes within one cell of (x, z), every layer whose body band
+// overlaps the wall's [y_lo, y_hi].
+void flag_walls_near(Heightmap& hm, float x, float z, float y_lo, float y_hi) {
+    const float u = (x - hm.boundsMin.x) / hm.cellSize;
+    const float v = (z - hm.boundsMin.z) / hm.cellSize;
+    const int i0 = clamp_index(std::ceil(u - 1.0f), hm.width);
+    const int i1 = clamp_index(std::floor(u + 1.0f), hm.width);
+    const int j0 = clamp_index(std::ceil(v - 1.0f), hm.height);
+    const int j1 = clamp_index(std::floor(v + 1.0f), hm.height);
+    for (int j = j0; j <= j1; ++j) {
+        for (int i = i0; i <= i1; ++i) {
+            const std::size_t base = layer_base(hm, i, j);
+            for (int k = 0; k < hm.maxLayers && !std::isnan(hm.layers[base + k]); ++k) {
+                const float y = hm.layers[base + k];
+                if (y_hi >= y + kBodyBandLow && y_lo <= y + kBodyBandHigh) {
+                    hm.blocked[base + k] = 1;
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
-Heightmap build_heightmap(const Scene& scene, float cellSize) {
+Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
     if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
         throw std::runtime_error("heightmap cell size must be positive and finite");
     }
@@ -108,76 +201,131 @@ Heightmap build_heightmap(const Scene& scene, float cellSize) {
         static_cast<std::size_t>(heightmap.width) * static_cast<std::size_t>(heightmap.height),
         std::numeric_limits<float>::quiet_NaN());
 
-    for (std::size_t mesh_index = 0; mesh_index < scene.meshes.size(); ++mesh_index) {
-        const MeshCpu& mesh = scene.meshes[mesh_index];
-        if (mesh.rig >= 0) {
-            continue;  // a rigged mesh (player or entity): never ground
+    if (layered) {
+        heightmap.maxLayers = kHeightmapLayers;
+        heightmap.layers.assign(heightmap.heights.size() * kHeightmapLayers,
+                                std::numeric_limits<float>::quiet_NaN());
+        heightmap.blocked.assign(heightmap.layers.size(), 0);
+    }
+
+    // Calls `visit(p0, p1, p2)` for each static triangle, in world space.
+    const auto for_each_triangle = [&](auto&& visit) {
+        for (std::size_t mesh_index = 0; mesh_index < scene.meshes.size(); ++mesh_index) {
+            const MeshCpu& mesh = scene.meshes[mesh_index];
+            if (mesh.rig >= 0) {
+                continue;  // a rigged mesh (player or entity): never ground
+            }
+            for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+                const std::size_t i0 = mesh.indices[t];
+                const std::size_t i1 = mesh.indices[t + 1];
+                const std::size_t i2 = mesh.indices[t + 2];
+                if (i0 >= mesh.vertices.size() || i1 >= mesh.vertices.size() ||
+                    i2 >= mesh.vertices.size()) {
+                    continue;  // a malformed index would read out of bounds
+                }
+                const Vec3 p0 = transform_point(
+                    mesh.model,
+                    Vec3{mesh.vertices[i0].px, mesh.vertices[i0].py, mesh.vertices[i0].pz});
+                const Vec3 p1 = transform_point(
+                    mesh.model,
+                    Vec3{mesh.vertices[i1].px, mesh.vertices[i1].py, mesh.vertices[i1].pz});
+                const Vec3 p2 = transform_point(
+                    mesh.model,
+                    Vec3{mesh.vertices[i2].px, mesh.vertices[i2].py, mesh.vertices[i2].pz});
+                if (!is_finite(p0) || !is_finite(p1) || !is_finite(p2)) {
+                    continue;  // a non-finite vertex would poison the index arithmetic
+                }
+                visit(p0, p1, p2);
+            }
         }
-        for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
-            const std::size_t i0 = mesh.indices[t];
-            const std::size_t i1 = mesh.indices[t + 1];
-            const std::size_t i2 = mesh.indices[t + 2];
-            if (i0 >= mesh.vertices.size() || i1 >= mesh.vertices.size() ||
-                i2 >= mesh.vertices.size()) {
-                continue;  // a malformed index would read out of bounds
-            }
-            const Vec3 p0 = transform_point(
-                mesh.model, Vec3{mesh.vertices[i0].px, mesh.vertices[i0].py, mesh.vertices[i0].pz});
-            const Vec3 p1 = transform_point(
-                mesh.model, Vec3{mesh.vertices[i1].px, mesh.vertices[i1].py, mesh.vertices[i1].pz});
-            const Vec3 p2 = transform_point(
-                mesh.model, Vec3{mesh.vertices[i2].px, mesh.vertices[i2].py, mesh.vertices[i2].pz});
-            if (!is_finite(p0) || !is_finite(p1) || !is_finite(p2)) {
-                continue;  // a non-finite vertex would poison the index arithmetic
-            }
+    };
 
-            const float area = cross_xz(p0, p1, p2);
-            if (area == 0.0f) {
-                continue;  // a vertical wall: no XZ footprint, no ground height
-            }
+    // |normal.y| of a triangle (normal normalized); 1 for a flat floor, 0 for a
+    // wall. A zero-area triangle has no normal and counts as neither.
+    const auto steepness = [](Vec3 a, Vec3 b, Vec3 c) {
+        const Vec3 u{b.x - a.x, b.y - a.y, b.z - a.z};
+        const Vec3 v{c.x - a.x, c.y - a.y, c.z - a.z};
+        const Vec3 n{u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x};
+        const float length = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        return length > 0.0f ? std::fabs(n.y) / length : -1.0f;
+    };
 
-            // The node range the triangle's XZ bounding box can touch.
-            const float min_x = std::min({p0.x, p1.x, p2.x});
-            const float max_x = std::max({p0.x, p1.x, p2.x});
-            const float min_z = std::min({p0.z, p1.z, p2.z});
-            const float max_z = std::max({p0.z, p1.z, p2.z});
-            const int i_min =
-                node_index_begin(min_x, heightmap.boundsMin.x, cellSize, heightmap.width);
-            const int i_max = node_index_end(max_x, heightmap.boundsMin.x, cellSize, heightmap.width);
-            const int j_min =
-                node_index_begin(min_z, heightmap.boundsMin.z, cellSize, heightmap.height);
-            const int j_max =
-                node_index_end(max_z, heightmap.boundsMin.z, cellSize, heightmap.height);
+    for_each_triangle([&](Vec3 p0, Vec3 p1, Vec3 p2) {
+        const float area = cross_xz(p0, p1, p2);
+        if (area == 0.0f) {
+            return;  // a vertical wall: no XZ footprint, no ground height
+        }
+        const bool floor_triangle = layered && steepness(p0, p1, p2) >= kWallSteepness;
+        // The node range the triangle's XZ bounding box can touch.
+        const float min_x = std::min({p0.x, p1.x, p2.x});
+        const float max_x = std::max({p0.x, p1.x, p2.x});
+        const float min_z = std::min({p0.z, p1.z, p2.z});
+        const float max_z = std::max({p0.z, p1.z, p2.z});
+        const int i_min =
+            node_index_begin(min_x, heightmap.boundsMin.x, cellSize, heightmap.width);
+        const int i_max = node_index_end(max_x, heightmap.boundsMin.x, cellSize, heightmap.width);
+        const int j_min =
+            node_index_begin(min_z, heightmap.boundsMin.z, cellSize, heightmap.height);
+        const int j_max =
+            node_index_end(max_z, heightmap.boundsMin.z, cellSize, heightmap.height);
 
-            for (int j = j_min; j <= j_max; ++j) {
-                for (int i = i_min; i <= i_max; ++i) {
-                    const Vec3 node{heightmap.boundsMin.x + static_cast<float>(i) * cellSize, 0.0f,
-                                    heightmap.boundsMin.z + static_cast<float>(j) * cellSize};
+        for (int j = j_min; j <= j_max; ++j) {
+            for (int i = i_min; i <= i_max; ++i) {
+                const Vec3 node{heightmap.boundsMin.x + static_cast<float>(i) * cellSize, 0.0f,
+                                heightmap.boundsMin.z + static_cast<float>(j) * cellSize};
 
-                    // Barycentric coverage, edges included: a node on a shared
-                    // edge is claimed by every triangle that touches it, which
-                    // the max-Y rule resolves.
-                    const float e0 = cross_xz(p1, p2, node);
-                    const float e1 = cross_xz(p2, p0, node);
-                    const float e2 = cross_xz(p0, p1, node);
-                    const bool inside = area > 0.0f ? (e0 >= 0.0f && e1 >= 0.0f && e2 >= 0.0f)
-                                                    : (e0 <= 0.0f && e1 <= 0.0f && e2 <= 0.0f);
-                    if (!inside) {
-                        continue;
-                    }
+                // Barycentric coverage, edges included: a node on a shared
+                // edge is claimed by every triangle that touches it, which
+                // the max-Y rule resolves.
+                const float e0 = cross_xz(p1, p2, node);
+                const float e1 = cross_xz(p2, p0, node);
+                const float e2 = cross_xz(p0, p1, node);
+                const bool inside = area > 0.0f ? (e0 >= 0.0f && e1 >= 0.0f && e2 >= 0.0f)
+                                                : (e0 <= 0.0f && e1 <= 0.0f && e2 <= 0.0f);
+                if (!inside) {
+                    continue;
+                }
 
-                    // λ0 = e0/area is p0's barycentric weight, and so on: the
-                    // sub-triangle opposite a vertex is the one the other two
-                    // edges form.
-                    const float y = (e0 * p0.y + e1 * p1.y + e2 * p2.y) / area;
-                    float& cell =
-                        heightmap.heights[static_cast<std::size_t>(j) * heightmap.width + i];
-                    if (std::isnan(cell) || y > cell) {
-                        cell = y;
-                    }
+                // λ0 = e0/area is p0's barycentric weight, and so on: the
+                // sub-triangle opposite a vertex is the one the other two
+                // edges form.
+                const float y = (e0 * p0.y + e1 * p1.y + e2 * p2.y) / area;
+                float& cell =
+                    heightmap.heights[static_cast<std::size_t>(j) * heightmap.width + i];
+                if (std::isnan(cell) || y > cell) {
+                    cell = y;
+                }
+                if (floor_triangle) {
+                    insert_layer(&heightmap.layers[layer_base(heightmap, i, j)],
+                                 heightmap.maxLayers, y);
                 }
             }
         }
+    });
+
+    if (layered) {
+        // Walls, once every floor layer is known: march each steep triangle's
+        // outline at half-cell steps and flag the layers its height reaches.
+        for_each_triangle([&](Vec3 p0, Vec3 p1, Vec3 p2) {
+            const float s = steepness(p0, p1, p2);
+            if (!(s >= 0.0f && s < kWallSteepness)) {
+                return;
+            }
+            const float y_lo = std::min({p0.y, p1.y, p2.y});
+            const float y_hi = std::max({p0.y, p1.y, p2.y});
+            const Vec3 corners[3] = {p0, p1, p2};
+            for (int e = 0; e < 3; ++e) {
+                const Vec3 a = corners[e];
+                const Vec3 b = corners[(e + 1) % 3];
+                const float length = std::hypot(b.x - a.x, b.z - a.z);
+                const int steps = std::max(1, static_cast<int>(std::ceil(length / (cellSize * 0.5f))));
+                for (int n = 0; n <= steps; ++n) {
+                    const float f = static_cast<float>(n) / static_cast<float>(steps);
+                    flag_walls_near(heightmap, a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f, y_lo,
+                                    y_hi);
+                }
+            }
+        });
     }
     return heightmap;
 }
@@ -259,4 +407,84 @@ float heightmap_sample(const Heightmap& heightmap, Vec3 p) {
 bool heightmap_in_bounds(const Heightmap& heightmap, Vec3 p) {
     return p.x >= heightmap.boundsMin.x && p.x <= heightmap.boundsMax.x &&
            p.z >= heightmap.boundsMin.z && p.z <= heightmap.boundsMax.z;
+}
+
+float heightmap_floor(const Heightmap& heightmap, Vec3 p, float step) {
+    if (!is_layered(heightmap)) {
+        return heightmap_sample(heightmap, p);
+    }
+
+    const float x = clamp_coordinate(p.x, heightmap.boundsMin.x, heightmap.boundsMax.x);
+    const float z = clamp_coordinate(p.z, heightmap.boundsMin.z, heightmap.boundsMax.z);
+    const float u = (x - heightmap.boundsMin.x) / heightmap.cellSize;
+    const float v = (z - heightmap.boundsMin.z) / heightmap.cellSize;
+    const int i0 = clamp_index(std::floor(u), heightmap.width);
+    const int j0 = clamp_index(std::floor(v), heightmap.height);
+    const int i1 = std::min(i0 + 1, heightmap.width - 1);
+    const int j1 = std::min(j0 + 1, heightmap.height - 1);
+
+    const float h00 = layer_height(heightmap, i0, j0, p.y, step);
+    const float h10 = layer_height(heightmap, i1, j0, p.y, step);
+    const float h01 = layer_height(heightmap, i0, j1, p.y, step);
+    const float h11 = layer_height(heightmap, i1, j1, p.y, step);
+    if (!std::isnan(h00) && !std::isnan(h10) && !std::isnan(h01) && !std::isnan(h11)) {
+        const float tx = u - static_cast<float>(i0);
+        const float tz = v - static_cast<float>(j0);
+        return (1.0f - tx) * (1.0f - tz) * h00 + tx * (1.0f - tz) * h10 +
+               (1.0f - tx) * tz * h01 + tx * tz * h11;
+    }
+
+    // Any empty node: the nearest node holding a layer, the four first and then
+    // the whole grid (a spawn over a hole), as heightmap_sample does.
+    float best = std::numeric_limits<float>::quiet_NaN();
+    float best_distance = std::numeric_limits<float>::infinity();
+    const auto consider = [&](int i, int j) {
+        const float height = layer_height(heightmap, i, j, p.y, step);
+        if (std::isnan(height)) {
+            return;
+        }
+        const float distance = node_distance_squared(heightmap, i, j, x, z);
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = height;
+        }
+    };
+    for (const int j : {j0, j1}) {
+        for (const int i : {i0, i1}) {
+            consider(i, j);
+        }
+    }
+    if (!std::isnan(best)) {
+        return best;
+    }
+    for (int j = 0; j < heightmap.height; ++j) {
+        for (int i = 0; i < heightmap.width; ++i) {
+            consider(i, j);
+        }
+    }
+    return best;
+}
+
+bool heightmap_walkable(const Heightmap& heightmap, Vec3 from, Vec3 to) {
+    if (!is_layered(heightmap)) {
+        return true;
+    }
+    int si = 0, sj = 0, ti = 0, tj = 0;
+    nearest_node(heightmap, from, si, sj);
+    nearest_node(heightmap, to, ti, tj);
+    const int src = select_layer(heightmap, si, sj, from.y, kFloorStep);
+    const int dst = select_layer(heightmap, ti, tj, from.y, kFloorStep);
+    if (dst < 0) {
+        return src < 0;  // no floor ahead: only a body already over a hole may move
+    }
+    const std::size_t dst_at = layer_base(heightmap, ti, tj) + dst;
+    if (heightmap.blocked[dst_at] != 0) {
+        return false;
+    }
+    if (src < 0) {
+        return true;
+    }
+    const float rise = heightmap.layers[dst_at] - heightmap.layers[layer_base(heightmap, si, sj) + src];
+    // A hair of slack: a 0.6 m stair is a step, not a wall.
+    return rise <= kFloorStep + 1e-4f && -rise <= kFloorDrop + 1e-4f;
 }

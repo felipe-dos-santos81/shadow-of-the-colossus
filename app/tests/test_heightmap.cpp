@@ -16,6 +16,7 @@
 
 #include "heightmap.h"
 #include "math3d.h"
+#include "player.h"
 #include "scene.h"
 
 namespace {
@@ -316,4 +317,146 @@ TEST_CASE("heightmap_sample refuses an empty grid instead of reading out of boun
     short_grid.boundsMin = Vec3{0, 0, 0};
     short_grid.boundsMax = Vec3{3, 0, 3};
     CHECK(std::isnan(heightmap_sample(short_grid, {1, 0, 1})));
+}
+
+// ---- S7: the layered ground ------------------------------------------------
+
+namespace {
+
+// Two triangles: the horizontal quad [x0, x1] x [z0, z1] at height y.
+void add_floor(std::vector<Vec3>& out, float x0, float x1, float z0, float z1, float y) {
+    out.insert(out.end(), {{x0, y, z0}, {x1, y, z0}, {x0, y, z1}});
+    out.insert(out.end(), {{x1, y, z0}, {x1, y, z1}, {x0, y, z1}});
+}
+
+// Two triangles: the vertical quad on x = x, spanning z0..z1 and y0..y1.
+void add_wall_x(std::vector<Vec3>& out, float x, float z0, float z1, float y0, float y1) {
+    out.insert(out.end(), {{x, y0, z0}, {x, y1, z0}, {x, y0, z1}});
+    out.insert(out.end(), {{x, y1, z0}, {x, y1, z1}, {x, y0, z1}});
+}
+
+}  // namespace
+
+TEST_CASE("an unlayered map's floor is its sample and every move is walkable") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 10, 0, 10, 2.0f);
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    CHECK(hm.maxLayers == 0);
+    for (const float x : {0.0f, 3.3f, 9.9f}) {
+        const float z = 10.0f - x;
+        const float sample = heightmap_sample(hm, {x, 0, z});
+        CHECK(heightmap_floor(hm, {x, -50, z}, kFloorStep) == sample);
+        CHECK(heightmap_floor(hm, {x, 500, z}, kFloorStep) == sample);
+        CHECK(heightmap_walkable(hm, {x, 0, z}, {x + 5, 0, z}));
+        CHECK(heightmap_walkable(hm, {x, 0, z}, {x, 900, z + 50}));
+    }
+    // A hand-built map with no grid at all stays defined.
+    CHECK(std::isnan(heightmap_floor(Heightmap{}, {0, 0, 0}, kFloorStep)));
+    CHECK(heightmap_walkable(Heightmap{}, {0, 0, 0}, {1, 0, 0}));
+}
+
+TEST_CASE("a layered two-storey column answers the floor under the feet") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 4, -4, 4, 9.0f);
+    add_floor(tris, -4, 4, -4, 4, 60.0f);
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    CHECK(hm.maxLayers == kHeightmapLayers);
+    CHECK(heightmap_floor(hm, {0, 9.2f, 0}, kFloorStep) == doctest::Approx(9.0f));
+    CHECK(heightmap_floor(hm, {0, 61.0f, 0}, kFloorStep) == doctest::Approx(60.0f));
+    CHECK(heightmap_floor(hm, {0, 5.0f, 0}, kFloorStep) == doctest::Approx(9.0f));
+    CHECK(heightmap_floor(hm, {0.5f, 9.2f, 0.5f}, kFloorStep) == doctest::Approx(9.0f));
+    // The unlayered query still sees the top.
+    CHECK(heightmap_sample(hm, {0, 0, 0}) == doctest::Approx(60.0f));
+    // Walking on the lower storey under the roof stays walkable.
+    CHECK(heightmap_walkable(hm, {0, 9, 0}, {1, 9, 0}));
+}
+
+TEST_CASE("layers within 0.05 m merge and a full node keeps the highest") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 4, 0, 4, 1.00f);
+    add_floor(tris, 0, 4, 0, 4, 1.03f);  // merges into 1.03
+    for (int k = 0; k < kHeightmapLayers + 2; ++k) {
+        add_floor(tris, 0, 4, 0, 4, 10.0f * static_cast<float>(k + 1));
+    }
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    // 10 storeys + the merged pair = 11 distinct, the 8 highest survive: 30..100.
+    CHECK(heightmap_floor(hm, {2, 0, 2}, kFloorStep) == doctest::Approx(30.0f));
+    CHECK(heightmap_floor(hm, {2, 100, 2}, kFloorStep) == doctest::Approx(100.0f));
+    CHECK(heightmap_floor(hm, {2, 45, 2}, kFloorStep) == doctest::Approx(40.0f));
+}
+
+TEST_CASE("a step within kFloorStep is climbed") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 0, -4, 4, 9.0f);
+    add_floor(tris, 0, 4, -4, 4, 9.5f);
+    add_floor(tris, 0, 4, -4, 4, 12.0f);  // a walkway over the second
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    CHECK(heightmap_floor(hm, {1, 9.0f, 0}, kFloorStep) == doctest::Approx(9.5f));
+    CHECK(heightmap_floor(hm, {-2, 9.0f, 0}, kFloorStep) == doctest::Approx(9.0f));
+    CHECK(heightmap_floor(hm, {1, 12.2f, 0}, kFloorStep) == doctest::Approx(12.0f));
+    CHECK(heightmap_walkable(hm, {-2, 9.0f, 0}, {1, 9.0f, 0}));
+}
+
+TEST_CASE("a rise above kFloorStep or a drop below kFloorDrop is not walkable") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 0, -4, 4, 9.0f);
+    add_floor(tris, 0, 4, -4, 4, 10.0f);  // a 1.0 m ledge
+    add_floor(tris, 4, 8, -4, 4, 5.0f);   // a 5 m drop from the ledge
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    CHECK_FALSE(heightmap_walkable(hm, {-2, 9, 0}, {1, 9, 0}));   // up 1.0
+    CHECK(heightmap_walkable(hm, {1, 10, 0}, {-2, 10, 0}));       // down 1.0
+    CHECK_FALSE(heightmap_walkable(hm, {2, 10, 0}, {6, 10, 0}));  // down 5.0
+}
+
+TEST_CASE("a wall in the body band blocks, a ceiling above it does not") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 6, -4, 4, 9.0f);
+    add_wall_x(tris, 3.0f, -4, 4, 9.0f, 13.0f);
+    add_floor(tris, -4, 6, -4, 4, 20.0f);
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    CHECK_FALSE(heightmap_walkable(hm, {1, 9, 0}, {3.5f, 9, 0}));
+    CHECK_FALSE(heightmap_walkable(hm, {5, 9, 0}, {2.6f, 9, 0}));
+    CHECK(heightmap_walkable(hm, {1, 9, 0}, {1, 9, 2}));
+    // The roof's own band (y 20.6..21.8) is above the wall's top (13).
+    CHECK(heightmap_walkable(hm, {1, 20, 0}, {3.5f, 20, 0}));
+    // A wall is never ground: the floor under it is still the floor.
+    CHECK(heightmap_floor(hm, {3, 9, 0}, kFloorStep) == doctest::Approx(9.0f));
+}
+
+TEST_CASE("a move with no floor within kFloorDrop below is refused") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 4, -4, 4, 9.0f);
+    add_floor(tris, 4, 12, -4, 4, 0.0f);  // the exterior ground
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    CHECK_FALSE(heightmap_walkable(hm, {3, 9, 0}, {5, 9, 0}));
+    CHECK(heightmap_walkable(hm, {1, 9, 0}, {3, 9, 0}));
+}
+
+TEST_CASE("a layered target over a hole is refused, a source over one may leave") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 4, 0, 4, 9.0f);
+    add_floor(tris, 8, 12, 0, 4, 9.0f);  // a gap at x 4..8
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
+    CHECK_FALSE(heightmap_walkable(hm, {3, 9, 2}, {6, 9, 2}));
+    CHECK(heightmap_walkable(hm, {6, 9, 2}, {7, 9, 2}));
+}
+
+TEST_CASE("player_update slides along a wall and stays on its floor") {
+    std::vector<Vec3> tris;
+    add_floor(tris, -4, 12, -4, 12, 9.0f);
+    add_wall_x(tris, 6.0f, -4, 12, 9.0f, 13.0f);
+    const Heightmap hm = build_heightmap(scene_from_triangles(tris), 0.5f, true);
+
+    PlayerState state;
+    state.position = {2.0f, 9.0f, 0.0f};
+    PlayerInput input;
+    input.forward = true;  // camera yaw 90: forward is +X, right is +Z
+    input.right = true;
+    for (int i = 0; i < 120; ++i) {
+        player_update(state, input, 0.05f, hm, 90.0f);
+    }
+    CHECK(state.position.x < 6.0f);  // never through the wall
+    CHECK(state.position.x > 4.0f);  // it did walk up to it
+    CHECK(state.position.z > 5.0f);  // and slid along it
+    CHECK(state.position.y == doctest::Approx(9.0f));
 }
