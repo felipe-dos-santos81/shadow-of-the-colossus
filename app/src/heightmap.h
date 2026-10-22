@@ -21,7 +21,11 @@
 // node, up to `maxLayers` floor heights and a wall flag per floor. `heights`
 // stays the node's maximum Y, so `heightmap_sample` answers the same thing on
 // either kind of map; the arena is never layered.
-inline constexpr int kHeightmapLayers = 8;
+// The cap is measured against the shrine (S7 Task 9): its 1 m grid holds up to 60
+// distinct surfaces in one column (the back stair under the stacked roof and
+// garden: 16), and a full node keeps its highest — so a cap of 8 dropped the
+// stair's own floor. 64 keeps every surface (~9.5 MB on the 158 x 186 grid).
+inline constexpr int kHeightmapLayers = 64;
 inline constexpr float kFloorStep = 0.6f;   // the most a move may step up
 inline constexpr float kFloorDrop = 3.0f;   // the most a horizontal move may step down
 // A wall blocks a floor layer when it overlaps [y + kBodyBandLow, y + kBodyBandHigh]

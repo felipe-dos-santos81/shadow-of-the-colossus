@@ -64,7 +64,17 @@ void print_usage(FILE* out) {
                  "                    camera), print s6-status, soft-reset with R,\n"
                  "                    print s6-reset, exit\n"
                  "  --s6-stills DIR   with --s6-selftest: write the motion, camera,\n"
-                 "                    tendrils and corpse stills to DIR\n");
+                 "                    tendrils and corpse stills to DIR\n"
+                 "  --stage arena|shrine  the first stage (default arena; the shrine\n"
+                 "                    starts with control; R returns to the arena)\n"
+                 "  --shrine-manifest PATH  the shrine's manifest (default\n"
+                 "                    out/re/stage/shrine.manifest)\n"
+                 "  --no-return       keep S6's end state: no return to the shrine\n"
+                 "  --s7-selftest     seed Valus dead, run the return to the shrine, the\n"
+                 "                    wake and the shrine probes, R back and reload;\n"
+                 "                    print the s7-* lines, exit\n"
+                 "  --s7-stills DIR   with --s7-selftest: write the fade, wake, altar,\n"
+                 "                    idols and hall stills to DIR\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -126,13 +136,23 @@ int main(int argc, char** argv) {
             opts.s6Selftest = true;
             continue;
         }
+        if (arg == "--s7-selftest") {
+            opts.s7Selftest = true;
+            continue;
+        }
+        if (arg == "--no-return") {
+            opts.noReturn = true;
+            continue;
+        }
 
         const bool wants_value = arg == "--library" || arg == "--model" || arg == "--screenshot" ||
                                  arg == "--frames" || arg == "--width" || arg == "--height" ||
                                  arg == "--anim" || arg == "--anim-time" || arg == "--manifest" ||
                                  arg == "--entity-time" || arg == "--camera-target" ||
                                  arg == "--s41-stills" || arg == "--s42-stills" ||
-                                 arg == "--s6-stills" || arg == "--audio-mixdown";
+                                 arg == "--s6-stills" || arg == "--audio-mixdown" ||
+                                 arg == "--stage" || arg == "--shrine-manifest" ||
+                                 arg == "--s7-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -187,6 +207,18 @@ int main(int argc, char** argv) {
             opts.s6StillsPath = value;
         } else if (arg == "--audio-mixdown") {
             opts.audioMixdownPath = value;
+        } else if (arg == "--stage") {
+            if (std::strcmp(value, "arena") != 0 && std::strcmp(value, "shrine") != 0) {
+                std::fprintf(stderr, "sotc-viewer: --stage expects arena or shrine, got: %s\n",
+                             value);
+                print_usage(stderr);
+                return 2;
+            }
+            opts.stage = std::strcmp(value, "shrine") == 0 ? StageId::Shrine : StageId::Arena;
+        } else if (arg == "--shrine-manifest") {
+            opts.shrineManifestPath = value;
+        } else if (arg == "--s7-stills") {
+            opts.s7StillsPath = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -276,6 +308,43 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "sotc-viewer: --s6-selftest cannot be combined with another selftest; "
                      "pass one\n");
+        print_usage(stderr);
+        return 2;
+    }
+    // S7: the selftest needs the arena encounter and the player glb, runs
+    // alone and starts in the arena; the shrine stage needs the arena's
+    // --manifest too (R returns there) and is an interactive start.
+    const bool frozen_selftest = opts.selftest || opts.s3Selftest || opts.s4Selftest ||
+                                 opts.s41Selftest || opts.s42Selftest || opts.s5Selftest ||
+                                 opts.s6Selftest;
+    if (opts.s7Selftest && opts.manifestPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s7-selftest needs --manifest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s7Selftest && opts.modelRelPath.empty()) {
+        std::fprintf(stderr, "sotc-viewer: --s7-selftest needs --model (the player glb)\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s7Selftest && frozen_selftest) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s7-selftest cannot be combined with another selftest; "
+                     "pass one\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.s7StillsPath.empty() && !opts.s7Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s7-stills needs --s7-selftest\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.stage == StageId::Shrine &&
+        (opts.manifestPath.empty() || frozen_selftest || opts.s7Selftest ||
+         !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --stage shrine is an interactive start: it needs --manifest "
+                     "(the arena R returns to) and no selftest or capture\n");
         print_usage(stderr);
         return 2;
     }

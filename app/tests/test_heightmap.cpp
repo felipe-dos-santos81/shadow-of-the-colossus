@@ -379,7 +379,8 @@ TEST_CASE("layers within 0.05 m merge and a full node keeps the highest") {
         add_floor(tris, 0, 4, 0, 4, 10.0f * static_cast<float>(k + 1));
     }
     const Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f, true);
-    // 10 storeys + the merged pair = 11 distinct, the 8 highest survive: 30..100.
+    // kHeightmapLayers + 2 storeys + the merged pair: the three lowest (1.03, 10,
+    // 20) are dropped, the kHeightmapLayers highest survive from 30 up.
     CHECK(heightmap_floor(hm, {2, 0, 2}, kFloorStep) == doctest::Approx(30.0f));
     CHECK(heightmap_floor(hm, {2, 100, 2}, kFloorStep) == doctest::Approx(100.0f));
     CHECK(heightmap_floor(hm, {2, 45, 2}, kFloorStep) == doctest::Approx(40.0f));

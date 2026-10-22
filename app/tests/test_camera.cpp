@@ -720,3 +720,45 @@ TEST_CASE("test_renderer_cull: the model matrix moves the box into view") {
     CHECK(aabb_outside_frustum(mat4_mul(viewProj, mat4_identity()), mn, mx));
     CHECK_FALSE(aabb_outside_frustum(mat4_mul(viewProj, translation(-200.0f, 0.0f, 0.0f)), mn, mx));
 }
+
+// The wake camera (S7 Task 9, design D9 — authored): two eased keys around the
+// spawn. At t = 0 the eye is 1.2 m up and 2.5 m in front of the spawn (along
+// the yaw), looking at Wander lying on the floor; at t = duration it is 1.8 m
+// up and 3.5 m behind, looking along the yaw (toward the altar) at his head.
+TEST_CASE("camera_wake_pose keys the wake: low in front, then behind toward the altar") {
+    const Vec3 spawn{2.0f, 9.0f, 1.0f};
+    const float yaw = 30.0f;
+    const float duration = 11.8f;
+    const Vec3 fwd{std::sin(yaw * kDegToRad), 0.0f, std::cos(yaw * kDegToRad)};
+    const auto check_vec = [](Vec3 got, Vec3 want) {
+        CHECK(got.x == doctest::Approx(want.x).epsilon(1e-4));
+        CHECK(got.y == doctest::Approx(want.y).epsilon(1e-4));
+        CHECK(got.z == doctest::Approx(want.z).epsilon(1e-4));
+    };
+
+    const Camera start = camera_wake_pose(spawn, yaw, 0.0f, duration);
+    check_vec(camera_eye(start),
+              Vec3{spawn.x + 2.5f * fwd.x, spawn.y + 1.2f, spawn.z + 2.5f * fwd.z});
+    check_vec(start.target, Vec3{spawn.x, spawn.y + kWakeLyingTargetHeight, spawn.z});
+
+    const Camera end = camera_wake_pose(spawn, yaw, duration, duration);
+    check_vec(camera_eye(end),
+              Vec3{spawn.x - 3.5f * fwd.x, spawn.y + 1.8f, spawn.z - 3.5f * fwd.z});
+    check_vec(end.target, Vec3{spawn.x, spawn.y + kFollowHeadHeight, spawn.z});
+    // Looking along the yaw: the look direction's heading is the spawn yaw.
+    CHECK(camera_look_yaw(end) == doctest::Approx(yaw));
+
+    const Camera mid = camera_wake_pose(spawn, yaw, 0.5f * duration, duration);
+    const Vec3 mid_eye = camera_eye(mid);
+    CHECK(std::isfinite(mid_eye.x));
+    CHECK(std::isfinite(mid_eye.y));
+    CHECK(std::isfinite(mid_eye.z));
+    CHECK(std::isfinite(mid.target.y));
+    CHECK(mid.distance > 0.5f);  // the eye never passes through the body
+
+    // Past the end it holds the end key; a broken clock answers the start key.
+    check_vec(camera_eye(camera_wake_pose(spawn, yaw, 99.0f, duration)), camera_eye(end));
+    check_vec(camera_eye(camera_wake_pose(spawn, yaw, std::numeric_limits<float>::quiet_NaN(),
+                                          duration)),
+              camera_eye(start));
+}

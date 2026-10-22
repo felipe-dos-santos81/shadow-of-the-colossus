@@ -16,6 +16,9 @@ struct Camera {
 // side), pitch lifts the eye from the horizon, and the world's +Y is up.
 Mat4 camera_view(const Camera&);
 
+// The eye's world position: `target + distance * (cos p sin y, sin p, cos p cos y)`.
+Vec3 camera_eye(const Camera&);
+
 // View-to-clip matrix: right-handed, Metal's [0, 1] depth range. The near and
 // far planes scale with the orbit distance.
 Mat4 camera_proj(const Camera&, float aspect);
@@ -233,3 +236,24 @@ inline constexpr float kDeathWideYawOffsetDeg = 45.0f;
 // key and the path is continuous. `valus` is the entity's placement point;
 // `player` anchors the T8 follow key.
 Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t);
+
+// --- Wake camera (S7 Task 9, design D9 — authored) ----------------------------
+//
+// The shrine wake's camera: two keys around the spawn, eased with a smoothstep
+// as orbit poses (the eye swings round Wander's side, never through him).
+//
+//   t = 0         the eye 1.2 m up and 2.5 m in front of the spawn (along
+//                 `yawDeg`), looking at Wander lying on the floor
+//   t = duration  the eye 1.8 m up and 3.5 m behind, looking along the yaw (at
+//                 the altar) over his head — the follow camera's target, so the
+//                 hand-back to camera_follow eases without a jump
+//
+// `t` past `duration` (or a non-positive duration) holds the end key; a
+// non-finite `t` answers the start key. The values are builder-authored.
+inline constexpr float kWakeFrontDistance = 2.5f;
+inline constexpr float kWakeFrontEyeHeight = 1.2f;
+inline constexpr float kWakeLyingTargetHeight = 0.3f;  // the lying body
+inline constexpr float kWakeBackDistance = 3.5f;
+inline constexpr float kWakeBackEyeHeight = 1.8f;
+
+Camera camera_wake_pose(Vec3 spawn, float yawDeg, float t, float duration);

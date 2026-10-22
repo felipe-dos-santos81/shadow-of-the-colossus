@@ -47,12 +47,15 @@ bool finite_vec3(Vec3 v) {
 
 }  // namespace
 
-Mat4 camera_view(const Camera& camera) {
+Vec3 camera_eye(const Camera& camera) {
     const Vec3 offset = orbit_offset(camera.yaw, camera.pitch);
-    const Vec3 eye{camera.target.x + offset.x * camera.distance,
-                   camera.target.y + offset.y * camera.distance,
-                   camera.target.z + offset.z * camera.distance};
-    return mat4_look_at(eye, camera.target, Vec3{0.0f, 1.0f, 0.0f});
+    return Vec3{camera.target.x + offset.x * camera.distance,
+                camera.target.y + offset.y * camera.distance,
+                camera.target.z + offset.z * camera.distance};
+}
+
+Mat4 camera_view(const Camera& camera) {
+    return mat4_look_at(camera_eye(camera), camera.target, Vec3{0.0f, 1.0f, 0.0f});
 }
 
 Mat4 camera_proj(const Camera& camera, float aspect) {
@@ -428,4 +431,27 @@ Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& play
             death_ease((t - kDeathWideSeconds) / (kDeathFollowSeconds - kDeathWideSeconds)));
     }
     return follow;
+}
+
+Camera camera_wake_pose(Vec3 spawn, float yawDeg, float t, float duration) {
+    // An orbit key whose eye sits `back` metres along -yaw (negative = in
+    // front) and `eyeUp` above the spawn, looking at `targetUp` above it.
+    const auto key = [&](float back, float eyeUp, float targetUp) {
+        Camera c{};
+        c.target = Vec3{spawn.x, spawn.y + targetUp, spawn.z};
+        const float horizontal = std::fabs(back);
+        c.distance = std::sqrt(horizontal * horizontal + (eyeUp - targetUp) * (eyeUp - targetUp));
+        c.pitch = std::atan2(eyeUp - targetUp, horizontal) / kDegToRad;
+        c.yaw = back < 0.0f ? yawDeg : yawDeg + 180.0f;
+        return c;
+    };
+    const Camera front = key(-kWakeFrontDistance, kWakeFrontEyeHeight, kWakeLyingTargetHeight);
+    const Camera behind = key(kWakeBackDistance, kWakeBackEyeHeight, kFollowHeadHeight);
+    if (!std::isfinite(t)) {
+        return front;
+    }
+    if (!(duration > 0.0f) || t >= duration) {
+        return behind;
+    }
+    return death_blend(front, behind, death_ease(t / duration));
 }

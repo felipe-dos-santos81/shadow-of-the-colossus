@@ -71,6 +71,9 @@ inline void reset_encounter(Encounter& encounter) {
     encounter.entityYawDeg = encounter.entityBaseYawDeg;
 }
 
+// The stages run_app can compose (S7 D6): the --manifest arena, or the shrine.
+enum class StageId { Arena, Shrine };
+
 // One viewer run's parameters, filled by the argument parser in main.cpp.
 struct AppOptions {
     std::string libraryDir;      // converted asset library (--library, or $SOTC_LIB)
@@ -161,6 +164,24 @@ struct AppOptions {
     // snapshotted and restored around it, so the timeline's values are
     // identical with and without stills.
     std::string s6StillsPath;
+    // S7 (design D11/D13): --stage arena|shrine is the first stage (the shrine
+    // starts in Free; a dev and walk aid); --no-return keeps S6's end state in
+    // interactive play (the return machine never runs); --shrine-manifest is
+    // the shrine's composed manifest.
+    StageId stage = StageId::Arena;
+    bool noReturn = false;
+    std::string shrineManifestPath = "out/re/stage/shrine.manifest";
+    // --s7-selftest: the S7 acceptance timeline (design §8.6). In the arena,
+    // seed Valus dead (death Done, the corpse shown), run the return machine
+    // at fixed 1/60 s steps (an R during the first FadeOut, then again to
+    // Load), load the shrine, finish FadeIn/Wake/Free, print the ground, wall,
+    // idol, Mono and perf probes, press R back to the arena and load the
+    // shrine once more. Prints the `s7-*` lines and exits 0. Requires
+    // --manifest (the arena encounter) and --model.
+    bool s7Selftest = false;
+    // --s7-stills DIR: with --s7-selftest, write fade.png, wake.png,
+    // altar.png, idols.png and hall.png into DIR (the script creates it).
+    std::string s7StillsPath;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode
@@ -173,9 +194,10 @@ inline bool entity_target_key_allowed(bool followMode, bool entityChestResolved)
 
 // The stage loop (S7 D6): run_app composes one stage per iteration; the
 // iteration ends with a request — quit, or release the scene and load `next`.
-enum class StageId { Arena, Shrine };
 struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
-struct StageCarry { ReturnState ret{}; int s7Step = 0; bool reloadedShrine = false; };  // what crosses an iteration
+// What crosses an iteration: the return machine's state, the --s7-selftest's
+// progress, and the first shrine load's mesh count (a reload must match it).
+struct StageCarry { ReturnState ret{}; int s7Step = 0; std::size_t shrineMeshes = 0; };
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the
 // window close button). With opts.selftest, runs exactly one frame, prints the
