@@ -402,8 +402,8 @@ move; the identity was checked directly as well: `--s42-selftest` (audio off) pr
   `mix(1, rgb, alpha)` as a multiplicative dark veil.
 - **D8 / R4 — the frozen S5 acceptance runs first**, then the S6 decode. §7.
 - **D1 / D2 — the tendrils and the camera are reconstructions**, labelled as such. §3.
-- **The asset gate**: `docs/notes/s6-recon.md` (the 13 assets, the four PNGs' SHA-256s, the
-  dead body's 6/6/0 shape).
+- **The asset gate**: `docs/notes/s6-recon.md` (the 13 assets recorded at recon, 14 since the veins
+  veil check; the four PNGs' SHA-256s; the dead body's 6/6/0 shape).
 - **The maps**: `tools/re/audio/s5_map.json` (frozen) and `tools/re/audio/s6_map.json` (the ten
   cues).
 

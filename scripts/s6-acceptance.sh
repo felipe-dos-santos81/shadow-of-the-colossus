@@ -326,6 +326,7 @@ done_line="$(one_line '^s6-phase phase=Done ' "s6-phase Done")"
 [[ "$(field "$idle_line" total)" = "0.000" ]] || fail "s6-phase Idle total=$(field "$idle_line" total) (expected 0.000)"
 [[ "$(field "$idle_line" lock)" = "0" ]] || fail "s6-phase Idle lock=$(field "$idle_line" lock) (expected 0)"
 [[ "$(field "$idle_line" corpse)" = "0" ]] || fail "s6-phase Idle corpse=$(field "$idle_line" corpse) (expected 0)"
+[[ "$(field "$idle_line" roots)" = "0" ]] || fail "s6-phase Idle roots=$(field "$idle_line" roots) (expected 0)"
 
 [[ "$(field "$motion_line" total)" = "0.000" ]] || fail "s6-phase Motion total=$(field "$motion_line" total) (expected 0.000)"
 [[ "$(field "$motion_line" lock)" = "1" ]] || fail "s6-phase Motion lock=$(field "$motion_line" lock) (expected 1)"

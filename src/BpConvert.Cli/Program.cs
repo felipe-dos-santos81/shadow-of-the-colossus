@@ -276,15 +276,10 @@ static int TextureCommand(string[] args)
         Console.Error.WriteLine($"bp-convert texture: {e.Message}");
         return 1;
     }
-    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-    {
-        Console.Error.WriteLine($"bp-convert texture: {e.GetType().Name}: {e.Message}");
-        return 1;
-    }
     catch (Exception e)
     {
-        // Any other failure (a decoder's ArgumentException, say) is still a
-        // decode failure, not a crash: the documented matrix is 0 = ok,
+        // An IO failure, or any other (a decoder's ArgumentException, say), is
+        // still a decode failure, not a crash: the documented matrix is 0 = ok,
         // 1 = decode/IO failure, 2 = bad invocation.
         Console.Error.WriteLine($"bp-convert texture: {e.GetType().Name}: {e.Message}");
         return 1;

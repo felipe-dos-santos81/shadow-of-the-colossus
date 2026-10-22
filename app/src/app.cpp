@@ -1711,6 +1711,39 @@ void write_screenshot(Renderer& renderer, SDL_Window* win, const std::string& pa
                 pixel_height);
 }
 
+// `<dir>/<name>.png`, whether or not `dir` carries its trailing slash.
+std::string still_png_path(std::string dir, const char* name) {
+    if (!dir.empty() && dir.back() != '/') {
+        dir += '/';
+    }
+    return dir + name + ".png";
+}
+
+// A still is an observation: every rig's clock is snapshotted around `render`
+// and restored, so no capture can move the clip time, the clip selection, or a
+// playing/pinned flag between two timeline steps.
+template <typename Render>
+void with_clocks_restored(std::vector<Playback>& playbacks, Render&& render) {
+    struct PlaybackClockState {
+        int index;
+        float time;
+        bool playing;
+        bool pinned;
+    };
+    std::vector<PlaybackClockState> saved;
+    saved.reserve(playbacks.size());
+    for (const Playback& p : playbacks) {
+        saved.push_back(PlaybackClockState{p.index, p.time, p.playing, p.pinned});
+    }
+    render();
+    for (std::size_t i = 0; i < saved.size() && i < playbacks.size(); ++i) {
+        playbacks[i].index = saved[i].index;
+        playbacks[i].time = saved[i].time;
+        playbacks[i].playing = saved[i].playing;
+        playbacks[i].pinned = saved[i].pinned;
+    }
+}
+
 // --- S5 audio seam (Task 5) -------------------------------------------------
 
 // The app's one audio object: the mixer, the music lifecycle, and — for
@@ -3511,51 +3544,27 @@ int run_app(const AppOptions& opts) {
             // --s42-stills: one rendered PNG at a named phase, HUD visible (the
             // hurt and death stills must show Wander's amber bar). The frame is
             // rebuilt from the current playback/combat state, so a still shows
-            // exactly what the timeline has reached. A render is an observation:
-            // every rig's clock is snapshotted and restored, so no capture can
-            // move the clip time, the clip selection, or a playing/pinned flag
-            // between two timeline steps.
-            struct PlaybackClockState {
-                int index;
-                float time;
-                bool playing;
-                bool pinned;
-            };
-            const auto still_dir = [&]() {
-                std::string dir = opts.s42StillsDir;
-                if (!dir.empty() && dir.back() != '/') {
-                    dir += '/';
-                }
-                return dir;
-            };
+            // exactly what the timeline has reached, and every rig's clock is
+            // restored after it (with_clocks_restored).
             const auto still_path = [&](const char* name) {
-                return still_dir() + name + ".png";
+                return still_png_path(opts.s42StillsDir, name);
             };
             const auto capture_still = [&](const char* phase, const std::string& path) {
                 if (opts.s42StillsDir.empty()) {
                     return;
                 }
                 std::printf("s42-still phase=%s path=%s\n", phase, path.c_str());
-                std::vector<PlaybackClockState> saved;
-                saved.reserve(playbacks.size());
-                for (const Playback& p : playbacks) {
-                    saved.push_back(PlaybackClockState{p.index, p.time, p.playing, p.pinned});
-                }
-                const PlayerInput no_input;
-                update_combat_clips(playback, scene, combat, no_input, /*manualClip=*/false);
-                update_all_poses(renderer, scene, playbacks, 0.0f, club);
-                apply_player_transform(scene, player_rig_record, player,
-                                       active_player_lift(scene, playback, player_rig_record));
-                renderer.set_hud(hud_state(/*visible=*/true));
-                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                      /*acquire_swapchain=*/true);
-                write_screenshot(renderer, shell.win, path);
-                for (std::size_t i = 0; i < saved.size() && i < playbacks.size(); ++i) {
-                    playbacks[i].index = saved[i].index;
-                    playbacks[i].time = saved[i].time;
-                    playbacks[i].playing = saved[i].playing;
-                    playbacks[i].pinned = saved[i].pinned;
-                }
+                with_clocks_restored(playbacks, [&]() {
+                    const PlayerInput no_input;
+                    update_combat_clips(playback, scene, combat, no_input, /*manualClip=*/false);
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                    apply_player_transform(scene, player_rig_record, player,
+                                           active_player_lift(scene, playback, player_rig_record));
+                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                          /*acquire_swapchain=*/true);
+                    write_screenshot(renderer, shell.win, path);
+                });
             };
 
             // --- 1. Proxy: both shells on the pinned stand frame --------------
@@ -4651,24 +4660,8 @@ int run_app(const AppOptions& opts) {
             int effectRoots = 0;
             DeathPhase printed = death.phase;
 
-            // A still is an observation: every rig's clock is snapshotted and
-            // restored around the render, so no capture can move a clip time or
-            // a playing/pinned flag between two timeline steps.
-            struct PlaybackClockState {
-                int index;
-                float time;
-                bool playing;
-                bool pinned;
-            };
-            const auto still_dir = [&]() {
-                std::string dir = opts.s6StillsPath;
-                if (!dir.empty() && dir.back() != '/') {
-                    dir += '/';
-                }
-                return dir;
-            };
             const auto still_path = [&](const char* name) {
-                return still_dir() + name + ".png";
+                return still_png_path(opts.s6StillsPath, name);
             };
             // One frame of the death scene, rendered with or without the
             // effect pass: the same pose, the same camera, the same HUD, so
@@ -4693,19 +4686,10 @@ int run_app(const AppOptions& opts) {
                 if (opts.s6StillsPath.empty()) {
                     return;
                 }
-                std::vector<PlaybackClockState> saved;
-                saved.reserve(playbacks.size());
-                for (const Playback& p : playbacks) {
-                    saved.push_back(PlaybackClockState{p.index, p.time, p.playing, p.pinned});
-                }
-                render_death_frame(/*withEffect=*/true);
-                write_screenshot(renderer, shell.win, still_path(name));
-                for (std::size_t i = 0; i < saved.size() && i < playbacks.size(); ++i) {
-                    playbacks[i].index = saved[i].index;
-                    playbacks[i].time = saved[i].time;
-                    playbacks[i].playing = saved[i].playing;
-                    playbacks[i].pinned = saved[i].pinned;
-                }
+                with_clocks_restored(playbacks, [&]() {
+                    render_death_frame(/*withEffect=*/true);
+                    write_screenshot(renderer, shell.win, still_path(name));
+                });
             };
 
             bool done = false;
