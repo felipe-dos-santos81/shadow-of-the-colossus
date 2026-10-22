@@ -5,9 +5,8 @@ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
 original containers.
 
-**Status (milestone S5): the sound of the forbidden land — the game's own audio decoded at
-build time (the seven attributed cues plus Boss 1), a deterministic mixer, `M` to mute (user
-walk pending).**
+**Status (milestone S6): the fall — Valus's death sequence, the black tendrils, the corpse and the
+cinematic camera (user walk pending).**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -60,20 +59,39 @@ way (left stick move, right stick camera, RT grip, west/X/square strike, Start
 pause) and hot-plugs without latching an input. `--s41-selftest` and
 `--s42-selftest` run the deterministic acceptance timelines described below.
 
+**Valus's death is a sequence, not a freeze.** When his health reaches 0 a phase
+machine (`app/src/death.h`) takes over: his fall (`minotaur_a_death_front`,
+6.166877 s) plays once from the death clock, the black tendrils erupt from the
+two weakpoint shells between 0.4 s and 3.0 s, and the live rig is swapped for the
+shipped dead body and its dirtmound at the collapse (6.166877 s). The player's
+input is locked through the motion and the collapse — `R`, `M` and `Escape` stay
+live — and the control returns at 8.0 s, with the corpse still on the arena
+floor and Valus's health bar gone from the HUD. The cinematic camera is
+reconstructed: the follow pose, a 12 m pull-back 4 m up that looks up at the
+body, a low angle on the tendrils at 3.0 s, a wide on the corpse at 6.2 s, and
+the follow pose again at 8.0 s. The tendrils are a **labeled reconstruction**
+built from the game's own assets — the `death_tentacle_veins` mask and the three
+`.cptx` smoke atlases, 201 stations 0.25 m apart per root — but the `.csdr`
+particle simulator is **not** ported, so the motion is authored, not the game's
+own curves; the shipped type-36 death-camera clips are undecoded and are not
+played either. `--s6-selftest` runs the whole sequence deterministically.
+
 The encounter has its own voice. The library's converted audio slice is loaded at start
 (a missing manifest or one without a curated cue prints one error naming the manifest or the
-event and the scene runs silent; `--s5-selftest` makes the same condition fatal) and played
+event and the scene runs silent; `--s5-selftest` and `--s6-selftest` make the same condition
+fatal) and played
 through a 32-voice software mixer
 into one SDL3 stream at 48 kHz: the music is non-positional, world sounds attenuate with
 distance and pan by the player's relative bearing. Music starts on the first landed hit
 and loops, and stops at the `R` reset (and on Valus's defeat). `M` mutes and unmutes the whole
 mixer; there is no other audio UI. The curated slice is the seven attributed cues
 (`player.swing`, `player.hit`, `player.hurt`, `player.death`, `valus.telegraph`,
-`valus.impact`, `valus.hurt`) plus `music.boss` (`Boss 1`, 5.1 downmixed to stereo, looped).
-Valus's death, the club whoosh, the player's fall, ambience, grab/climb and footsteps are
+`valus.impact`, `valus.hurt`) plus `music.boss` (`Boss 1`, 5.1 downmixed to stereo, looped) and,
+since S6, `valus.death` (the tendril-burst roar) and `valus.club_swing` (the club whoosh).
+The player's fall, ambience, grab/climb and footsteps are
 **deferred** — none is in the cue map's `cues` array, so they are silent rather than
-placeholders (eight of them are listed under the map's `deferred` array with a reason each; the
-club whoosh and footsteps have no entry). `--s5-selftest --audio-mixdown PATH` runs the S4.2
+placeholders (seven of them are listed under the map's `deferred` array with a reason each).
+`--s5-selftest --audio-mixdown PATH` runs the S4.2
 timeline with the audio observer on and writes the proof.
 
 ## Build
@@ -126,6 +144,8 @@ is required. Escape or the close button quits.
 | `--s42-stills DIR` | with `--s42-selftest`, write six HUD-bearing stills into `DIR`: `stomp-telegraph.png`, `stomp-impact.png`, `club-swing.png`, `hurt.png`, `death.png`, `arm-weakpoint.png`; each capture restores the playback clocks, so the `s42-*` event lines are identical with and without stills; `DIR` must exist (the acceptance script creates it) |
 | `--s5-selftest` | compose the encounter `--manifest` and run the S4.2 timeline with the S5 audio observer on: the same fixed 1/60 s steps, one `s5-event t= event= clip=<manifest name> gain=` line per played cue, then the `s5-mix` quality line and `s5-status` last; writes the mixdown to `--audio-mixdown` and exits 1 on a missing cue clip or a silent capture; needs `--manifest` (with an entity) and `--audio-mixdown`; cannot be combined with another selftest |
 | `--audio-mixdown PATH` | with `--s5-selftest`, the 48 kHz float stereo WAV the mixer's disk sink writes — the headless acceptance capture; needs `--s5-selftest` |
+| `--s6-selftest` | compose the encounter `--manifest` and run the S6 death timeline through fixed 1/60 s steps with no window input: a club swing (so the whoosh fires on the production path), a scripted lethal event through the production `apply_combat_events`, the death phase machine to `Done` (the motion, the tendril burst, the collapse into the corpse, the cinematic camera), the `s6-perf` line and the R soft reset; prints the `s6-phase`, `s6-event`, `s6-perf`, `s6-death`, `s6-status` and `s6-reset` lines (13 in all) and exits 1 on a failed invariant (a missing cue clip, a dead colossus that is still collidable, a half-restored reset); needs `--manifest` (with an entity) and `--model`; cannot be combined with another selftest |
+| `--s6-stills DIR` | with `--s6-selftest`, write `motion.png` (0.200 s), `camera.png` (0.400 s, the pull-back key), `tendrils.png` (1.200 s, the burst) and `corpse.png` (6.200 s, the corpse wide) into `DIR`, plus `tendrils-control.png` — the burst's frame with the effect pass suppressed, the control the pixel guard differences against; `DIR` must exist (the acceptance script creates it) |
 
 ## Manifests
 
@@ -327,6 +347,44 @@ the fight in this timeline. The last two lines are a **synthetic post-reset defe
 weakpoint defeat is the S4.1 acceptance (audio off) plus the user's walk. With audio off the
 timeline prints the same `s42-*` lines byte for byte.
 
+`--s6-selftest` is the S6 death timeline: a club swing on the production path (so the whoosh
+fires), the scripted lethal event through the production `apply_combat_events`, and then the
+death machine to `Done` with the cinematic camera, the tendril burst, the corpse swap and the R
+soft reset. The event lines, verbatim:
+
+```text
+s6-phase phase=Idle t=0.000 total=0.000 lock=0 corpse=0 roots=0
+s6-event t=0.000 event=club_start clip=valus.telegraph gain=0.60
+s6-event t=0.300 event=club_swing clip=valus.club_swing gain=0.70
+s6-event t=0.000 event=music_start clip=music.boss gain=0.45
+s6-event t=0.000 event=music_stop clip=music.boss gain=0.00
+s6-phase phase=Motion t=0.000 total=0.000 lock=1 corpse=0 roots=2
+s6-event t=0.400 event=valus_defeat clip=valus.death gain=0.80
+s6-phase phase=Collapse t=0.016 total=6.183 lock=1 corpse=1 roots=2
+s6-phase phase=Done t=0.000 total=8.000 lock=0 corpse=1 roots=2
+s6-death clip=minotaur_a_death_front total=8.000 corpse=1 health=0 camera=follow
+s6-status defeated=1 corpse=1 roots=2 player_dead=0
+s6-reset phase=Idle corpse=0 lock=0 valus=100 player=100
+```
+
+The score's start and its stop are the same step: the defeat is the downbeat and the
+defeat stops the score. The death roar fires at 0.400 s, when the tendril burst
+begins. `Collapse` lands on the death clip's own end (6.166877 s), and `Done` at the
+8.0 s cinematic end, with the input unlocked and the corpse still on the floor.
+
+With `--s6-stills DIR` the run also writes the four stills and the control frame
+(`tendrils-control.png`, the burst's frame with the effect pass suppressed) and prints the
+effect pass's price:
+
+```text
+s6-perf frames=240 effect_ms=2134.684 base_ms=2107.470 marginal_ms=0.113 frame_ms=8.895
+```
+
+The acceptance script (`scripts/s6-acceptance.sh`) parses every line, differences the burst
+against its control, guards the stills, checks the frame cost and runs the frozen S5
+acceptance unchanged; `docs/notes/s6-results.md` records the measured values and the walk
+checklist.
+
 A manifest with an `entity` is an encounter: the player's combat clips
 (`player_a_grip_loop`, `player_a_grip_move_f1`,
 `player_a_grip_float_u_hi_attack`, `player_a_damage_m_fly2`,
@@ -348,7 +406,8 @@ The viewer plays only converted audio. `bp-convert audio` decodes the curated cu
 game's resident `SXDF` banks and the `music.sxd1`/`music.sxd2` pair at **build time** into
 `<library>/audio/<bank>/<event>.wav` (48 kHz float PCM) plus
 `<library>/audio/audio.manifest`; the runtime never parses `.sxd`/`.sxd2`. A manifest that lacks
-a cue the table names is a **fatal load error naming the event** in `--s5-selftest`; interactive
+a cue the table names is a **fatal load error naming the event** in `--s5-selftest` and
+`--s6-selftest`; interactive
 play warns once and runs the scene **silent** (the whole mixer is disabled, never a partial mix
 or a placeholder).
 
@@ -358,6 +417,9 @@ dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" --out out/libr
   --map tools/re/audio/s5_map.json --force
 # -> manifest: out/library/audio/audio.manifest (8 entries)
 # -> audio: 8 written, 0 reused, 8 manifest entries
+dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" --out out/library \
+  --map tools/re/audio/s6_map.json --force
+# -> the same manifest with 10 entries (the eight above + valus.death + valus.club_swing)
 ```
 
 `tools/re/audio/s5_map.json` is the slice's authority: seven attributed cues (`player.swing`,
@@ -366,12 +428,15 @@ dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" --out out/libr
 `SEQD` → `PLAY_TONE` → `WAVE`); the other six are audition picks, and every 0x21 PS-ADPCM
 row is a fitted-filter decode. Each row's method, identity confidence and fidelity are in
 `docs/notes/s5-audio-attribution.md`; the decode itself is in
-`docs/notes/s5-audio-recon.md`. **Deferred**: none of Valus's death, the club whoosh, the
-player's fall, ambience, grab/climb or footsteps is in the map's `cues` array, so they are
-silent rather than replaced. Eight of them are listed under the map's `deferred` array with a
-reason each (`valus.death`, `valus.grab`, `valus.fall`, `valus.breath`, `valus.ambience`,
-`player.grab`, `player.fall`, `player.breath`); the club whoosh and footsteps have no entry.
-The user's ear is the identity check (`docs/notes/s5-results.md`), and `valus.impact` (the
+`docs/notes/s5-audio-recon.md`. `tools/re/audio/s6_map.json` adds `valus.death` (the roar that
+fires with the tendril burst) and `valus.club_swing` (the whoosh that fires with the club
+swing) — both audition rows with a high identity confidence and a medium fidelity; the S5 map
+and the S5 slice stay frozen. **Deferred**: none of the player's fall, ambience, grab/climb or
+footsteps is in either map's `cues` array, so they are silent rather than replaced. Seven of
+them are listed under the maps' `deferred` array with a reason each (`valus.grab`,
+`valus.fall`, `valus.breath`, `valus.ambience`, `player.grab`, `player.fall`, `player.breath`);
+the footsteps have no entry. The user's ear is the identity check (`docs/notes/s5-results.md`,
+`docs/notes/s6-results.md`), and `valus.impact` (the
 five-layer ground hit, 8.15 s) rings past the impact window — the checklist asks whether that
 tail reads as an impact or a rumble.
 
@@ -381,7 +446,25 @@ oldest/quietest voice stealing, a 0.85 master headroom before the clamp, and `M`
 `--s5-selftest --audio-mixdown out/s5/mix.wav` proves it headlessly (no audio device); the
 acceptance script (`scripts/s5-acceptance.sh`) runs it, checks the sequence / the WAV /
 `ffmpeg astats`, proves the `s42-*` lines are unchanged with audio off, then runs the S4.2
-acceptance unchanged.
+acceptance unchanged. `scripts/s6-acceptance.sh` runs that script first and then decodes the
+S6 slice's ten entries.
+
+## Known gaps (S6)
+
+- **The tendrils are a labeled reconstruction.** The textures, the emitter roles and the
+  201 × 0.25 m ribbon geometry are the game's own; the `.csdr` GCN particle simulator is
+  **not** ported, so the motion is the builder's authored curl and turbulence, not the
+  game's curves. There is no per-segment stagger either — one growth front.
+- **The death camera is authored.** The shipped `camera_minoa_death_front_camera_01/02.anb`
+  clips are type 36 (undecoded) and are not played; the five-key path is reconstructed.
+- **No ragdoll.** The corpse is the converted dead body plus the dirtmound, placed at the
+  entity's transform — static geometry, not a physics body.
+- **The vein mask is anisotropic.** The ribbon samples the `death_tentacle_veins` mask with
+  `u` across the width and `v` along the path (about 100:1), so the veins read as fine
+  cross-ribs rather than the game's own stretch.
+- **The burst is subtle in the wide framing.** The scripted still measures the effect's
+  footprint at 14 599 changed pixels against its control; the shape and the colour are the
+  user's eye check, not the script's.
 
 ## Tests
 
