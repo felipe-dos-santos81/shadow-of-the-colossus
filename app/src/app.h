@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "transition.h"
 #include "valus.h"
 
 // The encounter's own state (ruling R5): Valus's health and whether he is down,
@@ -169,6 +170,12 @@ struct AppOptions {
 inline bool entity_target_key_allowed(bool followMode, bool entityChestResolved) {
     return followMode && entityChestResolved;
 }
+
+// The stage loop (S7 D6): run_app composes one stage per iteration; the
+// iteration ends with a request — quit, or release the scene and load `next`.
+enum class StageId { Arena, Shrine };
+struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
+struct StageCarry { ReturnState ret{}; int s7Step = 0; bool reloadedShrine = false; };  // what crosses an iteration
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the
 // window close button). With opts.selftest, runs exactly one frame, prints the
