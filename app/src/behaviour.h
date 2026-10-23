@@ -26,6 +26,12 @@
 // to its clip end and sets the cooldown — the same sequence as S4.2's
 // `advance_valus_attack`, which `test_behaviour.cpp` proves frame by frame.
 
+// A multi-clip attack chain is a run of states (each state's clip end leads to
+// the next); its cooldown is set by the app on the chain's last state (controller
+// ruling A5), not by the table. `BehaviourDesc` is meant to be embedded in S11
+// Task 7's EncounterDesc; the weakpoint gates live here, and `WeakpointDesc`
+// holds only the material and the reaction clip.
+
 inline constexpr int kBehaviourNone = -1;
 
 // What a weakpoint hit does in a state.
@@ -138,8 +144,14 @@ struct BehaviourHit {
 // table or a Transition row with a bad target all answer Ignore.
 BehaviourHit behaviour_hit(const BehaviourDesc& desc, BehaviourRuntime rt, int weakpoint);
 
+// Moves the entity into `state` at t = 0: stateSeconds 0, any action dropped (the
+// cooldown stays) — exactly what a transition does. The app uses it for the
+// moves the tables cannot express (stand -> walk, a turn, an attack start). An
+// invalid table or an out-of-range state returns the runtime unchanged.
+BehaviourRuntime behaviour_enter(const BehaviourDesc& desc, BehaviourRuntime rt, int state);
+
 // The gate a weakpoint hit meets in `state` (the first matching row), or an
-// Ignore row when none matches.
+// Ignore row when none matches, the table is invalid or `state` is out of range.
 WeakpointGate behaviour_gate(const BehaviourDesc& desc, int state, int weakpoint);
 
 // The clip the entity plays now: the action's clip while one plays, else the

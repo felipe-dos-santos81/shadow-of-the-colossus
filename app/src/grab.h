@@ -108,7 +108,9 @@ bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float 
 // hand-over at an end is the caller's) and `across` by lateral * speed * dt
 // (clamped as above). A non-finite or non-positive dt, or a non-finite input,
 // moves nothing. Returns false, changing nothing, when the band's segment
-// cannot be formed (the caller's grip break).
+// cannot be formed (the caller's grip break) or the radius is not positive and
+// finite. The caller gates surface walk on the top normal's y: a near-vertical
+// band's "top" is a wall, so only a band whose top faces up is walked.
 bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float along,
                        float lateral, float speed, float dt, float& t, float& across);
 

@@ -198,3 +198,24 @@ TEST_CASE("a non-finite or negative dt, drive or turn changes nothing") {
     CHECK(motion.position.z == 0.0f);
     CHECK(motion.yawDeg == 0.0f);
 }
+
+TEST_CASE("an unwrapped start yaw is wrapped; a NaN yaw or position never reaches the position") {
+    const LocomotionTuning tuning = quadratus_tuning();
+    EntityMotion motion;
+    motion.yawDeg = 450.0f;  // = 90: faces +X
+    CHECK(locomotion_step(motion, 1.0f, 0.0f, tuning, kFlat, kStep) == LocomotionResult::Moved);
+    CHECK(motion.yawDeg == doctest::Approx(90.0f));
+    CHECK(motion.position.x > 0.0f);
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EntityMotion badYaw;
+    badYaw.yawDeg = nan;
+    CHECK(locomotion_step(badYaw, 1.0f, 0.0f, tuning, kFlat, kStep) == LocomotionResult::Refused);
+    CHECK(badYaw.position.x == 0.0f);
+    CHECK(badYaw.position.z == 0.0f);
+
+    EntityMotion badPos;
+    badPos.position.x = nan;
+    CHECK(locomotion_step(badPos, 1.0f, 0.0f, tuning, kFlat, kStep) == LocomotionResult::Refused);
+    CHECK(std::isnan(badPos.position.x));
+}

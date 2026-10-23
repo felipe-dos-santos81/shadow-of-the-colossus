@@ -468,3 +468,16 @@ TEST_CASE("Valus's bands are all non-horizontal and attach exactly as before") {
     }
     CHECK_FALSE(climb_band(ClimbBandId::Count).horizontal);
 }
+
+TEST_CASE("a surface walk step rejects a non-positive or NaN radius") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (float radius : {-2.0f, 0.0f, nan}) {
+        ClimbBand band = back_band();
+        band.radius = radius;
+        float t = 0.5f;
+        float across = 0.25f;
+        CHECK_FALSE(surface_walk_step(band, kBackJoints, 1.0f, 1.0f, 1.0f, 0.1f, t, across));
+        CHECK(t == 0.5f);
+        CHECK(across == 0.25f);
+    }
+}

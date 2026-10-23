@@ -283,6 +283,9 @@ bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float 
 
 bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float along,
                        float lateral, float speed, float dt, float& t, float& across) {
+    if (!std::isfinite(band.radius) || !(band.radius > 0.0f)) {
+        return false;
+    }
     Vec3 a{};
     Vec3 b{};
     if (!climb_band_segment(band, lookup, a, b)) {

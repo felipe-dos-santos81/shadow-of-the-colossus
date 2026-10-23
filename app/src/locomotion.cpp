@@ -25,6 +25,9 @@ LocomotionResult locomotion_step(EntityMotion& motion, float drive, float turn,
     if (!std::isfinite(dt) || dt <= 0.0f) {
         return LocomotionResult::Still;
     }
+    if (std::isfinite(motion.yawDeg)) {
+        motion.yawDeg = std::remainder(motion.yawDeg, 360.0f);  // wrap an unwrapped start
+    }
     const float t = unit_or_zero(turn);
     if (t != 0.0f) {
         const float yaw = std::remainder(motion.yawDeg - t * tuning.turnRateDeg * dt, 360.0f);
@@ -41,6 +44,9 @@ LocomotionResult locomotion_step(EntityMotion& motion, float drive, float turn,
     const float yawRad = motion.yawDeg * kDegToRad;
     const Vec3 to{motion.position.x + std::sin(yawRad) * speed * dt, motion.position.y,
                   motion.position.z + std::cos(yawRad) * speed * dt};
+    if (!std::isfinite(to.x) || !std::isfinite(to.z)) {
+        return LocomotionResult::Refused;  // a NaN position or yaw never reaches the ground
+    }
     float floorY = 0.0f;
     if (!ground || !ground(motion.position, to, floorY) || !std::isfinite(floorY)) {
         return LocomotionResult::Refused;

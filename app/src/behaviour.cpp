@@ -104,7 +104,17 @@ BehaviourRuntime step_behaviour(const BehaviourDesc& desc, BehaviourRuntime rt, 
     return rt;
 }
 
+BehaviourRuntime behaviour_enter(const BehaviourDesc& desc, BehaviourRuntime rt, int state) {
+    if (!behaviour_valid(desc) || !state_in(desc, state)) {
+        return rt;
+    }
+    return enter(rt, state, 0.0f);
+}
+
 WeakpointGate behaviour_gate(const BehaviourDesc& desc, int state, int weakpoint) {
+    if (!behaviour_valid(desc) || !state_in(desc, state)) {
+        return {};
+    }
     for (const WeakpointGate& gate : desc.gates) {
         if (gate.weakpoint == weakpoint && (gate.state == kBehaviourNone || gate.state == state)) {
             return gate;

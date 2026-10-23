@@ -427,6 +427,8 @@ TEST_CASE("Valus as a one-state machine makes the same decisions as valus.cpp") 
         const ValusAttackInput mIn = input_for(w, rt.cooldownSeconds, mYaw, mLeftNext);
 
         cooldown = std::max(0.0f, cooldown - dt);
+        // Note: select_valus_attack is shared by both arms of this equivalence test, so
+        // selection itself is not proven here (test_valus.cpp covers it).
         if (attack == ValusAttack::None) {
             if (reaction < 0.0f) {
                 const ValusAttack chosen = select_valus_attack(in);
@@ -497,4 +499,53 @@ TEST_CASE("Valus as a one-state machine makes the same decisions as valus.cpp") 
     CHECK(cancels == 2);
     CHECK(struckIdle);
     CHECK(std::fabs(std::fabs(yaw) - 180.0f) < 1.0f);
+}
+
+TEST_CASE("behaviour_enter resets the state clock and the action, and keeps the cooldown") {
+    BehaviourRuntime rt = at(0);
+    rt.stateSeconds = 1.25f;
+    rt.action = 0;
+    rt.actionSeconds = 0.4f;
+    rt.cooldownSeconds = 2.0f;
+    const BehaviourRuntime in = behaviour_enter(kValus, rt, 0);
+    CHECK(in.state == 0);
+    CHECK(in.stateSeconds == 0.0f);
+    CHECK(in.action == kBehaviourNone);
+    CHECK(in.actionSeconds == 0.0f);
+    CHECK(in.cooldownSeconds == 2.0f);
+
+    BehaviourRuntime stand = at(kQStand);
+    stand.stateSeconds = 0.7f;
+    const BehaviourRuntime to = behaviour_enter(kQuadratus, stand, 5);
+    CHECK(to.state == 5);
+    CHECK(to.stateSeconds == 0.0f);
+}
+
+TEST_CASE("behaviour_enter and behaviour_gate are inert for an invalid table or state") {
+    BehaviourRuntime rt = at(kQStand);
+    rt.stateSeconds = 0.5f;
+    rt.action = 0;
+    for (int bad : {-1, 13, 1000}) {
+        const BehaviourRuntime out = behaviour_enter(kQuadratus, rt, bad);
+        CHECK(out.state == kQStand);
+        CHECK(out.stateSeconds == 0.5f);
+        CHECK(out.action == 0);
+        CHECK(behaviour_gate(kQuadratus, bad, kQHead).kind == GateKind::Ignore);
+    }
+    // A wildcard (-1) row must not answer an out-of-range state.
+    const std::array<BehaviourStateDesc, 1> one = {{{.clip = 0}}};
+    const std::array<WeakpointGate, 1> wild = {{{kBehaviourNone, 0, GateKind::Damage, kBehaviourNone}}};
+    const BehaviourDesc ok{one, {}, wild};
+    REQUIRE(behaviour_valid(ok));
+    CHECK(behaviour_gate(ok, 0, 0).kind == GateKind::Damage);
+    CHECK(behaviour_gate(ok, 3, 0).kind == GateKind::Ignore);
+
+    const std::array<WeakpointGate, 2> bad = {{
+        {0, 0, GateKind::Damage, kBehaviourNone},
+        {0, 1, GateKind::Transition, 5},
+    }};
+    const BehaviourDesc broken{one, {}, bad};
+    REQUIRE_FALSE(behaviour_valid(broken));
+    CHECK(behaviour_enter(broken, rt, 0).stateSeconds == 0.5f);
+    CHECK(behaviour_gate(broken, 0, 0).kind == GateKind::Ignore);
 }
