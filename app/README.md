@@ -5,10 +5,11 @@ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
 original containers.
 
-**Status (milestone S8): Agro — walk out of the shrine's front door onto the plain, whistle for Agro,
-mount from either side, ride at walk/trot/gallop, steer, rein in, back up and dismount; walk back into
-the shrine; `R` goes back to the arena (user walk pending). S7 (the return to the shrine) and S6 (the
-fall) are below it, unchanged.**
+**Status (milestone S9): the road to Valus — in interactive play the plain runs on up the arena's
+entrance stairs and corridor; the corridor's dead end is a door into Valus's arena and the arena's rim
+has one back; Agro waits where she was left; `C` (left shoulder) raises the sword and its light points
+to Valus (user walk pending). S8 (Agro), S7 (the return to the shrine) and S6 (the fall) are below it,
+unchanged.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -204,7 +205,8 @@ is required. Escape or the close button quits.
 | `--s6-stills DIR` | with `--s6-selftest`, write `motion.png` (0.200 s), `camera.png` (0.400 s, the pull-back key), `tendrils.png` (1.200 s, the burst) and `corpse.png` (6.200 s, the corpse wide) into `DIR`, plus `tendrils-control.png` — the burst's frame with the effect pass suppressed, the control the pixel guard differences against; `DIR` must exist (the acceptance script creates it) |
 | `--stage arena\|shrine\|plain` | the first stage (default `arena`); `shrine` and `plain` start there with control, using `--shrine-manifest` / `--plain-manifest`; an interactive start only (needs `--manifest` for the player's frame) |
 | `--shrine-manifest PATH` | the shrine's scene manifest (default `out/re/stage/shrine.manifest`, composed by `tools/re/stage/probe.py compose --stage shrine`) |
-| `--plain-manifest PATH` | the plain's scene manifest (default `out/re/stage/plain.manifest`, composed by `tools/re/stage/probe.py compose --stage plain`) |
+| `--plain-manifest PATH` | the plain's scene manifest (default `out/re/stage/plain.manifest`, composed by `tools/re/stage/probe.py compose --stage plain`); `--s8-selftest`/`--s8-e2e` load it |
+| `--road-manifest PATH` | the road's scene manifest: the Plain stage in interactive play and the S9 runs (default `out/re/stage/road.manifest`, composed by `tools/re/stage/probe.py compose --stage road`) |
 | `--no-return` | interactive play keeps S6's end state: no hold/fade/shrine after the death sequence |
 | `--s7-selftest` | seed Valus dead and run the return (hold, fade, shrine load, wake, `Free`), the shrine's ground/wall/idol/Mono probes and a 240-frame perf run, then `R` back to the arena and a second shrine load; prints the `s7-phase`/`s7-load`/`s7-ground`/`s7-wall`/`s7-idols`/`s7-mono`/`s7-perf`/`s7-status`/`s7-reset` lines (25 in all); needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest |
 | `--s7-e2e` | the end-to-end proof: the **interactive** loop at a fixed 1/60 s with scripted input (keyboard and gamepad ignored) — one lethal hit through the production combat path after 1 s, then the death, the return, the real stage switch, the wake and `Free`; `R` (the key's handler) 1 s into `Free`, exit 0 1 s into the reloaded arena; prints the `s7e2e-death`/`-return`/`-load`/`-input`/`-wake`/`-status`/`-reset` lines (20) and `s1-status`; needs `--manifest` and `--model`; runs alone (no selftest, capture, `--stage shrine` or `--no-return`) |
@@ -212,6 +214,9 @@ is required. Escape or the close button quits.
 | `--s8-selftest` | start on the plain and run the ride through fixed 1/60 s steps with no window input: the whistle from the probe, the left mount, kicks through walk/trot/gallop (each loop's speed over 2 s), a full right steer at the gallop, the held-`S` stop, the back-up, a ridden and an on-foot walk into the cliff edge, the right dismount, the audio counters, a 240-frame perf run, then `R` while galloping; prints the 16 `s8-*` lines and `s1-status`, exits 1 on a failed invariant; needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest |
 | `--s8-stills DIR` | with `--s8-selftest`, write `whistle.png`, `mount.png`, `gallop.png` and `plain.png` into `DIR` |
 | `--s8-e2e` | with `--stage shrine`: the **interactive** loop at a fixed 1/60 s with scripted keys (keyboard and gamepad ignored) — walk into the shrine door, whistle, mount, kick to the gallop for 5 s, stop, dismount, walk into the shrine steps, `R` in the shrine; prints `s8e2e-door` (2), `s8e2e-ride`, `s8e2e-reset` and `s1-status`; needs `--manifest` and `--model`; runs alone |
+| `--s9-selftest` | start on the road and run fixed 1/60 s steps with no window input: raise the sword at the sunlit probe facing away (the fan), turn the camera to dot 0.80 (the partial) and onto Valus's chest (the lock, the sparks), the shade probe, the mounted raise at a stand with a kick ignored, the walk up the entrance stairs, the corridor door to the arena and the arena door back (Agro where she was left), a 240-frame perf run, then `R` while raised with a carried horse; prints the 15 `s9-*` lines and `s1-status`, exits 1 on a failed invariant; needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest or e2e |
+| `--s9-stills DIR` | with `--s9-selftest`, write `fan.png`, `locked.png`, `entrance.png` and `arena_door.png` into `DIR` |
+| `--s9-e2e` | with `--stage shrine`: the **interactive** loop at a fixed 1/60 s with scripted input — the shrine door, whistle, mount, gallop the route to the stairs, rein in, raise and lock, up the stairs, dismount, the corridor door, the production lethal hit, the death, the return to the shrine; prints `s9e2e-door` (2), `-mount`, `-ride`, `-lock`, `-stairs`, `-death`, `-return`, `-done` and `s1-status`; needs `--manifest` and `--model`; refused (exit 2) with a selftest, another e2e, `--screenshot`, `--entity-time`, `--no-return` or without `--stage shrine` |
 
 ## Manifests
 
