@@ -8,7 +8,7 @@ find_package(SDL3_ttf CONFIG REQUIRED)
 add_executable(sotc-viewer
   src/main.cpp src/app.cpp src/encounter_rt.cpp src/capture.cpp src/audio_seam.cpp
   src/gamepad_input.cpp src/stage_ctx.cpp src/stage_setup.cpp
-  src/selftest_s1.cpp src/selftest_s3.cpp src/selftest_s4.cpp src/asset_io.cpp src/renderer.cpp src/camera.cpp src/anim.cpp
+  src/selftest_s1.cpp src/selftest_s3.cpp src/selftest_s4.cpp src/selftest_s6.cpp src/asset_io.cpp src/renderer.cpp src/camera.cpp src/anim.cpp
   src/manifest.cpp src/heightmap.cpp src/player.cpp src/collision.cpp src/grab.cpp
   src/player_state.cpp src/hud.cpp src/valus.cpp src/audio.cpp src/wav_io.cpp
   src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
