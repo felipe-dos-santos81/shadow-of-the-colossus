@@ -29,7 +29,8 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 // glb's material indices are offset by what the earlier loads contributed;
 // texture indices need no offset because images append to the shared texture
 // list directly), and `boundsMin/boundsMax` cover every placed vertex in world
-// space.
+// space. A PNG several glbs reference (by resolved library path) is decoded once
+// and is one texture, shared by every material that names it.
 //
 // Every rigged glb keeps its own skeleton and clips as one RigCpu; the player's
 // rig is dynamic, an entity's plays the exact clip the manifest names. An

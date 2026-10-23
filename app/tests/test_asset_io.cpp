@@ -772,10 +772,10 @@ TEST_CASE("compose_scene places two plank instances and the player") {
     }
 
     // Materials and textures land at offset indices: every mesh's
-    // materialIndex and every material's texture indices stay valid. Each
-    // instance load appends its own textures (2 planks x 2 + wander's 21).
+    // materialIndex and every material's texture indices stay valid. Textures
+    // are shared scene-wide by path (S7 task 11): the planks' 2 + wander's 21.
     CHECK(scene.materials.size() == 14);
-    CHECK(scene.textures.size() == 25);
+    CHECK(scene.textures.size() == 23);
     for (const MeshCpu& mesh : scene.meshes) {
         REQUIRE(mesh.materialIndex >= 0);
         REQUIRE(static_cast<std::size_t>(mesh.materialIndex) < scene.materials.size());
@@ -796,6 +796,22 @@ TEST_CASE("compose_scene places two plank instances and the player") {
         load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     REQUIRE(plank.meshes.size() == 1);
     REQUIRE(wander.meshes.size() == 12);
+    // The shared list is exactly the serial loads' textures, first-seen order,
+    // with the same pixels.
+    std::vector<const TextureCpu*> serial;
+    for (const Scene* source : {&plank, &plank, &wander}) {
+        for (const TextureCpu& texture : source->textures) {
+            const bool seen = std::any_of(serial.begin(), serial.end(), [&](const TextureCpu* t) {
+                return t->sourceRelPath == texture.sourceRelPath;
+            });
+            if (!seen) serial.push_back(&texture);
+        }
+    }
+    REQUIRE(scene.textures.size() == serial.size());
+    for (std::size_t i = 0; i < serial.size(); ++i) {
+        CHECK(scene.textures[i].sourceRelPath == serial[i]->sourceRelPath);
+        CHECK(scene.textures[i].rgba8 == serial[i]->rgba8);
+    }
     CHECK(scene.meshes[0].materialIndex == 0);
     CHECK(scene.meshes[1].materialIndex == 1);
     check_material_matches(scene, 0, plank, plank.meshes[0].materialIndex);
@@ -1413,4 +1429,73 @@ TEST_CASE("compose_scene keeps the scene bounds of two posed props") {
     CHECK(scene.boundsMin.x == doctest::Approx(-21.0f).epsilon(1e-4));
     CHECK(scene.boundsMax.x == doctest::Approx(10.0f).epsilon(1e-4));
     CHECK(scene.boundsMax.y == doctest::Approx(7.0f).epsilon(1e-4));
+}
+
+// --- Scene-wide texture sharing (S7 task 11) -----------------------------------
+
+TEST_CASE("two glbs sharing a PNG compose to one texture shared by both materials") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "shared.png", kPng1x1Red, sizeof kPng1x1Red);
+    std::filesystem::create_directories(dir.path() / "sub");
+    // Two different URIs, one library path: the key is the resolved path.
+    write_text(dir.path() / "sub" / "a.gltf", fixture_gltf_json("../shared.png"));
+    write_text(dir.path() / "b.gltf", fixture_gltf_json("shared.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("sub/a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+
+    const Scene scene = compose_scene(dir.path(), manifest, "b.gltf");
+
+    REQUIRE(scene.textures.size() == 1);
+    CHECK(scene.textures[0].sourceRelPath == "shared.png");
+    REQUIRE(scene.materials.size() == 2);
+    CHECK(scene.materials[0].baseColorTexture == 0);
+    CHECK(scene.materials[1].baseColorTexture == 0);
+}
+
+TEST_CASE("composed textures keep the serial first-seen order") {
+    TempFixtureDir dir;
+    for (const char* name : {"p1.png", "p2.png", "p3.png"}) {
+        write_binary(dir.path() / name, kPng1x1Red, sizeof kPng1x1Red);
+    }
+    write_text(dir.path() / "a.gltf", fixture_gltf_json("p1.png", "p2.png"));
+    write_text(dir.path() / "b.gltf", fixture_gltf_json("p2.png", "p3.png"));
+    write_text(dir.path() / "c.gltf", fixture_gltf_json("p3.png", "p1.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+    manifest.instances.push_back(placed_at("b.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+
+    // Decoding runs in parallel; the indices must not depend on who finishes first.
+    for (int run = 0; run < 3; ++run) {
+        CAPTURE(run);
+        const Scene scene = compose_scene(dir.path(), manifest, "c.gltf");
+        REQUIRE(scene.textures.size() == 3);
+        CHECK(scene.textures[0].sourceRelPath == "p1.png");
+        CHECK(scene.textures[1].sourceRelPath == "p2.png");
+        CHECK(scene.textures[2].sourceRelPath == "p3.png");
+        REQUIRE(scene.materials.size() == 3);
+        const int expected[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+        for (std::size_t m = 0; m < 3; ++m) {
+            CHECK(scene.materials[m].baseColorTexture == expected[m][0]);
+            CHECK(scene.materials[m].emissiveTexture == expected[m][1]);
+        }
+    }
+}
+
+TEST_CASE("a missing PNG shared by two glbs degrades to -1 in both") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "ok.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "a.gltf", fixture_gltf_json("missing.png", "ok.png"));
+    write_text(dir.path() / "b.gltf", fixture_gltf_json("missing.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+
+    Scene scene;
+    REQUIRE_NOTHROW(scene = compose_scene(dir.path(), manifest, "b.gltf"));
+
+    REQUIRE(scene.materials.size() == 2);
+    CHECK(scene.materials[0].baseColorTexture == -1);
+    CHECK(scene.materials[0].emissiveTexture == 0);
+    CHECK(scene.materials[1].baseColorTexture == -1);
+    REQUIRE(scene.textures.size() == 1);
+    CHECK(scene.textures[0].sourceRelPath == "ok.png");
 }

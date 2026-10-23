@@ -358,7 +358,8 @@ struct GlbPlacement {
 // clips. Every contributed mesh carries `placement.model` and its rig index
 // (`placement.includeRig` ? the new record : -1); material indices shift by
 // `placement.materialOffset` (texture indices need no shift: images append to
-// the scene's shared texture list, so their index already is global).
+// the scene's shared texture list, or reuse the entry an earlier glb decoded
+// from the same library path, so their index already is global).
 // `have_bounds` is the caller's running "some vertex was seen" flag: the
 // scene's bounds are set from the first glb that has vertices and grown by each
 // later one, always in world space.
@@ -395,6 +396,14 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
     // two texture slots of a material) decode only once.
     std::unordered_map<cgltf_size, int> loaded_images;
 
+    // Library-relative path -> Scene::textures index, across every glb already in
+    // the scene: a PNG another glb decoded is reused, never decoded again (S7 task
+    // 11 — the shrine's ruins share their textures across dozens of glbs).
+    std::unordered_map<std::string, int> scene_textures;
+    for (std::size_t i = 0; i < scene.textures.size(); ++i) {
+        scene_textures.emplace(scene.textures[i].sourceRelPath, static_cast<int>(i));
+    }
+
     // Decodes one glTF image into RGBA8 and appends it to the scene. Returns -1,
     // without throwing, when the PNG is absent or undecodable: the converter
     // drops textures it cannot convert (e.g. BC6H/HDR), and such a material
@@ -417,6 +426,11 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
             return -1;
         }
 
+        const auto shared = scene_textures.find(rel.generic_string());
+        if (shared != scene_textures.end()) {
+            return shared->second;
+        }
+
         int width = 0;
         int height = 0;
         int channels = 0;
@@ -436,7 +450,9 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
         texture.rgba8.assign(pixels.data, pixels.data + pixel_bytes);
         texture.sourceRelPath = rel.generic_string();
         scene.textures.push_back(std::move(texture));
-        return static_cast<int>(scene.textures.size()) - 1;
+        const int index = static_cast<int>(scene.textures.size()) - 1;
+        scene_textures.emplace(scene.textures.back().sourceRelPath, index);
+        return index;
     };
 
     auto resolve_texture = [&](const cgltf_texture* texture) -> int {
