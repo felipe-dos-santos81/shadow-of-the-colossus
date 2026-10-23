@@ -86,6 +86,14 @@ constexpr float kS7Eps = 1e-4f;
 
 constexpr int kS41ApproachFrames = 240;     // walk from S4's stop to the foot band
 
+// Authored values (source: authored) are labelled; the clip names are data.
+// --s8-selftest (Task 9): the script's budgets, tolerances and scaffolding
+// (authored: the probe points are placements.json's).
+constexpr float kS8MaxWhistleSeconds = 30.0f;  // the ~60 m approach, neigh and neigh_end
+constexpr float kS8ArriveMax = 3.5f;           // m: the whistle's arrival gate
+constexpr float kS8MountSide = 1.0f;           // m beside her (within kMountReach)
+constexpr float kS8KickGapSeconds = 1.1f;      // spaced kicks: never the 3-in-1 s cooldown
+
 // What crosses the stages of one run (design §13.9): the process's window,
 // device, renderer and audio engine, the stage to compose next, the carry
 // (StageCarry, app.h) and the per-run latches.
