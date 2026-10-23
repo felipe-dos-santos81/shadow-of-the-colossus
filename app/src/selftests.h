@@ -36,3 +36,4 @@ SelftestResult run_s7(StageCtx& ctx, RunState& run);
 SelftestResult run_s41(StageCtx& ctx, RunState& run);
 SelftestResult run_s42(StageCtx& ctx, RunState& run);
 SelftestResult run_s8(StageCtx& ctx, RunState& run);
+SelftestResult run_s9(StageCtx& ctx, RunState& run);

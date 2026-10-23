@@ -94,6 +94,11 @@ constexpr float kS8ArriveMax = 3.5f;           // m: the whistle's arrival gate
 constexpr float kS8MountSide = 1.0f;           // m beside her (within kMountReach)
 constexpr float kS8KickGapSeconds = 1.1f;      // spaced kicks: never the 3-in-1 s cooldown
 
+constexpr float kS9StuckSeconds = 3.0f;         // no 0.5 m of progress: the walk is blocked
+// The stairs climbed: on the corridor floor, 4 m short of door_corridor's box (the
+// floor is 2.68 m at z 280 and rises past the 2.7 m gate by z 281).
+constexpr float kS9EntranceZ = 282.0f;
+
 // What crosses the stages of one run (design §13.9): the process's window,
 // device, renderer and audio engine, the stage to compose next, the carry
 // (StageCarry, app.h) and the per-run latches.
