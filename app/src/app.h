@@ -232,6 +232,14 @@ struct AppOptions {
     bool s9Selftest = false;
     std::string s9StillsPath;
     bool s9E2e = false;
+    // --s11-selftest / --s11-stills DIR / --s11-e2e (S11 Task 10): Quadratus in
+    // the --manifest arena (arena_02), scripted from its spawn to his death and
+    // R; the selftest prints the s11-* lines (+ four stills), the e2e drives the
+    // interactive loop and prints s11e2e-*. The flag rules live in main.cpp; the
+    // usage text is frozen (the S9 goldens hold it), app/README.md lists them.
+    bool s11Selftest = false;
+    std::string s11StillsPath;
+    bool s11E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode

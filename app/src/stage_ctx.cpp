@@ -325,6 +325,10 @@ void StageCtx::soft_reset_encounter(DeathState& deathState, bool& cueFired, bool
     reset_player_combat(player, combat, spawn_position(manifest, scene),
                         manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f, tuning);
     reset_encounter(encounter);
+    if (quad_wired && entityRig < playbacks.size()) {
+        // S11: Quadratus back to his placement, standing, sigils whole.
+        quadratus_fight_reset(quad, encounter, playbacks[entityRig]);
+    }
     audio.reset();  // R stops every voice, music too
     deathState = reset_death();
     cueFired = false;

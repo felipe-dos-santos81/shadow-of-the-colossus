@@ -138,3 +138,32 @@ TEST_CASE("run_flags reproduces every derived run flag over all inputs") {
     }
     CHECK(cases == 3u * (1u << kBits));  // 3,145,728
 }
+
+TEST_CASE("the S11 runs: the selftest is frozen and death-wired, the e2e an interactive arena run") {
+    AppOptions self;
+    self.s11Selftest = true;
+    const RunFlags s = run_flags(self, StageId::Arena, /*followMode=*/true, true);
+    CHECK(s.frozenSelftest);
+    CHECK(is_frozen_selftest(self));
+    CHECK_FALSE(s.interactiveRun);
+    CHECK(s.deathWired);
+    CHECK_FALSE(s.returnWired);
+    CHECK(s.pumpLoad);
+    CHECK_FALSE(s.s8Wired);
+    CHECK_FALSE(s.s9Wired);
+    CHECK_FALSE(s.scriptedE2e);
+    CHECK_FALSE(s.audioStrict);
+    CHECK(scene_flags(self, StageId::Arena, true, true, true).valusBehavior);
+
+    AppOptions e2e;
+    e2e.s11E2e = true;
+    const RunFlags e = run_flags(e2e, StageId::Arena, true, true);
+    CHECK_FALSE(e.frozenSelftest);
+    CHECK(e.interactiveRun);
+    CHECK(e.deathWired);
+    CHECK(e.returnWired);  // stage_setup turns it off in a non-Valus arena (§13.13)
+    CHECK(e.scriptedE2e);
+    CHECK_FALSE(e.s8Wired);  // it stays in its arena: no doors, no road
+    CHECK_FALSE(e.s9Wired);
+    CHECK(scene_flags(e2e, StageId::Arena, true, true, true).valusBehavior);
+}

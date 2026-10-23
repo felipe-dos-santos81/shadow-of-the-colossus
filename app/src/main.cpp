@@ -190,6 +190,14 @@ int main(int argc, char** argv) {
             opts.s9E2e = true;
             continue;
         }
+        if (arg == "--s11-selftest") {
+            opts.s11Selftest = true;
+            continue;
+        }
+        if (arg == "--s11-e2e") {
+            opts.s11E2e = true;
+            continue;
+        }
         if (arg == "--no-return") {
             opts.noReturn = true;
             continue;
@@ -204,7 +212,7 @@ int main(int argc, char** argv) {
                                  arg == "--stage" || arg == "--shrine-manifest" ||
                                  arg == "--s7-stills" || arg == "--plain-manifest" ||
                                  arg == "--s8-stills" || arg == "--road-manifest" ||
-                                 arg == "--s9-stills";
+                                 arg == "--s9-stills" || arg == "--s11-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -285,6 +293,8 @@ int main(int argc, char** argv) {
             opts.roadManifestPath = value;
         } else if (arg == "--s9-stills") {
             opts.s9StillsPath = value;
+        } else if (arg == "--s11-stills") {
+            opts.s11StillsPath = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -524,6 +534,37 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "sotc-viewer: --camera-target entity needs --manifest (there is no entity)\n");
         print_usage(stderr);
+        return 2;
+    }
+
+    // S11 (Task 10): Quadratus's selftest and e2e run alone in the --manifest
+    // arena (arena_02). These checks come last, so every earlier refusal's
+    // output is unchanged (the frozen goldens hold them, usage text included).
+    if ((opts.s11Selftest || opts.s11E2e) &&
+        (opts.manifestPath.empty() || opts.modelRelPath.empty())) {
+        std::fprintf(stderr, "sotc-viewer: --s11-selftest/--s11-e2e need --manifest and --model\n");
+        return 2;
+    }
+    if (opts.s11Selftest &&
+        (opts.selftest || opts.s3Selftest || opts.s4Selftest || opts.s41Selftest ||
+         opts.s42Selftest || opts.s5Selftest || opts.s6Selftest || opts.s7Selftest ||
+         opts.s7E2e || opts.s8Selftest || opts.s8E2e || opts.s9Selftest || opts.s9E2e ||
+         opts.s11E2e || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s11-selftest cannot be combined with another selftest, "
+                     "e2e or capture\n");
+        return 2;
+    }
+    if (opts.s11E2e && (frozen_selftest || opts.s7Selftest || opts.s7E2e || opts.s8E2e ||
+                        opts.s9E2e || opts.stage != StageId::Arena ||
+                        !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s11-e2e runs alone in the --manifest arena: no selftest, "
+                     "other e2e, capture, --entity-time or --stage\n");
+        return 2;
+    }
+    if (!opts.s11StillsPath.empty() && !opts.s11Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s11-stills needs --s11-selftest\n");
         return 2;
     }
 

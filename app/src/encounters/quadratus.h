@@ -503,9 +503,14 @@ inline constexpr EncounterDesc kQuadratus{
     .turnDegPerSec = quadratus_detail::kTurnDegPerSec,
     .attacks = quadratus_detail::kAttacks,
     // The death clip (motion 42): 80 intervals / 15 fps = 5.333 s (measured).
-    // The tendril window, the 8.0 s end and the camera keys are Valus's S6
-    // values (authored, unscaled: tune on the walk; the game's MOMMOTH_DEATH_CAM
-    // is not decoded). Two roots: the two sigils (weakpoints 0/1). The
+    // The tendril window and the 8.0 s end are Valus's S6 values (authored,
+    // unscaled; effect.cpp's ribbon envelope is the same 0.4/3.0 s). The camera
+    // keys are authored for his size and his fall (Task 10, from the stills; the
+    // game's MOMMOTH_DEATH_CAM is not decoded): the keys follow his origin, which
+    // the death clip's root carries 17.5 m (C§1) — a pull to 30 m on the 14.5 m
+    // hip, a low 34 m key on his flank as he rears and falls (a nearer one sat
+    // inside his rearing body), then a wide 55 m view of the body lying 4.6 m
+    // high. Two roots: the two sigils (weakpoints 0/1). The
     // tendrils' fallback centre is the stand hip height 14.5 m (measured).
     .death = {.clip = "boss_a_death",
               .motionSeconds = 5.333333f,
@@ -514,7 +519,22 @@ inline constexpr EncounterDesc kQuadratus{
               .endSeconds = 8.0f,
               .roots = 2,
               .fallbackChestHeight = 14.5f,
-              .camera = kValus.death.camera},
+              .camera = {.pullSeconds = 0.4f,
+                         .lowSeconds = 3.0f,
+                         .wideSeconds = 6.2f,
+                         .followSeconds = 8.0f,
+                         .pullDistance = 30.0f,
+                         .pullEyeHeight = 8.0f,
+                         .pullTargetHeight = 16.0f,
+                         .pullPitchDeg = -15.5f,  // -asin((16 - 8) / 30)
+                         .lowTargetHeight = 10.0f,
+                         .lowDistance = 34.0f,
+                         .lowPitchDeg = -12.0f,
+                         .lowYawOffsetDeg = 25.0f,
+                         .wideTargetHeight = 4.0f,
+                         .wideDistance = 55.0f,
+                         .widePitchDeg = 15.0f,
+                         .wideYawOffsetDeg = 45.0f}},
     .cues = {.stompStart = quadratus_detail::kSilent,
              .stompImpact = quadratus_detail::kSilent,
              .clubStart = quadratus_detail::kSilent,

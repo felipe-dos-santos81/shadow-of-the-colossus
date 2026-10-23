@@ -4,6 +4,7 @@
 #include "door.h"
 #include "encounter_rt.h"
 #include "gamepad_input.h"
+#include "s11_script.h"
 #include "ride_points.h"
 #include "road_points.h"
 #include "shrine_points.h"
@@ -179,6 +180,10 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         }
         input = PlayerInput{};
     }
+    // S11: the ground stab roots the player while its clip plays.
+    if (ctx.quad_wired && quadratus_stabbing(ctx.quad, combat)) {
+        input.forward = input.back = input.left = input.right = false;
+    }
     const bool moving = input.forward || input.back || input.left || input.right;
     if (in.afterLock) {
         if (const std::optional<int> code = in.afterLock(inputLocked, moving)) {
@@ -225,6 +230,16 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         // sounded at the clip's start).
         maybe_club_swing(encounter, audio_on ? &frameSfx : nullptr);
     }
+    // S11 (D9): Quadratus's fight — his clock, travel, choices and clip —
+    // where Valus's would run (stage_setup decides: quad_wired).
+    ctx.quadHit = QuadratusHit{};
+    ctx.quadStab = QuadratusStab{};
+    if (ctx.quad_wired) {
+        ctx.quadFrame = quadratus_fight_step(ctx.quad, encounter, playbacks[entityRig], heightmap,
+                                             player, combat,
+                                             std::clamp(dt, 0.0f, kMaxCombatStepSeconds));
+        update_entity_transform(scene, encounter, entityRig);
+    }
     // S7: while waking the wake clips own the player's clip.
     const bool wakeFrame = ctx.waking();
     if (wakeFrame) {
@@ -238,6 +253,14 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
             // The sword's clip at the machine's clock (last frame's step).
             playback.index = clip_index_named(playback, sword.clip);
             playback.time = sword.clipTime;
+            playback.pinned = true;
+            playback.playing = false;
+        } else if (ctx.quad_wired && quadratus_stabbing(ctx.quad, combat)) {
+            // S11: the ground stab's clip at its own clock.
+            if (playback.index != ctx.quad.stabClip) {
+                select_clip(playback, scene, scene.playerRig, ctx.quad.stabClip);
+            }
+            playback.time = ctx.quad.stabSeconds;
             playback.pinned = true;
             playback.playing = false;
         } else {
@@ -284,10 +307,13 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     // the attach point from this frame's entity palette. Once the
     // corpse has replaced the body (S6, design §8.3) the frame
     // carries no live entity: nothing to walk into, climb or strike.
-    const PlayerFrame frame =
+    PlayerFrame frame =
         player_frame_of(scene, entityRig, palettes, heightmap,
                         camera_look_yaw(camera), ctx.enc(),
                         /*entityLive=*/!death_corpse_visible(death));
+    if (ctx.quad_wired) {
+        frame.shake = quadratus_shake(ctx.quad);  // S11: his refuse clips' drain
+    }
     const int weakpoint = combat.weakpoint;  // detach() clears it
     const Vec3 positionBefore = player.position;
     // S8 (D8): no player_step while mounted — the ride places him.
@@ -303,8 +329,34 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         events.damageDealt = 100;
     }
     if (events.damageDealt > 0 && entityRig < playbacks.size()) {
-        apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
-                            weakpoint, audio_on ? &frameSfx : nullptr);
+        if (ctx.quad_wired) {
+            // S11: every hit goes through his gates first (the sigil order,
+            // the hooves' kneels, nothing in Death); his fight is silent (D10).
+            ctx.quadHit = quadratus_fight_hit(ctx.quad, encounter, playbacks[entityRig],
+                                              entityClips, weakpoint,
+                                              static_cast<float>(events.damageDealt));
+        } else {
+            apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
+                                weakpoint, audio_on ? &frameSfx : nullptr);
+        }
+    }
+    if (ctx.quad_wired) {
+        // A swing released on him pauses the shake rule 3 s (mode 20, data);
+        // a strike press on the ground is the stab at his hooves; his stomp's
+        // impact lands after the player's step, like Valus's.
+        if (attached_before && events.struck) {
+            quadratus_fight_struck(ctx.quad);
+        }
+        ctx.quadStab = quadratus_ground_stab(ctx.quad, encounter, scene, entityRig,
+                                             palettes[entityRig], heightmap, player, combat,
+                                             input, frame.weakpointProxy);
+        if (ctx.quadFrame.impactDue) {
+            apply_valus_impact(combat, player, frame, tuning,
+                               ctx.quadFrame.impactAttack == 0 ? ValusAttack::StompL
+                                                               : ValusAttack::StompR,
+                               ctx.enc(), audio_on ? &frameSfx : nullptr,
+                               audio_on ? &events : nullptr);
+        }
     }
     if (in.lethalHit && !encounter.defeated) {
         result.exitCode = in.lethalMissed();
@@ -653,6 +705,15 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
              entityRig >= playbacks.size() || entityClips.death < 0)) {
             return s9e_fail("the arena has no death or return to drive");
         }
+    }
+    // --s11-e2e (Task 10): the shared S11 script (s11_script.h) picks the keys;
+    // the loop below is the interactive one; R is the key's own handler.
+    S11Script s11s;
+    s11s.prefix = "s11e2e";
+    if (opts.s11E2e && !s11_start(s11s, ctx, ctx.loadMs)) {
+        std::fprintf(stderr, "sotc-viewer: --s11-e2e: the --manifest arena is not Quadratus's "
+                             "(encounter quadratus, his bake) or his fight is unwired\n");
+        return 1;
     }
     // S8 (D14): a stage entered through a door completes the door's Load
     // here; FadeIn runs on this stage's frames.
@@ -1436,6 +1497,8 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                 in.input = s9In;
                 in.rideKeys = s9Keys;
                 in.swordHeld = s9Held;
+            } else if (opts.s11E2e) {
+                in.input = s11_input(s11s, ctx);
             } else if (!opts.s7E2e) {
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 // S8 (G4): W kicks, S reins, A/D steer, E mounts and
@@ -1549,6 +1612,22 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
             const FrameResult result = frame_step(ctx, in);
             if (result.exitCode) {
                 return *result.exitCode;
+            }
+            if (opts.s11E2e) {
+                std::optional<int> code = s11_after(s11s, ctx);
+                if (!code && s11s.wantR) {
+                    press_r_key();  // the R key's own handler
+                    s11s.wantR = false;
+                    code = s11_after(s11s, ctx);
+                }
+                if (code) {
+                    if (*code != 0) {
+                        return *code;
+                    }
+                    std::printf("s11e2e-done frames=%d seconds=%.1f\n", s11s.frames, s11s.seconds);
+                    print_status_line(opts, shell.win);
+                    return 0;
+                }
             }
             if (result.request) {
                 request = *result.request;

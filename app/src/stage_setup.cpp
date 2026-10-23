@@ -151,6 +151,12 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         }
         encounter.desc = desc;
         encounter.health = desc->maxHealth;
+        // S11 (§13.13): no return to the shrine after a colossus other than
+        // Valus — his corpse stays and R resets (the colossus-2 loop is later).
+        if (here == StageId::Arena && desc != &encounters::kValus) {
+            flags.returnWired = false;
+            return_wired = false;
+        }
         if (opts.entityTimeSet && manifest.entities.empty()) {
             std::fprintf(stderr, "sotc-viewer: --entity-time: the manifest has no entity\n");
             return 2;
@@ -262,6 +268,7 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
                              error.what());
             }
         }
+        ctx.loadMs = static_cast<double>(SDL_GetTicksNS() - stage_load_start) / 1e6;
         if (opts.s7Selftest || interactive_run) {
             const double load_ms =
                 static_cast<double>(SDL_GetTicksNS() - stage_load_start) / 1e6;
@@ -596,6 +603,24 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
                     .clips[static_cast<std::size_t>(entityClips.stand)]);
         }
         encounter.entityTransformSet = true;
+        update_entity_transform(scene, encounter, entityRig);
+    }
+
+    // S11 (D9): Quadratus's fight replaces Valus's behaviour where it would
+    // run; his clips, the stab clip and his soles must resolve.
+    ctx.quad_wired = valus_behavior && &ctx.enc() == &encounters::kQuadratus &&
+                     encounter.entityTransformSet;
+    if (ctx.quad_wired) {
+        valus_behavior = false;
+        std::string why;
+        if (!quadratus_fight_load(ctx.quad, scene, entityRig, playbacks[entityRig], playback,
+                                  why)) {
+            std::fprintf(stderr, "sotc-viewer: Quadratus's fight: %s\n", why.c_str());
+            return 2;
+        }
+        ctx.quad.basePosition = encounter.entityPosition;
+        ctx.quad.baseYawDeg = encounter.entityBaseYawDeg;
+        quadratus_fight_reset(ctx.quad, encounter, playbacks[entityRig]);
         update_entity_transform(scene, encounter, entityRig);
     }
 

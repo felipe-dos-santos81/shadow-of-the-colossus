@@ -37,6 +37,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run);
 SelftestResult run_s42(StageCtx& ctx, RunState& run);
 SelftestResult run_s8(StageCtx& ctx, RunState& run);
 SelftestResult run_s9(StageCtx& ctx, RunState& run);
+SelftestResult run_s11(StageCtx& ctx, RunState& run);
 
 // The scripted paths in run_app's order (design §13.9's list, explicitly): the
 // first that ends the run or switches the stage wins; a path that falls through
@@ -70,6 +71,12 @@ inline SelftestResult run_selftests(StageCtx& ctx, RunState& run) {
     }
     if (opts.s9Selftest) {
         const SelftestResult result = run_s9(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s11Selftest) {
+        const SelftestResult result = run_s11(ctx, run);
         if (result.exitCode || result.next) {
             return result;
         }

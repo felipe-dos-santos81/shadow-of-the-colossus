@@ -17,6 +17,7 @@
 #include "manifest.h"
 #include "player.h"
 #include "player_state.h"
+#include "quadratus_fight.h"
 #include "renderer.h"
 #include "ride.h"
 #include "run_flags.h"
@@ -189,6 +190,7 @@ struct StageCtx {
 
     StageId here = StageId::Arena;
     const char* stage_name = "";
+    double loadMs = 0.0;  // the composed stage's load, through the upload (wall clock)
     // Scene: a single glb (--model alone) or a composed manifest scene
     // (--manifest, with --model as the player's glb). `Scene scene{}` keeps
     // zeroed bounds for a model-less run, so camera_frame stays finite even
@@ -255,6 +257,14 @@ struct StageCtx {
     float wakeFirstSeconds = 0.0f;
     bool manual_clip = false;
     bool valus_behavior = false;
+    // S11 (D9): Quadratus's fight in place of Valus's behaviour (his arena's
+    // `encounter quadratus`, wherever Valus's would run); this frame's results
+    // are kept for the --s11 scripts' lines.
+    bool quad_wired = false;
+    QuadratusFight quad{};
+    QuadratusFrame quadFrame{};
+    QuadratusStab quadStab{};
+    QuadratusHit quadHit{};
     bool s8_wired = false;
     bool plain_ride = false;
     PlainRide pr{};
