@@ -11,8 +11,9 @@
 //
 // `fade` is 0 (clear) in Idle, ramps 0 -> 1 across FadeOut, is 1 through Load and
 // ramps 1 -> 0 across FadeIn. Input is locked from the entering frame until
-// FadeIn ends. `target` is the door's destination: set on entry, held through the
-// sequence, -1 again in Idle.
+// FadeIn ends. `row` is the entered door (the app's door table row, app.h kDoors —
+// its destination and arrival): set on entry, held through the sequence, -1 again
+// in Idle.
 //
 // Load is the only phase left by something other than the clock: it waits for
 // `loadDone`, however long the app takes, and one long frame crosses FadeOut but
@@ -29,13 +30,13 @@ struct DoorState {
     float t = 0.0f;     // seconds in the phase
     float fade = 0.0f;  // 0 clear .. 1 opaque
     bool inputLocked = false;
-    int target = -1;
+    int row = -1;
 };
 
 constexpr float kDoorFadeOut = 1.0f;  // seconds
 constexpr float kDoorFadeIn = 1.5f;
 
-DoorState step_door(DoorState s, float dt, bool entered, int target, bool loadDone);
+DoorState step_door(DoorState s, float dt, bool entered, int row, bool loadDone);
 
 // True on the step that enters Load (and only that one).
 bool door_wants_load(const DoorState& before, const DoorState& after);
@@ -44,7 +45,7 @@ bool door_wants_load(const DoorState& before, const DoorState& after);
 // its end is inside. Bounds are inclusive. A spawn inside a box never fires.
 bool box_entered(Vec3 prev, Vec3 now, Vec3 mn, Vec3 mx);
 
-// Idle, unlocked, clear, no target (the `R` soft reset, from any phase).
+// Idle, unlocked, clear, no row (the `R` soft reset, from any phase).
 DoorState reset_door();
 
 // "Idle", "FadeOut", "Load", "FadeIn", for telemetry.

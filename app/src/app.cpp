@@ -713,6 +713,36 @@ constexpr float kRideCameraEase = 8.0f;             // s^-1, the follow camera's
 constexpr float kApproachTurnDegPerSecond = 90.0f;  // D12, authored: Agro turning to the player
 constexpr float kStickPressThreshold = 0.5f;        // authored: a stick "press" (kick/rein)
 constexpr std::uint32_t kRideSfxSeed = 8u;          // the variant RNG's fixed seed
+// --s8-selftest (Task 9): the script's budgets, tolerances and scaffolding
+// (authored: the probe points are placements.json's).
+constexpr float kS8MaxWhistleSeconds = 30.0f;  // the ~60 m approach, neigh and neigh_end
+constexpr float kS8ArriveMax = 3.5f;           // m: the whistle's arrival gate
+constexpr float kS8MountSide = 1.0f;           // m beside her (within kMountReach)
+constexpr float kS8MountStillSeconds = 0.8f;   // mount.png: mid stand_ride_l
+constexpr float kS8GaitSeconds = 2.0f;         // each loop's speed window
+constexpr float kS8Tolerance = 0.05f;          // ±5 % on the speeds and the yaw rate
+constexpr float kS8SteerRampSeconds = 0.25f;   // the steer blend settles first
+constexpr float kS8SteerSeconds = 2.0f;
+constexpr float kS8BackSeconds = 0.5f;         // the back loop's speed window
+constexpr float kS8EdgeKickGapSeconds = 0.6f;  // walk -> trot toward the edge
+constexpr float kS8MaxEdgeSeconds = 30.0f;     // the 40 m edge probe, ridden or on foot
+constexpr float kS8KickGapSeconds = 1.1f;      // spaced kicks: never the 3-in-1 s cooldown
+constexpr float kS8RiderOffsetMax = 0.10f;     // m: the pelvis's departure from its seated rest
+constexpr int kS8PerfFrames = 240;
+// --s8-e2e (Task 9, authored): the walk/ride script's tolerances and budgets.
+constexpr int kS8E2eMaxStageFrames = 5400;    // 90 s at 1/60 s per stage
+constexpr float kS8E2eArrive = 0.15f;         // m: a scripted walk's waypoint reached
+constexpr float kS8E2eStuckSeconds = 3.0f;    // no 0.5 m of progress: the walk is blocked
+constexpr float kS8E2eAround = 1.8f;          // m: the waypoint round her front-left
+constexpr float kS8E2eLookahead = 40.0f;      // m: the pursuit point ahead on the line
+constexpr float kS8E2eSteerGainDeg = 20.0f;   // heading error for a full steer
+constexpr float kS8E2eAlignDeg = 10.0f;       // turned onto the line: kick
+constexpr float kS8E2eGallopSeconds = 5.0f;
+// The shrine spawn -> door_shrine route round Mono's altar (shrine frame, x/z):
+// a 0.25 m lattice BFS through the layered map, simplified to straight legs.
+constexpr std::array<std::array<float, 2>, 3> kS8E2eShrineRoute{
+    {{2.57f, 21.5f}, {2.57f, 24.5f}, {0.07f, 28.25f}}};
+constexpr float kS8E2eGallopMin = 60.0f;      // m: run_start 16.5 m + 3.4 s x 14.7 m/s = 66.5
 
 // The R3 reaction names, plus the generic body reaction a strike on a band with
 // no weakpoint plays (the pinned bands without a weakpoint are not silent). The
@@ -1800,13 +1830,6 @@ void with_clocks_restored(std::vector<Playback>& playbacks, Render&& render) {
     }
 }
 
-// --- S5 audio seam (Task 5) -------------------------------------------------
-
-// The app's one audio object: the mixer, the music lifecycle, and — for
-// --s5-selftest — the ordered cue log and the WAV capture. One translation path
-// (play_event) serves the interactive loop and the shared scripted timeline, so
-// their sound cannot drift. With the engine off (`enabled == false`) every
-// method is a no-op, which is what keeps the default S4.2 run byte-identical.
 // --- S8: the plain's helpers ---------------------------------------------------
 
 // One rig's clip blend (D7): the pose shown last frame, the outgoing pose a
@@ -1877,6 +1900,18 @@ Mat4 translation_of(Vec3 t) {
     return mat4_from_trs(t, Quat{0.0f, 0.0f, 0.0f, 1.0f}, Vec3{1.0f, 1.0f, 1.0f});
 }
 
+// `p` in the local frame of `m` (a rotation with a uniform scale, plus a
+// translation): mat4 * point inverted without a general inverse.
+Vec3 point_in_frame(const Mat4& m, Vec3 p) {
+    const Vec3 d{p.x - m.m[12], p.y - m.m[13], p.z - m.m[14]};
+    const auto along = [&](int column) {
+        const Vec3 axis{m.m[4 * column], m.m[4 * column + 1], m.m[4 * column + 2]};
+        const float norm = vec3_dot(axis, axis);
+        return norm > 0.0f ? vec3_dot(axis, d) / norm : 0.0f;
+    };
+    return Vec3{along(0), along(1), along(2)};
+}
+
 // Every mesh of `rig` drawn with `model` (the rider: a full matrix, no lift).
 void set_rig_model(Scene& scene, const RigCpu& rig, const Mat4& model) {
     for (std::size_t i = rig.meshBegin; i < rig.meshEnd && i < scene.meshes.size(); ++i) {
@@ -1925,6 +1960,13 @@ int footfalls_crossed(const float* fractions, float duration, float prev, float 
     return count;
 }
 
+// --- S5 audio seam (Task 5) -------------------------------------------------
+
+// The app's one audio object: the mixer, the music lifecycle, and — for
+// --s5-selftest — the ordered cue log and the WAV capture. One translation path
+// (play_event) serves the interactive loop and the shared scripted timeline, so
+// their sound cannot drift. With the engine off (`enabled == false`) every
+// method is a no-op, which is what keeps the default S4.2 run byte-identical.
 struct AudioSeam {
     AudioEngine engine;
     bool enabled = false;       // the manifest and every mapped clip loaded
@@ -2272,7 +2314,8 @@ int run_app(const AppOptions& opts) {
         // return from inside the iteration and never request a switch; the
         // return to the shrine (interactive play, --s7-selftest) and R from the
         // shrine do. `carry` is what crosses (design D6).
-        StageId stage = opts.stage;
+        // --s8-selftest starts on the plain (D17); --s8-e2e passes --stage shrine.
+        StageId stage = opts.s8Selftest ? StageId::Plain : opts.stage;
         StageCarry carry;
         if (stage != StageId::Arena) {
             // --stage shrine|plain starts with control (D11): the return is over.
@@ -2325,8 +2368,8 @@ int run_app(const AppOptions& opts) {
             const bool death_wired =
                 opts.s6Selftest ||
                 (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
-                 !opts.s42Selftest && !opts.s5Selftest && !opts.entityTimeSet &&
-                 opts.screenshotPath.empty());
+                 !opts.s42Selftest && !opts.s5Selftest && !opts.s8Selftest &&
+                 !opts.entityTimeSet && opts.screenshotPath.empty());
             // S7: interactive play steps the return machine (unless --no-return,
             // D13), and so does --s7-selftest. No frozen selftest (--selftest,
             // --s3 ... --s6-selftest) or capture ever does: S4.1's selftest
@@ -2334,7 +2377,7 @@ int run_app(const AppOptions& opts) {
             const bool interactive_run =
                 !opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
                 !opts.s42Selftest && !opts.s5Selftest && !opts.s6Selftest && !opts.s7Selftest &&
-                !opts.entityTimeSet && opts.screenshotPath.empty();
+                !opts.s8Selftest && !opts.entityTimeSet && opts.screenshotPath.empty();
             bool return_wired = follow_mode && return_available &&
                                 (opts.s7Selftest || (interactive_run && !opts.noReturn));
             if (follow_mode) {
@@ -2364,7 +2407,7 @@ int run_app(const AppOptions& opts) {
                 // The load runs on this thread: keep the window answering the
                 // system meanwhile (no "not responding" during the shrine load).
                 // Only the S7 runs pump — the frozen timelines load as before.
-                const bool pump_load = opts.s7Selftest || interactive_run;
+                const bool pump_load = opts.s7Selftest || opts.s8Selftest || interactive_run;
                 scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath, nullptr,
                                       pump_load ? std::function<void()>([] { SDL_PumpEvents(); })
                                                 : std::function<void()>());
@@ -2432,6 +2475,11 @@ int run_app(const AppOptions& opts) {
                                     stage_name, scene.meshes.size(), load_ms);
                     }
                 }
+                if (opts.s8Selftest && here == StageId::Plain) {
+                    std::printf("s8-load stage=plain instances=%zu meshes=%zu ms=%.1f\n",
+                                manifest.instances.size(), scene.meshes.size(),
+                                static_cast<double>(SDL_GetTicksNS() - stage_load_start) / 1e6);
+                }
             } else if (!opts.modelRelPath.empty()) {
                 scene = load_scene(opts.libraryDir, opts.modelRelPath);
                 renderer.upload(scene);
@@ -2458,11 +2506,14 @@ int run_app(const AppOptions& opts) {
             float stage_spawn_yaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
             // S8 (D14): a stage entered through a door starts at that door's
             // arrival spawn (on its floor), not at the stage's start.
-            const bool door_arrival = carry.door.phase == DoorPhase::Load &&
-                                      carry.door.target == static_cast<int>(here);
+            // The arrival is the kDoors row recorded at entry (R16); any other
+            // start resets the machine (a door entered on the frame R ended the
+            // last stage must not lock this one).
+            carry.door = door_stage_start(carry.door, here);
+            const DoorRow* const arrival = arriving_door(carry.door, here);
+            const bool door_arrival = arrival != nullptr;
             if (door_arrival) {
-                const ride_points::Door& door = here == StageId::Plain ? ride_points::kDoorShrine
-                                                                       : ride_points::kDoorPlain;
+                const ride_points::Door& door = *arrival->door;
                 stage_spawn = Vec3{door.arrive[0], door.arrive[1], door.arrive[2]};
                 stage_spawn_yaw = door.arriveYawDeg;
             }
@@ -4852,7 +4903,7 @@ int run_app(const AppOptions& opts) {
             // --- S8: the plain — Agro, the whistle, riding (design D4-D15) -------
             // Stepped only in interactive play (not --s7-e2e): no frozen selftest,
             // --s7-selftest or --s7-e2e ever meets the doors or the ride (D17).
-            const bool s8_wired = interactive_run && !opts.s7E2e;
+            const bool s8_wired = (interactive_run && !opts.s7E2e) || opts.s8Selftest;
             bool plain_ride = s8_wired && here == StageId::Plain && horseRig < playbacks.size() &&
                               !manifest.horses.empty();
             if (plain_ride &&
@@ -4889,11 +4940,15 @@ int run_app(const AppOptions& opts) {
             int whistleClip = -1;  // the player's whistle one-shot, -1 = none
             float whistleSeconds = 0.0f;
             bool agroProgressed = true;
+            // R11: the ground refused last frame's ridden move (fed back as a rein).
+            bool rideBlocked = false;
+            // R12: the mount's start — the player's on-foot spot, resolved into the
+            // seat's frame on the first mounted pose (then mount_offset lerps it).
+            bool mountFootPending = false;
+            Vec3 mountFootWorld{};
+            Vec3 mountFoot{};
             // Last frame's held ride keys: the presses are their edges.
-            struct RideKeys {
-                bool kick = false, rein = false, mount = false, whistle = false;
-                float steer = 0.0f;
-            } rideKeysBefore;
+            RideKeys rideKeysBefore;
             const auto horse_model = [&]() {
                 const float half = 0.5f * horseYaw * kDegToRad;
                 return mat4_from_trs(horsePos, Quat{0.0f, std::sin(half), 0.0f, std::cos(half)},
@@ -4907,20 +4962,14 @@ int run_app(const AppOptions& opts) {
             // One plain frame, after this frame's update_all_poses: the presses,
             // the whistle, the ride and Agro's machines, her travel over the
             // ground, both rigs' blended poses, the rider on the saddle, and the
-            // cues. `locked` (a door fade) eats every press.
+            // cues. `locked` (a door fade) eats every press; a key held through
+            // it is not a fresh press when it ends (ride_presses).
             const auto plain_step = [&](float dt, RideKeys keys, bool locked,
                                         std::vector<std::vector<Mat4>>& palettes) {
-                if (locked) {
-                    keys = RideKeys{};
-                }
-                RideInput in;
-                in.kickPressed = keys.kick && !rideKeysBefore.kick;
-                in.reinPressed = keys.rein && !rideKeysBefore.rein;
-                in.reinHeld = keys.rein;
-                in.mountPressed = keys.mount && !rideKeysBefore.mount && whistleClip < 0;
-                in.whistlePressed = keys.whistle && !rideKeysBefore.whistle;
-                in.steerX = keys.steer;
-                rideKeysBefore = keys;
+                RideInput in = ride_presses(keys, rideKeysBefore, locked);
+                in.mountPressed = in.mountPressed && whistleClip < 0;
+                // R11: a refused ridden move holds the rein (the stop chain runs).
+                in = blocked_rein(in, ride, rideBlocked);
 
                 // The whistle (D12): Wander's one-shot (`_near` within 15 m), on foot.
                 bool whistled = false;
@@ -4982,6 +5031,8 @@ int run_app(const AppOptions& opts) {
                             scene, playerRig, shown, playback_time(playback, shown.duration));
                     }
                     riderBlend.clip.clear();
+                    mountFootPending = true;  // R12
+                    mountFootWorld = player.position;
                     audio.play_ride(RideSfx::Mount, horsePos);
                 }
                 if (in.kickPressed && (counted_kicks(ride) > counted_kicks(before) ||
@@ -5045,6 +5096,7 @@ int run_app(const AppOptions& opts) {
                     horseYaw = ride.yawDeg;
                     speed = ride.speed;
                 }
+                bool refused = false;
                 if (speed != 0.0f && dt > 0.0f) {
                     const Vec3 f = yaw_forward(horseYaw);
                     Vec3 next{horsePos.x + f.x * speed * dt, horsePos.y,
@@ -5057,8 +5109,11 @@ int run_app(const AppOptions& opts) {
                             next.y = floor;
                         }
                         horsePos = next;
+                    } else {
+                        refused = true;
                     }
                 }
+                rideBlocked = refused && ride.phase == RidePhase::Riding;
                 agroProgressed = horse_distance() < distanceBefore - 1e-4f;
 
                 // Agro's rig: placed, posed with the blend, hooves on touchdown.
@@ -5129,8 +5184,15 @@ int run_app(const AppOptions& opts) {
                     }
                     Mat4 seat{};
                     if (rig_bone_world(scene, horseRig, palettes[horseRig], kRiderBone, seat)) {
+                        if (mountFootPending) {
+                            // R12: where he stood, in the seat's frame (y from the clip).
+                            mountFoot = point_in_frame(seat, mountFootWorld);
+                            mountFoot.y = 0.0f;
+                            mountFootPending = false;
+                        }
+                        const Vec3 offset = mount_offset(ride, mountFoot);
                         set_rig_model(scene, player_rig_record,
-                                      mat4_mul(seat, translation_of(rider_offset(ride))));
+                                      mat4_mul(seat, translation_of(offset)));
                     }
                     player.position = horsePos;  // the listener, the camera, R
                     player.yawDeg = horseYaw;
@@ -5617,6 +5679,497 @@ int run_app(const AppOptions& opts) {
                     return 0;
                 }
                 return fail("unexpected stage step " + std::to_string(carry.s7Step));
+            }
+
+            if (opts.s8Selftest) {
+                // The S8 acceptance timeline (design §8.3): fixed 1/60 s steps,
+                // no window input, the plain's own frame (plain_step, the follow
+                // camera, player_step on foot) driven by scripted ride keys.
+                // Placements between probes are scaffolding (as S7's wall probe);
+                // every ride transition is the machine's own.
+                const float dt = kFixedFrameSeconds;
+                const auto fail = [](const std::string& message) {
+                    std::fprintf(stderr, "sotc-viewer: --s8-selftest: %s\n", message.c_str());
+                    return 1;
+                };
+                const auto ride_phase_name = [](RidePhase phase) {
+                    return phase == RidePhase::OnFoot     ? "OnFoot"
+                           : phase == RidePhase::Mounting ? "Mounting"
+                           : phase == RidePhase::Riding   ? "Riding"
+                                                          : "Dismounting";
+                };
+                if (here == StageId::Arena) {
+                    // --- 12. R: the arena in its opening state ---------------------
+                    const int valus = static_cast<int>(std::lround(encounter.health));
+                    const int hero = static_cast<int>(std::lround(combat.health));
+                    if (carry.s8Step != 1 || carry.door.phase != DoorPhase::Idle ||
+                        ride.phase != RidePhase::OnFoot || carry.ret.phase != ReturnPhase::Idle ||
+                        valus != 100 || hero != 100) {
+                        return fail("R did not bring the arena back in its opening state");
+                    }
+                    std::printf("s8-reset stage=arena ride=%s door=%s valus=%d player=%d\n",
+                                ride_phase_name(ride.phase), door_phase_name(carry.door.phase),
+                                valus, hero);
+                    print_status_line(opts, shell.win);
+                    return 0;
+                }
+                if (here != StageId::Plain || carry.s8Step != 0) {
+                    return fail("unexpected stage step " + std::to_string(carry.s8Step));
+                }
+                if (!plain_ride) {
+                    return fail("the plain has no Agro to ride (the S8 bake or manifest)");
+                }
+                if (!audio.enabled) {
+                    return fail("audio is not loaded (run `make audio` for the 34-entry slice)");
+                }
+                namespace rp = ride_points;
+                std::vector<std::vector<Mat4>> palettes =
+                    update_all_poses(renderer, scene, playbacks, 0.0f, club);
+                // Agro's clip as shown, and every switch of it since the last clear.
+                const auto horse_clip = [&]() -> const std::string& {
+                    return ride.phase == RidePhase::OnFoot ? agro.clip : ride.horseClip;
+                };
+                std::vector<std::string> seen;
+                // One plain frame: the interactive loop's order (the clip choice,
+                // the poses, plain_step, the camera, the player step on foot).
+                const auto frame = [&](RideKeys keys, PlayerInput input = PlayerInput{}) {
+                    const bool rideOwns = ride.phase != RidePhase::OnFoot || whistleClip >= 0;
+                    if (rideOwns) {
+                        input = PlayerInput{};
+                    } else {
+                        update_combat_clips(playback, scene, combat, input, /*manualClip=*/false);
+                    }
+                    palettes = update_all_poses(renderer, scene, playbacks, dt, club);
+                    const std::string before = horse_clip();
+                    plain_step(dt, keys, /*locked=*/false, palettes);
+                    if (horse_clip() != before) {
+                        seen.push_back(horse_clip());
+                    }
+                    const bool riding = ride.phase != RidePhase::OnFoot;
+                    const bool moving = input.forward || input.back || input.left || input.right;
+                    camera_follow(camera, follow, riding ? horsePos : player.position,
+                                  riding ? horseYaw : player.yawDeg, 0.0f, 0.0f, 0.0f,
+                                  riding ? ride.speed != 0.0f : moving, dt);
+                    if (!riding) {
+                        const PlayerFrame f = player_frame_of(scene, entityRig, palettes, heightmap,
+                                                              camera_look_yaw(camera));
+                        player_step(player, combat, input, f, tuning, dt);
+                        apply_player_transform(scene, player_rig_record, player, player_lift());
+                    }
+                    audio.update(dt, player.position, camera_look_yaw(camera));
+                };
+                const auto frames_until = [&](float seconds, RideKeys keys, auto&& done) {
+                    for (int i = static_cast<int>(std::lround(seconds / dt)); i > 0; --i) {
+                        if (done()) {
+                            return true;
+                        }
+                        frame(keys);
+                    }
+                    return done();
+                };
+                const auto hold = [&](float seconds, RideKeys keys) {
+                    for (int i = static_cast<int>(std::lround(seconds / dt)); i > 0; --i) {
+                        frame(keys);
+                    }
+                };
+                const auto press = [&](RideKeys keys) {
+                    frame(keys);
+                    frame(RideKeys{});
+                };
+                RideKeys kick;
+                kick.kick = true;
+                RideKeys rein;
+                rein.rein = true;
+                RideKeys mount;
+                mount.mount = true;
+                RideKeys whistle;
+                whistle.whistle = true;
+                const auto on_floor = [&](float x, float z, float y) {
+                    Vec3 p{x, y, z};
+                    const float floor = heightmap_floor(heightmap, p, kFloorStep);
+                    p.y = std::isfinite(floor) ? floor : y;
+                    return p;
+                };
+                const auto snap_camera = [&]() {
+                    follow.yawOffsetDeg = 0.0f;
+                    follow.pitchOffsetDeg = 0.0f;
+                    const bool riding = ride.phase != RidePhase::OnFoot;
+                    camera_follow(camera, follow, riding ? horsePos : player.position,
+                                  riding ? horseYaw : player.yawDeg, 0.0f, 0.0f, 0.0f,
+                                  /*moving=*/false, /*dtSeconds=*/10.0f);
+                };
+                const auto place_player = [&](Vec3 p, float yawDeg) {
+                    player = PlayerState{p, yawDeg};
+                    apply_player_transform(scene, player_rig_record, player, player_lift());
+                    snap_camera();
+                };
+                // Agro moved by hand (scaffolding): her heading is the ride's too.
+                const auto place_horse = [&](Vec3 p, float yawDeg) {
+                    horsePos = p;
+                    horseYaw = yawDeg;
+                    ride.yawDeg = yawDeg;
+                    set_rig_model(scene, scene.rigs[horseRig], horse_model());
+                    snap_camera();
+                };
+                const auto heading_to = [](float fromX, float fromZ, float toX, float toZ) {
+                    return std::atan2(toX - fromX, toZ - fromZ) / kDegToRad;
+                };
+                const auto render = [&]() {
+                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.render_frame(scene, camera_view_proj(camera, shell.win),
+                                          /*acquire_swapchain=*/true);
+                };
+                const auto capture = [&](const char* name) {
+                    if (opts.s8StillsPath.empty()) {
+                        return;
+                    }
+                    with_clocks_restored(playbacks, [&]() {
+                        render();
+                        write_screenshot(renderer, shell.win,
+                                         still_png_path(opts.s8StillsPath, name));
+                    });
+                };
+                const auto bone_origin = [&](std::size_t rig, const char* bone, Vec3& out) {
+                    Mat4 m{};
+                    if (rig >= palettes.size() ||
+                        !rig_bone_world(scene, rig, palettes[rig], bone, m)) {
+                        return false;
+                    }
+                    out = Vec3{m.m[12], m.m[13], m.m[14]};
+                    return true;
+                };
+                const auto short_clip = [](const std::string& clip) {
+                    const std::string prefix = "horse_a_uma_";
+                    return clip.rfind(prefix, 0) == 0 ? clip.substr(prefix.size()) : clip;
+                };
+                const auto horse_named = [](const char* name) {
+                    return std::string("horse_a_uma_") + name;
+                };
+                frame(RideKeys{});  // the first plain frame: Agro posed, the blend seeded
+
+                // --- 1. The whistle from probes.whistle_from ----------------------
+                place_player(on_floor(rp::kProbeWhistleFrom[0], rp::kProbeWhistleFrom[1],
+                                      player.position.y),
+                             heading_to(rp::kProbeWhistleFrom[0], rp::kProbeWhistleFrom[1],
+                                        horsePos.x, horsePos.z));
+                frame(RideKeys{});
+                const float whistleDistance = horse_distance();
+                press(whistle);
+                if (whistleClip < 0 || agro.phase != AgroPhase::Approach) {
+                    return fail("the whistle did not call Agro");
+                }
+                bool neighed = false;
+                bool whistleStill = false;
+                if (!frames_until(kS8MaxWhistleSeconds, RideKeys{}, [&]() {
+                        neighed = neighed || agro.phase == AgroPhase::Neigh;
+                        if (!whistleStill && agro.phase == AgroPhase::Approach &&
+                            horse_distance() <= 0.5f * whistleDistance) {
+                            capture("whistle");
+                            whistleStill = true;
+                        }
+                        return neighed && agro.phase == AgroPhase::Idle;
+                    })) {
+                    return fail("Agro did not arrive and neigh");
+                }
+                const float arrived = horse_distance();
+                std::printf("s8-whistle dist=%.2f arrived=%.2f neigh=%d\n", whistleDistance,
+                            arrived, neighed ? 1 : 0);
+                if (!(arrived <= kS8ArriveMax)) {
+                    return fail("Agro stopped farther than 3.5 m");
+                }
+
+                // --- 2. The mount, from her left (x < 0 in her frame) -------------
+                frames_until(3.0f, RideKeys{}, [&]() { return whistleClip < 0; });
+                const auto beside = [&](float x) {
+                    const Vec3 p = from_body_frame(Vec3{x, 0.0f, 0.0f}, horsePos, horseYaw);
+                    return on_floor(p.x, p.z, horsePos.y);
+                };
+                place_player(beside(-kS8MountSide), horseYaw);
+                frame(mount);
+                if (ride.phase != RidePhase::Mounting || ride.side != Side::Left) {
+                    return fail("E beside her left did not start the left mount");
+                }
+                std::printf("s8-mount side=L clip=%s\n", ride.riderClip.c_str());
+                bool mountStill = false;
+                if (!frames_until(3.0f, RideKeys{}, [&]() {
+                        if (!mountStill && ride.phase == RidePhase::Mounting &&
+                            ride.clipTime >= kS8MountStillSeconds) {
+                            capture("mount");
+                            mountStill = true;
+                        }
+                        return ride.phase == RidePhase::Riding;
+                    })) {
+                    return fail("the mount never reached Riding");
+                }
+
+                // The rider's seated rest (stand1_player at Stand): the pelvis over
+                // OptBone_boy in Agro's frame. The clip seats the pelvis joint
+                // 0.18 m above the bone (y is the clip's own); s8-rider is the
+                // pelvis's largest departure from this rest during the gallop —
+                // a float, a sink or a slide on the saddle.
+                const auto pelvis_on_seat = [&](Vec3& out) {
+                    Vec3 pelvis{};
+                    Vec3 seat{};
+                    if (!bone_origin(playerRig, "Bone_KOSI", pelvis) ||
+                        !bone_origin(horseRig, kRiderBone, seat)) {
+                        return false;
+                    }
+                    out = to_body_frame(pelvis, seat, horseYaw);
+                    return true;
+                };
+                // Riding is reached as the Mount -> stand1 blend starts: sample the
+                // rest once the blend has finished, not two frames into it.
+                hold(kClipBlendSeconds, RideKeys{});
+                Vec3 seatRest{};
+                if (!pelvis_on_seat(seatRest)) {
+                    return fail("no Bone_KOSI on the rider or OptBone_boy on Agro");
+                }
+
+                // --- 3. Kicks: Walk, Trot, Gallop through their start clips -------
+                float riderOffset = 0.0f;
+                struct GaitProbe {
+                    Gait gait;
+                    const char* start;
+                    const char* loop;
+                    float expected;
+                };
+                for (const GaitProbe& g :
+                     {GaitProbe{Gait::Walk, "walk_start", "walk", rp::kSpeedWalk},
+                      GaitProbe{Gait::Trot, "run_n_start", "run_n", rp::kSpeedTrot},
+                      GaitProbe{Gait::Gallop, "run_start", "run", rp::kSpeedGallop}}) {
+                    seen.clear();
+                    press(kick);
+                    if (!frames_until(4.0f, RideKeys{},
+                                      [&]() { return horse_clip() == horse_named(g.loop); }) ||
+                        seen.size() != 2 || seen[0] != horse_named(g.start) ||
+                        ride.gait != g.gait) {
+                        return fail(std::string("the kick to ") + gait_name(g.gait) +
+                                    " did not run " + g.start + " -> " + g.loop);
+                    }
+                    float path = 0.0f;
+                    const int n = static_cast<int>(std::lround(kS8GaitSeconds / dt));
+                    for (int i = 0; i < n; ++i) {
+                        const Vec3 before = horsePos;
+                        frame(RideKeys{});
+                        path += std::hypot(horsePos.x - before.x, horsePos.z - before.z);
+                        Vec3 onSeat{};
+                        if (g.gait == Gait::Gallop && pelvis_on_seat(onSeat)) {
+                            const Vec3 d{onSeat.x - seatRest.x, onSeat.y - seatRest.y,
+                                         onSeat.z - seatRest.z};
+                            riderOffset = std::max(riderOffset, std::sqrt(vec3_dot(d, d)));
+                        }
+                        if (g.gait == Gait::Gallop && i == n / 2) {
+                            capture("gallop");
+                        }
+                    }
+                    const float speed = path / kS8GaitSeconds;
+                    std::printf("s8-gait gait=%s speed=%.3f expected=%.3f\n", gait_name(g.gait),
+                                speed, g.expected);
+                    if (!(std::fabs(speed - g.expected) <= kS8Tolerance * g.expected)) {
+                        return fail(std::string(gait_name(g.gait)) + "'s loop speed is off");
+                    }
+                }
+
+                // --- 4. Full right steer at the gallop: the yaw rate ---------------
+                {
+                    RideKeys right;
+                    right.steer = 1.0f;
+                    hold(kS8SteerRampSeconds, right);  // the 0.5-per-frame blend settles
+                    float turned = 0.0f;
+                    const int n = static_cast<int>(std::lround(kS8SteerSeconds / dt));
+                    for (int i = 0; i < n; ++i) {
+                        const float before = horseYaw;
+                        frame(right);
+                        turned += std::remainder(horseYaw - before, 360.0f);
+                    }
+                    const float rate = turned / kS8SteerSeconds;
+                    const float expected = -kYawRateGallop;  // right turns yaw down
+                    std::printf("s8-steer yaw_rate=%.2f expected=%.2f\n", rate, expected);
+                    if (ride.gait != Gait::Gallop ||
+                        !(std::fabs(rate - expected) <= kS8Tolerance * std::fabs(expected))) {
+                        return fail("the gallop's yaw rate is off");
+                    }
+                    hold(kS8SteerRampSeconds, RideKeys{});
+                }
+
+                // --- 5. Hold S: the gallop stops through run_stop1-3 ---------------
+                seen.clear();
+                hold(kReinHoldSeconds + 0.1f, rein);
+                if (!frames_until(5.0f, RideKeys{},
+                                  [&]() { return horse_clip() == horse_named("stand1"); })) {
+                    return fail("the held S never stopped the gallop");
+                }
+                {
+                    const std::vector<std::string> want{
+                        horse_named("run_stop1"), horse_named("run_stop2"),
+                        horse_named("run_stop3"), horse_named("stand1")};
+                    if (seen != want) {
+                        return fail("the stop did not run run_stop1 -> 2 -> 3 -> stand1");
+                    }
+                    std::printf("s8-stop from=Gallop clips=%s,%s,%s\n", short_clip(seen[0]).c_str(),
+                                short_clip(seen[1]).c_str(), short_clip(seen[2]).c_str());
+                }
+
+                // --- 6. S at a standstill: back up ---------------------------------
+                if (!frames_until(2.0f, rein,
+                                  [&]() { return horse_clip() == horse_named("back"); })) {
+                    return fail("S at a standstill did not back up");
+                }
+                {
+                    const Vec3 from = horsePos;
+                    const Vec3 f = yaw_forward(horseYaw);
+                    hold(kS8BackSeconds, rein);
+                    const float moved = (horsePos.x - from.x) * f.x + (horsePos.z - from.z) * f.z;
+                    const float speed = moved / kS8BackSeconds;
+                    std::printf("s8-back speed=%.3f\n", speed);
+                    if (!(std::fabs(speed - rp::kSpeedBack) <=
+                          kS8Tolerance * std::fabs(rp::kSpeedBack))) {
+                        return fail("the back-up speed is off");
+                    }
+                }
+                if (!frames_until(3.0f, RideKeys{},
+                                  [&]() { return horse_clip() == horse_named("stand1"); })) {
+                    return fail("releasing S did not end the back-up");
+                }
+
+                // --- 7. The plateau's edge, ridden: R11 stops her ------------------
+                const float edgeDx = rp::kProbeEdgeTo[0] - rp::kProbeEdgeFrom[0];
+                const float edgeDz = rp::kProbeEdgeTo[1] - rp::kProbeEdgeFrom[1];
+                const float edgeLength = std::hypot(edgeDx, edgeDz);
+                const auto along_edge = [&](Vec3 p) {
+                    return ((p.x - rp::kProbeEdgeFrom[0]) * edgeDx +
+                            (p.z - rp::kProbeEdgeFrom[1]) * edgeDz) /
+                           edgeLength;
+                };
+                const float edgeYaw = heading_to(rp::kProbeEdgeFrom[0], rp::kProbeEdgeFrom[1],
+                                                 rp::kProbeEdgeTo[0], rp::kProbeEdgeTo[1]);
+                place_horse(on_floor(rp::kProbeEdgeFrom[0], rp::kProbeEdgeFrom[1], horsePos.y),
+                            edgeYaw);
+                frame(RideKeys{});
+                seen.clear();
+                press(kick);
+                hold(kS8EdgeKickGapSeconds, RideKeys{});
+                press(kick);  // to the trot
+                bool stopClip = false;
+                if (!frames_until(kS8MaxEdgeSeconds, RideKeys{}, [&]() {
+                        stopClip = stopClip || horse_clip() == horse_named("run_n_stop") ||
+                                   horse_clip() == horse_named("walk_stop");
+                        return stopClip && horse_clip() == horse_named("stand1");
+                    })) {
+                    return fail("riding into the edge did not stop Agro (R11)");
+                }
+                {
+                    std::string clips;
+                    for (const std::string& clip : seen) {
+                        clips += (clips.empty() ? "" : ",") + short_clip(clip);
+                    }
+                    const bool blocked = along_edge(horsePos) < edgeLength - 0.5f;
+                    std::printf("s8-edge-ride stopped=%.2f,%.2f clips=%s blocked=%d\n", horsePos.x,
+                                horsePos.z, clips.c_str(), blocked ? 1 : 0);
+                    if (!blocked) {
+                        return fail("the ride toward the edge was never refused");
+                    }
+                }
+
+                // --- 8. Dismount right: the cliff on her left ----------------------
+                // Turned in place so her left (x < 0) faces over the edge: the
+                // mounted side has no ground, the machine picks the right.
+                place_horse(horsePos, std::atan2(edgeDz, -edgeDx) / kDegToRad);
+                frame(RideKeys{});
+                frame(mount);
+                if (ride.phase != RidePhase::Dismounting || ride.side != Side::Right) {
+                    return fail("E at the edge did not dismount on the right");
+                }
+                std::printf("s8-dismount side=R\n");
+                if (!frames_until(3.0f, RideKeys{},
+                                  [&]() { return ride.phase == RidePhase::OnFoot; })) {
+                    return fail("the dismount never ended on foot");
+                }
+                frame(RideKeys{});
+
+                // --- 9. The edge on foot: player_step refuses the drop -------------
+                {
+                    place_player(on_floor(rp::kProbeEdgeFrom[0], rp::kProbeEdgeFrom[1],
+                                          player.position.y),
+                                 edgeYaw);
+                    PlayerInput forward;
+                    forward.forward = true;
+                    forward.run = true;
+                    const int n = static_cast<int>(std::lround(kS8MaxEdgeSeconds / dt));
+                    for (int i = 0; i < n && along_edge(player.position) < edgeLength; ++i) {
+                        palettes = update_all_poses(renderer, scene, playbacks, dt, club);
+                        const PlayerFrame f =
+                            player_frame_of(scene, entityRig, palettes, heightmap, edgeYaw);
+                        player_step(player, combat, forward, f, tuning, dt);
+                    }
+                    const bool blocked = along_edge(player.position) < edgeLength - 0.5f;
+                    std::printf("s8-edge stopped=%.2f,%.2f blocked=%d\n", player.position.x,
+                                player.position.z, blocked ? 1 : 0);
+                    if (!blocked) {
+                        return fail("the walk toward the edge was never stopped");
+                    }
+                }
+                std::printf("s8-rider offset=%.3f\n", riderOffset);
+                if (!(riderOffset <= kS8RiderOffsetMax)) {
+                    return fail("the rider's pelvis is off the saddle");
+                }
+
+                // --- 10. Back at her start: the audio, plain.png, the perf ---------
+                place_horse(on_floor(rp::kProbeGallopFrom[0], rp::kProbeGallopFrom[1], horsePos.y),
+                            rp::kProbeGallopHeadingDeg);
+                place_player(stage_spawn, 180.0f);  // facing the shrine
+                hold(0.5f, RideKeys{});
+                std::printf("s8-audio events=%d hooves=%d\n", audio.rideEvents, audio.hooves);
+                if (audio.hooves <= 0 || audio.rideEvents <= audio.hooves) {
+                    return fail("the ride played no hooves or no other cue");
+                }
+                {
+                    const Camera followCamera = camera;
+                    camera.target =
+                        Vec3{stage_spawn.x, stage_spawn.y + 6.0f, stage_spawn.z - 15.0f};
+                    camera.distance = 45.0f;
+                    camera.yaw = 0.0f;  // the eye on +Z, looking at the shrine (-Z)
+                    camera.pitch = 12.0f;
+                    capture("plain");
+                    camera = followCamera;
+                }
+                render();  // warm-up
+                {
+                    const Uint64 perfStart = SDL_GetTicksNS();
+                    for (int i = 0; i < kS8PerfFrames; ++i) {
+                        frame(RideKeys{});
+                        render();
+                    }
+                    const double perfMs = static_cast<double>(SDL_GetTicksNS() - perfStart) / 1e6;
+                    std::printf("s8-perf frames=%d frame_ms=%.3f drawn=%d culled=%d\n",
+                                kS8PerfFrames, perfMs / static_cast<double>(kS8PerfFrames),
+                                renderer.drawn_last_frame(), renderer.culled_last_frame());
+                }
+
+                // --- 11. Mounted from the right, at a gallop: R --------------------
+                place_player(beside(kS8MountSide), horseYaw);
+                frame(mount);
+                if (ride.phase != RidePhase::Mounting || ride.side != Side::Right ||
+                    !frames_until(3.0f, RideKeys{},
+                                  [&]() { return ride.phase == RidePhase::Riding; })) {
+                    return fail("the right mount did not reach Riding");
+                }
+                for (int k = 0; k < 3; ++k) {
+                    press(kick);
+                    hold(kS8KickGapSeconds, RideKeys{});
+                }
+                if (ride.gait != Gait::Gallop || ride.speed <= 0.0f) {
+                    return fail("three kicks did not reach the gallop");
+                }
+                DeathState death = reset_death();
+                bool deathCueFired = false;
+                if (!press_reset(death, deathCueFired, nullptr)) {
+                    return fail("R on the plain did not ask for the arena");
+                }
+                carry.s8Step = 1;
+                renderer.release_scene();
+                stage = StageId::Arena;
+                continue;
             }
 
             if (opts.s6Selftest) {
@@ -6555,6 +7108,47 @@ int run_app(const AppOptions& opts) {
                     e2e_print_return();
                 }
             }
+            // --s8-e2e (Task 9): the script's view of this stage. The loop below
+            // is the interactive one; the script picks the input (the keys a
+            // player would hold, the heading he walks), counts the gallop and
+            // checks each join: the shrine's door into the plain, the plain's
+            // door back into the shrine, R into the arena.
+            struct S8E2eScript {
+                int frames = 0;
+                float seconds = 0.0f;  // fixed-step seconds in this stage
+                int phase = 0;         // the stage's own steps (see below)
+                float t = 0.0f;        // seconds in the phase
+                float kickWait = 0.0f;
+                float gallopPath = 0.0f;
+                bool neighed = false;
+                Vec3 lastHorse{};
+                Vec3 progressFrom{};
+                float progressSeconds = 0.0f;
+            } s8e;
+            const auto s8e_fail = [](const std::string& step) {
+                std::fprintf(stderr, "sotc-viewer: --s8-e2e: %s\n", step.c_str());
+                return 1;
+            };
+            if (opts.s8E2e) {
+                if (here == StageId::Shrine && carry.s8Step == 0 && !door_arrival) {
+                    // The start: --stage shrine, in Free.
+                } else if (here == StageId::Plain && carry.s8Step == 0 && door_arrival) {
+                    std::printf("s8e2e-door from=shrine to=plain\n");
+                    carry.s8Step = 1;
+                } else if (here == StageId::Shrine && carry.s8Step == 1 && door_arrival) {
+                    std::printf("s8e2e-door from=plain to=shrine\n");
+                    carry.s8Step = 2;
+                } else if (here == StageId::Arena && carry.s8Step == 2 && !door_arrival) {
+                    carry.s8Step = 3;
+                } else {
+                    return s8e_fail(std::string("the ") + stage_name +
+                                    " loaded out of order (step " + std::to_string(carry.s8Step) +
+                                    ")");
+                }
+                if (here == StageId::Plain && !plain_ride) {
+                    return s8e_fail("the plain has no Agro to ride");
+                }
+            }
             // S8 (D14): a stage entered through a door completes the door's Load
             // here; FadeIn runs on this stage's frames.
             if (door_arrival) {
@@ -6570,8 +7164,8 @@ int run_app(const AppOptions& opts) {
 
                 SDL_Event event;
                 while (SDL_PollEvent(&event)) {
-                    if (opts.s7E2e && event.type != SDL_EVENT_QUIT) {
-                        continue;  // --s7-e2e: the script owns the input
+                    if ((opts.s7E2e || opts.s8E2e) && event.type != SDL_EVENT_QUIT) {
+                        continue;  // --s7-e2e/--s8-e2e: the script owns the input
                     }
                     switch (event.type) {
                         case SDL_EVENT_QUIT:
@@ -6670,11 +7264,11 @@ int run_app(const AppOptions& opts) {
 
                 const Uint64 now = SDL_GetTicks();
                 // --s7-e2e steps the real loop at the selftests' fixed 1/60 s.
-                const float dt = opts.s7E2e ? kFixedFrameSeconds
+                const float dt = (opts.s7E2e || opts.s8E2e) ? kFixedFrameSeconds
                                             : static_cast<float>(now - last_ticks) / 1000.0f;
                 last_ticks = now;
 
-                if (!opts.s7E2e) {
+                if (!opts.s7E2e && !opts.s8E2e) {
                     gamepad.poll();
                 }
                 if (gamepad.pausePressed) {
@@ -6742,6 +7336,251 @@ int run_app(const AppOptions& opts) {
                             running = false;
                         }
                     }
+                    // --s8-e2e: this frame's scripted keys (decided from the state the
+                    // last frame left), the late R and the exit.
+                    PlayerInput s8In;
+                    RideKeys s8Keys;
+                    if (opts.s8E2e) {
+                        namespace rp = ride_points;
+                        if (++s8e.frames > kS8E2eMaxStageFrames) {
+                            return s8e_fail(std::string("the ") + stage_name +
+                                            " never finished its step (phase " +
+                                            std::to_string(s8e.phase) + ")");
+                        }
+                        s8e.seconds += dt;
+                        s8e.t += dt;
+                        const auto next_phase = [&]() {
+                            ++s8e.phase;
+                            s8e.t = 0.0f;
+                        };
+                        // Walk (or run) toward a point: the heading is the script's,
+                        // the camera looks along it, W does the walking.
+                        const auto walk_to = [&](float x, float z, bool run) {
+                            const float dx = x - player.position.x;
+                            const float dz = z - player.position.z;
+                            if (std::hypot(dx, dz) <= kS8E2eArrive) {
+                                return true;
+                            }
+                            const float h = std::atan2(dx, dz) / kDegToRad;
+                            player.yawDeg = h;
+                            follow.yawOffsetDeg = 0.0f;
+                            follow.pitchOffsetDeg = 0.0f;
+                            camera.yaw = std::remainder(h + 180.0f, 360.0f);
+                            s8In.forward = true;
+                            s8In.run = run;
+                            return false;
+                        };
+                        // A walk that stops making progress is a failed join.
+                        const auto stuck = [&]() {
+                            s8e.progressSeconds += dt;
+                            if (std::hypot(player.position.x - s8e.progressFrom.x,
+                                           player.position.z - s8e.progressFrom.z) > 0.5f) {
+                                s8e.progressFrom = player.position;
+                                s8e.progressSeconds = 0.0f;
+                            }
+                            return s8e.progressSeconds > kS8E2eStuckSeconds;
+                        };
+                        // Agro onto the gallop line: steer at a point 40 m ahead on it.
+                        const auto pursue = [&]() {
+                            const float hx = std::sin(rp::kProbeGallopHeadingDeg * kDegToRad);
+                            const float hz = std::cos(rp::kProbeGallopHeadingDeg * kDegToRad);
+                            const float along = (horsePos.x - rp::kProbeGallopFrom[0]) * hx +
+                                                (horsePos.z - rp::kProbeGallopFrom[1]) * hz;
+                            const float at = std::clamp(along + kS8E2eLookahead, 0.0f,
+                                                        rp::kProbeGallopLength);
+                            const float want =
+                                std::atan2(rp::kProbeGallopFrom[0] + hx * at - horsePos.x,
+                                           rp::kProbeGallopFrom[1] + hz * at - horsePos.z) /
+                                kDegToRad;
+                            const float err = std::remainder(want - horseYaw, 360.0f);
+                            s8Keys.steer = std::clamp(-err / kS8E2eSteerGainDeg, -1.0f, 1.0f);
+                            return std::fabs(err);
+                        };
+                        const bool doorIdle = carry.door.phase == DoorPhase::Idle;
+                        if (here == StageId::Shrine && carry.s8Step == 0) {
+                            // Out through the front door (its box is ~43 m ahead).
+                            if (doorIdle) {
+                                // Round Mono's altar (a lattice route through the
+                                // layered map), then straight out to the door box.
+                                const ride_points::Door& d = rp::kDoorShrine;
+                                const std::size_t leg = static_cast<std::size_t>(s8e.phase);
+                                const bool last = leg >= kS8E2eShrineRoute.size();
+                                const float x = last ? 0.5f * (d.min[0] + d.max[0])
+                                                     : kS8E2eShrineRoute[leg][0];
+                                const float z = last ? 0.5f * (d.min[2] + d.max[2])
+                                                     : kS8E2eShrineRoute[leg][1];
+                                if (walk_to(x, z, /*run=*/true) && !last) {
+                                    next_phase();
+                                }
+                                if (stuck()) {
+                                    char where[96];
+                                    std::snprintf(where, sizeof(where),
+                                                  "the walk to door_shrine is blocked at "
+                                                  "%.1f,%.1f,%.1f",
+                                                  player.position.x, player.position.y,
+                                                  player.position.z);
+                                    return s8e_fail(where);
+                                }
+                            }
+                        } else if (here == StageId::Plain) {
+                            switch (s8e.phase) {
+                                case 0:  // the door's FadeIn
+                                    if (doorIdle && !carry.door.inputLocked) {
+                                        next_phase();
+                                    }
+                                    break;
+                                case 1:  // whistle
+                                    s8Keys.whistle = true;
+                                    next_phase();
+                                    break;
+                                case 2:  // she comes, neighs, stands
+                                    s8e.neighed = s8e.neighed || agro.phase == AgroPhase::Neigh;
+                                    if (s8e.neighed && agro.phase == AgroPhase::Idle &&
+                                        whistleClip < 0) {
+                                        if (!(horse_distance() <= kS8ArriveMax)) {
+                                            return s8e_fail("Agro stopped farther than 3.5 m");
+                                        }
+                                        next_phase();
+                                    } else if (s8e.t > kS8MaxWhistleSeconds) {
+                                        return s8e_fail("the whistle: Agro never arrived");
+                                    }
+                                    break;
+                                case 3: {  // around her front-left, then beside her left
+                                    const Vec3 a = from_body_frame(Vec3{-kS8E2eAround, 0.0f,
+                                                                        kS8E2eAround},
+                                                                   horsePos, horseYaw);
+                                    if (walk_to(a.x, a.z, /*run=*/false)) {
+                                        next_phase();
+                                    }
+                                    break;
+                                }
+                                case 4: {
+                                    const Vec3 b = from_body_frame(
+                                        Vec3{-kS8MountSide, 0.0f, 0.0f}, horsePos, horseYaw);
+                                    if (walk_to(b.x, b.z, /*run=*/false)) {
+                                        next_phase();
+                                    }
+                                    break;
+                                }
+                                case 5:  // E: the mount
+                                    s8Keys.mount = true;
+                                    next_phase();
+                                    break;
+                                case 6:
+                                    if (ride.phase == RidePhase::OnFoot) {
+                                        return s8e_fail("E beside her did not mount");
+                                    }
+                                    if (ride.phase == RidePhase::Riding) {
+                                        next_phase();
+                                    }
+                                    break;
+                                case 7:  // turn onto the gallop line at a standstill
+                                    if (pursue() < kS8E2eAlignDeg) {
+                                        next_phase();
+                                    } else if (s8e.t > 10.0f) {
+                                        return s8e_fail("Agro never turned onto the gallop line");
+                                    }
+                                    break;
+                                case 8:  // spaced kicks up to the gallop
+                                    pursue();
+                                    if (ride.gait == Gait::Gallop) {
+                                        s8e.lastHorse = horsePos;
+                                        s8e.gallopPath = 0.0f;
+                                        next_phase();
+                                    } else if ((s8e.kickWait -= dt) <= 0.0f) {
+                                        s8Keys.kick = true;
+                                        s8e.kickWait = kS8KickGapSeconds;
+                                    }
+                                    if (s8e.t > 10.0f) {
+                                        return s8e_fail("the kicks never reached the gallop");
+                                    }
+                                    break;
+                                case 9:  // 5 s at the gallop along the line
+                                    s8e.gallopPath += std::hypot(horsePos.x - s8e.lastHorse.x,
+                                                                 horsePos.z - s8e.lastHorse.z);
+                                    s8e.lastHorse = horsePos;
+                                    if (s8e.t >= kS8E2eGallopSeconds) {
+                                        std::printf("s8e2e-ride gallop_m=%.1f\n", s8e.gallopPath);
+                                        if (ride.gait != Gait::Gallop ||
+                                            !(s8e.gallopPath >= kS8E2eGallopMin)) {
+                                            return s8e_fail("the gallop was cut short");
+                                        }
+                                        next_phase();
+                                    } else {
+                                        pursue();
+                                    }
+                                    break;
+                                case 10:  // hold S past the rein's 0.5 s, then let go
+                                    s8Keys.rein = s8e.t <= kReinHoldSeconds + 0.1f;
+                                    if (!s8Keys.rein && ride.gait == Gait::Stand &&
+                                        ride.horseClip == kAgroStandClip) {
+                                        next_phase();
+                                    } else if (s8e.t > 8.0f) {
+                                        return s8e_fail("S never stopped the gallop");
+                                    }
+                                    break;
+                                case 11:  // E: the dismount
+                                    s8Keys.mount = true;
+                                    next_phase();
+                                    break;
+                                case 12:
+                                    if (ride.phase == RidePhase::Riding) {
+                                        return s8e_fail("E at a standstill did not dismount");
+                                    }
+                                    if (ride.phase == RidePhase::OnFoot) {
+                                        s8e.progressFrom = player.position;
+                                        next_phase();
+                                    }
+                                    break;
+                                case 13:  // on foot, back to the shrine steps
+                                    if (doorIdle) {
+                                        const ride_points::Door& d = rp::kDoorPlain;
+                                        walk_to(0.5f * (d.min[0] + d.max[0]),
+                                                0.5f * (d.min[2] + d.max[2]), /*run=*/true);
+                                        if (stuck()) {
+                                            char where[96];
+                                            std::snprintf(where, sizeof(where),
+                                                          "the walk to door_plain is blocked at "
+                                                          "%.1f,%.1f",
+                                                          player.position.x, player.position.z);
+                                            return s8e_fail(where);
+                                        }
+                                    }
+                                    break;
+                                default:
+                                    break;
+                            }
+                        } else if (here == StageId::Shrine && carry.s8Step == 2) {
+                            // Back in the shrine: the fade-in, a second, then R.
+                            if (s8e.phase == 0) {
+                                if (doorIdle && !carry.door.inputLocked) {
+                                    next_phase();
+                                }
+                            } else if (s8e.t >= kS7E2eLeadSeconds) {
+                                press_r_key();
+                                if (running) {
+                                    return s8e_fail("R in the shrine did not ask for the arena");
+                                }
+                            }
+                        } else if (here == StageId::Arena && carry.s8Step == 3 &&
+                                   s8e.seconds + kS7Eps >= kS7E2eLeadSeconds) {
+                            const int valus = static_cast<int>(std::lround(encounter.health));
+                            const int hero = static_cast<int>(std::lround(combat.health));
+                            if (carry.ret.phase != ReturnPhase::Idle ||
+                                carry.door.phase != DoorPhase::Idle ||
+                                ride.phase != RidePhase::OnFoot ||
+                                death.phase != DeathPhase::Idle || encounter.defeated ||
+                                valus != 100 || hero != 100) {
+                                return s8e_fail("R did not restore the arena's opening state");
+                            }
+                            std::printf("s8e2e-reset stage=arena ride=OnFoot door=%s valus=%d "
+                                        "player=%d\n",
+                                        door_phase_name(carry.door.phase), valus, hero);
+                            print_status_line(opts, shell.win);
+                            request = StageRequest{};
+                            running = false;
+                        }
+                    }
                     // S6: the death sequence's clock runs on the real frame time.
                     // The defeat transition happens later in this frame (in
                     // apply_combat_events), so the machine starts on the next frame
@@ -6800,6 +7639,9 @@ int run_app(const AppOptions& opts) {
                     RideKeys rideKeys;  // S8: the plain's held ride keys
                     if (opts.s7E2e) {
                         input.forward = e2eExpectLocked;
+                    } else if (opts.s8E2e) {
+                        input = s8In;
+                        rideKeys = s8Keys;
                     } else {
                         const bool* keys = SDL_GetKeyboardState(nullptr);
                         // S8 (G4): W kicks, S reins, A/D steer, E mounts and
@@ -7024,21 +7866,17 @@ int run_app(const AppOptions& opts) {
                     // plain's shrine steps — fire on entry, on foot, through the
                     // door machine; its Load ends the iteration for the other
                     // stage (this frame still draws, faded).
-                    if (s8_wired && (here == StageId::Shrine || here == StageId::Plain)) {
-                        const ride_points::Door& door = here == StageId::Shrine
-                                                            ? ride_points::kDoorShrine
-                                                            : ride_points::kDoorPlain;
-                        const bool entered =
-                            !riding && !inputLocked &&
-                            box_entered(positionBefore, player.position,
-                                        Vec3{door.min[0], door.min[1], door.min[2]},
-                                        Vec3{door.max[0], door.max[1], door.max[2]});
-                        const int target = static_cast<int>(
-                            here == StageId::Shrine ? StageId::Plain : StageId::Shrine);
+                    // R16: only while the stage still runs (R or Escape this frame
+                    // ended it), from the kDoors rows of this stage.
+                    if (s8_wired) {
+                        const int row = running && !riding && !inputLocked
+                                            ? door_entered_row(here, positionBefore,
+                                                               player.position)
+                                            : -1;
                         const DoorState doorBefore = carry.door;
-                        carry.door = step_door(carry.door, dt, entered, target, /*loadDone=*/false);
+                        carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);
                         if (running && door_wants_load(doorBefore, carry.door)) {
-                            request = StageRequest{false, static_cast<StageId>(carry.door.target)};
+                            request = StageRequest{false, kDoors[carry.door.row].to};
                             running = false;
                         }
                     }

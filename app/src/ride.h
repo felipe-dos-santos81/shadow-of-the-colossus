@@ -155,6 +155,32 @@ Vec3 rider_offset(const RideState& s);
 // `side` ends: the last `stand_getoff_fall` frame, mirrored on the right.
 Vec3 dismount_offset(Side side);
 
+// The held ride keys of one frame (the app reads them from the keyboard/gamepad).
+struct RideKeys {
+    bool kick = false, rein = false, mount = false, whistle = false;
+    float steer = 0.0f;
+};
+
+// This frame's RideInput from the held keys: a press is a key down now and up in
+// `before` (last frame's keys), reinHeld/steerX are the held values. A `locked`
+// frame (a door fade) presses and holds nothing, but `before` still records the
+// real keys, so a key held through the lock is not a fresh press when it ends.
+// The app adds its own conditions (the whistle clip gates the mount press).
+RideInput ride_presses(const RideKeys& keys, RideKeys& before, bool locked);
+
+// Ruling R11: a move the ground refused (no ground, a cliff, a wall — the app's
+// heightmap_walkable) reads as a held rein while Agro is ridden in a moving gait
+// (Walk/Trot/Gallop), so the stop chain runs instead of a gallop in place. It never
+// backs her up: at Stand (a stop clip, stand1) or Back it adds nothing. The app
+// passes last frame's refusal; `in`'s own keys pass through unchanged.
+RideInput blocked_rein(RideInput in, const RideState& s, bool blocked);
+
+// Ruling R12: the rider's seat-relative offset during the mount's 0.25 s blend,
+// lerped from `onFoot` (where he stood, in the same seat-relative frame; y ignored)
+// to rider_offset(s), so pressing E never snaps him onto the clip's first frame.
+// rider_offset(s) everywhere else.
+Vec3 mount_offset(const RideState& s, Vec3 onFoot);
+
 // "Stand", "Walk", "Trot", "Gallop", "Back".
 const char* gait_name(Gait gait);
 

@@ -5,9 +5,10 @@ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
 original containers.
 
-**Status (milestone S7): the return to the shrine — after Valus's death the screen fades to white, the
-shrine loads, Wander wakes in front of the altar and takes control; `R` goes back to the arena (user walk
-pending). S6 (the fall) is below it, unchanged.**
+**Status (milestone S8): Agro — walk out of the shrine's front door onto the plain, whistle for Agro,
+mount from either side, ride at walk/trot/gallop, steer, rein in, back up and dismount; walk back into
+the shrine; `R` goes back to the arena (user walk pending). S7 (the return to the shrine) and S6 (the
+fall) are below it, unchanged.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -92,6 +93,29 @@ starts there directly; `--no-return` keeps S6's end state (the corpse and the co
 S6 walk. `--s7-selftest` runs the whole thing deterministically; `--s7-e2e` drives the interactive loop
 itself (fixed 1/60 s, scripted input) from one lethal hit through the shrine and `R` back.
 
+**The plain and Agro (S8).** The shrine's front door (an authored trigger box, entry only) fades out
+(1.0 s, input locked), loads the plain (`out/re/stage/plain.manifest`: the `levels/home` ground, the
+cathedral's exterior as drawn-only `backdrop` lines, Agro as a `horse` record) and fades in (1.5 s); a
+box on the shrine steps goes back. The plain's ground refuses a move with no ground, a drop over 1.5 m or
+a rise over 1.0 m (the cliff edge is a wall; the arena's entrance stairs are a wall until S9). Controls on
+the plain:
+
+| Key (gamepad) | On foot | Mounted |
+| --- | --- | --- |
+| `Q` (north) | whistle: Agro (within 150 m) trots, or gallops beyond 40 m, to 3 m beside you and neighs | — |
+| `E` (south) | mount, within 1.6 m of her side (the side picks the left or right mount) | dismount at a stand or walk, to her mounted side, or the other side when that one has no walkable ground |
+| `W` press (stick-forward press) | move | kick: one gait up (walk → trot → gallop) through the start clips; three kicks in 1 s start a 3 s cooldown; a kick near top speed is refused with a neigh |
+| `S` (stick back) | move | a tap lowers one gait; held 0.5 s it stops her through the stop clips; at a stand it backs her up |
+| `A`/`D` (left stick x) | move | steer (90/60/60/45 °/s at stand/walk/trot/gallop, authored) |
+| `R` / `M` / `Escape` | reset to the arena / mute / quit | the same |
+
+Agro's travel is the playing clip's own measured root travel (the loops at 1.31, 5.29 and 14.7 m/s; the
+start/stop clips per frame); Wander rides on `OptBone_boy` playing the paired rider clip; every clip
+switch on either blends over 0.25 s. The riding camera pulls back per gait (6/7/9 m, authored). Hooves,
+the neigh, the whistle, the mount, the "hyah" and the "whoa" are audition picks from `com_b_h`/`com_v`
+(the S8 audio slice, 34 entries). The bridle, foliage, jumps, mounted combat and the moving mount are
+not in S8. `--stage plain` starts there; `--s8-selftest` and `--s8-e2e` prove it.
+
 The encounter has its own voice. The library's converted audio slice is loaded at start
 (a missing manifest or one without a curated cue prints one error naming the manifest or the
 event and the scene runs silent; `--s5-selftest` and `--s6-selftest` make the same condition
@@ -165,12 +189,16 @@ is required. Escape or the close button quits.
 | `--audio-mixdown PATH` | with `--s5-selftest`, the 48 kHz float stereo WAV the mixer's disk sink writes — the headless acceptance capture; needs `--s5-selftest` |
 | `--s6-selftest` | compose the encounter `--manifest` and run the S6 death timeline through fixed 1/60 s steps with no window input: a club swing (so the whoosh fires on the production path), a scripted lethal event through the production `apply_combat_events`, the death phase machine to `Done` (the motion, the tendril burst, the collapse into the corpse, the cinematic camera), the `s6-perf` line and the R soft reset; prints the `s6-phase`, `s6-event`, `s6-perf`, `s6-death`, `s6-status` and `s6-reset` lines (13 in all) and exits 1 on a failed invariant (a missing cue clip, a dead colossus that is still collidable, a half-restored reset); needs `--manifest` (with an entity) and `--model`; cannot be combined with another selftest |
 | `--s6-stills DIR` | with `--s6-selftest`, write `motion.png` (0.200 s), `camera.png` (0.400 s, the pull-back key), `tendrils.png` (1.200 s, the burst) and `corpse.png` (6.200 s, the corpse wide) into `DIR`, plus `tendrils-control.png` — the burst's frame with the effect pass suppressed, the control the pixel guard differences against; `DIR` must exist (the acceptance script creates it) |
-| `--stage arena\|shrine` | the first stage (default `arena`); `shrine` starts there with control, using `--shrine-manifest`; an interactive start only (needs `--manifest` for the player's frame) |
+| `--stage arena\|shrine\|plain` | the first stage (default `arena`); `shrine` and `plain` start there with control, using `--shrine-manifest` / `--plain-manifest`; an interactive start only (needs `--manifest` for the player's frame) |
 | `--shrine-manifest PATH` | the shrine's scene manifest (default `out/re/stage/shrine.manifest`, composed by `tools/re/stage/probe.py compose --stage shrine`) |
+| `--plain-manifest PATH` | the plain's scene manifest (default `out/re/stage/plain.manifest`, composed by `tools/re/stage/probe.py compose --stage plain`) |
 | `--no-return` | interactive play keeps S6's end state: no hold/fade/shrine after the death sequence |
 | `--s7-selftest` | seed Valus dead and run the return (hold, fade, shrine load, wake, `Free`), the shrine's ground/wall/idol/Mono probes and a 240-frame perf run, then `R` back to the arena and a second shrine load; prints the `s7-phase`/`s7-load`/`s7-ground`/`s7-wall`/`s7-idols`/`s7-mono`/`s7-perf`/`s7-status`/`s7-reset` lines (25 in all); needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest |
 | `--s7-e2e` | the end-to-end proof: the **interactive** loop at a fixed 1/60 s with scripted input (keyboard and gamepad ignored) — one lethal hit through the production combat path after 1 s, then the death, the return, the real stage switch, the wake and `Free`; `R` (the key's handler) 1 s into `Free`, exit 0 1 s into the reloaded arena; prints the `s7e2e-death`/`-return`/`-load`/`-input`/`-wake`/`-status`/`-reset` lines (20) and `s1-status`; needs `--manifest` and `--model`; runs alone (no selftest, capture, `--stage shrine` or `--no-return`) |
 | `--s7-stills DIR` | with `--s7-selftest`, write `fade.png` (the arena at fade 0.6), `wake.png`, `altar.png`, `idols.png` and `hall.png` into `DIR` |
+| `--s8-selftest` | start on the plain and run the ride through fixed 1/60 s steps with no window input: the whistle from the probe, the left mount, kicks through walk/trot/gallop (each loop's speed over 2 s), a full right steer at the gallop, the held-`S` stop, the back-up, a ridden and an on-foot walk into the cliff edge, the right dismount, the audio counters, a 240-frame perf run, then `R` while galloping; prints the 16 `s8-*` lines and `s1-status`, exits 1 on a failed invariant; needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest |
+| `--s8-stills DIR` | with `--s8-selftest`, write `whistle.png`, `mount.png`, `gallop.png` and `plain.png` into `DIR` |
+| `--s8-e2e` | with `--stage shrine`: the **interactive** loop at a fixed 1/60 s with scripted keys (keyboard and gamepad ignored) — walk into the shrine door, whistle, mount, kick to the gallop for 5 s, stop, dismount, walk into the shrine steps, `R` in the shrine; prints `s8e2e-door` (2), `s8e2e-ride`, `s8e2e-reset` and `s1-status`; needs `--manifest` and `--model`; runs alone |
 
 ## Manifests
 

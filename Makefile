@@ -3,7 +3,7 @@
 
 GAME_ROOT ?= /Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 UROOT     ?= /Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/uroot
-LIB       ?= $(CURDIR)/out/library
+LIB       ?= $(or $(SOTC_LIB),$(CURDIR)/out/library)
 BIN       ?= $(CURDIR)/out/bin
 JOBS      ?= 8
 f         ?= models/shadow/characters/wander/_cmn/wander.cmsh
@@ -19,6 +19,7 @@ VIEWER    = $(AWAKE) app/build/sotc-viewer --library "$(LIB)" \
             --model models/shadow/characters/wander/_cmn/wander.glb
 ENCOUNTER = out/re/stage/encounter.manifest
 SHRINE    = out/re/stage/shrine.manifest
+PLAIN     = out/re/stage/plain.manifest
 # The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, the
 # two S7 wake cuts (docs/notes/s7-recon.md §6), then the 26 S8 ride clips
 # (docs/notes/s8-recon.md). The order is the clip index.
@@ -50,7 +51,7 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake run shrine viewer shrine-manifest probe-check accept clean
+        bake run shrine plain viewer shrine-manifest plain-manifest probe-check accept clean libview
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -95,12 +96,15 @@ app: ## Configure and build the viewer (Release)
 app-test: app ## Run the viewer's unit and windowed tests
 	ctest --test-dir app/build --output-on-failure
 
-run: app shrine-manifest ## Play the Valus encounter (defeat him to return to the shrine)
+run: app shrine-manifest plain-manifest ## Play the Valus encounter (defeat him to return to the shrine)
 	@test -f $(ENCOUNTER) || { echo "missing $(ENCOUNTER): run make accept-s4"; exit 1; }
 	$(VIEWER) --manifest $(ENCOUNTER)
 
-shrine: app shrine-manifest ## Start in the Shrine of Worship
+shrine: app shrine-manifest plain-manifest ## Start in the Shrine of Worship (its front door leads to the plain)
 	$(VIEWER) --manifest $(ENCOUNTER) --stage shrine
+
+plain: app shrine-manifest plain-manifest ## Start on the plain with Agro (Q whistles, E mounts)
+	$(VIEWER) --manifest $(ENCOUNTER) --stage plain
 
 viewer: app ## Show Wander alone (no stage)
 	$(VIEWER)
@@ -108,19 +112,30 @@ viewer: app ## Show Wander alone (no stage)
 shrine-manifest: ## Compose out/re/stage/shrine.manifest from the stage data
 	@test -f $(SHRINE) || python3 tools/re/stage/probe.py compose --stage shrine --library "$(LIB)" --out $(SHRINE)
 
-probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine manifests)
+plain-manifest: ## Compose out/re/stage/plain.manifest from the stage data
+	@test -f $(PLAIN) || python3 tools/re/stage/probe.py compose --stage plain --library "$(LIB)" --out $(PLAIN)
+
+probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain manifests)
 	python3 tools/re/anb/probe.py check-skb
 	python3 tools/re/stage/probe.py check-cwks
 	python3 tools/re/stage/probe.py check-manifest --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-encounter --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-manifest --stage shrine --library "$(LIB)" $(SHRINE)
+	python3 tools/re/stage/probe.py check-manifest --stage plain --library "$(LIB)" $(PLAIN)
+
+census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
+	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
+.PHONY: census
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest accept-s7 ## Run the current milestone's acceptance (S7 → S6 → … → S3)
+accept: shrine-manifest plain-manifest accept-s8 ## Run the current milestone's acceptance (S8 → S7 → S6 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s7 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s8 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
+
+libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export
+	@./tools/verify/libview.sh "$(BRANCH)"
 
 clean: ## Remove build outputs (out/bin, app/build); the library and out/re stay
 	rm -rf $(BIN) app/build

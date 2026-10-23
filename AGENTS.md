@@ -4,7 +4,27 @@ Personal-use, offline-first native rebuild of *Shadow of the Colossus* for Apple
 C++20 + SDL3 + SDL_GPU/Metal for the viewer, a .NET 10 converter for the game's assets.
 This file is workspace guidance and is tracked with the project.
 
-## Status (2026-10-22)
+## Status (2026-10-23)
+
+**Milestone S8 "Agro" — implemented; scripted acceptance green, user walk PENDING.**
+The shrine's front door (an authored trigger box, entry only; `app/src/door.h`: FadeOut 1.0 s → Load →
+FadeIn 1.5 s) now leads onto the plain: a third stage `plain` (`out/re/stage/plain.manifest`, composed by
+`probe.py compose --stage plain`: the `levels/home` ground, 27 cathedral-exterior `backdrop` lines and
+Agro as a `horse` record), whose ground refuses holes, drops > 1.5 m and rises > 1.0 m (the cliff edge is
+a wall). `Q` whistles Agro over (authored approach, the binary's 10 s stuck warp); `E` beside her mounts
+from that side; mounted, a `W` press kicks one gait up through the start clips (the binary's kick buffer),
+`S` taps down / held stops through the stop clips / backs up at a stand, `A`/`D` steer (authored
+90/60/60/45 °/s), `E` at a stand or walk dismounts (`app/src/ride.h`). Agro moves by the clips' own
+measured root travel (walk 1.31, trot 5.29, gallop 14.7 m/s); Wander rides on `OptBone_boy`; every clip
+switch on either blends over 0.25 s. The audio slice is `tools/re/audio/s8_map.json` (34 entries: the S6
+ten + 24 audition picks). A box on the shrine steps leads back; `R` returns to the arena from anywhere.
+The proof is `--s8-selftest --s8-stills out/s8/stills` (16 `s8-*` lines + four 2560×1440 stills) and
+`--stage shrine --s8-e2e` (the interactive loop, scripted: door → plain → whistle → mount → gallop →
+stop → dismount → door → `R`); the acceptance script is `scripts/s8-acceptance.sh` (it runs the frozen S7
+chain first, then decodes the S8 map itself), and the recorded numbers are in `docs/notes/s8-results.md`.
+The plain loads in 0.88–0.89 s and draws at 8.37 ms/frame. Known gaps: foliage, the bridle, jumps, mounted
+combat, the moving mount, the call voice, music while riding, the arena wall at the entrance stairs,
+low-confidence hoof picks. The user's walk is still the user's to fill in.
 
 **Milestone S7 "Return to the Shrine" — implemented; scripted acceptance green, user walk PENDING.**
 After the death sequence reaches `Done` the interactive game now returns to the shrine: a transition
@@ -66,8 +86,8 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 |---|---|
 | `app/` | the native viewer (`app/src/`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6` are invoked unchanged as later milestones' regressions |
-| `docs/notes/` | RE records and per-milestone results notes (`s7-results.md` is this milestone's; `s7-recon.md` is its RE gates) |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6`/`s7` are invoked unchanged as later milestones' regressions |
+| `docs/notes/` | RE records and per-milestone results notes (`s8-results.md` is this milestone's; `s8-recon.md` is its RE gates) |
 | `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
@@ -80,16 +100,25 @@ export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extra
 export SOTC_LIB=<repo>/out/library
 ```
 
+**A branch works in a library view, never in `out/library`.** `make libview BRANCH=<name>` clones the
+shared library (`cp -cR`: models, textures, audio, coredata, `catalog.json`; ~5 s, ~0 bytes until a file is
+rewritten) into `out/libviews/<name>/` and prints `export SOTC_LIB=...`. Export it: the Makefile's
+`LIB ?= $(or $(SOTC_LIB),$(CURDIR)/out/library)` then points `make bake`/`audio`/`convert`, the viewer and
+the tests at the view, so a branch's re-bakes and audio decodes never touch the base or `main`. Everything
+is cloned, no symlinks (the converter rewrites every referenced texture PNG on a bake and would write
+through). Delete a view with `rm -rf out/libviews/<name>` when the branch is done.
+
 The machine suspends idle background work. **Every viewer run and every acceptance run must be
 wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Never run two
 acceptances concurrently.
 
 ## Build and test
 
-`make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make accept`, `make
-accept-s6`, …). `make bake` rebakes Mono's pose and Wander's 17 clips (the 15 S2–S6 clips, then the
-two S7 wake cuts) into the shared library with `--force`; `make run`/`make accept` compose the shrine
-manifest first. The underlying commands:
+`make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make plain`, `make
+accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 43 clips (the 15 S2–S6 clips,
+the two S7 wake cuts, then the 26 S8 ride clips) and Agro's 20 (the S4.2 kick at index 0, then the 19
+riding clips) into `$SOTC_LIB` (the view, when exported) with `--force`; `make run`/`make accept` compose the shrine and
+plain manifests first. The underlying commands:
 
 ```bash
 dotnet build BpConvert.sln
@@ -97,10 +126,10 @@ dotnet test tests/BpConvert.Tests -v q
 cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release
 cmake --build app/build -j
 ctest --test-dir app/build --output-on-failure
-# the curated audio slice into <SOTC_LIB>/audio/ — 8 cues for S5, 10 for S6
+# the curated audio slice into <SOTC_LIB>/audio/ — 8 cues for S5, 10 for S6, 34 for S8
 dotnet publish src/BpConvert.Cli -c Release -o out/bin
 caffeinate -dimsu dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" \
-  --out "$SOTC_LIB" --map tools/re/audio/s6_map.json --force
+  --out "$SOTC_LIB" --map tools/re/audio/s8_map.json --force
 ```
 
 Dependencies: SDL3 and SDL3_ttf via Homebrew (`brew install sdl3 sdl3_ttf`).
@@ -152,13 +181,33 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --s7-e2e                                   # the interactive loop, scripted: hit -> shrine -> R
 ```
 
+In the shrine, walk out of the front door onto the plain (`--stage plain` starts there;
+`--plain-manifest PATH` overrides `out/re/stage/plain.manifest`). On the plain: `Q` (gamepad north)
+whistles for Agro, `E` (south) beside her mounts; mounted, a `W` press (stick-forward press) kicks one gait
+up, a tap of `S` lowers one, holding `S` stops her, `S` at a stand backs up, `A`/`D` steer, `E` at a
+stand or walk dismounts. The shrine steps lead back into the shrine; `R` returns to the arena. An S7
+acceptance leaves the S6 ten in the audio manifest: re-run `make audio` (34 entries) before any
+`--s8-*` run. The S8 proof:
+
+```bash
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s8-selftest --s8-stills out/s8/stills    # the S8 ride timeline + the stills
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --stage shrine --s8-e2e                    # the interactive loop, scripted: door -> ride -> door -> R
+```
+
 ## Acceptance
 
 ```bash
-caffeinate -dimsu ./scripts/s7-acceptance.sh   # S7 + S6 (which runs S5 → S4.2 → S4.1 → S4 → S3)
+caffeinate -dimsu ./scripts/s8-acceptance.sh   # S8 + S7 (which runs S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s6-acceptance.sh`, `scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`,
-`scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh` for an S7 change: they are the regression.
+Never modify `scripts/s7-acceptance.sh`, `scripts/s6-acceptance.sh`, `scripts/s5-acceptance.sh`,
+`scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh` for an S8
+change: they are the regression.
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
 measured values, not adjectives.

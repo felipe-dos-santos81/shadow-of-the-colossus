@@ -1,0 +1,2425 @@
+{
+ "rows": [
+  {
+   "idx": 1,
+   "dir": "colossus_01_minotaur_a",
+   "glb": "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb",
+   "glb_mb": 38.5,
+   "joints": 238,
+   "meshes": 12,
+   "conv": {
+    "ok": 7,
+    "total": 7
+   },
+   "weak_glb_mats": {
+    "weakpoint_04": 1,
+    "weakpoint_03": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c01_minotaur_a_dead_body.glb",
+     "mb": 11.93,
+     "meshes": 6,
+     "skin": 0
+    },
+    {
+     "f": "c01_minotaur_a_dead_body_3f67b2b5.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c01_minotaur_a_dead_body_skirt.glb",
+     "mb": 0.13,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c01_minotaur_a_dead_body_skirt_43f50941.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c01_minotaur_a_dead_dirtmound.glb",
+     "mb": 0.25,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c01_minotaur_a_dead_dirtmound_aaf2b183.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [
+    "c01_minotaur_a_dead_dirtmound.glb",
+    "c01_minotaur_a_dead_dirtmound_aaf2b183.glb"
+   ],
+   "dead_cgpr": true,
+   "stem": "minotaur_a",
+   "skb_names": 73,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "minotaur_c"
+    ],
+    [
+     1.0,
+     "minotaur_b"
+    ]
+   ],
+   "track_counts": {
+    "58": 80
+   },
+   "map_ok": true,
+   "sha_bad": [
+    "death_front",
+    "death_front_loop"
+   ],
+   "clips": 82,
+   "flagset": 2,
+   "types_bad": 0,
+   "root": 68,
+   "death_clips": [
+    "death_front",
+    "death_front_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 6,
+    "attack": 10,
+    "damage/down": 32,
+    "refuse/shake": 16
+   },
+   "objanim": 75,
+   "mech": {
+    "climb struct": [
+     "add_ude_l_damage",
+     "add_ude_r_damage"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_01",
+     "arena_01_entrance"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 34,
+    "own": [
+     "Arena_01_Entrance",
+     "Arena_01"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 21,
+   "world_scripts": [
+    "arena_01.cgpr",
+    "arena_01_shared.cgpr"
+   ],
+   "start": [
+    353.0,
+    29.0,
+    345.0
+   ],
+   "arena_glb": 13,
+   "arena_kw": {
+    "cutscene": 6
+   }
+  },
+  {
+   "idx": 2,
+   "dir": "colossus_02_bull_a",
+   "glb": "models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.glb",
+   "glb_mb": 7.4,
+   "joints": 34,
+   "meshes": 15,
+   "conv": {
+    "ok": 3,
+    "total": 3
+   },
+   "weak_glb_mats": {
+    "colossus_02_hoof_weakpoint_fl": 1,
+    "colossus_02_hoof_weakpoint_rl": 1,
+    "weakpoint_05": 1,
+    "weakpoint_04": 1,
+    "weakpoint_06": 1,
+    "colossus_02_hoof_weakpoint_rr": 1,
+    "colossus_02_hoof_weakpoint_fr": 1
+   },
+   "weak_cmat": [
+    "colossus_02_hoof_weakpoint_fl",
+    "colossus_02_hoof_weakpoint_fr",
+    "colossus_02_hoof_weakpoint_rl",
+    "colossus_02_hoof_weakpoint_rr"
+   ],
+   "dead": [
+    {
+     "f": "c02_bull_a_deadbody.glb",
+     "mb": 2.48,
+     "meshes": 7,
+     "skin": 0
+    },
+    {
+     "f": "c02_bull_a_deadbody_28091053.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c02_bull_a_deadbody_skirt1.glb",
+     "mb": 0.01,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c02_bull_a_deadbody_skirt1_21b78eb9.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "boss_a",
+   "skb_names": 31,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.85,
+     "kame_a"
+    ],
+    [
+     0.83,
+     "kirin_a"
+    ]
+   ],
+   "track_counts": {
+    "23": 58
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 58,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 48,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 5,
+    "walk/run": 6,
+    "attack": 8,
+    "damage/down": 23,
+    "refuse/shake": 7
+   },
+   "objanim": 48,
+   "mech": {},
+   "zone": {
+    "name": [
+     "arena_02",
+     "arena_02_fast"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 39,
+    "own": [
+     "Arena_02"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 104,
+   "world_scripts": [
+    "arena_02.cgpr",
+    "arena_02_shared.cgpr"
+   ],
+   "start": [
+    273.0,
+    -97.0,
+    -842.0
+   ],
+   "arena_glb": 67,
+   "arena_kw": {
+    "climb": 2,
+    "colossus": 2,
+    "cutscene": 2,
+    "sand": 16,
+    "underwater": 4,
+    "water": 87
+   }
+  },
+  {
+   "idx": 3,
+   "dir": "colossus_03_knight",
+   "glb": "models/shadow/characters/colossus_03_knight/_cmn/colossus_03_knight.glb",
+   "glb_mb": 16.7,
+   "joints": 35,
+   "meshes": 12,
+   "conv": {
+    "ok": 21,
+    "total": 21
+   },
+   "weak_glb_mats": {
+    "weakpoint_01": 1,
+    "weakpoint_02": 1,
+    "weakpoint_03": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c03_knight_deadbody.glb",
+     "mb": 4.72,
+     "meshes": 7,
+     "skin": 0
+    },
+    {
+     "f": "c03_knight_deadbody_dd543dbb.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c03_knight_deadbody_skirt.glb",
+     "mb": 0.07,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c03_knight_deadbody_skirt_7b636443.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "knight_a",
+   "skb_names": 34,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.87,
+     "guard_d"
+    ],
+    [
+     0.81,
+     "guard_e"
+    ]
+   ],
+   "track_counts": {
+    "21": 62
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 62,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 48,
+   "death_clips": [
+    "death_loop",
+    "knight_death"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 3,
+    "attack": 16,
+    "damage/down": 17,
+    "refuse/shake": 4
+   },
+   "objanim": 37,
+   "mech": {},
+   "zone": {
+    "name": [
+     "arena_03",
+     "arena_03_ring"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 39,
+    "own": [
+     "Arena_03"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 37,
+   "world_scripts": [
+    "arena_03.cgpr",
+    "arena_03_low.cgpr",
+    "arena_03_shared.cgpr"
+   ],
+   "start": [
+    -301.0,
+    44.0,
+    -1375.0
+   ],
+   "arena_glb": 24,
+   "arena_kw": {
+    "climb": 2,
+    "fire": 4,
+    "underwater": 4,
+    "water": 15
+   }
+  },
+  {
+   "idx": 4,
+   "dir": "colossus_04_kirin",
+   "glb": "models/shadow/characters/colossus_04_kirin/_cmn/c04_kirin.glb",
+   "glb_mb": 17.5,
+   "joints": 38,
+   "meshes": 11,
+   "conv": {
+    "ok": 8,
+    "total": 8
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1,
+    "weakpoint_02_int": 1,
+    "weakpoint_03_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c04_kirin_deadbody.glb",
+     "mb": 3.28,
+     "meshes": 6,
+     "skin": 0
+    },
+    {
+     "f": "c04_kirin_deadbody_b7cd71f3.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c04_kirin_mound.glb",
+     "mb": 0.08,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c04_kirin_mound_c5c82ae5.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [
+    "c04_kirin_mound.glb",
+    "c04_kirin_mound_c5c82ae5.glb"
+   ],
+   "dead_cgpr": true,
+   "stem": "kirin_a",
+   "skb_names": 35,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.94,
+     "boss_a"
+    ],
+    [
+     0.85,
+     "kame_a"
+    ]
+   ],
+   "track_counts": {
+    "27": 75,
+    "4": 2
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 77,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 50,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 9,
+    "attack": 16,
+    "damage/down": 23,
+    "refuse/shake": 13
+   },
+   "objanim": 44,
+   "mech": {
+    "climb struct": [
+     "hashigo_l_base",
+     "hashigo_r_base"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_04"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 33,
+    "own": [
+     "Arena_04"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 40,
+   "world_scripts": [
+    "arena_04.cgpr",
+    "arena_04_shared.cgpr"
+   ],
+   "start": [
+    984.0,
+    52.5,
+    142.0
+   ],
+   "arena_glb": 26,
+   "arena_kw": {
+    "climb": 2,
+    "fire": 120,
+    "fly": 57,
+    "underwater": 2,
+    "water": 36
+   }
+  },
+  {
+   "idx": 5,
+   "dir": "colossus_05_eagle",
+   "glb": "models/shadow/characters/colossus_05_eagle/_cmn/c05_eagle.glb",
+   "glb_mb": 6.8,
+   "joints": 71,
+   "meshes": 10,
+   "conv": {
+    "ok": 3,
+    "total": 3
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1,
+    "weakpoint_02_int": 1,
+    "weakpoint_03_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "colossus_05_eagle_deadbody.glb",
+     "mb": 2.64,
+     "meshes": 5,
+     "skin": 0
+    },
+    {
+     "f": "colossus_05_eagle_deadbody_cd2ec2c5.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "bird_a",
+   "skb_names": 70,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.58,
+     "boss_a"
+    ],
+    [
+     0.57,
+     "kirin_a"
+    ]
+   ],
+   "track_counts": {
+    "62": 60
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 60,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 42,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 0,
+    "attack": 3,
+    "damage/down": 8,
+    "refuse/shake": 3
+   },
+   "objanim": 28,
+   "mech": {
+    "flying": [
+     "add_flap_break_l_end",
+     "add_flap_break_l_loop",
+     "add_flap_break_l_start",
+     "add_flap_break_r_end",
+     "add_flap_break_r_loop",
+     "add_flap_break_r_start"
+    ],
+    "bow/arrow": [
+     "add_arrow_damage"
+    ],
+    "ride": [
+     "atk_gride",
+     "gride_end",
+     "gride_loop",
+     "gride_start"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_05"
+    ],
+    "inherit": [
+     "hall_06_east"
+    ],
+    "areas": 33,
+    "own": [
+     "Arena_05"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 39,
+   "world_scripts": [
+    "arena_05.cgpr",
+    "arena_05_low.cgpr",
+    "arena_05_shared.cgpr"
+   ],
+   "start": [
+    1285.0,
+    6.5,
+    -330.0
+   ],
+   "arena_glb": 25,
+   "arena_kw": {
+    "colossus": 14,
+    "underwater": 5,
+    "water": 14
+   }
+  },
+  {
+   "idx": 6,
+   "dir": "colossus_06_minotaur_b",
+   "glb": "models/shadow/characters/colossus_06_minotaur_b/_cmn/c06_minotaur_b.glb",
+   "glb_mb": 26.2,
+   "joints": 238,
+   "meshes": 10,
+   "conv": {
+    "ok": 6,
+    "total": 6
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1,
+    "weakpoint_02_int": 1,
+    "weakpoint_03_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c06_minotaur_b_dead_body.glb",
+     "mb": 4.81,
+     "meshes": 5,
+     "skin": 0
+    },
+    {
+     "f": "c06_minotaur_b_dead_body_5819462a.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "minotaur_b",
+   "skb_names": 84,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "minotaur_c"
+    ],
+    [
+     1.0,
+     "minotaur_a"
+    ]
+   ],
+   "track_counts": {
+    "58": 15,
+    "5": 1
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 16,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 11,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 3,
+    "walk/run": 2,
+    "attack": 7,
+    "damage/down": 0,
+    "refuse/shake": 2
+   },
+   "objanim": 75,
+   "mech": {},
+   "zone": {
+    "name": [
+     "arena_06"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 16,
+    "own": [
+     "Arena_06"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 20,
+   "world_scripts": [
+    "arena_06.cgpr"
+   ],
+   "start": [
+    -971.0,
+    -91.0,
+    815.0
+   ],
+   "arena_glb": 13,
+   "arena_kw": {
+    "bow": 6,
+    "fire": 2,
+    "torch": 36,
+    "water": 26
+   }
+  },
+  {
+   "idx": 7,
+   "dir": "colossus_07_electric_serpent",
+   "glb": "models/shadow/characters/colossus_07_electric_serpent/_cmn/c07_electric_serpent.glb",
+   "glb_mb": 5.1,
+   "joints": 192,
+   "meshes": 13,
+   "conv": {
+    "ok": 3,
+    "total": 3
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "colossus_07_electric_serpent_deadbody.glb",
+     "mb": 1.18,
+     "meshes": 6,
+     "skin": 0
+    },
+    {
+     "f": "colossus_07_electric_serpent_deadbody_621cec35.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "eel_b",
+   "skb_names": 51,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "narga_a"
+    ],
+    [
+     0.21,
+     "snake_c"
+    ]
+   ],
+   "track_counts": {
+    "49": 21
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 21,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 3,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 3,
+    "walk/run": 0,
+    "attack": 0,
+    "damage/down": 4,
+    "refuse/shake": 0
+   },
+   "objanim": 11,
+   "mech": {
+    "climb struct": [
+     "addp_kune_tate_end",
+     "addp_kune_tate_hi_loop",
+     "addp_kune_tate_loop",
+     "addp_kune_tate_start"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_07",
+     "arena_07_fast"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 19,
+    "own": [
+     "Arena_07"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 44,
+   "world_scripts": [
+    "arena_07.cgpr",
+    "arena_07_low.cgpr",
+    "arena_07_shared.cgpr"
+   ],
+   "start": [
+    -767.0,
+    45.0,
+    -2093.0
+   ],
+   "arena_glb": 28,
+   "arena_kw": {
+    "climb": 1,
+    "underwater": 6,
+    "water": 15
+   }
+  },
+  {
+   "idx": 8,
+   "dir": "colossus_08_lizard",
+   "glb": "models/shadow/characters/colossus_08_lizard/_cmn/c08_lizard.glb",
+   "glb_mb": 7.4,
+   "joints": 80,
+   "meshes": 13,
+   "conv": {
+    "ok": 4,
+    "total": 4
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1,
+    "weakpoint_02_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "colossus_08_lizard_deadbody.glb",
+     "mb": 2.09,
+     "meshes": 10,
+     "skin": 0
+    },
+    {
+     "f": "colossus_08_lizard_deadbody_d60fd4be.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "colossus_08_lizard_deadbody_skirts.glb",
+     "mb": 0.02,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "colossus_08_lizard_deadbody_skirts_6d4b7cd2.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "yamori_b",
+   "skb_names": 79,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.94,
+     "kame_a"
+    ],
+    [
+     0.94,
+     "boss_a"
+    ]
+   ],
+   "track_counts": {
+    "65": 88
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 88,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 75,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 12,
+    "attack": 10,
+    "damage/down": 30,
+    "refuse/shake": 1
+   },
+   "objanim": 55,
+   "mech": {
+    "bow/arrow": [
+     "add_arrow_damage_l",
+     "add_arrow_damage_r"
+    ],
+    "breath/beam": [
+     "atk_breath_end",
+     "atk_breath_ground_end",
+     "atk_breath_ground_start",
+     "atk_breath_start"
+    ],
+    "geyser/pulse": [
+     "atk_pulse_a",
+     "atk_pulse_b",
+     "atk_pulse_c",
+     "atk_pulse_start"
+    ],
+    "climb struct": [
+     "wall_fall_downward_start",
+     "wall_fall_downward_start_low",
+     "wall_fall_end",
+     "wall_fall_end2",
+     "wall_fall_leftward_start",
+     "wall_fall_loop"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_08"
+    ],
+    "inherit": [
+     "level_11"
+    ],
+    "areas": 21,
+    "own": [
+     "Arena_08"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 23,
+   "world_scripts": [
+    "arena_08.cgpr"
+   ],
+   "start": [
+    916.0,
+    -21.0,
+    950.0
+   ],
+   "arena_glb": 16,
+   "arena_kw": {
+    "bow": 62,
+    "cloud": 1,
+    "fire": 63,
+    "torch": 405
+   }
+  },
+  {
+   "idx": 9,
+   "dir": "colossus_09_desert_tortoise",
+   "glb": "models/shadow/characters/colossus_09_desert_tortoise/_cmn/c09_tortoise.glb",
+   "glb_mb": 8.9,
+   "joints": 35,
+   "meshes": 9,
+   "conv": {
+    "ok": 4,
+    "total": 4
+   },
+   "weak_glb_mats": {
+    "weakpoint_01": 1,
+    "colossus_09_ankle_weakpoint_fl": 1
+   },
+   "weak_cmat": [
+    "colossus_09_ankle_weakpoint_fl"
+   ],
+   "dead": [
+    {
+     "f": "c09_tortoise_deadbody.glb",
+     "mb": 2.49,
+     "meshes": 7,
+     "skin": 0
+    },
+    {
+     "f": "c09_tortoise_deadbody_a40ea696.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c09_tortoise_deadbody_skirts.glb",
+     "mb": 0.02,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c09_tortoise_deadbody_skirts_8ab6051a.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "kame_a",
+   "skb_names": 34,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.94,
+     "boss_a"
+    ],
+    [
+     0.83,
+     "kirin_a"
+    ]
+   ],
+   "track_counts": {
+    "23": 83
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 83,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 51,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 6,
+    "walk/run": 6,
+    "attack": 12,
+    "damage/down": 35,
+    "refuse/shake": 3
+   },
+   "objanim": 45,
+   "mech": {
+    "geyser/pulse": [
+     "add_arm_l_geyser",
+     "add_arm_r_geyser",
+     "add_atk_pulse_3hit_a",
+     "add_atk_pulse_3hit_b",
+     "add_atk_pulse_3hit_c",
+     "add_atk_pulse_3hit_start"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_09",
+     "arena_09_outer"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 41,
+    "own": [
+     "Arena_09"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 73,
+   "world_scripts": [
+    "arena_09.cgpr",
+    "arena_09_low.cgpr",
+    "arena_09_shared.cgpr"
+   ],
+   "start": [
+    -844.0,
+    24.0,
+    -774.0
+   ],
+   "arena_glb": 48,
+   "arena_kw": {
+    "cloud": 4,
+    "colossus": 10,
+    "geyser": 25,
+    "steam": 4,
+    "water": 233
+   }
+  },
+  {
+   "idx": 10,
+   "dir": "colossus_10_sand_serpent",
+   "glb": "models/shadow/characters/colossus_10_sand_serpent/_cmn/c10_sand_serpent.glb",
+   "glb_mb": 3.6,
+   "joints": 25,
+   "meshes": 6,
+   "conv": {
+    "ok": 5,
+    "total": 5
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1,
+    "weakpoint_02_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "colossus_10_sand_serpent_deadbody.glb",
+     "mb": 0.11,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "colossus_10_sand_serpent_deadbody_cccb9cd7.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "colossus_10_sand_serpent_deadbody_skirt.glb",
+     "mb": 0.02,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "colossus_10_sand_serpent_deadbody_skirt_46ddd143.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "colossus_10_sand_serpent_deadbody_stone.glb",
+     "mb": 4.59,
+     "meshes": 4,
+     "skin": 0
+    },
+    {
+     "f": "colossus_10_sand_serpent_deadbody_stone_98b038fb.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [
+    "colossus_10_sand_serpent_deadbody_stone.glb",
+    "colossus_10_sand_serpent_deadbody_stone_98b038fb.glb"
+   ],
+   "dead_cgpr": true,
+   "stem": "narga_a",
+   "skb_names": 22,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.43,
+     "eel_b"
+    ],
+    [
+     0.18,
+     "snake_c"
+    ]
+   ],
+   "track_counts": {
+    "20": 21,
+    "7": 8
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 29,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 10,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 3,
+    "walk/run": 0,
+    "attack": 3,
+    "damage/down": 3,
+    "refuse/shake": 0
+   },
+   "objanim": 11,
+   "mech": {
+    "climb struct": [
+     "addp_kune_atk",
+     "addp_kune_atk_end",
+     "addp_kune_atk_start",
+     "addp_kune_hi_loop",
+     "addp_kune_low_loop",
+     "addp_kune_low_start"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_10",
+     "arena_10_nt",
+     "arena_10_st"
+    ],
+    "inherit": [
+     "vista_02"
+    ],
+    "areas": 40,
+    "own": [
+     "Arena_10",
+     "Arena_10_vista"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 11,
+   "world_scripts": [
+    "arena_10.cgpr",
+    "arena_10_vista.cgpr"
+   ],
+   "start": [
+    -2145.0,
+    -10.5,
+    -306.0
+   ],
+   "arena_glb": 7,
+   "arena_kw": {
+    "fire": 2,
+    "sand": 4
+   }
+  },
+  {
+   "idx": 11,
+   "dir": "colossus_11_lion",
+   "glb": "models/shadow/characters/colossus_11_lion/_cmn/c11_lion.glb",
+   "glb_mb": 16.0,
+   "joints": 42,
+   "meshes": 6,
+   "conv": {
+    "ok": 14,
+    "total": 14
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c11_lion_deadbody.glb",
+     "mb": 5.63,
+     "meshes": 4,
+     "skin": 0
+    },
+    {
+     "f": "c11_lion_deadbody_2f9b7480.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "leo_a",
+   "skb_names": 41,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "cerberus_a"
+    ],
+    [
+     0.85,
+     "horse_a"
+    ]
+   ],
+   "track_counts": {
+    "32": 87
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 87,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 73,
+   "death_clips": [
+    "leo_death",
+    "leo_death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 33,
+    "attack": 6,
+    "damage/down": 1,
+    "refuse/shake": 1
+   },
+   "objanim": 39,
+   "mech": {
+    "jump/dash": [
+     "add_dash_hit",
+     "jump",
+     "jump_fall",
+     "jump_land",
+     "jump_land_stop",
+     "jump_start"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_11"
+    ],
+    "inherit": [
+     "level_01_west"
+    ],
+    "areas": 30,
+    "own": [
+     "Arena_11"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 44,
+   "world_scripts": [
+    "arena_11.cgpr",
+    "arena_11_low.cgpr",
+    "arena_11_shared.cgpr"
+   ],
+   "start": [
+    403.0,
+    -50.0,
+    -2053.0
+   ],
+   "arena_glb": 29,
+   "arena_kw": {
+    "fire": 16,
+    "sand": 59,
+    "torch": 35,
+    "underwater": 2,
+    "water": 6
+   }
+  },
+  {
+   "idx": 12,
+   "dir": "colossus_12_lake_turtle",
+   "glb": "models/shadow/characters/colossus_12_lake_turtle/_cmn/c12_lake_turtle.glb",
+   "glb_mb": 33.8,
+   "joints": 42,
+   "meshes": 8,
+   "conv": {
+    "ok": 13,
+    "total": 13
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c12_lake_turtle_deadbody.glb",
+     "mb": 12.07,
+     "meshes": 6,
+     "skin": 0
+    },
+    {
+     "f": "c12_lake_turtle_deadbody_a86c813b.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "poseidon_a",
+   "skb_names": 41,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.94,
+     "boss_a"
+    ],
+    [
+     0.88,
+     "kame_a"
+    ]
+   ],
+   "track_counts": {
+    "23": 56
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 56,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 43,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 5,
+    "attack": 0,
+    "damage/down": 5,
+    "refuse/shake": 3
+   },
+   "objanim": 51,
+   "mech": {
+    "swim/under": [
+     "add_dai_nozoki_end",
+     "add_dai_nozoki_loop",
+     "add_dai_nozoki_start",
+     "dai_nori_hi_dmg_end",
+     "dai_nori_hi_end",
+     "dai_nori_hi_loop"
+    ],
+    "geyser/pulse": [
+     "dai_nori_hi_pulse_5hit_a",
+     "dai_nori_hi_pulse_5hit_b",
+     "dai_nori_hi_pulse_5hit_c",
+     "dai_nori_hi_pulse_5hit_d",
+     "dai_nori_hi_pulse_5hit_e",
+     "dai_nori_hi_pulse_5hit_start"
+    ],
+    "ride": [
+     "dai_nori_hi_dmg_end",
+     "dai_nori_hi_end",
+     "dai_nori_hi_loop",
+     "dai_nori_hi_pulse_5hit_a",
+     "dai_nori_hi_pulse_5hit_b",
+     "dai_nori_hi_pulse_5hit_c"
+    ],
+    "jump/dash": [
+     "dash_a",
+     "dash_b"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_12_south",
+     "arena_12_north"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 25,
+    "own": [
+     "Arena_12"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 23,
+   "world_scripts": [
+    "arena_12.cgpr",
+    "arena_12_low.cgpr",
+    "arena_12_shared.cgpr"
+   ],
+   "start": [
+    876.0,
+    12.5,
+    -1475.0
+   ],
+   "arena_glb": 14,
+   "arena_kw": {
+    "climb": 4,
+    "cloud": 3,
+    "cutscene": 1,
+    "underwater": 15,
+    "water": 273
+   }
+  },
+  {
+   "idx": 13,
+   "dir": "colossus_13_sky_serpent",
+   "glb": "models/shadow/characters/colossus_13_sky_serpent/_cmn/c13_sky_serpent.glb",
+   "glb_mb": 12.3,
+   "joints": 122,
+   "meshes": 38,
+   "conv": {
+    "ok": 3,
+    "total": 3
+   },
+   "weak_glb_mats": {
+    "c13_Sky_Serpent_geo_assemble_weakpoint_01": 1,
+    "c13_Sky_Serpent_geo_assemble_weakpoint_02": 1,
+    "c13_Sky_Serpent_geo_assemble_weakpoint_03": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c13_sky_serpent_deadbody.glb",
+     "mb": 3.43,
+     "meshes": 29,
+     "skin": 0
+    },
+    {
+     "f": "c13_sky_serpent_deadbody_9c66d5e2.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "colossus_13_sand_snake_deadbody_skirt.glb",
+     "mb": 0.01,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "colossus_13_sand_snake_deadbody_skirt_73a2539c.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "snake_c",
+   "skb_names": 121,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "narga_a"
+    ],
+    [
+     0.51,
+     "eel_b"
+    ]
+   ],
+   "track_counts": {
+    "112": 56
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 56,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 10,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 3,
+    "walk/run": 0,
+    "attack": 0,
+    "damage/down": 11,
+    "refuse/shake": 0
+   },
+   "objanim": 17,
+   "mech": {
+    "flying": [
+     "add_hane_dmg_head",
+     "add_hane_dmg_mune",
+     "add_hane_dmg_tail",
+     "add_hane_down_end",
+     "add_hane_down_loop",
+     "add_hane_fly_end"
+    ],
+    "swim/under": [
+     "add_hane_under_loop",
+     "add_hane_under_start"
+    ],
+    "climb struct": [
+     "addp_kune_down_end",
+     "addp_kune_down_loop",
+     "addp_kune_low_end",
+     "addp_kune_low_loop",
+     "addp_kune_low_start"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_13",
+     "arena_13_hall_08"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 34,
+    "own": [
+     "Arena_13"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 36,
+   "world_scripts": [
+    "arena_13.cgpr",
+    "arena_13_low.cgpr",
+    "arena_13_shared.cgpr"
+   ],
+   "start": [
+    -635.0,
+    -51.0,
+    1209.0
+   ],
+   "arena_glb": 23,
+   "arena_kw": {
+    "climb": 2,
+    "cloud": 1,
+    "colossus": 5,
+    "cutscene": 4,
+    "sand": 73,
+    "storm": 4,
+    "underwater": 1,
+    "water": 2
+   }
+  },
+  {
+   "idx": 14,
+   "dir": "colossus_14_cerberus",
+   "glb": "models/shadow/characters/colossus_14_cerberus/_cmn/c14_cereberus.glb",
+   "glb_mb": 3.8,
+   "joints": 42,
+   "meshes": 3,
+   "conv": {
+    "ok": 25,
+    "total": 25
+   },
+   "weak_glb_mats": {
+    "weakpoint_03": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c14_cerberus_deadbody.glb",
+     "mb": 4.66,
+     "meshes": 4,
+     "skin": 0
+    },
+    {
+     "f": "c14_cerberus_deadbody_7257568d.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "cerberus_a",
+   "skb_names": 41,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "leo_a"
+    ],
+    [
+     0.85,
+     "horse_a"
+    ]
+   ],
+   "track_counts": {
+    "32": 41
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 41,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 36,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 4,
+    "walk/run": 14,
+    "attack": 4,
+    "damage/down": 1,
+    "refuse/shake": 2
+   },
+   "objanim": 15,
+   "mech": {
+    "climb struct": [
+     "tower_end",
+     "tower_loop",
+     "tower_start",
+     "towerc2_breaksb_end",
+     "towerc2_breaksb_start"
+    ],
+    "jump/dash": [
+     "add_dash_hit",
+     "jump2",
+     "run",
+     "run_end",
+     "run_from_walk1",
+     "run_from_walk2"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_14"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 16,
+    "own": [
+     "Arena_14"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 55,
+   "world_scripts": [
+    "arena_14.cgpr",
+    "arena_14_shared.cgpr"
+   ],
+   "start": [
+    -1481.0,
+    32.0,
+    -1490.0
+   ],
+   "arena_glb": 36,
+   "arena_kw": {
+    "bow": 1,
+    "colossus": 6,
+    "fire": 7,
+    "torch": 4,
+    "underwater": 2,
+    "water": 63
+   }
+  },
+  {
+   "idx": 15,
+   "dir": "colossus_15_minotaur_c",
+   "glb": "models/shadow/characters/colossus_15_minotaur_c/_cmn/c15_minotaur_c.glb",
+   "glb_mb": 38.6,
+   "joints": 238,
+   "meshes": 12,
+   "conv": {
+    "ok": 9,
+    "total": 9
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1,
+    "weakpoint_02_int": 1,
+    "weakpoint_03_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c15_minotaur_c_deadbody.glb",
+     "mb": 19.54,
+     "meshes": 7,
+     "skin": 0
+    },
+    {
+     "f": "c15_minotaur_c_deadbody_02a2cfc5.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    },
+    {
+     "f": "c15_minotaur_c_deadbody_skirt.glb",
+     "mb": 0.08,
+     "meshes": 1,
+     "skin": 0
+    },
+    {
+     "f": "c15_minotaur_c_deadbody_skirt_e745e34d.glb",
+     "mb": 0.0,
+     "meshes": 0,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": true,
+   "stem": "minotaur_c",
+   "skb_names": 73,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     1.0,
+     "minotaur_b"
+    ],
+    [
+     1.0,
+     "minotaur_a"
+    ]
+   ],
+   "track_counts": {
+    "58": 37
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 37,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 25,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 3,
+    "walk/run": 0,
+    "attack": 22,
+    "damage/down": 1,
+    "refuse/shake": 0
+   },
+   "objanim": 75,
+   "mech": {
+    "climb struct": [
+     "add_atk_wall_high_end",
+     "add_atk_wall_high_loop",
+     "add_atk_wall_high_start",
+     "atk_wall",
+     "atk_wall_cancel",
+     "atk_wall_end"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_15"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 26,
+    "own": [
+     "Arena_15"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 67,
+   "world_scripts": [
+    "arena_15.cgpr",
+    "arena_15_low.cgpr",
+    "arena_15_shared.cgpr"
+   ],
+   "start": [
+    1045.0,
+    46.0,
+    -2048.0
+   ],
+   "arena_glb": 43,
+   "arena_kw": {
+    "cloud": 10,
+    "colossus": 20,
+    "cutscene": 21,
+    "water": 28
+   }
+  },
+  {
+   "idx": 16,
+   "dir": "colossus_16_mega_maid",
+   "glb": "models/shadow/characters/colossus_16_mega_maid/_cmn/c16_mega_maid.glb",
+   "glb_mb": 12.5,
+   "joints": 88,
+   "meshes": 19,
+   "conv": {
+    "ok": 31,
+    "total": 31
+   },
+   "weak_glb_mats": {
+    "weakpoint_01_int": 1
+   },
+   "weak_cmat": [],
+   "dead": [
+    {
+     "f": "c16_mega_maid_deadbody.glb",
+     "mb": 67.32,
+     "meshes": 33,
+     "skin": 0
+    }
+   ],
+   "mound": [],
+   "dead_cgpr": false,
+   "stem": "buddha_a",
+   "skb_names": 87,
+   "skb_cov": 1.0,
+   "rivals": [
+    [
+     0.95,
+     "baby_a"
+    ],
+    [
+     0.78,
+     "guard_d"
+    ]
+   ],
+   "track_counts": {
+    "76": 58
+   },
+   "map_ok": true,
+   "sha_bad": [],
+   "clips": 58,
+   "flagset": 0,
+   "types_bad": 0,
+   "root": 42,
+   "death_clips": [
+    "death",
+    "death_loop"
+   ],
+   "fam": {
+    "death": 2,
+    "stand/idle": 13,
+    "walk/run": 0,
+    "attack": 5,
+    "damage/down": 10,
+    "refuse/shake": 10
+   },
+   "objanim": 24,
+   "mech": {
+    "bow/arrow": [
+     "add_atk_shot_charge",
+     "add_atk_shot_fire"
+    ],
+    "breath/beam": [
+     "add_atk_shot_charge",
+     "add_atk_shot_fire"
+    ]
+   },
+   "zone": {
+    "name": [
+     "arena_16"
+    ],
+    "inherit": [
+     "base_world"
+    ],
+    "areas": 10,
+    "own": [
+     "Arena_16"
+    ]
+   },
+   "levels_dir": true,
+   "levels_files": 53,
+   "world_scripts": [
+    "arena_16.cgpr",
+    "arena_16_light.cgpr",
+    "arena_16_low.cgpr",
+    "arena_16_shared.cgpr"
+   ],
+   "start": [
+    350.0,
+    -11.0,
+    2057.0
+   ],
+   "arena_glb": 34,
+   "arena_kw": {
+    "bow": 16,
+    "climb": 1,
+    "cloud": 2,
+    "cutscene": 5,
+    "fire": 16,
+    "lightning": 59,
+    "storm": 21,
+    "torch": 56,
+    "water": 124
+   }
+  }
+ ],
+ "banks": {
+  "boss01": {
+   "names": 342,
+   "stems": [
+    [
+     "mammo",
+     122
+    ],
+    [
+     "boss01",
+     71
+    ],
+    [
+     "boss",
+     50
+    ],
+    [
+     "mavo",
+     41
+    ],
+    [
+     "boss03",
+     22
+    ],
+    [
+     "mid",
+     9
+    ]
+   ]
+  },
+  "boss02": {
+   "names": 244,
+   "stems": [
+    [
+     "bird",
+     96
+    ],
+    [
+     "boss02",
+     60
+    ],
+    [
+     "boss",
+     40
+    ],
+    [
+     "bdvo",
+     34
+    ],
+    [
+     "boss03",
+     5
+    ],
+    [
+     "boss06",
+     5
+    ]
+   ]
+  },
+  "boss03": {
+   "names": 518,
+   "stems": [
+    [
+     "kame",
+     179
+    ],
+    [
+     "boss09",
+     170
+    ],
+    [
+     "kmvo",
+     59
+    ],
+    [
+     "boss",
+     48
+    ],
+    [
+     "boss15",
+     29
+    ],
+    [
+     "boss03",
+     20
+    ]
+   ]
+  },
+  "boss04": {
+   "names": 192,
+   "stems": [
+    [
+     "boss13",
+     74
+    ],
+    [
+     "snake",
+     60
+    ],
+    [
+     "sncvo",
+     29
+    ],
+    [
+     "boss",
+     18
+    ],
+    [
+     "boss03",
+     5
+    ],
+    [
+     "boss02",
+     4
+    ]
+   ]
+  },
+  "boss05": {
+   "names": 341,
+   "stems": [
+    [
+     "knight",
+     124
+    ],
+    [
+     "boss05",
+     68
+    ],
+    [
+     "boss03",
+     53
+    ],
+    [
+     "boss",
+     41
+    ],
+    [
+     "ktvo",
+     37
+    ],
+    [
+     "eight",
+     10
+    ]
+   ]
+  },
+  "boss07": {
+   "names": 469,
+   "stems": [
+    [
+     "yamori",
+     190
+    ],
+    [
+     "boss07",
+     147
+    ],
+    [
+     "ymbvo",
+     58
+    ],
+    [
+     "boss",
+     42
+    ],
+    [
+     "boss03",
+     24
+    ],
+    [
+     "boss08",
+     4
+    ]
+   ]
+  },
+  "boss08": {
+   "names": 166,
+   "stems": [
+    [
+     "boss07",
+     78
+    ],
+    [
+     "eel",
+     58
+    ],
+    [
+     "eevo",
+     26
+    ],
+    [
+     "boss",
+     4
+    ]
+   ]
+  },
+  "boss11": {
+   "names": 527,
+   "stems": [
+    [
+     "leo",
+     257
+    ],
+    [
+     "boss11",
+     167
+    ],
+    [
+     "levo",
+     58
+    ],
+    [
+     "boss",
+     22
+    ],
+    [
+     "boss03",
+     12
+    ],
+    [
+     "low",
+     7
+    ]
+   ]
+  },
+  "boss12": {
+   "names": 385,
+   "stems": [
+    [
+     "boss12",
+     130
+    ],
+    [
+     "pose",
+     130
+    ],
+    [
+     "psvo",
+     55
+    ],
+    [
+     "boss",
+     45
+    ],
+    [
+     "boss03",
+     12
+    ],
+    [
+     "low",
+     7
+    ]
+   ]
+  },
+  "boss13": {
+   "names": 505,
+   "stems": [
+    [
+     "cerb",
+     209
+    ],
+    [
+     "boss14",
+     190
+    ],
+    [
+     "cbvo",
+     61
+    ],
+    [
+     "boss",
+     22
+    ],
+    [
+     "boss03",
+     12
+    ],
+    [
+     "low",
+     7
+    ]
+   ]
+  },
+  "boss15": {
+   "names": 385,
+   "stems": [
+    [
+     "boss01",
+     105
+    ],
+    [
+     "minotaur",
+     85
+    ],
+    [
+     "boss15",
+     73
+    ],
+    [
+     "mivo",
+     35
+    ],
+    [
+     "boss",
+     17
+    ],
+    [
+     "minoboot",
+     16
+    ]
+   ]
+  },
+  "boss17": {
+   "names": 313,
+   "stems": [
+    [
+     "boss17",
+     80
+    ],
+    [
+     "kirin",
+     79
+    ],
+    [
+     "boss",
+     42
+    ],
+    [
+     "kivo",
+     36
+    ],
+    [
+     "boss03",
+     21
+    ],
+    [
+     "kist",
+     20
+    ]
+   ]
+  },
+  "boss20": {
+   "names": 218,
+   "stems": [
+    [
+     "boss10",
+     85
+    ],
+    [
+     "narga",
+     54
+    ],
+    [
+     "boss",
+     33
+    ],
+    [
+     "navo",
+     31
+    ],
+    [
+     "eight",
+     7
+    ],
+    [
+     "boss03",
+     5
+    ]
+   ]
+  },
+  "boss22": {
+   "names": 306,
+   "stems": [
+    [
+     "boss22",
+     86
+    ],
+    [
+     "minotaur",
+     58
+    ],
+    [
+     "boss",
+     51
+    ],
+    [
+     "mivo",
+     35
+    ],
+    [
+     "boss06",
+     23
+    ],
+    [
+     "boss03",
+     19
+    ]
+   ]
+  },
+  "boss23": {
+   "names": 281,
+   "stems": [
+    [
+     "boss15",
+     108
+    ],
+    [
+     "boss",
+     40
+    ],
+    [
+     "boss03",
+     27
+    ],
+    [
+     "par",
+     23
+    ],
+    [
+     "boss06",
+     14
+    ],
+    [
+     "l",
+     8
+    ]
+   ]
+  },
+  "boss24": {
+   "names": 377,
+   "stems": [
+    [
+     "evis",
+     135
+    ],
+    [
+     "boss16",
+     115
+    ],
+    [
+     "evvo",
+     74
+    ],
+    [
+     "boss",
+     25
+    ],
+    [
+     "boss03",
+     18
+    ],
+    [
+     "eight",
+     7
+    ]
+   ]
+  }
+ },
+ "hashes": {
+  "checked": 5505,
+  "mismatched": [
+   {
+    "path": "game/cp3shadow/anim/camera_minoa_death_front_camera_01.anb",
+    "expected": "e15eecc7375751ecc2ece8998dbacba8a29599468b09939d19402bfeb71f3a51",
+    "actual": "a4d9c3b0d54feb7ecc48a56b26b5df9dfaead2125dc575c7949412788c40f75b"
+   },
+   {
+    "path": "game/cp3shadow/anim/minotaur_a_death_front.anb",
+    "expected": "0db1d990ba55687d6539ce61b39274684c29c0d281a6732cb7392cb07edf6c2b",
+    "actual": "a4d9c3b0d54feb7ecc48a56b26b5df9dfaead2125dc575c7949412788c40f75b"
+   },
+   {
+    "path": "game/cp3shadow/anim/minotaur_a_death_front_loop.anb",
+    "expected": "a7639824b3e004a6207113d358072914df2a26706bf09fc609a5b56b3fb87a3f",
+    "actual": "a4d9c3b0d54feb7ecc48a56b26b5df9dfaead2125dc575c7949412788c40f75b"
+   },
+   {
+    "path": "game/cp3shadow/anim/objanim_minotaur_a_death_front.anb",
+    "expected": "f5daae1a9450a82bdc1aa33b6d6e7ef6ee607a49b5729bd43f127e7007644351",
+    "actual": "a4d9c3b0d54feb7ecc48a56b26b5df9dfaead2125dc575c7949412788c40f75b"
+   }
+  ],
+  "missing": []
+ }
+}
