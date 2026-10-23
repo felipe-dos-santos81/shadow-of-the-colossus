@@ -2137,7 +2137,13 @@ int run_app(const AppOptions& opts) {
                                  "sotc-viewer: --camera-target entity: the manifest has no entity\n");
                     return 2;
                 }
-                scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath);
+                // The load runs on this thread: keep the window answering the
+                // system meanwhile (no "not responding" during the shrine load).
+                // Only the S7 runs pump — the frozen timelines load as before.
+                const bool pump_load = opts.s7Selftest || interactive_run;
+                scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath, nullptr,
+                                      pump_load ? std::function<void()>([] { SDL_PumpEvents(); })
+                                                : std::function<void()>());
 
                 // The ground is built from the scene's static meshes only: the
                 // player's own body and the placed entities must never rasterize

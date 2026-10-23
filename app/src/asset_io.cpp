@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -373,9 +374,11 @@ using DecodedTextures = std::unordered_map<std::string, TextureCpu>;
 // Only the pixels are made here; the serial loads still assign the texture
 // indices, so the order is the serial one whoever finishes first. A glb that
 // does not parse or a PNG that does not decode is simply left out: its serial
-// load reports it exactly as before.
+// load reports it exactly as before. The calling thread decodes too, and calls
+// `onProgress` (when set) after each of its PNGs.
 DecodedTextures decode_textures(const std::filesystem::path& libraryDir,
-                                const std::vector<std::string>& glbRelPaths) {
+                                const std::vector<std::string>& glbRelPaths,
+                                const std::function<void()>& onProgress) {
     const std::filesystem::path library = std::filesystem::weakly_canonical(libraryDir);
     std::vector<std::string> paths;
     std::unordered_set<std::string> seen_glbs;
@@ -417,17 +420,21 @@ DecodedTextures decode_textures(const std::filesystem::path& libraryDir,
     std::vector<TextureCpu> textures(paths.size());
     std::vector<char> decoded_ok(paths.size(), 0);
     std::atomic<std::size_t> next{0};
-    const auto worker = [&] {
+    const auto worker = [&](const std::function<void()>* progress) {
         for (std::size_t i = next++; i < paths.size(); i = next++) {
             decoded_ok[i] = decode_png(library / paths[i], textures[i]) ? 1 : 0;
+            if (progress != nullptr && *progress) {
+                (*progress)();
+            }
         }
     };
     const std::size_t thread_count = std::min<std::size_t>(
         std::max(1u, std::thread::hardware_concurrency()), paths.size());
     std::vector<std::thread> threads;
-    for (std::size_t t = 0; t < thread_count; ++t) {
-        threads.emplace_back(worker);
+    for (std::size_t t = 1; t < thread_count; ++t) {
+        threads.emplace_back(worker, nullptr);
     }
+    worker(&onProgress);
     for (std::thread& thread : threads) {
         thread.join();
     }
@@ -785,7 +792,8 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 }
 
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
-                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin) {
+                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin,
+                    const std::function<void()>& onProgress) {
     Scene scene;
     bool have_bounds = false;
 
@@ -801,10 +809,16 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     for (const ManifestPosed& posed : manifest.posed) {
         glbs.push_back(posed.glb);
     }
-    DecodedTextures decoded = decode_textures(libraryDir, glbs);
+    DecodedTextures decoded = decode_textures(libraryDir, glbs, onProgress);
+    const auto progress = [&onProgress] {
+        if (onProgress) {
+            onProgress();
+        }
+    };
 
     // Static instances: no rig record, meshes keep rig = -1.
     for (const ManifestInstance& instance : manifest.instances) {
+        progress();
         const GlbPlacement placement{
             .model = mat4_from_trs(instance.position, instance.rotation, instance.scale),
             .materialOffset = static_cast<int>(scene.materials.size()),
@@ -826,6 +840,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
         .includeRig = true,
         .dynamic = true,
     };
+    progress();
     load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds, &decoded);
 
     // The player's meshes start here (rig 0's meshBegin): everything before is
@@ -839,6 +854,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     // asks for a clip the model does not have is a load error, not a silent
     // rest pose.
     for (const ManifestEntity& entity : manifest.entities) {
+        progress();
         const GlbPlacement placement{
             .model = mat4_from_trs(entity.placement.position, entity.placement.rotation,
                                    entity.placement.scale),
@@ -878,6 +894,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     // (rig = -1) with the TRS in `model` and the cull box of the posed vertices.
     // The load's bind-pose bounds are discarded and replaced by the posed ones.
     for (const ManifestPosed& posed : manifest.posed) {
+        progress();
         const Vec3 saved_min = scene.boundsMin;
         const Vec3 saved_max = scene.boundsMax;
         const bool saved_have = have_bounds;

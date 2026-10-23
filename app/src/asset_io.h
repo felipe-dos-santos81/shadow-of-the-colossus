@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "manifest.h"
@@ -42,8 +43,13 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 // `playerMeshBegin` (optional) receives the player's rig's first mesh index:
 // the static instances precede it and the entities follow it. Kept for the S3
 // callers; the rig records carry the authoritative ranges now.
+//
+// `onProgress` (optional) is called on the calling thread throughout the load —
+// before each glb it loads and after each PNG this thread decodes — so a window
+// can keep pumping its events (S7 task 11).
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
-                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr);
+                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr,
+                    const std::function<void()>& onProgress = {});
 
 // Appends `glbRelPath`'s meshes to an already-composed scene as static
 // geometry: no rig record, every appended mesh carries rig = -1 (static meshes

@@ -1499,3 +1499,19 @@ TEST_CASE("a missing PNG shared by two glbs degrades to -1 in both") {
     REQUIRE(scene.textures.size() == 1);
     CHECK(scene.textures[0].sourceRelPath == "ok.png");
 }
+
+TEST_CASE("compose_scene reports progress before each glb it loads") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "shared.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "a.gltf", fixture_gltf_json("shared.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{1.0f, 0.0f, 0.0f}));
+
+    int calls = 0;
+    compose_scene(dir.path(), manifest, "a.gltf", nullptr, [&calls] { ++calls; });
+
+    // Two instances + the player, plus at most one per PNG this thread decoded.
+    CHECK(calls >= 3);
+    CHECK(calls <= 4);
+}
