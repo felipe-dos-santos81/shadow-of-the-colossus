@@ -90,7 +90,7 @@ fragment float4 mesh_fragment(VSOut in [[stage_in]],
 
     // Provisional key light (world space) and flat ambient, until a lighting
     // task replaces them.
-    const float3 key_light = normalize(float3(0.4, 0.8, 0.6));
+    const float3 key_light = normalize(float3(0.4, 0.8, 0.6));  // mirrored as kSunDir in app/src/sword.h (S9 D6); change both
     const float ambient = 0.1;
 
     // Lambert key light plus flat ambient, on the world-space normal.
