@@ -19,12 +19,13 @@ with the GPU runs. The runner refuses to run when a frozen script differs from t
                 and the pin (only on the pinned commit, after S9 merges — §13.3)
   --long        run the highest scripts/sN-acceptance.sh (the milestone gate) instead
 
-Output: out/verify/<worktree>/ (logs/, stamps/, candidates/, <sN>/<section>/, bin/, run/).
+Output: out/verify/<worktree>-<hash8 of its path>/ (logs/, stamps/, candidates/, <sN>/<section>/, bin/, run/).
 """
 import argparse
 import concurrent.futures
 import difflib
 import glob
+import hashlib
 import os
 import re
 import shutil
@@ -169,6 +170,24 @@ def coverage(milestone):
     return gates, missing, excluded, heredocs
 
 
+def adapter_problems():
+    """Every frozen scripts/sN-acceptance.sh (N >= 3) has an adapter with no missing gate or heredoc;
+    otherwise the runner refuses (a script without an adapter would be silently unchecked)."""
+    problems, names = [], adapters()
+    for path in sorted(glob.glob(os.path.join(ROOT, "scripts", "s*-acceptance.sh"))):
+        m = os.path.basename(path).split("-")[0]
+        if not re.fullmatch(r"s\d+", m) or milestone_key(m) < 3:
+            continue
+        if m not in names:
+            problems.append("scripts/%s-acceptance.sh has no adapter tools/verify/%s.sh" % (m, m))
+            continue
+        _, missing, _, heredocs = coverage(m)
+        if missing or heredocs:
+            problems.append("tools/verify/%s.sh lacks %d frozen gate(s) and %d heredoc(s) "
+                            "(python3 -I tools/verify/test_coverage.py)" % (m, len(missing), len(heredocs)))
+    return problems
+
+
 def sections_of(milestone):
     """{section: body text} of an adapter, in run order."""
     text = read(os.path.join(HERE, milestone + ".sh"))
@@ -225,10 +244,15 @@ class Runner:
         self.args = args
         self.lib = os.environ.get("SOTC_LIB") or os.path.join(ROOT, "out", "library")
         self.game = os.environ.get("SOTC_GAME_ROOT", "")
-        self.out = os.path.join(ROOT, "out", "verify", os.path.basename(ROOT))
+        # unique per worktree: two checkouts with the same basename never share stamps or outputs
+        self.out = os.path.join(ROOT, "out", "verify", "%s-%s" % (
+            os.path.basename(ROOT), hashlib.sha256(ROOT.encode()).hexdigest()[:8]))
         self.bin = os.path.join(self.out, "bin")
         self.results = []          # (name, ok, seconds, reason)
-        self.published = threading.Event()
+        self.published = threading.Event()   # set once no dotnet job is (re)publishing the CLI
+        self.dotnet_value = ""     # the dotnet stamp of the current sources
+        self.dotnet_failed = False
+        self.not_run = []          # (milestone, section, why)
         self.threads = []
 
     # paths ----------------------------------------------------------------------------------
@@ -309,13 +333,14 @@ class Runner:
         milestones, steps = self.selected()
         pin, problems = self.pin_check()
         print("verify: dry run — root %s, out %s, library %s" % (ROOT, self.out, os.path.realpath(self.lib)))
+        problems += adapter_problems()
         print("pin: %s%s" % (pin or "none", "".join("\n  REFUSE: " + p for p in problems)))
         st = stamps.Stamper(ROOT, self.lib)
         for step in steps:
             value = st.step(step)
             what = {"dotnet": "dotnet build BpConvert.sln; dotnet publish src/BpConvert.Cli -> <OUT>/bin; "
                               "dotnet test tests/BpConvert.Tests",
-                    "ctest": "cmake build app/build (always, incremental); ctest --test-dir app/build",
+                    "ctest": "cmake build app/build (always, incremental); ctest --test-dir app/build (after the audio decode)",
                     "audio": "bp-convert audio --map %s --force into the library (the current map)"
                              % os.path.relpath(self.current_map(), ROOT)}[step]
             print("step %-7s %s — %s" % (step, "skip (stamp unchanged)" if self.fresh(step, value) else "RUN", what))
@@ -354,14 +379,29 @@ class Runner:
             self.record("app-build", False, time.time() - t, "see %s" % log)
         return ok
 
+    def published_file(self):
+        return os.path.join(self.bin, ".dotnet-stamp")
+
+    def mark_published(self):
+        with open(self.published_file(), "w") as f:
+            f.write(self.dotnet_value + "\n")
+
     def publish(self, log):
-        return self.sh(["dotnet", "publish", "src/BpConvert.Cli", "-c", "Release", "-o", self.bin], log) == 0
+        """dotnet publish into the runner's bin, recording the dotnet stamp it was built from."""
+        ok = self.sh(["dotnet", "publish", "src/BpConvert.Cli", "-c", "Release", "-o", self.bin], log) == 0
+        if ok:
+            self.mark_published()
+        return ok
 
     def dotnet_job(self, value):
         log = self.p("logs", "dotnet.log")
         t = time.time()
-        ok = self.sh(["dotnet", "build", "BpConvert.sln", "-v", "q"], log, mode="w") == 0 and self.publish(log)
-        self.published.set()
+        ok = False
+        try:
+            ok = self.sh(["dotnet", "build", "BpConvert.sln", "-v", "q"], log, mode="w") == 0 and self.publish(log)
+        finally:
+            self.dotnet_failed = not ok
+            self.published.set()
         ok = ok and self.sh(["dotnet", "test", "tests/BpConvert.Tests", "-v", "q"], log) == 0
         if ok:
             self.store("dotnet", value)
@@ -376,10 +416,18 @@ class Runner:
         self.record("ctest", ok, time.time() - t, "ctest" if ok else "see %s" % log)
 
     def ensure_cli(self):
+        """A bp-convert published from the current sources (the dotnet stamp), or False: never an old
+        dll (--only sN after a src change) and never after a failed dotnet build."""
         self.published.wait()
-        if not os.path.exists(os.path.join(self.bin, "bp-convert.dll")):
-            self.publish(self.p("logs", "publish.log"))
-        return os.path.exists(os.path.join(self.bin, "bp-convert.dll"))
+        if self.dotnet_failed:
+            return False
+        try:
+            current = read(self.published_file()).strip() == self.dotnet_value
+        except OSError:
+            current = False
+        if not (current and os.path.exists(os.path.join(self.bin, "bp-convert.dll"))):
+            return self.publish(self.p("logs", "publish.log"))
+        return True
 
     def audio_step(self, value):
         """The current (highest) map decoded once per audio stamp into the library the GPU runs read
@@ -389,8 +437,8 @@ class Runner:
         ok = self.ensure_cli() and self.sh(
             ["dotnet", "exec", os.path.join(self.bin, "bp-convert.dll"), "audio", "--root", self.game,
              "--out", self.lib, "--map", self.current_map(), "--force"], log, mode="w") == 0
-        if ok:
-            self.store("audio", value)
+        if ok:   # the stamp after the decode (it covers the audio.manifest the decode just wrote)
+            self.store("audio", stamps.Stamper(ROOT, self.lib).step("audio"))
         self.record("audio", ok, time.time() - t, os.path.basename(self.current_map()) if ok else "see %s" % log)
         return ok
 
@@ -470,13 +518,16 @@ class Runner:
         rest = [i for i in todo if i not in perf]
         with concurrent.futures.ThreadPoolExecutor(max(1, self.args.jobs)) as pool:
             list(pool.map(one, rest))
+        if perf:   # perf-gated runs run alone (D4) until Task 4 measures a GPU width
+            for th in self.threads:
+                th.join()
         for item in perf:
             one(item)
         return outcome
 
-    def summarise(self, milestones, outcome, todo=(), why=""):
-        """One line per milestone; a section that was due but never ran (why) is a failure."""
-        for m, s, _ in todo:
+    def summarise(self, milestones, outcome):
+        """One line per milestone; a section that was due but never ran is a failure."""
+        for m, s, why in self.not_run:
             outcome.setdefault((m, s), (False, 0.0, "%s: not run (%s)" % (s, why)))
         for m in milestones:
             mine = [(s, outcome[(m, s)]) for s in sections_of(m) if (m, s) in outcome]
@@ -507,6 +558,7 @@ class Runner:
         if self.args.bless:   # goldens come from the committed frozen scripts (§13.3)
             dirty = subprocess.call(["git", "-C", ROOT, "diff", "--quiet", "HEAD", "--", "scripts/"]) != 0
             problems = ["scripts/ differs from HEAD: bless on the clean pinned commit"] if dirty else []
+        problems += adapter_problems()
         if problems:
             for p in problems:
                 print("verify: REFUSE — " + p, file=sys.stderr)
@@ -514,42 +566,56 @@ class Runner:
         shutil.rmtree(self.p("run"), ignore_errors=True)
         os.makedirs(self.p("run"), exist_ok=True)
         st = stamps.Stamper(ROOT, self.lib)
+        self.dotnet_value = st.step("dotnet")
         need_gpu = any("gpu" in sections_of(m) for m in milestones)
         if ("ctest" in steps or need_gpu) and not self.app_build():
             return 1
         self.published.set()            # cleared while a dotnet job will publish the CLI
-        for step, job in (("dotnet", self.dotnet_job), ("ctest", self.ctest_job)):
-            if step not in steps:
-                continue
-            if self.fresh(step, st.step(step)):
-                self.record(step, True, 0, "stamp unchanged")
-                continue
-            if step == "dotnet":
+        if "dotnet" in steps:
+            if self.fresh("dotnet", self.dotnet_value):
+                self.record("dotnet", True, 0, "stamp unchanged")
+            else:
                 self.published.clear()
-            th = threading.Thread(target=job, args=(st.step(step),))
-            th.start()
-            self.threads.append(th)
+                self.start(self.dotnet_job, self.dotnet_value)
 
-        early = [i for i in self.sections(milestones, st.section) if i[1] != "gpu"]
-        if any(i[1] == "audio" for i in early) and not self.ensure_cli():
-            self.record("publish", False, 0, "no bp-convert.dll in %s" % self.bin)
-        outcome = self.execute(early, bless=self.args.bless)
+        # 1. the probes (they read no audio); 2. the runner's decode into the library; then, on
+        # stamps taken after the decode: ctest (it reads the library), the audio and gpu sections.
+        probes = [i for i in self.sections(milestones, st.section) if i[1] == "probes"]
+        outcome = self.execute(probes, bless=self.args.bless)
         audio_ok = True
         if "audio" in steps:
             if self.fresh("audio", st.step("audio")):
                 self.record("audio", True, 0, "stamp unchanged")
             else:
                 audio_ok = self.audio_step(st.step("audio"))
-        st = stamps.Stamper(ROOT, self.lib)   # the decode may have rewritten audio.manifest
-        gpu = [i for i in self.sections(milestones, st.section) if i[1] == "gpu"]
+        st = stamps.Stamper(ROOT, self.lib)
+        if "ctest" in steps:
+            if self.fresh("ctest", st.step("ctest")):
+                self.record("ctest", True, 0, "stamp unchanged")
+            else:
+                self.start(self.ctest_job, st.step("ctest"))
+        later = [i for i in self.sections(milestones, st.section) if i[1] != "probes"]
+        audio = [i for i in later if i[1] == "audio"]
+        gpu = [i for i in later if i[1] == "gpu"]
+        if audio and not self.ensure_cli():
+            self.not_run += [(m, s, "no bp-convert published from the current sources") for m, s, _ in audio]
+            audio = []
+        outcome.update(self.execute(audio, bless=self.args.bless))
         if audio_ok:
             outcome.update(self.execute(gpu, bless=self.args.bless))
+        else:
+            self.not_run += [(m, s, "the audio decode failed") for m, s, _ in gpu]
         for th in self.threads:
             th.join()
-        if self.args.bless and audio_ok:
-            return self.bless(milestones, outcome, early + gpu)
-        self.summarise(milestones, outcome, gpu, "the audio decode failed")
+        if self.args.bless and not self.not_run:
+            return self.bless(milestones, outcome, probes + audio + gpu)
+        self.summarise(milestones, outcome)
         return 0 if all(r[1] for r in self.results) else 1
+
+    def start(self, job, value):
+        th = threading.Thread(target=job, args=(value,))
+        th.start()
+        self.threads.append(th)
 
     def bless(self, milestones, first, todo):
         """Second run of every section, diff the two, write the goldens and the pin (§13.3)."""

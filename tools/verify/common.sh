@@ -22,7 +22,7 @@ viewer_bin="$build_dir/sotc-viewer"
 viewer=sotc_viewer   # the frozen code's `"$viewer" …` calls resolve to the function below
 player="models/shadow/characters/wander/_cmn/wander.glb"
 cli="$VERIFY_BIN/bp-convert.dll"
-ms_dir="$(dirname "$VERIFY_OUT")"   # out/verify/<worktree>/<sN>; sections share it
+ms_dir="$(dirname "$VERIFY_OUT")"   # out/verify/<worktree>-<hash>/<sN>; sections share it
 out_dir="$VERIFY_OUT"
 mkdir -p "$VERIFY_OUT" "$VERIFY_CAND" "$VERIFY_RUN/cache"
 

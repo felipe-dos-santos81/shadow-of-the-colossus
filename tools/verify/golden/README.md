@@ -20,7 +20,7 @@ pinned commit, never from files under the shared `out/`).
    naming the evidence (`python3 -I tools/verify/test_masks.py` must stay green: a field a frozen
    script compares to a literal can never be masked), then bless again.
 4. `scripts/verify` → every milestone PASS on the unchanged tree; time it cold (no
-   `out/verify/<worktree>/stamps/`) and warm; `scripts/verify --long` on the same tree must agree.
+   `out/verify/<worktree>-<hash>/stamps/`) and warm; `scripts/verify --long` on the same tree must agree.
 5. Agreement check: a one-line change to a selftest print on a scratch branch must make
    `scripts/verify` FAIL naming the line; revert.
 6. Commit `tools/verify/golden/` (`test: bless the runner's goldens at <PIN>`).
