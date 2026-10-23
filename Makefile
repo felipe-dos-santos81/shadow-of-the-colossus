@@ -21,6 +21,7 @@ ENCOUNTER = out/re/stage/encounter.manifest
 SHRINE    = out/re/stage/shrine.manifest
 PLAIN     = out/re/stage/plain.manifest
 ROAD      = out/re/stage/road.manifest
+ARENA02   = out/re/stage/arena_02.manifest
 # The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, the
 # two S7 wake cuts (docs/notes/s7-recon.md §6), the 26 S8 ride clips
 # (docs/notes/s8-recon.md), then the six S9 raise clips at 43…48 (design D9).
@@ -83,7 +84,7 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake bake-quadratus run shrine plain road viewer shrine-manifest plain-manifest road-manifest probe-check accept clean libview \
+        bake bake-quadratus run shrine plain road quadratus viewer shrine-manifest plain-manifest road-manifest arena02-manifest probe-check accept clean libview \
         verify verify-long
 
 help: ## List the targets
@@ -148,6 +149,9 @@ plain: app shrine-manifest plain-manifest road-manifest ## Start on the plain wi
 
 road: plain ## The same start as `plain`: interactive play loads the road (C raises the sword)
 
+quadratus: app arena02-manifest ## Fight Quadratus in arena_02 (stab a rear hoof; R resets)
+	$(VIEWER) --manifest $(ARENA02)
+
 viewer: app ## Show Wander alone (no stage)
 	$(VIEWER)
 
@@ -159,6 +163,9 @@ plain-manifest: ## Compose out/re/stage/plain.manifest from the stage data
 
 road-manifest: ## Compose out/re/stage/road.manifest from the stage data
 	@test -f $(ROAD) || python3 tools/re/stage/probe.py compose --stage road --library "$(LIB)" --out $(ROAD)
+
+arena02-manifest: ## Compose out/re/stage/arena_02.manifest (Quadratus's arena) from the stage data
+	@test -f $(ARENA02) || python3 tools/re/stage/probe.py compose --stage arena_02 --library "$(LIB)" --out $(ARENA02)
 
 probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road manifests)
 	python3 tools/re/anb/probe.py check-skb
@@ -180,7 +187,7 @@ accept: shrine-manifest plain-manifest road-manifest accept-s9 ## Run the curren
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
-verify: shrine-manifest plain-manifest road-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
+verify: shrine-manifest plain-manifest road-manifest arena02-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
 	./scripts/verify $(ARGS)
 
 verify-long: shrine-manifest plain-manifest road-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh

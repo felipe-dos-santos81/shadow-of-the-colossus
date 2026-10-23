@@ -53,6 +53,13 @@ def milestone_key(name):
     return {"41": 4.1, "42": 4.2}.get(n, float(n) if n.isdigit() else 999.0)
 
 
+def report_only(milestone):
+    """An adapter ahead of its frozen script (S11 before Task 11): no scripts/<m>-acceptance.sh and no
+    goldens. Its sections run on their own gates; nothing is diffed until the goldens are blessed."""
+    return (not os.path.exists(os.path.join(ROOT, "scripts", "%s-acceptance.sh" % milestone))
+            and not os.path.isdir(os.path.join(GOLDEN, milestone)))
+
+
 def adapters():
     names = [os.path.basename(p)[:-3] for p in glob.glob(os.path.join(HERE, "s*.sh"))]
     return sorted((n for n in names if re.fullmatch(r"s\d+", n)), key=milestone_key)
@@ -346,13 +353,17 @@ class Runner:
             print("step %-7s %s — %s" % (step, "skip (stamp unchanged)" if self.fresh(step, value) else "RUN", what))
         total_runs = total_gates = 0
         for m in milestones:
-            gates, missing, excluded, heredocs = coverage(m)
-            print("\n%s — frozen scripts/%s-acceptance.sh: %d gate conditions, %d present in the adapter, "
-                  "%d excluded, %d missing; %d heredoc(s) extracted at run time%s"
-                  % (m, m, len(gates), len(gates) - len(missing) - len(excluded), len(excluded),
-                     len(missing), heredoc_count(m), " (MISSING %s)" % heredocs if heredocs else ""))
-            for n, c in missing:
-                print("  MISSING gate (line %d): %s" % (n, c[:160]))
+            if report_only(m):
+                print("\n%s — report-only: no frozen scripts/%s-acceptance.sh and no goldens yet; the "
+                      "adapter's own gates decide" % (m, m))
+            else:
+                gates, missing, excluded, heredocs = coverage(m)
+                print("\n%s — frozen scripts/%s-acceptance.sh: %d gate conditions, %d present in the adapter, "
+                      "%d excluded, %d missing; %d heredoc(s) extracted at run time%s"
+                      % (m, m, len(gates), len(gates) - len(missing) - len(excluded), len(excluded),
+                         len(missing), heredoc_count(m), " (MISSING %s)" % heredocs if heredocs else ""))
+                for n, c in missing:
+                    print("  MISSING gate (line %d): %s" % (n, c[:160]))
             for section, body in sections_of(m).items():
                 runs, checks, ngates, perf = plan(body)
                 key = "%s.%s" % (m, section)
@@ -471,6 +482,8 @@ class Runner:
         got = self.candidates(m, section)
         want = {os.path.basename(f): read(f) for f in sorted(glob.glob(os.path.join(gdir, "*.txt")))}
         if not want:
+            if report_only(m):
+                return ""   # report-only: its own gates passed (the line says so)
             return "no goldens in %s (bless after S9 merges)" % os.path.relpath(gdir, ROOT)
         for name, text in want.items():
             if self.args.quick and "-e2e" in text.split("\n", 1)[0]:
@@ -511,8 +524,9 @@ class Runner:
                     e2e = any("-e2e" in r for r in plan(sections_of(m)[section])[0])
                     self.store("%s.%s" % (m, section), value, quick=self.args.quick and e2e)
             outcome[(m, section)] = (ok, seconds, reason)
+            note = " — report-only: no frozen script, no goldens yet" if ok and report_only(m) else ""
             print("verify:   %s.%s %s (%.0f s)%s" % (m, section, "ok" if ok else "FAILED", seconds,
-                                                     "" if ok else " — " + reason), flush=True)
+                                                     note if ok else " — " + reason), flush=True)
 
         perf = [i for i in todo if plan(sections_of(i[0])[i[1]])[3]]
         rest = [i for i in todo if i not in perf]

@@ -117,7 +117,7 @@ def main():
         rc, log, calls = go(out, "quick", "force")
         assert rc == 0, "quick skips the e2e goldens: %s" % log
         rc, log, calls = go(out)
-        assert calls == ["s7.gpu", "s8.gpu", "s9.gpu"], "only the sections with e2e runs owe a full run: %s" % calls
+        assert calls == ["s11.gpu", "s7.gpu", "s8.gpu", "s9.gpu"], "only the sections with e2e runs owe a full run: %s" % calls
 
         # the CLI: republished when the dotnet stamp moved, refused when the dotnet build failed
         r = Fake(argparse.Namespace(only=[], quick=False, jobs=1, force=False, dry_run=False, bless=False, long=False))

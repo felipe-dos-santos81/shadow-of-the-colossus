@@ -12,7 +12,7 @@ import stamps  # noqa: E402
 
 MILESTONES = {"s3": ["gpu"], "s4": ["probes", "gpu"], "s41": ["gpu"], "s42": ["gpu"], "s5": ["audio", "gpu"],
               "s6": ["probes", "audio", "gpu"], "s7": ["probes", "gpu"], "s8": ["probes", "audio", "gpu"],
-              "s9": ["probes", "audio", "gpu"]}
+              "s9": ["probes", "audio", "gpu"], "s11": ["gpu"]}
 STEPS = ["dotnet", "ctest", "audio"]
 ALL = STEPS + ["%s.%s" % (m, s) for m, ss in MILESTONES.items() for s in ss]
 
@@ -34,10 +34,11 @@ def of(*milestones, **only):
 
 MANIFEST_READERS = {
     "valus": {"s3.gpu", "s4.probes"},
-    "encounter": of(*[m for m in MILESTONES if m != "s3"]) - {"s7.audio"},
+    "encounter": of(*[m for m in MILESTONES if m not in ("s3", "s11")]) - {"s7.audio"},
     "shrine": of("s7", "s8", "s9"),
     "plain": of("s8", "s9"),
     "road": of("s9"),
+    "arena_02": of("s11"),
 }
 
 
@@ -80,7 +81,7 @@ CASES = {
     "tools/verify/golden/s5/gpu/run.txt": {"s5.gpu"},
     "tools/verify/golden/s8/probes/compose.txt": {"s8.probes"},
 }
-UNCHANGED = ["out/re/stage/zz_test.manifest", "out/re/stage/arena_02.manifest",   # no section reads these
+UNCHANGED = ["out/re/stage/zz_test.manifest",   # no section reads it
              "app/build/CMakeCache.txt", "src/BpConvert.Cli/bin/x.dll", "lib/textures/t.png", "lib/textures/models/m.png",
              "lib/audio/clip.txt", "docs/notes/x.md"]
 

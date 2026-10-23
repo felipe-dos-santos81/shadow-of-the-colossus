@@ -62,7 +62,10 @@ def main():
                      for p in glob.glob(os.path.join(run.ROOT, "scripts", "*-acceptance.sh"))),
                     key=run.milestone_key)
     frozen = [f for f in frozen if f not in NOT_ADAPTED]
-    assert frozen == run.adapters(), "frozen %s vs adapters %s" % (frozen, run.adapters())
+    # An adapter ahead of its frozen script (S11 before Task 11) runs report-only; every frozen
+    # script still needs its adapter.
+    adapted = [a for a in run.adapters() if not run.report_only(a)]
+    assert frozen == adapted, "frozen %s vs adapters %s" % (frozen, adapted)
     problems, rows = [], []
     for m in frozen:
         gates, missing, excluded, heredocs = run.coverage(m)

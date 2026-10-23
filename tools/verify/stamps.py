@@ -49,6 +49,7 @@ MANIFESTS = {
     "s7": {"probes": "encounter shrine", "gpu": "encounter shrine"},
     "s8": {s: "encounter shrine plain" for s in ("probes", "audio", "gpu")},
     "s9": {s: "encounter shrine plain road" for s in ("probes", "audio", "gpu")},   # via preflight()
+    "s11": {"gpu": "arena_02"},   # report-only until Task 11 (run.report_only)
 }
 NAMED = "@named:"   # a pattern naming one file that must exist: absent hashes as "absent"
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",
