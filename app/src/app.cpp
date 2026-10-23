@@ -210,16 +210,6 @@ std::string manifest_header_value(const std::string& path, const std::string& ke
     return {};
 }
 
-// The `s3-status` line the W1.5 acceptance script greps: the manifest's
-// instance count, the chosen spawn, the player's position after the simulated
-// frames, and whether the ground under it is real (a finite heightmap sample).
-void print_s3_status(const SceneManifest& manifest, Vec3 spawn, Vec3 position, bool ground_ok) {
-    std::printf("s3-status instances=%zu spawn=%.3f,%.3f,%.3f pos=%.3f,%.3f,%.3f ground=%s "
-                "frames=%d\n",
-                manifest.instances.size(), spawn.x, spawn.y, spawn.z, position.x, position.y,
-                position.z, ground_ok ? "ok" : "none", kSelftestFrames);
-}
-
 }  // namespace
 
 int run_app(const AppOptions& opts) {
@@ -4469,54 +4459,14 @@ int run_app(const AppOptions& opts) {
             }
 
             if (opts.s3Selftest) {
-                // The pinned W1.4 self-test: 240 fixed 1/60 s frames of
-                // forward+run (camera-relative movement, the follow camera
-                // recentring), then one rendered frame and the s3-status line. With
-                // --screenshot the frame is also captured (the F3/wave check).
-                const Vec3 spawn = player.position;
-                PlayerInput input;
-                input.forward = true;
-                input.run = true;
-                for (int frame = 0; frame < kSelftestFrames; ++frame) {
-                    if (targetCamera.active) {
-                        if (haveEntityChest) {
-                            camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
-                        }
-                    } else {
-                        camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
-                                      /*moving=*/true, kFixedFrameSeconds);
-                    }
-                    player_update(player, input, kFixedFrameSeconds, heightmap,
-                                  camera_look_yaw(camera));
-                    update_locomotion(playback, scene, input, manual_clip);
-                    const std::vector<std::vector<Mat4>> palettes =
-                        update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds, club);
-                    // The collision hook: after this frame's pose/playback update,
-                    // before the player transform that is drawn below the loop.
-                    resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
-                    if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
-                        haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
-                                                               entityChest);
-                        if (targetCamera.active && haveEntityChest) {
-                            camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
-                        }
-                    }
+                const SelftestResult result = run_s3(ctx, run);
+                if (result.exitCode) {
+                    return *result.exitCode;
                 }
-                if (targetCamera.active && haveEntityChest) {
-                    camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+                if (result.next) {
+                    stage = *result.next;
+                    continue;
                 }
-                apply_player_transform(scene, player_rig_record, player,
-                                       active_player_lift(scene, playback, player_rig_record));
-
-                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                      /*acquire_swapchain=*/true);
-                if (!opts.screenshotPath.empty()) {
-                    write_screenshot(renderer, shell.win, opts.screenshotPath);
-                }
-                print_status_line(opts, shell.win);
-                print_s3_status(manifest, spawn, player.position,
-                                std::isfinite(heightmap_sample(heightmap, player.position)));
-                return 0;
             }
 
             if (opts.selftest) {

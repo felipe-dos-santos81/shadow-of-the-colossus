@@ -28,3 +28,4 @@ struct SelftestResult {
 // --selftest (S1): one frame and the s1-status line. --screenshot: the capture run.
 SelftestResult run_selftest(StageCtx& ctx, RunState& run);
 SelftestResult run_screenshot(StageCtx& ctx, RunState& run);
+SelftestResult run_s3(StageCtx& ctx, RunState& run);
