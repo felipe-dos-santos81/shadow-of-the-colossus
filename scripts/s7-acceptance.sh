@@ -26,6 +26,13 @@
 #      roof), the wall probe stops the walk, the 16 idols (slot 1 broken), the
 #      posed Mono, the perf line (<= 16.7 ms, culling active), the status and
 #      the two resets, plus the `s1-status` window/cursor line;
+#   5b. the end-to-end return — `--s7-e2e`: the *interactive* loop at a fixed
+#      1/60 s with scripted input (one lethal hit through the production
+#      combat path, then nothing; R 1 s into Free): the death Idle Motion
+#      Collapse Done, the return Idle Hold FadeOut Load FadeIn Wake Free, the
+#      three loads (arena, shrine, arena), the two wake clips in order, the
+#      lock from the death through Wake and its release at Free, the feet on
+#      the floor at Free (<= 0.05 m), the reset line and the window line;
 #   6. the printed probe coordinates and the shrine_points.h transcription
 #      against tools/re/s7/shrine_placements.json (ruling R1);
 #   7. the five stills (fade, wake, altar, idols, hall): PNG magic, > 5000 B,
@@ -62,6 +69,7 @@ cli="$repo_root/out/bin/bp-convert.dll"
 out_dir="$repo_root/out/s7"
 stills_dir="$out_dir/stills"
 selftest_txt="$out_dir/s7-selftest.txt"
+e2e_txt="$out_dir/s7-e2e.txt"
 arena_scratch="$out_dir/arena-compose.manifest"
 shrine_scratch="$out_dir/shrine-compose.manifest"
 run_log="$repo_root/out/s7-acceptance-run.log"
@@ -134,7 +142,7 @@ stamp "clean: the acceptance's own artifacts under $out_dir"
 mkdir -p "$out_dir"
 rm -rf "$stills_dir"
 mkdir -p "$stills_dir"
-rm -f "$selftest_txt" "$arena_scratch" "$shrine_scratch"
+rm -f "$selftest_txt" "$e2e_txt" "$arena_scratch" "$shrine_scratch"
 
 stamp "probe.py compose (arena, scratch): must hash to the pinned S3 value"
 python3 "$probe" compose --library "$lib" --out "$arena_scratch"
@@ -283,6 +291,67 @@ reset_exact="s7-reset stage=arena phase=Idle death=Idle valus=100 player=100"
 
 status_window="$(one_line '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' "s1-status")"
 
+# --- Step 5b: the end-to-end return (the interactive loop, scripted) ----------
+
+stamp "s7-e2e: the interactive loop from one lethal hit to the shrine and back"
+if ! e2e_out="$(caffeinate -dimsu "$viewer" --library "$lib" \
+  --manifest "$encounter_manifest" --shrine-manifest "$shrine_manifest" \
+  --model "$player" --s7-e2e 2>&1)"; then
+  printf '%s\n' "$e2e_out" >&2
+  fail "--s7-e2e exited non-zero"
+fi
+printf '%s\n' "$e2e_out"
+printf '%s\n' "$e2e_out" > "$e2e_txt"
+
+e2e_lines() { printf '%s\n' "$e2e_out" | grep -E "$1" || true; }
+e2e_one() {
+  local regex="$1" label="$2"
+  [[ "$(e2e_lines "$regex" | grep -c . || true)" = "1" ]] || fail "s7-e2e $label: expected exactly one line"
+  e2e_lines "$regex"
+}
+e2e_order() { e2e_lines "^$1 " | awk -v k="$2" '{ for (i = 2; i <= NF; i++) if (index($i, k "=") == 1) print substr($i, length(k) + 2) }' | tr '\n' ' '; }
+
+# 4 death + 7 return + 3 load + 2 input + 2 wake + status + reset.
+e2e_total="$(e2e_lines '^s7e2e-' | grep -c . || true)"
+[[ "$e2e_total" = "20" ]] || fail "expected 20 s7e2e-* lines, found $e2e_total"
+e2e_death="$(e2e_order s7e2e-death phase)"
+[[ "$e2e_death" = "Idle Motion Collapse Done " ]] ||
+  fail "the e2e death order is '$e2e_death' (expected 'Idle Motion Collapse Done ')"
+e2e_return="$(e2e_order s7e2e-return phase)"
+[[ "$e2e_return" = "Idle Hold FadeOut Load FadeIn Wake Free " ]] ||
+  fail "the e2e return order is '$e2e_return' (expected 'Idle Hold FadeOut Load FadeIn Wake Free ')"
+e2e_loads="$(e2e_order s7e2e-load stage)"
+[[ "$e2e_loads" = "arena shrine arena " ]] ||
+  fail "the e2e load order is '$e2e_loads' (expected 'arena shrine arena ')"
+[[ "$(e2e_lines '^s7e2e-load stage=(arena|shrine) meshes=[0-9]+ ms=[0-9]+\.[0-9]$' | grep -c . || true)" = "3" ]] ||
+  fail "expected 3 well-formed s7e2e-load lines"
+e2e_shrine_load="$(e2e_one '^s7e2e-load stage=shrine ' "shrine load")"
+awk -v ms="$(field "$e2e_shrine_load" ms)" 'BEGIN { exit !(ms <= 15000) }' ||
+  fail "the e2e shrine load took $(field "$e2e_shrine_load" ms) ms (ceiling 15000)"
+e2e_wakes="$(e2e_order s7e2e-wake clip)"
+[[ "$e2e_wakes" = "player_a_home_boss01_cut04 player_a_home_boss01_cut05 " ]] ||
+  fail "the e2e wake clips are '$e2e_wakes' (expected cut04 then cut05)"
+e2e_input="$(e2e_order s7e2e-input locked)"
+[[ "$e2e_input" = "1 0 " ]] || fail "the e2e input lines are locked='$e2e_input' (expected '1 0 ': locked at the death, released at Free)"
+e2e_load_ret="$(e2e_one '^s7e2e-return phase=Load ' "return Load")"
+[[ "$(field "$e2e_load_ret" fade)" = "1.000" && "$(field "$e2e_load_ret" lock)" = "1" ]] ||
+  fail "the e2e Load is not opaque and locked: $e2e_load_ret"
+e2e_wake_ret="$(e2e_one '^s7e2e-return phase=Wake ' "return Wake")"
+[[ "$(field "$e2e_wake_ret" lock)" = "1" ]] || fail "the e2e Wake is not locked: $e2e_wake_ret"
+e2e_free_ret="$(e2e_one '^s7e2e-return phase=Free ' "return Free")"
+[[ "$(field "$e2e_free_ret" lock)" = "0" ]] || fail "the e2e Free is still locked: $e2e_free_ret"
+e2e_status="$(e2e_one '^s7e2e-status ' "status")"
+[[ "$e2e_status" = "s7e2e-status stage=shrine phase=Free lock=0 "* ]] ||
+  fail "s7e2e-status is '$e2e_status' (expected stage=shrine phase=Free lock=0)"
+awk -v y="$(field "$e2e_status" player_y)" -v f="$(field "$e2e_status" floor)" \
+  'BEGIN { d = y - f; if (d < 0) d = -d; exit !(d <= 0.05) }' ||
+  fail "the e2e player is off the floor at Free: $e2e_status"
+e2e_reset="$(e2e_one '^s7e2e-reset ' "reset")"
+[[ "$e2e_reset" = "s7e2e-reset stage=arena valus=100 player=100 death=Idle return=Idle" ]] ||
+  fail "s7e2e-reset is '$e2e_reset'"
+[[ "$(e2e_lines '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' | grep -c . || true)" = "1" ]] ||
+  fail "the e2e run is not windowed with the cursor free"
+
 # --- Step 6: the JSON cross-check (ruling R1) ---------------------------------
 
 stamp "cross-check: printed probes and shrine_points.h against shrine_placements.json"
@@ -393,9 +462,12 @@ printf 's7-acceptance: idols        %s\n' "$idols_line"
 printf 's7-acceptance: mono         %s\n' "$mono_line"
 printf 's7-acceptance: perf         %s\n' "$perf_line"
 printf 's7-acceptance: status       %s\n' "$status_line"
+printf 's7-acceptance: e2e          %s\n' "$(e2e_lines '^s7e2e-(death|return|input|wake)' | tr '\n' ' ')"
+printf 's7-acceptance: e2e loads    %s\n' "$(e2e_lines '^s7e2e-load ' | tr '\n' ' ')"
+printf 's7-acceptance: e2e status   %s\n' "$e2e_status"
 printf 's7-acceptance: stills       %s\n' "$stills"
 printf 's7-acceptance: fade luma    %s\n' "$fade_luma"
 printf 's7-acceptance: s6 regress   %s\n' "$s6_perf_line"
-printf 's7-acceptance: PASS — build, both suites, the frozen S6 acceptance green, the arena compose at sha %s…, the shrine compose byte-identical (sha %s…), check-cwks/check-manifest/check-encounter/check-manifest --stage shrine green; the return Idle Hold FadeOut (R) Idle Hold FadeOut Load FadeIn Wake Free, fade 1.000 at Load and 0.000 at Wake; four s7-loads (shrine %s meshes both times, %s and %s ms); ground floors %s; the wall walk stopped at %s (to %s); 16 idols (slot 1 broken), Mono present; shrine frame %s ms (drawn %s, culled %s); the two resets exact; five stills 2560x1440 (fade luma %s); windowed, cursor free\n' \
+printf 's7-acceptance: PASS — build, both suites, the frozen S6 acceptance green, the arena compose at sha %s…, the shrine compose byte-identical (sha %s…), check-cwks/check-manifest/check-encounter/check-manifest --stage shrine green; the return Idle Hold FadeOut (R) Idle Hold FadeOut Load FadeIn Wake Free, fade 1.000 at Load and 0.000 at Wake; four s7-loads (shrine %s meshes both times, %s and %s ms); ground floors %s; the wall walk stopped at %s (to %s); 16 idols (slot 1 broken), Mono present; shrine frame %s ms (drawn %s, culled %s); the two resets exact; the end-to-end run (the interactive loop from one lethal hit: death Idle Motion Collapse Done, return Idle Hold FadeOut Load FadeIn Wake Free, cut04 then cut05, %s) green; five stills 2560x1440 (fade luma %s); windowed, cursor free\n' \
   "${arena_sha:0:8}" "${shrine_sha:0:8}" "$shrine_meshes" "$(field "$load2" ms)" "$(field "$load4" ms)" \
-  "$ground_rows" "$wall_stopped" "$wall_to" "$perf_frame" "$(field "$perf_line" drawn)" "$perf_culled" "$fade_luma"
+  "$ground_rows" "$wall_stopped" "$wall_to" "$perf_frame" "$(field "$perf_line" drawn)" "$perf_culled" "$e2e_status" "$fade_luma"
