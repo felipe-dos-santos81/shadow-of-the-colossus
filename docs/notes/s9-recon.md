@@ -211,3 +211,36 @@ that `walk_line` passes with a worst slope < 9.5° → **4 waypoints** (301, −
 - `tools/re/s9/probes.cpp` — the Step 4 march harness (scratch-built against the read-only app sources).
 - `tools/re/s9/placements.json` — its output.
 - Scratch (not committed): `road.bin`, `arena.bin`, the Wander bake, the three decoded atlases.
+
+## 6 · The bakes and the audio slice (Task 6) — into the library view only
+
+S9 never writes the base `out/library`; every command runs with `SOTC_LIB` at the branch's view.
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
+make libview BRANCH=s9-road                    # APFS clone, ~4 s
+export SOTC_LIB=$PWD/out/libviews/s9-road
+make bake  LIB="$SOTC_LIB"    # mono, wander (49 clips), agro (20), then the four sword atlases:
+#   bp-convert texture --in "$SOTC_GAME_ROOT/textures/<t>.cptx" --out "$SOTC_LIB/textures/<t>.png"
+#   for t in textures.sources {lines, overlay, flare, hit} (hit = flare's atlas: 3 distinct PNGs)
+python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
+  --map tools/re/audio/s9_map.json --out out/s9/audition --check   # -> AUDITION PASSED: 36 cue(s)
+make audio LIB="$SOTC_LIB"    # s9_map.json -> audio.manifest, 36 entries
+make road-manifest            # composes out/re/stage/road.manifest when absent
+```
+
+* `wander.glb`: S8's 43 clips keep indices 0…42; the six raise clips are 43…48 in design D9's
+  order (`player_a_hoist_sword_{start,loop,end}`, `player_a_uma_hoist_sword_{start,loop,end}`),
+  baked at their `.anb` keys (16/26/16, 19/31/14).
+* Atlases (`variant 8c0a`): `vertical_solid_beams_01_pfx` 512×512, `vertical_beams_wave_01_pfx`
+  512×512, `soft_glow_01_falloff_pfx` 256×256 (flare and hit).
+* Audio (`method: audition`, neither chain-proven; the com_obj `TONE` chunk is the program form):
+  `sword.search` = request `sword_boss_test` (REQD 173 → `PLAY_TONE` 10…13) → wave **55**, the
+  pool label equal to the request name (confidence medium, 0.967 s). `sword.shimmer` = request
+  `sword_test` (REQD 175 → `PLAY_TONE` 66 under a `SET_PARAM` envelope; its name sits at pool
+  index 310, past the 241 resident waves, so no label match) → wave **239** `shine_normal`
+  (confidence **low**, 3.240 s, `loop: true`): the longest sustained normal-sword shine; the
+  alternates auditioned were w048 `Shine_Normal_sword` (0.543 s glint), w179
+  `DorminSwordShine_VoiceSampleLoop_v2` and w030/w060–063 (the Dormin sword's shines).
+* `scripts/s8-acceptance.sh` decodes `s8_map.json` itself (34 entries), so re-run `make audio`
+  after it before any `--s9-*` run.

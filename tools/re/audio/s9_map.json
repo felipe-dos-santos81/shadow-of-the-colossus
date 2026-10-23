@@ -1,0 +1,729 @@
+{
+  "version": 5,
+  "milestone": "s9",
+  "generated": "2026-10-23",
+  "payload_formula": "wave_record_offset + 0x24 + start (length = bytes); see docs/notes/s5-audio-recon.md §7",
+  "identity_policy": "name is the sound-request name (NAME/REQD); wave is the verified WAVE index; layers is the FULL set of waves in the sound, including the primary (layers[0] == wave). confidence is identity confidence only; 0x21 fidelity is a separate field and is medium for every row. ghidra rows require reqd+tone and must pass the actual SEQD/PLAY_TONE walk; audition rows require verified_index=true and are explicitly not chain-proven.",
+  "note": "The S9 slice: the S8 rows verbatim plus the raised sword's two cues (design D10): sword.shimmer (request sword_test, looped by the runtime while the sword is raised) and sword.search (request sword_boss_test, once per lock). Both are audition picks (method audition, not chain-proven); Sword_reflection (com_amb) and touch stay deferred. S8's note: The S8 slice: the S6 ten plus the Agro riding cues, one event per variant (agro.hoof_walk.0-9, agro.hoof_gallop.0-4, player.whistle.0-2, player.stop_horse.0-1), each variant row carrying variant_of = its base event and sharing the base sound-request name; the single-wave cues (agro.hoof_trot, agro.neigh, agro.mount, player.kick) are plain rows. All S8 rows are audition picks (method audition, none chain-proven); confidences from docs/notes/s8-recon.md. Still deferred: player.fall and the ambience/bed cues.",
+  "cues": [
+    {
+      "event": "valus.telegraph",
+      "bank": "boss01",
+      "name": "boss01_vo_atk1",
+      "reqd": 340,
+      "tone": null,
+      "wave": 3,
+      "layers": [
+        3
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 340 -> SEQD 0x10B1. The per-sound bytecode at 0x6ABC is a parameter envelope (a9 SET_PARAM) whose PLAY_TONE operands are complex/random (a4 02 03 ...), so no fixed tone can be walked. Audition pick: wave 3 (1.202 s vocal).",
+      "wave_pool_label": "boss01_vo_atk1",
+      "note": "Not chain-verified. The 0x42 pair 108/109 is a large roar alternative."
+    },
+    {
+      "event": "valus.impact",
+      "bank": "boss01",
+      "name": "boss01_atk_hit_ground1",
+      "reqd": 303,
+      "tone": 43,
+      "wave": 26,
+      "layers": [
+        26,
+        27,
+        28,
+        29,
+        30
+      ],
+      "method": "ghidra",
+      "confidence": "high",
+      "fidelity": "medium",
+      "chain": "NAME hash(boss01_atk_hit_ground1) -> REQD 303 -> SEQD timeline 0x13E4 -> bytecode 0x23BA -> a4 01 43 -> TONE[43] = (key 57, wave 26); the sequence then plays tones 44-47 -> waves 27-30",
+      "wave_pool_label": "boss01_FS_far3_0",
+      "note": "Layered sound: layers is the full set 26-30 including the primary. wave_pool_label is the pool string at index 26, not the request name. Identity high; 0x21 fidelity medium."
+    },
+    {
+      "event": "valus.hurt",
+      "bank": "boss01",
+      "name": "boss01_vo_dmg1",
+      "reqd": 331,
+      "tone": null,
+      "wave": 6,
+      "layers": [
+        6
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 331 -> SEQD 0x11B6. The per-sound bytecode is a parameter envelope with complex/random PLAY_TONE operands; no fixed tone can be walked. Audition pick: wave 6 (1.051 s roar).",
+      "wave_pool_label": "boss01_vo_dmg1",
+      "note": "Not chain-verified."
+    },
+    {
+      "event": "player.swing",
+      "bank": "com_obj",
+      "name": "wnd_LifeSwd_swish_t1_01",
+      "reqd": 118,
+      "tone": null,
+      "wave": 7,
+      "layers": [
+        7
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 118 -> SEQD 0x227A -> PLAY_TONE 16/17; com_obj TONE chunk is not the flat 12-byte form, so no tone->wave proof",
+      "wave_pool_label": "wnd_LifeSwd_swish_t1_01",
+      "note": "Audition pick: wave 7 is a 0.464 s 0x21 whoosh; identity is the ear, not a chain."
+    },
+    {
+      "event": "player.hit",
+      "bank": "com_obj",
+      "name": "wnd_swd_hit_gravel_t1_01",
+      "reqd": 60,
+      "tone": null,
+      "wave": 21,
+      "layers": [
+        21
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 60 -> SEQD 0x2779; no PLAY_TONE op decoded in the first window; com_obj TONE table is not flat",
+      "wave_pool_label": "wnd_swd_hit_gravel_t1_01",
+      "note": "Audition pick: wave 21 is a 0.708 s 0x21 impact, first gravel-hit variant."
+    },
+    {
+      "event": "player.hurt",
+      "bank": "com_v",
+      "name": "bvo_dmg_m",
+      "reqd": 172,
+      "tone": null,
+      "wave": 40,
+      "layers": [
+        40
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 172 -> SEQD 0x0FD0; no PLAY_TONE op decoded; com_v TONE table is not flat",
+      "wave_pool_label": "bvo_dmg_m",
+      "note": "Audition pick: wave 40 is a 0.270 s 0x21 grunt."
+    },
+    {
+      "event": "player.death",
+      "bank": "com_b_h",
+      "name": "b_dead_by_boss",
+      "reqd": 1573,
+      "tone": null,
+      "wave": 657,
+      "layers": [
+        657
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash -> REQD 1573 -> SEQD 0xD710; no PLAY_TONE op decoded; com_b_h TONE table is not flat",
+      "wave_pool_label": "b_dead_by_boss",
+      "note": "Audition pick: wave 657 is a 0.811 s 0x21 vocal. The dedicated bvo_die_* names in com_v are sequence names beyond the 63 resident waves."
+    },
+    {
+      "event": "music.boss",
+      "bank": "music",
+      "name": "Boss 1",
+      "wave": 6,
+      "layers": [
+        6
+      ],
+      "method": "table",
+      "confidence": "high",
+      "fidelity": "high",
+      "chain": "music.sxd1 REQD track 6 is \"Boss 1\"; the 76-byte WAVE record 6 is 5.1 ATRAC9 (config FE761DF0 at +0x40) with start 0x22C6860 absolute in music.sxd2 (recon §2/§4)",
+      "note": "Streamed music, not a resident SFX: 5.1 downmixed to stereo at conversion time (R6), looped by the runtime. Selected with --music \"Boss 1\"."
+    },
+    {
+      "event": "valus.death",
+      "bank": "boss01",
+      "name": "mavo_death",
+      "reqd": 165,
+      "tone": null,
+      "wave": 75,
+      "layers": [
+        75,
+        76,
+        77
+      ],
+      "method": "audition",
+      "confidence": "high",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(mavo_death) -> REQD 165 -> SEQD. The manual chain maps tone 97 -> wave 75 and the sequence plays tones 97-99 -> waves 75-77; the SEQD bytecode has no 0x4000 marker, so walk_play_tone returns None and the row stays audition, not tool-chain-proven. Design §6.",
+      "wave_pool_label": "boss15_FS_low_atk4",
+      "note": "Layered death roar: layers is the full set 75-77 (wave 75 is 3.673 s, layer 76 5.277 s). wave_pool_label is the pool string at index 75, not the request name. Audition: a dark collapse. Fires at the tendril burst (0.4 s)."
+    },
+    {
+      "event": "valus.club_swing",
+      "bank": "boss01",
+      "name": "boss01_mvt_swing_add",
+      "reqd": 123,
+      "tone": null,
+      "wave": 55,
+      "layers": [
+        55,
+        56,
+        57
+      ],
+      "method": "audition",
+      "confidence": "high",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(boss01_mvt_swing_add) -> REQD 123 -> SEQD. The manual chain maps tone 77 -> wave 55 and the sequence plays tones 77-79 -> waves 55-57; the SEQD bytecode has no 0x4000 marker, so walk_play_tone returns None and the row stays audition, not tool-chain-proven. Design §6.",
+      "wave_pool_label": "boss01_whoosh_head_swing1",
+      "note": "Layered club whoosh: layers is the full set 55-57 (3.490 s / 3.667 s / 3.801 s). wave_pool_label is the pool string at index 55, not the request name. Audition: a bright whoosh. Fires on the club swing (the ClubStart telegraph keeps valus.telegraph)."
+    },
+    {
+      "event": "agro.hoof_walk.0",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 666,
+      "layers": [
+        666
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_01",
+      "note": "Variant 0 of 10 of agro.hoof_walk (wave 666, hrs_grsShort_walk_01); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.1",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 667,
+      "layers": [
+        667
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_02",
+      "note": "Variant 1 of 10 of agro.hoof_walk (wave 667, hrs_grsShort_walk_02); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.2",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 668,
+      "layers": [
+        668
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_03",
+      "note": "Variant 2 of 10 of agro.hoof_walk (wave 668, hrs_grsShort_walk_03); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.3",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 669,
+      "layers": [
+        669
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_04",
+      "note": "Variant 3 of 10 of agro.hoof_walk (wave 669, hrs_grsShort_walk_04); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.4",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 670,
+      "layers": [
+        670
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_05",
+      "note": "Variant 4 of 10 of agro.hoof_walk (wave 670, hrs_grsShort_walk_05); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.5",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 671,
+      "layers": [
+        671
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_06",
+      "note": "Variant 5 of 10 of agro.hoof_walk (wave 671, hrs_grsShort_walk_06); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.6",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 672,
+      "layers": [
+        672
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_07",
+      "note": "Variant 6 of 10 of agro.hoof_walk (wave 672, hrs_grsShort_walk_07); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.7",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 673,
+      "layers": [
+        673
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_09",
+      "note": "Variant 7 of 10 of agro.hoof_walk (wave 673, hrs_grsShort_walk_09); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.8",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 674,
+      "layers": [
+        674
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_11",
+      "note": "Variant 8 of 10 of agro.hoof_walk (wave 674, hrs_grsShort_walk_11); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_walk.9",
+      "bank": "com_b_h",
+      "name": "horse_walk_grass",
+      "reqd": 1725,
+      "tone": null,
+      "wave": 676,
+      "layers": [
+        676
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_walk_grass) -> REQD 1725 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_walk_13",
+      "note": "Variant 9 of 10 of agro.hoof_walk (wave 676, hrs_grsShort_walk_13); the app picks one per trigger. Grass-walk hoof one-shots hrs_grsShort_walk_01..13 (0.416-0.667 s, no loop). w675 excluded: its payload is shared by 15 unrelated records. Pick a variant per footfall (never the same twice in a row).",
+      "variant_of": "agro.hoof_walk"
+    },
+    {
+      "event": "agro.hoof_trot",
+      "bank": "com_b_h",
+      "name": "horse_average_leg_grass",
+      "reqd": 1731,
+      "tone": null,
+      "wave": 90,
+      "layers": [
+        90
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_average_leg_grass) -> REQD 1731 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "horse_average_leg_grass",
+      "note": "The mid gait is named average_leg in the registry (walk / average_leg / run x 13 surfaces). Only one resident grass wave, 1.042 s (longer than a single footfall: may be a composite stride). Gait mapping trot=average_leg is a naming inference."
+    },
+    {
+      "event": "agro.hoof_gallop.0",
+      "bank": "com_b_h",
+      "name": "horse_run_grass",
+      "reqd": 1726,
+      "tone": null,
+      "wave": 160,
+      "layers": [
+        160
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_run_grass) -> REQD 1726 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_run_10_0_0",
+      "note": "Variant 0 of 5 of agro.hoof_gallop (wave 160, hrs_grsShort_run_10_0_0); the app picks one per trigger. Gallop hoof one-shots: hrs_grsShort_run_10 L/R pairs (w160/161/797/949, 0.33-0.54 s) plus the label-equal horse_run_grass w1131 (0.644 s; payload shared by 4 differently named records). run_01..09/12/13 are dummies or unresolved.",
+      "variant_of": "agro.hoof_gallop"
+    },
+    {
+      "event": "agro.hoof_gallop.1",
+      "bank": "com_b_h",
+      "name": "horse_run_grass",
+      "reqd": 1726,
+      "tone": null,
+      "wave": 161,
+      "layers": [
+        161
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_run_grass) -> REQD 1726 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_run_10_1_0",
+      "note": "Variant 1 of 5 of agro.hoof_gallop (wave 161, hrs_grsShort_run_10_1_0); the app picks one per trigger. Gallop hoof one-shots: hrs_grsShort_run_10 L/R pairs (w160/161/797/949, 0.33-0.54 s) plus the label-equal horse_run_grass w1131 (0.644 s; payload shared by 4 differently named records). run_01..09/12/13 are dummies or unresolved.",
+      "variant_of": "agro.hoof_gallop"
+    },
+    {
+      "event": "agro.hoof_gallop.2",
+      "bank": "com_b_h",
+      "name": "horse_run_grass",
+      "reqd": 1726,
+      "tone": null,
+      "wave": 797,
+      "layers": [
+        797
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_run_grass) -> REQD 1726 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_run_10_0_0_0",
+      "note": "Variant 2 of 5 of agro.hoof_gallop (wave 797, hrs_grsShort_run_10_0_0_0); the app picks one per trigger. Gallop hoof one-shots: hrs_grsShort_run_10 L/R pairs (w160/161/797/949, 0.33-0.54 s) plus the label-equal horse_run_grass w1131 (0.644 s; payload shared by 4 differently named records). run_01..09/12/13 are dummies or unresolved.",
+      "variant_of": "agro.hoof_gallop"
+    },
+    {
+      "event": "agro.hoof_gallop.3",
+      "bank": "com_b_h",
+      "name": "horse_run_grass",
+      "reqd": 1726,
+      "tone": null,
+      "wave": 949,
+      "layers": [
+        949
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_run_grass) -> REQD 1726 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hrs_grsShort_run_10_1_0_0",
+      "note": "Variant 3 of 5 of agro.hoof_gallop (wave 949, hrs_grsShort_run_10_1_0_0); the app picks one per trigger. Gallop hoof one-shots: hrs_grsShort_run_10 L/R pairs (w160/161/797/949, 0.33-0.54 s) plus the label-equal horse_run_grass w1131 (0.644 s; payload shared by 4 differently named records). run_01..09/12/13 are dummies or unresolved.",
+      "variant_of": "agro.hoof_gallop"
+    },
+    {
+      "event": "agro.hoof_gallop.4",
+      "bank": "com_b_h",
+      "name": "horse_run_grass",
+      "reqd": 1726,
+      "tone": null,
+      "wave": 1131,
+      "layers": [
+        1131
+      ],
+      "method": "audition",
+      "confidence": "low",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(horse_run_grass) -> REQD 1726 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "horse_run_grass",
+      "note": "Variant 4 of 5 of agro.hoof_gallop (wave 1131, horse_run_grass); the app picks one per trigger. Gallop hoof one-shots: hrs_grsShort_run_10 L/R pairs (w160/161/797/949, 0.33-0.54 s) plus the label-equal horse_run_grass w1131 (0.644 s; payload shared by 4 differently named records). run_01..09/12/13 are dummies or unresolved.",
+      "variant_of": "agro.hoof_gallop"
+    },
+    {
+      "event": "agro.neigh",
+      "bank": "com_b_h",
+      "name": "hvo_neigh_low",
+      "reqd": 1596,
+      "tone": null,
+      "wave": 22,
+      "layers": [
+        22
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(hvo_neigh_low) -> REQD 1596 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "hvo_neigh_low",
+      "note": "Horse vocal block (w009 hvo_eat, w022 hvo_neigh_low, w041 hvo_drink_water). The generic hvo_neigh (REQD 1585) maps by label to w1134 (1.740 s) but that payload is shared by 13 unrelated records: keep as alternate only after an ear check."
+    },
+    {
+      "event": "player.whistle.0",
+      "bank": "com_b_h",
+      "name": "whistle1",
+      "reqd": 1542,
+      "tone": null,
+      "wave": 19,
+      "layers": [
+        19
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(whistle1) -> REQD 1542 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "whistle1",
+      "note": "Variant 0 of 3 of player.whistle (wave 19, whistle1); the app picks one per trigger. whistle1..3 are sibling labels at w019-w021 (0.572 / 0.716 / 1.052 s); one is played per whistle (random).",
+      "variant_of": "player.whistle"
+    },
+    {
+      "event": "player.whistle.1",
+      "bank": "com_b_h",
+      "name": "whistle1",
+      "reqd": 1542,
+      "tone": null,
+      "wave": 20,
+      "layers": [
+        20
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(whistle1) -> REQD 1542 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "whistle2",
+      "note": "Variant 1 of 3 of player.whistle (wave 20, whistle2); the app picks one per trigger. whistle1..3 are sibling labels at w019-w021 (0.572 / 0.716 / 1.052 s); one is played per whistle (random).",
+      "variant_of": "player.whistle"
+    },
+    {
+      "event": "player.whistle.2",
+      "bank": "com_b_h",
+      "name": "whistle1",
+      "reqd": 1542,
+      "tone": null,
+      "wave": 21,
+      "layers": [
+        21
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(whistle1) -> REQD 1542 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "whistle3",
+      "note": "Variant 2 of 3 of player.whistle (wave 21, whistle3); the app picks one per trigger. whistle1..3 are sibling labels at w019-w021 (0.572 / 0.716 / 1.052 s); one is played per whistle (random).",
+      "variant_of": "player.whistle"
+    },
+    {
+      "event": "agro.mount",
+      "bank": "com_b_h",
+      "name": "b_get_on_stand",
+      "reqd": 1545,
+      "tone": null,
+      "wave": 297,
+      "layers": [
+        297
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(b_get_on_stand) -> REQD 1545 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "b_get_on_stand",
+      "note": "Wander mount vocal/body cue. b_get_on_run (REQD 1553) and b_stand_on_horse (1554) have no labelled resident wave: deferred; reuse get_on_stand for the running mount. Optional second layer wndxhrs_ride_t1 w042 (0.593 s saddle/ride contact)."
+    },
+    {
+      "event": "player.kick",
+      "bank": "com_v",
+      "name": "bvo_kick_horse1",
+      "reqd": 50,
+      "tone": null,
+      "wave": 62,
+      "layers": [
+        62
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(bvo_kick_horse1) -> REQD 50 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "bvo_kick_horse1",
+      "note": "The speed-up vocal. w062 (0.899 s) shares its payload with w061 REQ_3_0 (the request-local sample). Alternate: bvo_kick_horse_belly w014 (0.426 s). bvo_kick_horse2..12 and bvo_kick_horsegallop have no resident wave."
+    },
+    {
+      "event": "player.stop_horse.0",
+      "bank": "com_v",
+      "name": "bvo_stop_horse1",
+      "reqd": 52,
+      "tone": null,
+      "wave": 22,
+      "layers": [
+        22
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(bvo_stop_horse1) -> REQD 52 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "bvo_stop_horse1",
+      "note": "Variant 0 of 2 of player.stop_horse (wave 22, bvo_stop_horse1); the app picks one per trigger. Two resident variants bvo_stop_horse1/2 (0.256 / 0.234 s); the registry lists bvo_stop_horse1..8 but only 1-2 are resident.",
+      "variant_of": "player.stop_horse"
+    },
+    {
+      "event": "player.stop_horse.1",
+      "bank": "com_v",
+      "name": "bvo_stop_horse1",
+      "reqd": 52,
+      "tone": null,
+      "wave": 23,
+      "layers": [
+        23
+      ],
+      "method": "audition",
+      "confidence": "medium",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(bvo_stop_horse1) -> REQD 52 -> SEQD stream is a multi-variant switch ('a9 02 NN ..' SET_PARAM branches, shared across sibling requests); no single walkable PLAY_TONE, com_b_h TONE is the 35-program form, not flat. Wave = pool-label match (label == family/request name) at a coherent run of sibling labels.",
+      "wave_pool_label": "bvo_stop_horse2",
+      "note": "Variant 1 of 2 of player.stop_horse (wave 23, bvo_stop_horse2); the app picks one per trigger. Two resident variants bvo_stop_horse1/2 (0.256 / 0.234 s); the registry lists bvo_stop_horse1..8 but only 1-2 are resident.",
+      "variant_of": "player.stop_horse"
+    },
+    {
+      "event": "sword.shimmer",
+      "name": "sword_test",
+      "reqd": 175,
+      "wave": 239,
+      "layers": [
+        239
+      ],
+      "loop": true,
+      "confidence": "low",
+      "bank": "com_obj",
+      "tone": null,
+      "method": "audition",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(sword_test) -> REQD 175 -> SEQD 0x34A9 -> PLAY_TONE 66 under a SET_PARAM (a9 01 66 ..) envelope; com_obj TONE chunk is the program form, not flat, so no tone->wave proof; sword_test sits at name-pool index 310, past the 241 resident waves, so no label match either",
+      "wave_pool_label": "shine_normal",
+      "note": "Audition pick (low): wave 239 is the 3.240 s 0x21 'shine_normal' (the Ancient Sword's shine, not the Dormin sword's DorminSwordShine_* family), steady for its first half (-7..-9 dBFS per tenth) then decaying; the longest sustained shine, looped by the runtime (loop: true) from the raise until lowering begins. Alternates auditioned: w048 Shine_Normal_sword (0.543 s glint), w179 DorminSwordShine_VoiceSampleLoop_v2 (1.163 s), w030/w060-063 (Dormin-sword shines)."
+    },
+    {
+      "event": "sword.search",
+      "name": "sword_boss_test",
+      "reqd": 173,
+      "wave": 55,
+      "layers": [
+        55
+      ],
+      "confidence": "medium",
+      "bank": "com_obj",
+      "tone": null,
+      "method": "audition",
+      "fidelity": "medium",
+      "verified_index": true,
+      "chain": "NAME hash(sword_boss_test) -> REQD 173 -> SEQD 0x21E5 -> PLAY_TONE 10..13 (a4 01 10..13); com_obj TONE chunk is the program form, not flat, so no tone->wave proof. Wave = pool-label match (label == request name, pool index 55 in the resident run).",
+      "wave_pool_label": "sword_boss_test",
+      "note": "Audition pick (medium): wave 55 is a 0.967 s 0x21 swell (RMS -17.3 dBFS), its label equal to the request name; played once per lock (authored trigger)."
+    }
+  ],
+  "deferred": [
+    {
+      "event": "valus.grab",
+      "bank": "boss01",
+      "reason": "grab/body-movement cues are layered 0x21 sequences; not required by the core set."
+    },
+    {
+      "event": "valus.fall",
+      "bank": "boss01",
+      "reason": "fall/rise cues are layered 0x21 sequences; not required by the core set."
+    },
+    {
+      "event": "valus.breath",
+      "bank": "boss01",
+      "reason": "breath/ambience cues are layered 0x21 sequences; not required by the core set."
+    },
+    {
+      "event": "valus.ambience",
+      "bank": "boss01",
+      "reason": "boss01_FS_* / mammo_* ambience beds are layered 0x21 sequences; not required by the core set."
+    },
+    {
+      "event": "player.grab",
+      "bank": "com_b_h",
+      "reason": "grab/hand cues are layered com_b_h sequences; not required by the core set."
+    },
+    {
+      "event": "player.fall",
+      "bank": "com_v",
+      "reason": "bvo_fall* names are beyond the 63 resident com_v waves; streamed or layered."
+    },
+    {
+      "event": "player.breath",
+      "bank": "com_v",
+      "reason": "bvo_breath* / bvo_run_breath* names are beyond the 63 resident com_v waves; streamed or layered."
+    },
+    {
+      "event": "sword.reflection",
+      "bank": "com_amb",
+      "reason": "Sword_reflection (design D10): deferred; not required by the S9 core set."
+    },
+    {
+      "event": "sword.touch",
+      "bank": "com_obj",
+      "reason": "touch (design D10): deferred; not required by the S9 core set."
+    }
+  ]
+}

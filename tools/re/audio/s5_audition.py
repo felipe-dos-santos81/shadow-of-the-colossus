@@ -65,8 +65,10 @@ CORE_EVENTS_S8 = CORE_EVENTS_S6 + (
     tuple(f"agro.hoof_gallop.{i}" for i in range(5)) + ("agro.neigh",) +
     tuple(f"player.whistle.{i}" for i in range(3)) + ("agro.mount", "player.kick") +
     tuple(f"player.stop_horse.{i}" for i in range(2)))
+# S9 (D10): the S8 set + the raised sword's shimmer (looped) and search cue.
+CORE_EVENTS_S9 = CORE_EVENTS_S8 + ("sword.shimmer", "sword.search")
 CORE_EVENTS_BY_MILESTONE = {"s5": CORE_EVENTS_S5, "s6": CORE_EVENTS_S6,
-                            "s8": CORE_EVENTS_S8}
+                            "s8": CORE_EVENTS_S8, "s9": CORE_EVENTS_S9}
 DEFAULT_MILESTONE = "s5"
 
 
