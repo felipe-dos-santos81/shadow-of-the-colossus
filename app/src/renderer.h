@@ -12,6 +12,7 @@
 #include "hud.h"
 #include "math3d.h"
 #include "scene.h"
+#include "sword_fx.h"
 
 // Draws a loaded Scene with SDL_GPU/Metal into an offscreen color target, and
 // reads that target back as RGBA8 pixels — the same content that is copied to
@@ -61,6 +62,10 @@ public:
     // it), and the death sequence draws without tendrils; never throws.
     bool upload_effect_textures(const std::array<TextureCpu, 4>& textures);
 
+    // The sword pass's textures and pipeline (S9 Task 5, design D7), the same
+    // contract as upload_effect_textures: false = the sword draws no light.
+    bool upload_sword_textures(const std::array<TextureCpu, 4>& textures);
+
     // Renders the offscreen target (clear + one draw per mesh, pushing the
     // view-projection once and the per-mesh model + material uniforms), then —
     // when acquire_swapchain — copies it to the swapchain in the same submit.
@@ -70,8 +75,10 @@ public:
     // `effects`, when non-null and active, draws the tendril pass after the
     // opaque meshes and before the HUD, against the same depth buffer.
     // nullptr (the default) is the no-op every non-death frame passes.
+    // `sword`, when non-null and active, draws the sword's light after the
+    // tendril pass; nullptr (the default) leaves every other frame unchanged.
     void render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain,
-                      const EffectFrame* effects = nullptr);
+                      const EffectFrame* effects = nullptr, const SwordFxFrame* sword = nullptr);
 
     // The last rendered frame as RGBA8, row 0 = top. Only valid after a
     // render_frame; throws if nothing has been rendered yet.
@@ -172,6 +179,10 @@ private:
     // upload_effect_textures; until then (and on failure) its draws no-op.
     EffectRenderer effects_;
     bool effects_ready_ = false;
+
+    // The sword pass (S9 Task 5), created by upload_sword_textures.
+    SwordFxRenderer sword_;
+    bool sword_ready_ = false;
 
     // One palette buffer per rig (index = Scene::rigs index), each sized by
     // that rig's own joint count; a scene with no rigs keeps one identity

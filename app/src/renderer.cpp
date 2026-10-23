@@ -790,8 +790,15 @@ bool Renderer::upload_effect_textures(const std::array<TextureCpu, 4>& textures)
     return effects_ready_;
 }
 
+bool Renderer::upload_sword_textures(const std::array<TextureCpu, 4>& textures) {
+    if (!sword_ready_) {
+        sword_ready_ = sword_.create(device_, textures, color_format_);
+    }
+    return sword_ready_;
+}
+
 void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acquire_swapchain,
-                            const EffectFrame* effects) {
+                            const EffectFrame* effects, const SwordFxFrame* sword) {
     // Refresh the label before the frame's command buffer: the upload is its
     // own submission and only happens when the rounded percentage changed.
     // Uploading is not drawing — the overlay draws only after the swapchain
@@ -842,6 +849,10 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     const bool draw_effects = effects != nullptr && effects->active && effects_ready_;
     if (draw_effects) {
         effects_.update(*effects, viewProj);
+    }
+    const bool draw_sword = sword != nullptr && sword->active && sword_ready_;
+    if (draw_sword) {
+        sword_.update(*sword, viewProj);
     }
 
     SDL_GPUColorTargetInfo color_target{};
@@ -958,6 +969,10 @@ void Renderer::render_frame(const Scene& scene, const Mat4& viewProj, bool acqui
     // until the death sequence is wired).
     if (draw_effects) {
         effects_.draw(cmd, pass, viewProj);
+    }
+    // The sword's light (S9 Task 5): additive, after the tendrils, same depth.
+    if (draw_sword) {
+        sword_.draw(cmd, pass, viewProj);
     }
 
     SDL_EndGPURenderPass(pass);
