@@ -18,6 +18,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 
 
+# The probes the header writes (placements.json `probes`, minus its provenance keys).
+PROBE_KEYS = ("sunlit", "shade", "stairs_foot", "entrance_top", "agro_stairs", "e2e_route")
+PROBE_META = ("source", "sources", "tip_lift_m")
+
+
 def f(v):
     return repr(float(v)) + "f"
 
@@ -43,7 +48,8 @@ def render(d):
     w("//     from its spawn; the arrival on the road's corridor floor, below the cliff;")
     w("//   `valus` (source: %s) — the encounter manifest's entity feet, the chest lift" % va["source"])
     w("//     (Bone_MUNE);")
-    w("//   `sword.tip` (source: %s) — in %s's frame;" % (sw["source"], sw["bone"]))
+    w("//   `sword.tip` (source: %s) — a point of the sword glb (its own frame); the app" % sw["source"])
+    w("//     places it with %s x sword_grip(raise);" % sw["bone"])
     w("//   `probes` (source: %s) — world points on the road (y = ground);" % pr["source"])
     w("//   `textures` — the four sword PNGs, library-relative ([0] lines, [1] overlay,")
     w("//     [2] flare, [3] hit: sword_fx.h's order); `textures.frame` the atlas grid.")
@@ -67,7 +73,8 @@ def render(d):
     w("inline constexpr float kValusFeet[3]{%s};" % fl(va["feet"]))
     w("inline constexpr float kValusChestLift = %s;" % f(va["chest_lift"]))
     w("")
-    w("// The beam's origin in %s's frame (%s)." % (sw["bone"], sw["source"]))
+    w("// The beam's origin: a point of the sword glb (%s), not of %s's frame;" % (sw["source"], sw["bone"]))
+    w("// the app's tip is (%s x sword_grip(raise)) x kSwordTip." % sw["bone"])
     w("inline constexpr float kSwordTip[3]{%s};" % fl(sw["tip"]))
     w("")
     sun, agro = pr["sunlit"], pr["agro_stairs"]
@@ -101,10 +108,13 @@ def main(argv):
     dst = argv[2] if len(argv) > 2 else os.path.join(REPO, "app", "src", "road_points.h")
     with open(src) as fh:
         d = json.load(fh)
+    probes = sorted(k for k in d["probes"] if k not in PROBE_META)
+    if probes != sorted(PROBE_KEYS):
+        sys.exit("road_points.py: placements.json probes %s != %s" % (probes, sorted(PROBE_KEYS)))
     text = render(d)
     with open(dst, "w") as fh:
         fh.write(text)
-    print("wrote %s (doors=2 probes=%d route=%d)" % (dst, 6, len(d["probes"]["e2e_route"])))
+    print("wrote %s (doors=2 probes=%d route=%d)" % (dst, len(PROBE_KEYS), len(d["probes"]["e2e_route"])))
     return 0
 
 

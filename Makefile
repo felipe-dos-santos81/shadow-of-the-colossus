@@ -62,7 +62,7 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake run shrine plain viewer shrine-manifest plain-manifest road-manifest probe-check accept clean libview
+        bake run shrine plain road viewer shrine-manifest plain-manifest road-manifest probe-check accept clean libview
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -111,15 +111,17 @@ app: ## Configure and build the viewer (Release)
 app-test: app ## Run the viewer's unit and windowed tests
 	ctest --test-dir app/build --output-on-failure
 
-run: app shrine-manifest plain-manifest ## Play the Valus encounter (defeat him to return to the shrine)
+run: app shrine-manifest plain-manifest road-manifest ## Play the Valus encounter (defeat him to return to the shrine)
 	@test -f $(ENCOUNTER) || { echo "missing $(ENCOUNTER): run make accept-s4"; exit 1; }
 	$(VIEWER) --manifest $(ENCOUNTER)
 
-shrine: app shrine-manifest plain-manifest ## Start in the Shrine of Worship (its front door leads to the plain)
+shrine: app shrine-manifest plain-manifest road-manifest ## Start in the Shrine of Worship (its front door leads to the plain)
 	$(VIEWER) --manifest $(ENCOUNTER) --stage shrine
 
-plain: app shrine-manifest plain-manifest ## Start on the plain with Agro (Q whistles, E mounts)
+plain: app shrine-manifest plain-manifest road-manifest ## Start on the plain with Agro (Q whistles, E mounts)
 	$(VIEWER) --manifest $(ENCOUNTER) --stage plain
+
+road: plain ## The same start as `plain`: interactive play loads the road (C raises the sword)
 
 viewer: app ## Show Wander alone (no stage)
 	$(VIEWER)
@@ -133,13 +135,14 @@ plain-manifest: ## Compose out/re/stage/plain.manifest from the stage data
 road-manifest: ## Compose out/re/stage/road.manifest from the stage data
 	@test -f $(ROAD) || python3 tools/re/stage/probe.py compose --stage road --library "$(LIB)" --out $(ROAD)
 
-probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain manifests)
+probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road manifests)
 	python3 tools/re/anb/probe.py check-skb
 	python3 tools/re/stage/probe.py check-cwks
 	python3 tools/re/stage/probe.py check-manifest --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-encounter --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-manifest --stage shrine --library "$(LIB)" $(SHRINE)
 	python3 tools/re/stage/probe.py check-manifest --stage plain --library "$(LIB)" $(PLAIN)
+	python3 tools/re/stage/probe.py check-manifest --stage road --library "$(LIB)" $(ROAD)
 
 census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
@@ -147,9 +150,10 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest accept-s8 ## Run the current milestone's acceptance (S8 → S7 → S6 → … → S3)
+# S9: before S9's merge run it with LIB/SOTC_LIB at the view (out/libviews/s9-road).
+accept: shrine-manifest plain-manifest road-manifest accept-s9 ## Run the current milestone's acceptance (S9 → S8 → S7 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s8 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export

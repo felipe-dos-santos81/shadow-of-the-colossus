@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""S5/S6 audition — decode the curated cue map to WAV and gate it.
+"""S5–S9 audition — decode the curated cue map to WAV and gate it.
 
-Reads a curated cue map (`tools/re/audio/s5_map.json` by default,
-`tools/re/audio/s6_map.json` for the S6 slice), decodes each mapped
+Reads a curated cue map (`tools/re/audio/s5_map.json` by default;
+`s6_map.json`, `s8_map.json` and `s9_map.json` for the S6, S8 and S9 slices —
+the map's `milestone` picks its core events), decodes each mapped
 `(bank, wave)` with the loader-derived payload formula (`wave_record_offset +
 0x24 + start`, see `docs/notes/s5-audio-recon.md` §7), writes WAVs under
 `<out>/<bank>/` (`out/s5/audition/` for the S5 map, `out/s6/audition/gate/`
@@ -25,6 +26,8 @@ Usage
       --map tools/re/audio/s5_map.json --out out/s5/audition --check
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
       --map tools/re/audio/s6_map.json --out out/s6/audition/gate --check
+  python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
+      --map tools/re/audio/s9_map.json --out out/s9/audition-gate --check
   python3 tools/re/audio/s5_audition.py --root "$SOTC_GAME_ROOT" \
       --bank boss01 --all --out out/s5/audition     # decode every wave
 

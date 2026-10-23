@@ -10,7 +10,8 @@
 //     from its spawn; the arrival on the road's corridor floor, below the cliff;
 //   `valus` (source: data) — the encounter manifest's entity feet, the chest lift
 //     (Bone_MUNE);
-//   `sword.tip` (source: measured|authored) — in OptBone_sword's frame;
+//   `sword.tip` (source: measured|authored) — a point of the sword glb (its own frame); the app
+//     places it with OptBone_sword x sword_grip(raise);
 //   `probes` (source: authored|measured) — world points on the road (y = ground);
 //   `textures` — the four sword PNGs, library-relative ([0] lines, [1] overlay,
 //     [2] flare, [3] hit: sword_fx.h's order); `textures.frame` the atlas grid.
@@ -32,7 +33,8 @@ inline constexpr ride_points::Door kDoorArena{{298.0f, 27.5f, 303.0f}, {312.0f, 
 inline constexpr float kValusFeet[3]{382.0f, 28.369f, 370.0f};
 inline constexpr float kValusChestLift = 10.93f;
 
-// The beam's origin in OptBone_sword's frame (measured|authored).
+// The beam's origin: a point of the sword glb (measured|authored), not of OptBone_sword's frame;
+// the app's tip is (OptBone_sword x sword_grip(raise)) x kSwordTip.
 inline constexpr float kSwordTip[3]{0.0f, 0.0f, -0.58f};
 
 // The probes (world x, y = ground, z): the sunlit standpoint and the yaw that faces
