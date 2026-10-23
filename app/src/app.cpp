@@ -19,8 +19,10 @@
 #include "renderer.h"
 #include "ride.h"
 #include "ride_points.h"
+#include "road_points.h"
 #include "scene.h"
 #include "shrine_points.h"
+#include "sword.h"
 #include "transition.h"
 #include "wav_io.h"
 
@@ -226,6 +228,21 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
 constexpr const char* kClubGlb =
     "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a_weapon.glb";
 constexpr const char* kClubSocketJoint = "OptBone_sword";
+
+// S9 (design D5): Wander's sword, an unskinned glb placed every frame on the
+// road from the player rig's posed OptBone_sword (recon §3) through the grip
+// below. The beam leaves road_points::kSwordTip.
+constexpr const char* kSwordGlb = "models/shadow/characters/wander/_cmn/wander_sword.glb";
+constexpr const char* kSwordBone = "OptBone_sword";
+// The grip (S9 Task 8, source: authored from the stills): the glb's blade runs
+// along its -Z, but the bone's blade axis is its +Y — +Y is vertical (0.99) in
+// player_a_hoist_sword_loop and hangs down (-0.98) in player_a_stand, while the
+// bone's -Z lies flat across the head in the raise. The grip is Rx(+90 deg),
+// the inverse of a Z-up -> Y-up swap: glb (x, y, z) -> bone (x, -z, y). The
+// sword's model is bone * grip; road_points::kSwordTip is a point of the glb.
+const Mat4 kSwordGrip = mat4_from_trs(Vec3{0.0f, 0.0f, 0.0f},
+                                      Quat{0.70710678f, 0.0f, 0.0f, 0.70710678f},
+                                      Vec3{1.0f, 1.0f, 1.0f});
 
 // The corpse swap's assets (S6, design D5/§8.3): the already-converted dead
 // body (6 meshes, the six `_dead` materials with the veins veil) and the
@@ -1668,6 +1685,7 @@ struct GamepadInput {
     // takes the edges).
     bool south = false;
     bool north = false;
+    bool raise = false;  // S9: the left shoulder raises the sword (held)
 
     ~GamepadInput() { close(); }
 
@@ -1690,6 +1708,7 @@ struct GamepadInput {
         pauseWasDown = false;
         south = false;
         north = false;
+        raise = false;
     }
 
     void poll() {
@@ -1699,6 +1718,7 @@ struct GamepadInput {
         pausePressed = false;
         south = false;
         north = false;
+        raise = false;
         if (handle == nullptr) {
             return;
         }
@@ -1713,6 +1733,7 @@ struct GamepadInput {
         strike = SDL_GetGamepadButton(handle, kStrikeGamepadButton);
         south = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_SOUTH);
         north = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_NORTH);
+        raise = SDL_GetGamepadButton(handle, kRaiseGamepadButton);
         const bool pauseNow = SDL_GetGamepadButton(handle, SDL_GAMEPAD_BUTTON_START);
         pausePressed = pauseNow && !pauseWasDown;
         pauseWasDown = pauseNow;
@@ -2115,6 +2136,41 @@ struct AudioSeam {
         }
     }
 
+    // S9: the sword's two cues (authored, audio_map.h). A row the manifest lacks
+    // (an S8 acceptance leaves the 34) warns once per cue and stays silent.
+    std::array<bool, static_cast<std::size_t>(SwordSfx::Count)> swordWarned{};
+
+    void play_sword(SwordSfx id, const Vec3& position) {
+        if (!enabled) {
+            return;
+        }
+        const SwordCue& cue = sword_cue(id);
+        if (!engine.has(cue.clip)) {
+            const std::size_t index = static_cast<std::size_t>(id);
+            if (index < swordWarned.size() && !swordWarned[index]) {
+                swordWarned[index] = true;
+                std::fprintf(stderr,
+                             "sotc-viewer: audio: sword cue %s names missing clip '%s' — the cue "
+                             "stays silent (run `make audio` for the S9 slice)\n",
+                             sword_sfx_name(id), cue.clip);
+            }
+            return;
+        }
+        engine.play(cue.clip, position, cue.gain);
+        if (log) {
+            std::printf("%s t=%.3f event=sword_%s clip=%s gain=%.2f\n", logPrefix, clock,
+                        sword_sfx_name(id), cue.clip, cue.gain);
+            ++eventCount;
+        }
+    }
+
+    // Ends the looping shimmer (lowering, R); a no-op when it is not playing.
+    void stop_sword() {
+        if (enabled) {
+            engine.stop(sword_cue(SwordSfx::Shimmer).clip);
+        }
+    }
+
     void play_all(SfxQueue& queue) {
         for (int i = 0; i < queue.count; ++i) {
             play_event(queue.items[static_cast<std::size_t>(i)]);
@@ -2190,6 +2246,7 @@ struct AudioSeam {
         rideEvents = 0;
         hooves = 0;
         rideWarned = {};
+        swordWarned = {};
     }
 
     void toggle_mute() {
@@ -2327,6 +2384,10 @@ int run_app(const AppOptions& opts) {
         // shrine manifest or the wake clips missing; the run then plays on
         // without the return, as --no-return would.
         bool return_available = true;
+        // S9: the sword pass's textures upload once per run (the renderer keeps
+        // them across stages); a failure warns once and the raise draws no light.
+        bool sword_fx_ready = false;
+        bool sword_fx_warned = false;
         for (;;) {
             // The stage's manifest: --manifest for the arena, the shrine's own
             // composed manifest for the shrine.
@@ -2356,6 +2417,10 @@ int run_app(const AppOptions& opts) {
             bool effects_ready = false;
             SceneManifest manifest{};          // empty when --manifest is absent
             Heightmap heightmap{};             // an empty heightmap = no ground
+            // S9 (D6): the road's backdrop ray grid (the non-ground statics), and
+            // the sword's static mesh range — both empty off the road.
+            Heightmap raygrid{};
+            std::size_t swordMeshBegin = 0, swordMeshEnd = 0;
             const bool follow_mode = !opts.manifestPath.empty();
             // S6: whether this run wires the death sequence (the interactive game
             // and the --s6-selftest). The frozen scripted timelines (s3/s4/s41/
@@ -2439,8 +2504,24 @@ int run_app(const AppOptions& opts) {
                     // S8 (D3): the plain's plateau ends in cliffs; its map
                     // refuses holes, cliffs and walls of rock.
                     heightmap.refuseHoles = here == StageId::Plain;
+                    // S9 (D6): the beam and shade rays also march the backdrops
+                    // (the cliffs the ground map leaves out), built once here.
+                    if (road) {
+                        raygrid = build_backdrop_grid(scene, kHeightmapCellSize);
+                    }
                 } catch (const std::exception& error) {
                     std::fprintf(stderr, "sotc-viewer: no ground: %s\n", error.what());
+                }
+                // S9: the sword, after both grids (a static mesh with ground = true:
+                // appended earlier it would rasterize into them) and before
+                // upload(). It is a hand prop, not scene extent: the bounds keep
+                // the stage's own.
+                if (road) {
+                    const Vec3 boundsMin = scene.boundsMin, boundsMax = scene.boundsMax;
+                    swordMeshBegin = append_static_model(scene, opts.libraryDir, kSwordGlb);
+                    swordMeshEnd = scene.meshes.size();
+                    scene.boundsMin = boundsMin;
+                    scene.boundsMax = boundsMax;
                 }
 
                 // S4.2: the club, in a manifest scene that has an entity. The
@@ -2458,6 +2539,26 @@ int run_app(const AppOptions& opts) {
                 }
                 renderer.upload(scene);
                 print_scene_line(scene);
+                // S9 (D7): the sword's light — fatal where the light is the proof.
+                if (road && !sword_fx_ready && !sword_fx_warned) {
+                    std::string why = "the sword pass was not created";
+                    try {
+                        sword_fx_ready = renderer.upload_sword_textures(
+                            load_sword_textures(opts.libraryDir, road_points::kSwordTextures));
+                    } catch (const std::exception& error) {
+                        why = error.what();
+                    }
+                    if (!sword_fx_ready) {
+                        if (opts.s9Selftest || opts.s9E2e) {
+                            std::fprintf(stderr, "sotc-viewer: --s9-%s: %s\n",
+                                         opts.s9Selftest ? "selftest" : "e2e", why.c_str());
+                            return 1;
+                        }
+                        std::fprintf(stderr, "sotc-viewer: the sword's light is unavailable: %s\n",
+                                     why.c_str());
+                        sword_fx_warned = true;
+                    }
+                }
                 // S6: the tendril pass's four shipped textures (design §8.2). The
                 // S6 selftest cannot prove the burst without them, so a load
                 // failure there is fatal; the interactive game degrades to a death
@@ -4977,6 +5078,28 @@ int run_app(const AppOptions& opts) {
                     pr.horsePos.y = floor;
                 }
             }
+            // S9 (D5/D6): the raised sword — on the road only, with its six clips
+            // and its bone; any of them missing leaves it lowered (one line).
+            SwordState sword = reset_sword();
+            bool sword_wired = road && swordMeshEnd > swordMeshBegin;
+            if (sword_wired) {
+                for (const SwordClips* c : {&kSwordFoot, &kSwordMounted}) {
+                    for (const char* name : {c->start, c->loop, c->end}) {
+                        sword_wired = sword_wired && clip_index_named(playback, name) >= 0;
+                    }
+                }
+                if (!sword_wired) {
+                    std::fprintf(stderr,
+                                 "sotc-viewer: the road: the library lacks the raise clips "
+                                 "(re-run `make bake` into the view); the sword stays lowered\n");
+                } else if (playerRig >= scene.rigs.size() ||
+                           joint_index_named(scene.rigs[playerRig], kSwordBone) < 0) {
+                    std::fprintf(stderr, "sotc-viewer: the road: the player rig has no %s; the "
+                                         "sword stays lowered\n", kSwordBone);
+                    sword_wired = false;
+                }
+            }
+            bool swordSearchLatch = false;  // the search cue's lock edge (once per lock)
             const auto horse_model = [&]() {
                 const float half = 0.5f * pr.horseYaw * kDegToRad;
                 return mat4_from_trs(pr.horsePos, Quat{0.0f, std::sin(half), 0.0f, std::cos(half)},
@@ -4996,6 +5119,12 @@ int run_app(const AppOptions& opts) {
                                         std::vector<std::vector<Mat4>>& palettes) {
                 RideInput in = ride_presses(keys, pr.rideKeysBefore, locked);
                 in.mountPressed = in.mountPressed && pr.whistleClip < 0;
+                // S9: while the sword is up, kicks, the mount/dismount and the
+                // whistle are ignored (release C to ride); `before` still tracks
+                // the real keys, so a key held through the raise is no press.
+                if (sword.phase != SwordPhase::Lowered) {
+                    in.kickPressed = in.mountPressed = in.whistlePressed = false;
+                }
                 // R11: a refused ridden move holds the rein (the stop chain runs).
                 in = blocked_rein(in, pr.ride, pr.rideBlocked);
 
@@ -5196,17 +5325,27 @@ int run_app(const AppOptions& opts) {
                 // The rider (D8): the paired clip at the ride's clock, placed on
                 // OptBone_boy's world matrix times the seat-relative offset.
                 if (!onFoot) {
+                    // S9: a sword raised in the saddle overrides the rider's clip
+                    // (kSwordMounted at Stand), blended in over its first 0.25 s.
+                    const bool swordRider = sword.phase != SwordPhase::Lowered && sword.mounted;
+                    const std::string riderClip = swordRider ? sword.clip : pr.ride.riderClip;
+                    const float riderTime = swordRider ? sword.clipTime : pr.ride.clipTime;
+                    const float riderBlendFrom =
+                        !swordRider ? pr.ride.blendFrom
+                        : sword.phase != SwordPhase::Raised && sword.clipTime < kClipBlendSeconds
+                            ? sword.clipTime
+                            : -1.0f;
                     std::vector<Mat4> riderPalette =
-                        blended_palette(scene, playerRig, playback, pr.riderBlend, pr.ride.riderClip,
-                                        pr.ride.clipTime, pr.ride.blendFrom);
+                        blended_palette(scene, playerRig, playback, pr.riderBlend, riderClip,
+                                        riderTime, riderBlendFrom);
                     if (!riderPalette.empty()) {
                         renderer.upload_pose(playerRig, riderPalette);
                         palettes[playerRig] = std::move(riderPalette);
                     }
-                    if (const int riderIndex = clip_index_named(playback, pr.ride.riderClip);
+                    if (const int riderIndex = clip_index_named(playback, riderClip);
                         riderIndex >= 0) {
                         playback.index = riderIndex;  // the status and the clip owner
-                        playback.time = pr.ride.clipTime;
+                        playback.time = riderTime;
                         playback.pinned = true;
                         playback.playing = false;
                     }
@@ -5296,6 +5435,10 @@ int run_app(const AppOptions& opts) {
                 carry.door = reset_door();
                 pr.ride = reset_ride();
                 carry.horse.reset();  // S9 (D4): R forgets where Agro was left
+                // S9: R lowers the sword at once and ends its shimmer.
+                sword = reset_sword();
+                swordSearchLatch = false;
+                audio.stop_sword();
                 if (here != StageId::Arena) {
                     return true;
                 }
@@ -7308,6 +7451,9 @@ int run_app(const AppOptions& opts) {
                 // active (the renderer's no-op for every other frame).
                 EffectFrame effectFrame;
                 const EffectFrame* effectFramePtr = nullptr;
+                // S9: this frame's sword light — nullptr unless the sword is up.
+                SwordFxFrame swordFrame;
+                const SwordFxFrame* swordFramePtr = nullptr;
                 if (follow_mode) {
                     // --s7-e2e: the stage's clock, the budget, and the script's
                     // two late actions — R 1 s into Free (the key's handler),
@@ -7666,6 +7812,7 @@ int run_app(const AppOptions& opts) {
                     // return should lock it — the lock below must eat it).
                     PlayerInput input;
                     RideKeys rideKeys;  // S8: the plain's held ride keys
+                    bool swordHeld = false;  // S9: C / the left shoulder, held
                     if (opts.s7E2e) {
                         input.forward = e2eExpectLocked;
                     } else if (opts.s8E2e) {
@@ -7692,6 +7839,7 @@ int run_app(const AppOptions& opts) {
                         input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
                         input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
                         input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
+                        swordHeld = keys[SDL_SCANCODE_C] || gamepad.raise;
                     }
                     // S6 D7: the death cinematic locks the body — movement, grab
                     // and strike are ignored while the camera runs; R, M and Escape
@@ -7704,6 +7852,26 @@ int run_app(const AppOptions& opts) {
                     const bool rideOwnsBody =
                         plain_ride && (pr.ride.phase != RidePhase::OnFoot || pr.whistleClip >= 0);
                     if (inputLocked || rideOwnsBody) {
+                        input = PlayerInput{};
+                    }
+                    // S9: on foot a raised sword owns the clip and turns the move
+                    // input into a facing (zero speed; the camera aims the beam).
+                    const bool swordFoot = sword_wired && sword_locks_movement(sword);
+                    if (swordFoot) {
+                        const float ahead = (input.forward ? 1.0f : 0.0f) - (input.back ? 1.0f : 0.0f);
+                        const float side = (input.right ? 1.0f : 0.0f) - (input.left ? 1.0f : 0.0f);
+                        if (ahead != 0.0f || side != 0.0f) {
+                            // player_update's basis and turn rate (540 deg/s, its dt clamp).
+                            const float cy = camera_look_yaw(camera) * kDegToRad;
+                            const float want =
+                                std::atan2(std::sin(cy) * ahead - std::cos(cy) * side,
+                                           std::cos(cy) * ahead + std::sin(cy) * side) / kDegToRad;
+                            const float turn = 540.0f * std::clamp(dt, 0.0f, 0.05f);
+                            player.yawDeg = std::remainder(
+                                player.yawDeg +
+                                    std::clamp(std::remainder(want - player.yawDeg, 360.0f), -turn, turn),
+                                360.0f);
+                        }
                         input = PlayerInput{};
                     }
                     const bool moving = input.forward || input.back || input.left || input.right;
@@ -7785,7 +7953,15 @@ int run_app(const AppOptions& opts) {
                         }
                     } else if (!rideOwnsBody) {
                         leave_wake();
-                        update_combat_clips(playback, scene, combat, input, manual_clip);
+                        if (swordFoot) {
+                            // The sword's clip at the machine's clock (last frame's step).
+                            playback.index = clip_index_named(playback, sword.clip);
+                            playback.time = sword.clipTime;
+                            playback.pinned = true;
+                            playback.playing = false;
+                        } else {
+                            update_combat_clips(playback, scene, combat, input, manual_clip);
+                        }
                     }
                     palettes = update_all_poses(renderer, scene, playbacks, dt, club);
                     if (plain_ride) {
@@ -7891,6 +8067,93 @@ int run_app(const AppOptions& opts) {
                     if (!riding) {
                         apply_player_transform(scene, player_rig_record, player, player_lift());
                     }
+                    // S9 (D5-D7): the sword in the hand, its beam, the shade and the
+                    // lock, the machine, the cues and the light — after the rig's
+                    // model is final for this frame (on foot or in the saddle).
+                    if (sword_wired) {
+                        Mat4 bone = mat4_identity();
+                        Vec3 tip = player.position;
+                        if (rig_bone_world(scene, playerRig, palettes[playerRig], kSwordBone, bone)) {
+                            bone = mat4_mul(bone, kSwordGrip);
+                            for (std::size_t i = swordMeshBegin; i < swordMeshEnd; ++i) {
+                                scene.meshes[i].model = bone;
+                            }
+                            const float* t = road_points::kSwordTip;
+                            tip = Vec3{bone.m[0] * t[0] + bone.m[4] * t[1] + bone.m[8] * t[2] + bone.m[12],
+                                       bone.m[1] * t[0] + bone.m[5] * t[1] + bone.m[9] * t[2] + bone.m[13],
+                                       bone.m[2] * t[0] + bone.m[6] * t[1] + bone.m[10] * t[2] + bone.m[14]};
+                        }
+                        const Vec3 eye = camera_eye(camera);
+                        const Vec3 aim = vec3_normalize(Vec3{camera.target.x - eye.x,
+                                                             camera.target.y - eye.y,
+                                                             camera.target.z - eye.z});
+                        const Vec3 chest{road_points::kValusFeet[0],
+                                         road_points::kValusFeet[1] + road_points::kValusChestLift,
+                                         road_points::kValusFeet[2]};
+                        const SwordBeam beam = sword_beam(tip, aim, chest, sword.raise);
+                        // Every march: a unit dir, step <= cellSize/2, ground and
+                        // backdrops combined with fmin (NaN = no hit; B4).
+                        constexpr float kStep = 0.5f;
+                        const auto march = [&](Vec3 dir, float length) {
+                            return std::fmin(ray_march(heightmap, tip, dir, length, kStep),
+                                             ray_march(raygrid, tip, dir, length, kStep));
+                        };
+                        const bool sunlit = std::isnan(march(kSunDir, kShadeRayMetres));
+                        // The locked ray only while lit: a dark, lowered or shaded
+                        // beam passes NaN (the spark gate is raise > 0).
+                        const float hitMetres =
+                            beam.locked && sunlit && sword_intensity(sword) > 0.0f
+                                ? march(beam.axis, beam.rayLength)
+                                : std::numeric_limits<float>::quiet_NaN();
+                        // allowed: on foot (not whistling), or riding at Stand — and
+                        // a raise keeps the mount it was latched with, so a dismount
+                        // (or a gait) while raised lowers it.
+                        const bool footOk =
+                            !plain_ride || (pr.ride.phase == RidePhase::OnFoot && pr.whistleClip < 0);
+                        const bool standOk = plain_ride && pr.ride.phase == RidePhase::Riding &&
+                                             pr.ride.gait == Gait::Stand;
+                        SwordInput swordIn;
+                        swordIn.held = swordHeld && !inputLocked;
+                        swordIn.mounted = standOk;
+                        swordIn.allowed = sword.phase == SwordPhase::Lowered ? footOk || standOk
+                                          : sword.mounted                   ? standOk
+                                                                            : footOk;
+                        const SwordState swordBefore = sword;
+                        sword = step_sword(sword, dt, swordIn, beam, sunlit, hitMetres);
+                        const bool up = sword.phase != SwordPhase::Lowered;
+                        if (swordBefore.phase == SwordPhase::Lowered && up) {
+                            audio.play_sword(SwordSfx::Shimmer, tip);
+                        }
+                        if (swordBefore.phase != SwordPhase::Lowering &&
+                            sword.phase == SwordPhase::Lowering) {
+                            audio.stop_sword();
+                        }
+                        const bool lockLit = up && beam.locked && sunlit;
+                        if (lockLit && !swordSearchLatch) {
+                            audio.play_sword(SwordSfx::Search, tip);
+                        }
+                        swordSearchLatch = lockLit;
+                        if (swordBefore.phase != SwordPhase::Lowered && !up && !swordBefore.mounted) {
+                            playback.pinned = false;  // the mode's clip takes over next frame
+                            playback.playing = true;
+                        }
+                        if (up && sword_fx_ready) {
+                            swordFrame.active = true;
+                            swordFrame.tip = tip;
+                            swordFrame.lines = beam.lines;
+                            swordFrame.length =
+                                std::isfinite(hitMetres) ? hitMetres : beam.rayLength;  // clipped at a lock
+                            swordFrame.width = sword.width;
+                            swordFrame.alpha = sword_intensity(sword);
+                            swordFrame.hit = std::isfinite(hitMetres);
+                            swordFrame.hitPoint = Vec3{tip.x + beam.axis.x * hitMetres,
+                                                       tip.y + beam.axis.y * hitMetres,
+                                                       tip.z + beam.axis.z * hitMetres};
+                            swordFrame.atlasCols = road_points::kSwordAtlasGrid[0];
+                            swordFrame.atlasRows = road_points::kSwordAtlasGrid[1];
+                            swordFramePtr = &swordFrame;
+                        }
+                    }
                     // S8 (D14): the doors — the shrine's front exit and the
                     // plain's shrine steps — fire on entry, on foot, through the
                     // door machine; its Load ends the iteration for the other
@@ -7899,8 +8162,12 @@ int run_app(const AppOptions& opts) {
                     // ended it), from the kDoors rows of this stage.
                     if (s8_wired) {
                         // S9: the corridor and arena rows only when S9-wired.
+                        // S9 (Task 7 review): no door while the return runs (its
+                        // 2 s Hold leaves the input unlocked).
+                        const bool returnSettled = carry.ret.phase == ReturnPhase::Idle ||
+                                                   carry.ret.phase == ReturnPhase::Free;
                         const int row =
-                            running && !riding && !inputLocked
+                            running && !riding && !inputLocked && returnSettled
                                 ? door_entered_row(here, positionBefore, player.position,
                                                    s9_wired ? kDoorCount : kS8DoorCount)
                                 : -1;
@@ -7964,7 +8231,7 @@ int run_app(const AppOptions& opts) {
                 }
 
                 renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                      /*acquire_swapchain=*/true, effectFramePtr);
+                                      /*acquire_swapchain=*/true, effectFramePtr, swordFramePtr);
 
                 // The S1 fps HUD: the window title shows the rolling average over
                 // the last second, refreshed twice a second (drawn text arrives

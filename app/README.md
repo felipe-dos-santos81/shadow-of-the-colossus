@@ -107,6 +107,7 @@ the plain:
 | `W` press (stick-forward press) | move | kick: one gait up (walk → trot → gallop) through the start clips; three kicks in 1 s start a 3 s cooldown; a kick near top speed is refused with a neigh |
 | `S` (stick back) | move | a tap lowers one gait; held 0.5 s it stops her through the stop clips; at a stand it backs her up |
 | `A`/`D` (left stick x) | move | steer (90/60/60/45 °/s at stand/walk/trot/gallop, authored) |
+| `C` held (left shoulder) | S9, on the road: raise the sword (the hoist start → loop clips; release lowers it through the end clip). Movement stops; `W`/`A`/`S`/`D` turn him, the camera aims the light; `E`/`Q` are ignored while it is up | at a stand only: the mounted hoist clips; kicks and the dismount are ignored while it is up (release `C` to ride) |
 | `R` / `M` / `Escape` | reset to the arena / mute / quit | the same |
 
 Agro's travel is the playing clip's own measured root travel (the loops at 1.31, 5.29 and 14.7 m/s; the
@@ -115,6 +116,16 @@ switch on either blends over 0.25 s. The riding camera pulls back per gait (6/7/
 the neigh, the whistle, the mount, the "hyah" and the "whoa" are audition picks from `com_b_h`/`com_v`
 (the S8 audio slice, 34 entries). The bridle, foliage, jumps, mounted combat and the moving mount are
 not in S8. `--stage plain` starts there; `--s8-selftest` and `--s8-e2e` prove it.
+
+S9 (interactive play): the plain is the **road** — the arena's entrance stairs and corridor are walkable,
+the corridor's dead end is a door into Valus's arena and the arena has one back, and Agro waits where she
+was left. Wander holds `wander_sword.glb` in his right hand (`OptBone_sword` with an authored Rx(+90°)
+grip: the bone's +Y is the blade). Holding `C` raises it; in sunlight its eight-line fan opens around the
+camera's look and narrows as the look nears Valus's chest, locking within ≈ 11.5° (`k < 0.01`) — a locked
+beam is clipped where its ray first meets the ground or a backdrop (150 m at most) and sparks there. In
+shade (a 300 m march toward the sun meets terrain) the light fades out. The shimmer loops while the sword
+is up and the search cue sounds once per lock (the S9 audio slice, 36 entries: `make audio` after an S8
+acceptance).
 
 The encounter has its own voice. The library's converted audio slice is loaded at start
 (a missing manifest or one without a curated cue prints one error naming the manifest or the
@@ -255,6 +266,7 @@ Gamepad (standard SDL3 mapping, polled once per frame, hot-plugged):
 | Right stick | Turn the camera (same drag channel as the mouse) |
 | RT (right trigger, past half) | Grab, held |
 | West / X / square (west face button) | Strike, held to charge |
+| Left shoulder (LB / L1) | S9, on the road: raise the sword, held (the keyboard's `C`) |
 | Start | Play/pause the current clip |
 
 A removed gamepad closes its handle and clears every input it owned, so an

@@ -188,18 +188,18 @@ TEST_CASE("the door table: entry -> row -> arrival reproduces S8's two doors (R1
     const ride_points::Door& dp = ride_points::kDoorPlain;
     // The shrine's front exit: a step into its box on the shrine.
     const Vec3 shrineOut{0.0f, 1.0f, 43.0f}, shrineIn{0.0f, 1.0f, 45.0f};
-    const int r0 = door_entered_row(StageId::Shrine, shrineOut, shrineIn);
+    const int r0 = door_entered_row(StageId::Shrine, shrineOut, shrineIn, kDoorCount);
     REQUIRE(r0 >= 0);
     CHECK(kDoors[r0].from == StageId::Shrine);
     CHECK(kDoors[r0].door == &ds);
     CHECK(kDoors[r0].to == StageId::Plain);
     // A box belongs to its stage: the same step elsewhere enters nothing.
-    CHECK(door_entered_row(StageId::Plain, shrineOut, shrineIn) == -1);
-    CHECK(door_entered_row(StageId::Arena, shrineOut, shrineIn) == -1);
-    CHECK(door_entered_row(StageId::Shrine, shrineIn, shrineIn) == -1);  // a spawn inside
+    CHECK(door_entered_row(StageId::Plain, shrineOut, shrineIn, kDoorCount) == -1);
+    CHECK(door_entered_row(StageId::Arena, shrineOut, shrineIn, kDoorCount) == -1);
+    CHECK(door_entered_row(StageId::Shrine, shrineIn, shrineIn, kDoorCount) == -1);  // a spawn inside
     // The plain's shrine steps.
     const Vec3 plainOut{301.0f, 0.0f, -250.0f}, plainIn{301.0f, 0.0f, -255.0f};
-    const int r1 = door_entered_row(StageId::Plain, plainOut, plainIn);
+    const int r1 = door_entered_row(StageId::Plain, plainOut, plainIn, kDoorCount);
     REQUIRE(r1 >= 0);
     CHECK(r1 != r0);
     CHECK(kDoors[r1].door == &dp);
@@ -271,14 +271,14 @@ TEST_CASE("S9: the corridor and arena doors are rows 2 and 3, live only with the
     const ride_points::Door& da = road_points::kDoorArena;
     // The corridor's dead end on the road (the Plain stage) -> the arena.
     const Vec3 corridorOut{304.0f, 3.0f, 284.0f}, corridorIn{304.0f, 3.0f, 288.0f};
-    const int rc = door_entered_row(StageId::Plain, corridorOut, corridorIn);
+    const int rc = door_entered_row(StageId::Plain, corridorOut, corridorIn, kDoorCount);
     REQUIRE(rc == 2);
     CHECK(kDoors[rc].from == StageId::Plain);
     CHECK(kDoors[rc].door == &dc);
     CHECK(kDoors[rc].to == StageId::Arena);
     // The arena's way back -> the road.
     const Vec3 arenaOut{305.0f, 29.0f, 313.0f}, arenaIn{305.0f, 29.0f, 309.0f};
-    const int ra = door_entered_row(StageId::Arena, arenaOut, arenaIn);
+    const int ra = door_entered_row(StageId::Arena, arenaOut, arenaIn, kDoorCount);
     REQUIRE(ra == 3);
     CHECK(kDoors[ra].from == StageId::Arena);
     CHECK(kDoors[ra].door == &da);

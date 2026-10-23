@@ -259,7 +259,8 @@ inline constexpr int kS8DoorCount = 2;
 
 // The row (among the first `rowCount`) of a door on `here` whose box the step
 // prev -> now entered (box_entered), or -1. The first row in table order wins.
-inline int door_entered_row(StageId here, Vec3 prev, Vec3 now, int rowCount = kDoorCount) {
+// `rowCount` is required: a frozen run passes kS8DoorCount, an S9-wired one kDoorCount.
+inline int door_entered_row(StageId here, Vec3 prev, Vec3 now, int rowCount) {
     for (int i = 0; i < rowCount && i < kDoorCount; ++i) {
         const ride_points::Door& d = *kDoors[i].door;
         if (kDoors[i].from == here &&
