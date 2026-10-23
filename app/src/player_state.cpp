@@ -177,6 +177,8 @@ void drain_stamina(PlayerCombat& combat, float rate, float dt) {
     combat.stamina = std::clamp(stamina - rate * dt, 0.0f, kMaxStamina);
 }
 
+}  // namespace
+
 // Whether a release at `feet` reaches the shell of `weakpoint` (design §7.2).
 // The hit point is the closest point on the player's capsule *segment* — feet
 // to feet + kPlayerCapsuleHeight — to the shell centre; the hit lands when that
@@ -201,6 +203,8 @@ bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& 
     }
     return player_capsule_distance(feet, center) <= radius;
 }
+
+namespace {
 
 // Removes every field that only an attachment, charge or fall owns. Health,
 // mode and modeSeconds stay the caller's business, so Hurt, Dead and the R

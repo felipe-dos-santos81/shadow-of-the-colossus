@@ -89,6 +89,10 @@ struct PlayerCombat {
 // strike then deals no damage. The app binds it to posed_weakpoint_proxy.
 using WeakpointProxyLookup = std::function<bool(int weakpoint, Vec3& center, float& radius)>;
 
+// Whether a strike released at `feet` reaches the posed shell of `weakpoint`:
+// the player's capsule segment within the shell radius (player_state.cpp).
+bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& lookup);
+
 // S11 shake-off (design D9): what the entity does this frame against an attached
 // climber (Quadratus's refuse_* clips; the strength is the encounter's data).
 // Both default to nothing, so a frame without a shake steps exactly as before.
