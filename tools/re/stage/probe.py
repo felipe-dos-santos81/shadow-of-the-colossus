@@ -49,13 +49,15 @@ Modes
                              records, string pool; extracts the pool path list
                              matching SUBSTR (default: the stage's match)
   check-cwks                 pinned assertions for the workspace file (exit 0/1)
-  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|shrine]
+  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|shrine|plain]
                              emit the stage's scene manifest (the W1↔W2 format):
                              arena_01: the level sets' non-*_collision* glbs,
                              identity transforms, the labeled spawn pick;
                              shrine: the cathedral set + statues + posed Mono
                              + spawn (tools/re/s7/shrine_placements.json)
-  check-manifest [<file>] --library <dir> [--stage arena_01|shrine]
+                             plain: the levels/home set + shrine-set backdrops
+                             + the horse + spawn (tools/re/s8/placements.json)
+  check-manifest [<file>] --library <dir> [--stage arena_01|shrine|plain]
                              pinned assertions for the stage's manifest (exit 0/1);
                              no --stage means arena_01
   compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
@@ -208,6 +210,31 @@ STAGES = {
         ),
         # plus any `<name>_low` glb whose full-detail `<name>` sibling exists (stage_sets)
     },
+}
+# plain (S8): `levels/home` in the world frame — the 8 glbs the shrine's exclusion rules keep, minus
+# `home_ground_high` (overlays `home_ground` by 0.03-0.21 m; z-fighting), the three home proxies
+# also dropped — then one `backdrop` line per shrine-set glb of tools/re/s8/placements.json at the
+# shrine->world offset (drawn, never ground), the `horse` line (Agro) and the spawn, all from that
+# JSON.  `instances`/`backdrops`/`meshes`/`sha256` are pinned on the measured compose.
+STAGES["plain"] = {
+    "cwks_match": "levels/home/",
+    "count": 134,
+    "cwks_sha256": "8a573631da2c1f50d323f8b8871a941124259eb2d2e08c7aa2a5805d1d58ac93",
+    "sets": ("models/shadow/levels/home",),
+    "order": "cwks",
+    "instances": 7,               # 23 glb files, 16 excluded (measured 2026-10-23)
+    "backdrops": 27,
+    "meshes": (3541, 1916318),    # (primitives, vertices) over the 7 + 27 + 1 glbs
+    "sha256": "3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d",
+    "spawn": (301.0, -7.14, -210.0, 0.0),   # == the JSON's spawn_plain (compose and check assert it)
+    "backdrop_offset": (300.0, 0.071, -300.0),   # shrine-local -> world (home.cgpr level_setup)
+    "horse_glb": "models/shadow/characters/agro/_cmn/agro.glb",
+    "placements": os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "s8", "placements.json"),
+    "exclude_stub": STAGES["shrine"]["exclude_stub"],
+    "exclude_lod": STAGES["shrine"]["exclude_lod"],
+    "exclude_names": STAGES["shrine"]["exclude_names"] + (
+        "home_occluder", "home_shadowblocker", "home_cliff_shadow_lod", "home_ground_high",
+    ),
 }
 ARENA = STAGES["arena_01"]
 COLLISION_MARK = "_collision"
@@ -977,32 +1004,35 @@ def manifest_float(token, path, line, field):
     return value
 
 
-def parse_manifest_text(text, path, posed=None):
+def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None):
     """Parse the W1↔W2 schema; return (instances, spawns, entities) where
     instances = [(glbRelPath, [10 floats])], spawns = [[4 floats]] and entities
     = [(glbRelPath, [10 floats], clipName)].  A `posed` line (S7) is accepted
     only when the caller passes a `posed` list to fill with
     (glbRelPath, [10 floats], clipName, seconds); otherwise it is an unknown
-    directive, as for the arena.  Raises ManifestError shaped
+    directive, as for the arena; `backdrop` and `horse` (S8, both shaped as an
+    `instance`) work the same way, filling their lists with (glbRelPath,
+    [10 floats]).  Raises ManifestError shaped
     `<path>:<line>: <reason>` (the app's message shape)."""
     instances = []
     spawns = []
     entities = []
+    placed = {"instance": instances, "backdrop": backdrop, "horse": horse}
     for number, line in enumerate(text.splitlines(), start=1):
         tokens = line.split("#", 1)[0].split()
         if not tokens:
             continue
-        if tokens[0] == "instance":
+        if placed.get(tokens[0]) is not None:
             if len(tokens) != 12:
                 raise ManifestError(
-                    "%s:%d: instance expects 12 tokens (glb path + 10 numbers), got %d"
-                    % (path, number, len(tokens))
+                    "%s:%d: %s expects 12 tokens (glb path + 10 numbers), got %d"
+                    % (path, number, tokens[0], len(tokens))
                 )
             values = [
                 manifest_float(token, path, number, MANIFEST_INSTANCE_FIELDS[i])
                 for i, token in enumerate(tokens[2:])
             ]
-            instances.append((tokens[1], values))
+            placed[tokens[0]].append((tokens[1], values))
         elif tokens[0] == "entity":
             if len(tokens) != 13:
                 raise ManifestError(
@@ -1072,17 +1102,17 @@ def arena_sets(library):
     return sets
 
 
-def shrine_sets(library):
-    """The shrine's one set, as `arena_sets` returns it: the glbs that survive
-    the stage's exclusions (design D3), in the pool list's order; `excluded` is
-    everything dropped.  Every kept glb's cmsh must be referenced by the
-    workspace (the arena's cross-check, done here because the order comes from
+def shrine_sets(library, name="shrine"):
+    """The stage's one set (shrine or plain), as `arena_sets` returns it: the glbs
+    that survive the stage's exclusions (design D3), in the pool list's order;
+    `excluded` is everything dropped.  Every kept glb's cmsh must be referenced by
+    the workspace (the arena's cross-check, done here because the order comes from
     the same list); the list's sha256 is pinned."""
-    stage = STAGES["shrine"]
+    stage = STAGES[name]
     setrel = stage["sets"][0]
     setdir = os.path.join(library, setrel)
     if not os.path.isdir(setdir):
-        die("shrine set not found under the library: %s" % setdir)
+        die("%s set not found under the library: %s" % (name, setdir))
     rels = [
         os.path.relpath(path, library)
         for path in sorted(glob.glob(os.path.join(setdir, "**", "*.glb"), recursive=True))
@@ -1110,8 +1140,8 @@ def shrine_sets(library):
     sha = hashlib.sha256(arena_text(listed)).hexdigest()
     if (len(listed), sha) != (stage["count"], stage["cwks_sha256"]):
         die(
-            "shrine path list (match %r): %d entries, sha256 %s != the pin %d, %s"
-            % (stage["cwks_match"], len(listed), sha, stage["count"], stage["cwks_sha256"])
+            "%s path list (match %r): %d entries, sha256 %s != the pin %d, %s"
+            % (name, stage["cwks_match"], len(listed), sha, stage["count"], stage["cwks_sha256"])
         )
     order = {}
     for entry in listed:
@@ -1120,15 +1150,15 @@ def shrine_sets(library):
     unlisted = [rel for rel in kept if rel not in order]
     if unlisted:
         die(
-            "%d shrine glb(s) not referenced by the workspace list (%s)"
-            % (len(unlisted), ", ".join(unlisted[:3]))
+            "%d %s glb(s) not referenced by the workspace list (%s)"
+            % (len(unlisted), name, ", ".join(unlisted[:3]))
         )
     kept.sort(key=order.__getitem__)
     return [(setrel, kept, excluded)]
 
 
 def stage_sets(library, name):
-    return (arena_sets if STAGES[name]["order"] == "sorted" else shrine_sets)(library)
+    return arena_sets(library) if STAGES[name]["order"] == "sorted" else shrine_sets(library, name)
 
 
 def glb_counts(path):
@@ -1203,6 +1233,39 @@ def shrine_placements():
     if spawn != stage["spawn"]:
         die("shrine spawn %s in the JSON != the pin %s" % (spawn, stage["spawn"]))
     return statues, posed, spawn
+
+
+def plain_placements():
+    """Task 0's tools/re/s8/placements.json, validated, as (backdrops, horse, spawn):
+    backdrops = [glbRelPath] — shrine-set glbs, placed by the caller at the stage's
+    shrine->world offset, identity rotation, scale 1 — horse = (glbRelPath, [10 floats])
+    (Agro: `agro.p`, the yaw as `yaw_quaternion`, scale 1) and spawn = (x, y, z, yaw)."""
+    stage = STAGES["plain"]
+    path = os.path.normpath(stage["placements"])
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        backdrops = list(data["backdrops"])
+        agro = data["agro"]
+        horse = (stage["horse_glb"],
+                 [float(v) for v in agro["p"]] + list(yaw_quaternion(float(agro["yaw_deg"]))) + [1.0, 1.0, 1.0])
+        spawn = (tuple(float(v) for v in data["spawn_plain"]["p"]) + (float(data["spawn_plain"]["yaw_deg"]),))
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        die("plain placements %s: %s: %s" % (path, type(exc).__name__, exc))
+    if len(set(backdrops)) != len(backdrops) or not all(isinstance(b, str) for b in backdrops):
+        die("plain placements: backdrops are not %d distinct paths" % len(backdrops))
+    setdir = STAGES["shrine"]["sets"][0] + "/"
+    foreign = [b for b in backdrops if not b.startswith(setdir) or not b.endswith(".glb")]
+    if foreign:
+        die("plain placements: %d backdrop(s) outside the shrine set (%s)" % (len(foreign), ", ".join(foreign[:3])))
+    if spawn != stage["spawn"]:
+        die("plain spawn %s in the JSON != the pin %s" % (spawn, stage["spawn"]))
+    return backdrops, horse, spawn
+
+
+def backdrop_values(stage):
+    """The shared TRS of every backdrop line: the shrine->world offset, identity rotation, scale 1."""
+    return list(stage["backdrop_offset"]) + [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
 
 
 def fmt_values(values):
@@ -1426,6 +1489,7 @@ def cmd_compose(args):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
+    plain = args.stage == "plain"
 
     sets = stage_sets(library, args.stage)
     instances = [rel for _, set_instances, _ in sets for rel in set_instances]
@@ -1456,6 +1520,22 @@ def cmd_compose(args):
             "#   its surface height, facing +Z into the arena; the candidates (.path, camdata) are",
             "#   recorded in docs/notes/re-stage.md §3.",
         ]
+    elif plain:
+        summary = "%d/%d kept glbs' cmsh referenced" % (len(instances), len(instances))
+        backdrops, horse, _ = plain_placements()
+        header = [
+            "# plain — S8 composition, generated by tools/re/stage/probe.py compose --stage plain",
+            "# instances: the %d highest-detail glbs of %s/ (of the %d glb files), in the"
+            % (len(instances), stage["sets"][0], len(instances) + len(sets[0][2])),
+            "#   workspace pool-list order; the shrine's exclusion rules plus home_occluder,",
+            "#   home_shadowblocker, home_cliff_shadow_lod and home_ground_high (overlays",
+            "#   home_ground, z-fighting) dropped; identity transforms: the glbs are in the world frame.",
+            "# backdrops: %d shrine-set glbs from tools/re/s8/placements.json at the shrine->world offset"
+            % len(backdrops),
+            "#   (%s), drawn but never ground; horse (Agro) and spawn from the same file"
+            % " ".join(fmt_manifest_float(v) for v in stage["backdrop_offset"]),
+            "#   (horse source authored; spawn position source data, yaw authored).",
+        ]
     else:
         summary = "%d/%d kept glbs' cmsh referenced" % (len(instances), len(instances))
         statues, posed, _ = shrine_placements()
@@ -1475,7 +1555,15 @@ def cmd_compose(args):
     for rel in instances:
         lines.append("instance %s 0 0 0 0 0 0 1 1 1 1" % rel)
     all_rels = list(instances)
-    if not arena:
+    if plain:
+        for rel in backdrops:
+            lines.append("backdrop %s %s" % (rel, fmt_values(backdrop_values(stage))))
+        lines.append("horse %s %s" % (horse[0], fmt_values(horse[1])))
+        all_rels += backdrops + [horse[0]]
+        totals = manifest_counts(library, all_rels)
+        if stage["meshes"] is not None and totals != stage["meshes"]:
+            die("plain mesh/vertex totals %s != the pin %s" % (totals, stage["meshes"]))
+    elif not arena:
         for rel, values in statues:
             lines.append("instance %s %s" % (rel, fmt_values(values)))
             all_rels.append(rel)
@@ -1491,14 +1579,18 @@ def cmd_compose(args):
 
     # Round-trip the text through the schema before writing: a path that the
     # format cannot carry (whitespace, `#`) must fail here, not in the app.
-    parsed_posed = [] if not arena else None
-    parsed_instances, parsed_spawns, parsed_entities = parse_manifest_text(text, args.out, parsed_posed)
-    n_extra = 0 if arena else len(statues)
+    parsed_posed = [] if args.stage == "shrine" else None
+    parsed_backdrop, parsed_horse = ([], []) if plain else (None, None)
+    parsed_instances, parsed_spawns, parsed_entities = parse_manifest_text(
+        text, args.out, parsed_posed, parsed_backdrop, parsed_horse
+    )
+    n_extra = len(statues) if args.stage == "shrine" else 0
     if (
         len(parsed_instances) != len(instances) + n_extra
         or len(parsed_spawns) != (1 if spawn else 0)
         or parsed_entities
-        or (not arena and len(parsed_posed) != 1)
+        or (args.stage == "shrine" and len(parsed_posed) != 1)
+        or (plain and (len(parsed_backdrop) != len(backdrops) or len(parsed_horse) != 1))
     ):
         die(
             "composed manifest does not round-trip: %d instances, %d spawns"
@@ -1536,11 +1628,19 @@ def cmd_compose(args):
         print(
             "compose: spawn %s (%s)"
             % (" ".join(fmt_manifest_float(v) for v in spawn),
-               "builder pick — docs/notes/re-stage.md §3" if arena else "shrine_placements.json")
+               "builder pick — docs/notes/re-stage.md §3" if arena
+               else "placements.json" if plain else "shrine_placements.json")
         )
     else:
         print("compose: no spawn (the %s stage has none pinned yet)" % args.stage)
-    if not arena:
+    if plain:
+        print(
+            "compose: %d backdrops at %s + 1 horse (%s); totals %d meshes, %d vertices; sha256 %s"
+            % (len(backdrops), " ".join(fmt_manifest_float(v) for v in stage["backdrop_offset"]),
+               horse[0].rsplit("/", 1)[-1], totals[0], totals[1],
+               hashlib.sha256(text.encode("utf-8")).hexdigest())
+        )
+    elif not arena:
         print(
             "compose: %d statue instances + 1 posed (%s %s at %s s); totals %d meshes, %d vertices; sha256 %s"
             % (len(statues), posed[0].rsplit("/", 1)[-1], posed[2], fmt_manifest_float(posed[3]),
@@ -1548,7 +1648,8 @@ def cmd_compose(args):
         )
     print(
         "compose: wrote %s (%d instances + %d spawn + %d comment lines)"
-        % (out, len(instances) + (0 if arena else len(statues) + 1), 1 if spawn else 0, len(header))
+        % (out, len(instances) + (0 if arena else len(backdrops) + 1 if plain else len(statues) + 1),
+           1 if spawn else 0, len(header))
     )
     return 0
 
@@ -1563,6 +1664,7 @@ def cmd_check_manifest(args):
     path = os.path.abspath(args.file)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
+    plain = args.stage == "plain"
     checks = []
 
     def add(name, kind, expected, measured, ok):
@@ -1580,14 +1682,18 @@ def cmd_check_manifest(args):
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ManifestError("%s: not UTF-8 text (%s)" % (path, exc))
-        posed = [] if args.stage != "arena_01" else None
-        instances, spawns, _entities = parse_manifest_text(text, path, posed)
+        posed = [] if args.stage == "shrine" else None
+        backdrop, horse = ([], []) if plain else (None, None)
+        instances, spawns, _entities = parse_manifest_text(text, path, posed, backdrop, horse)
         error = None
     except ManifestError as exc:
         instances, spawns, error = None, None, str(exc)
 
     if error is not None:
         fail_all(error)
+    elif plain:
+        for name, kind, expected, measured, ok in plain_checks(library, text, instances, spawns, backdrop, horse):
+            add(name, kind, expected, measured, ok)
     elif not arena:
         for name, kind, expected, measured, ok in shrine_checks(library, text, instances, spawns, posed):
             add(name, kind, expected, measured, ok)
@@ -1764,9 +1870,9 @@ def shrine_check_spec():
     ]
 
 
-def shrine_excluded(rel):
+def shrine_excluded(rel, name="shrine"):
     """The reason the stage's D3 exclusions would drop this glb, or None."""
-    stage = STAGES["shrine"]
+    stage = STAGES[name]
     name = os.path.basename(rel)
     stem = name[: -len(".glb")]
     if stage["exclude_stub"].search(name):
@@ -1840,6 +1946,90 @@ def shrine_checks(library, text, instances, spawns, posed):
     return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
 
 
+def plain_check_spec():
+    """(name, kind, expected) per plain row — used verbatim when the manifest is
+    unparsable, and as the row order of `plain_checks`."""
+    stage = STAGES["plain"]
+    spawn = " ".join(fmt_manifest_float(v) for v in stage["spawn"])
+    offset = " ".join(fmt_manifest_float(v) for v in stage["backdrop_offset"])
+    return [
+        ("manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)",
+         "structure", "ok"),
+        ("manifest instances (the plain set)", "structure", stage["instances"]),
+        ("plain instance lines == the library's set, in cwks order", "structure",
+         "exact, ordered (%d)" % stage["instances"]),
+        ("identity transforms on every plain-set instance", "structure",
+         "%d/%d" % (stage["instances"], stage["instances"])),
+        ("backdrop lines == the placements JSON, in order (%d)" % stage["backdrops"], "structure",
+         "exact (%d)" % stage["backdrops"]),
+        ("backdrops are shrine-set glbs at offset %s, identity rotation, scale 1" % offset,
+         "structure", "%d/%d" % (stage["backdrops"], stage["backdrops"])),
+        ("exactly one horse line naming %s == the placements JSON" % stage["horse_glb"].rsplit("/", 1)[-1],
+         "structure", "exact (1)"),
+        ("every glbRelPath exists under the library", "structure", "all"),
+        ("no excluded name among the plain instances", "structure", "0 excluded"),
+        ("exactly one spawn == the pin (%s)" % spawn, "structure", 1),
+        ("mesh/vertex totals over the manifest's glbs", "measured",
+         "%d meshes, %d vertices" % tuple(stage["meshes"])),
+        ("manifest sha256", "measured", stage["sha256"]),
+    ]
+
+
+def plain_checks(library, text, instances, spawns, backdrop, horse):
+    """The plain rows, measured: [(name, kind, expected, measured, ok)] in
+    `plain_check_spec` order."""
+    stage = STAGES["plain"]
+    spec = plain_check_spec()
+    want = [rel for _, set_instances, _ in shrine_sets(library, "plain") for rel in set_instances]
+    backdrops, horse_expected, _ = plain_placements()
+    rels = [rel for rel, _ in instances]
+    results = [("ok", True)]
+
+    n = len(instances)
+    results.append((n, n == stage["instances"]))
+    ordered = rels == want
+    results.append(("ordered (%d)" % n if ordered else "differs (%d lines, %d wanted)" % (n, len(want)), ordered))
+
+    identity = [1 for _, v in instances if v[:3] == [0, 0, 0] and v[3:7] == [0, 0, 0, 1] and v[7:10] == [1, 1, 1]]
+    results.append(("%d/%d" % (len(identity), n), len(identity) == n))
+
+    got = [rel for rel, _ in backdrop]
+    results.append(("exact (%d)" % len(got) if got == backdrops else "differs (%d lines, %d wanted)" % (len(got), len(backdrops)),
+                    got == backdrops and len(got) == stage["backdrops"]))
+    placed = fmt_values(backdrop_values(stage))
+    at_offset = [1 for _, v in backdrop if fmt_values(v) == placed]
+    results.append(("%d/%d" % (len(at_offset), len(backdrop)),
+                    len(at_offset) == len(backdrop) == stage["backdrops"]))
+
+    horse_ok = (
+        len(horse) == 1
+        and horse[0][0] == stage["horse_glb"]
+        and (horse[0][0], fmt_values(horse[0][1])) == (horse_expected[0], fmt_values(horse_expected[1]))
+    )
+    results.append(("exact (1)" if horse_ok else "%d horse line(s), differs" % len(horse), horse_ok))
+
+    every = rels + got + [h[0] for h in horse]
+    missing = sorted({r for r in every if not os.path.isfile(os.path.join(library, r))})
+    results.append(("%d/%d" % (len(every) - len([r for r in every if r in missing]), len(every))
+                    + (" missing: %s" % ", ".join(missing[:3]) if missing else ""), not missing))
+
+    bad = [rel for rel in rels if shrine_excluded(rel, "plain")]
+    results.append(("%d excluded" % len(bad) + (": %s" % ", ".join(bad[:3]) if bad else ""), not bad))
+
+    spawn_ok = len(spawns) == 1 and tuple(spawns[0]) == stage["spawn"]
+    results.append((len(spawns), spawn_ok))
+
+    if missing:
+        results.append(("unmeasurable: missing glbs", False))
+    else:
+        totals = manifest_counts(library, every)
+        results.append(("%d meshes, %d vertices" % totals, totals == tuple(stage["meshes"])))
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    results.append((sha, sha == stage["sha256"]))
+
+    return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
+
+
 def check_manifest_spec(name):
     stage = STAGES[name]
     count = stage["instances"]
@@ -1847,6 +2037,8 @@ def check_manifest_spec(name):
         ("manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)",
          "structure", "ok"),
     ]
+    if name == "plain":
+        return plain_check_spec()
     if name != "arena_01":
         return shrine_check_spec()
     (key0, _, ev0), (key1, _, ev1) = stage["bounds_evidence"]

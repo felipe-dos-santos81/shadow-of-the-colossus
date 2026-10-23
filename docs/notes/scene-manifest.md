@@ -93,6 +93,26 @@ posed models/shadow/characters/mono/_cmn/mono.glb 0 11.4023 23 0 0 0 1 1 1 1 gir
 spawn 0 8.998 1 0
 ```
 
+## Example (the plain, S8)
+
+`out/re/stage/plain.manifest` (gitignored; `probe.py compose --stage plain`) carries the 7
+`levels/home` `instance` lines in workspace pool-list order (the world frame, identity
+transforms; `home_ground_high` dropped with the proxies), 27 `backdrop` lines (shrine-set glbs
+at the shrine-to-world offset `300 0.071 -300`, identity rotation, scale 1), one `horse` line
+(Agro: position and yaw from `tools/re/s8/placements.json`, the yaw as the glTF-order
+quaternion) and the `spawn`. Pins in `STAGES["plain"]`: 7 instances, 27 backdrops, 3541 meshes
+and 1,916,318 vertices over the 7 + 27 + 1 glbs, sha256
+`3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d`. The probe parses `backdrop`
+and `horse` only for the plain stage (the arena and shrine manifests stay strict);
+`probe.py check-manifest --stage plain` asserts it.
+
+```text
+instance models/shadow/levels/home/_cmn/home_ground.glb 0 0 0 0 0 0 1 1 1 1
+backdrop models/shadow/levels/cathedral/_cmn/cathedral_ext_front.glb 300 0.071 -300 0 0 0 1 1 1 1
+horse models/shadow/characters/agro/_cmn/agro.glb 301 -7.361 -203 0 1 0 0 1 1 1
+spawn 301 -7.14 -210 0
+```
+
 ## Output path
 
 W2's `compose` step writes the arena manifest to **`out/re/stage/valus.manifest`**
