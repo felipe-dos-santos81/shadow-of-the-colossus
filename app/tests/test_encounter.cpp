@@ -582,3 +582,38 @@ TEST_CASE("build_effect_frame roots the hit shell first, then the others, up to 
     // Outside the selected window there is no frame (Valus's 0.4-3.0 s would be).
     CHECK_FALSE(build_effect_frame(scene, 1, palettes, encounter, death_at(2.5f, kOther)).active);
 }
+
+namespace {
+
+// kOther's club with no swing cue (swingSeconds -1, encounter_desc.h's "none").
+inline constexpr std::array<AttackDesc, 3> kNoSwingAttacks{{
+    kOtherAttacks[0],
+    kOtherAttacks[1],
+    {"other_club", "Q_CLUB", 20.0f, 0.9f, 1.5f, 0.0f, 9.0f, 1.0f, 1.2f, -1.0f, 21.0f, 0.0f, false},
+}};
+inline constexpr EncounterDesc kNoSwing = [] {
+    EncounterDesc desc = kOther;
+    desc.attacks = kNoSwingAttacks;
+    return desc;
+}();
+
+}  // namespace
+
+TEST_CASE("maybe_club_swing never whooshes a club row whose swing time is -1") {
+    Encounter encounter;
+    encounter.attack = ValusAttack::Club;
+    SfxQueue sfx;
+    encounter.desc = &kNoSwing;
+    for (const float t : {0.0f, 0.5f, 5.0f}) {
+        encounter.attackSeconds = t;
+        maybe_club_swing(encounter, &sfx);
+        CHECK_FALSE(encounter.attackSwinged);
+    }
+    encounter.desc = &kOther;  // 0.8 s: fires once at its swing time
+    encounter.attackSeconds = 0.5f;
+    maybe_club_swing(encounter, &sfx);
+    CHECK_FALSE(encounter.attackSwinged);
+    encounter.attackSeconds = 0.8f;
+    maybe_club_swing(encounter, &sfx);
+    CHECK(encounter.attackSwinged);
+}

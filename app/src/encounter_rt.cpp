@@ -346,8 +346,9 @@ void maybe_club_swing(Encounter& encounter, SfxQueue* sfx) {
         return;
     }
     const AttackDesc* club = valus_attack_desc(ValusAttack::Club, *encounter.desc);
-    if (club == nullptr || !(encounter.attackSeconds >= club->swingSeconds)) {
-        return;  // no club row (another colossus), or not yet at the swing
+    if (club == nullptr || club->swingSeconds < 0.0f ||
+        !(encounter.attackSeconds >= club->swingSeconds)) {
+        return;  // no club row (another colossus), no swing cue (-1), or not yet at the swing
     }
     encounter.attackSwinged = true;
     if (sfx != nullptr) {
