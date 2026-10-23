@@ -2450,6 +2450,10 @@ int run_app(const AppOptions& opts) {
         // them across stages); a failure warns once and the raise draws no light.
         bool sword_fx_ready = false;
         bool sword_fx_warned = false;
+        // --s9-selftest: Agro's pose where its script left her (after the
+        // dismount at kAgroStairs) — the reference the road's reload is checked
+        // against, independent of the production carry.horse store.
+        std::optional<HorsePose> s9AgroLeft;
         for (;;) {
             // The stage's manifest: --manifest for the arena, the shrine's own
             // composed manifest for the shrine.
@@ -5621,6 +5625,36 @@ int run_app(const AppOptions& opts) {
                 }
                 return probe;
             };
+            // S8 (D14): the doors — the shrine's front exit and the plain's shrine
+            // steps, S9's corridor and arena doors — fire on entry, on foot, through
+            // the door machine; true when its Load must end the iteration for the
+            // other stage (this frame still draws, faded). R16: an entry only while
+            // the stage still runs (`live`: R or Escape this frame ended it), from
+            // the kDoors rows of this stage. The interactive loop and --s9-selftest
+            // both call it.
+            const auto door_frame = [&](float dt, Vec3 positionBefore, bool riding,
+                                        bool inputLocked, bool live) {
+                // S9: the corridor and arena rows only when S9-wired.
+                // S9 (Task 7 review): no door while the return runs (its
+                // 2 s Hold leaves the input unlocked).
+                const bool returnSettled = carry.ret.phase == ReturnPhase::Idle ||
+                                           carry.ret.phase == ReturnPhase::Free;
+                const int row = live && !riding && !inputLocked && returnSettled
+                                    ? door_entered_row(here, positionBefore, player.position,
+                                                       s9_wired ? kDoorCount : kS8DoorCount)
+                                    : -1;
+                const DoorState doorBefore = carry.door;
+                carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);
+                if (!live || !door_wants_load(doorBefore, carry.door)) {
+                    return false;
+                }
+                // S9 (D4, a labelled deviation: either door): leaving the road,
+                // Agro stays where she is now.
+                if (road && plain_ride) {
+                    carry.horse = HorsePose{pr.horsePos, pr.horseYaw};
+                }
+                return true;
+            };
             // The wake (D9, ruling R5): FadeIn shows its first frame, Wake plays
             // cut04 then cut05 once, pinned to the machine's clock, in place at
             // the spawn. The clips carry no root series (the pelvis sits at the
@@ -6630,17 +6664,10 @@ int run_app(const AppOptions& opts) {
                     if (sword_wired) {
                         probe = sword_frame(dt, held, locked, palettes, fx);
                     }
-                    // The doors: the interactive loop's rule (on foot, unlocked).
-                    const int row = !riding && !locked
-                                        ? door_entered_row(here, before, player.position, kDoorCount)
-                                        : -1;
-                    const DoorState doorBefore = carry.door;
-                    carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);
-                    if (!doorLoad && door_wants_load(doorBefore, carry.door)) {
+                    // The doors: the production step (the horse store included);
+                    // after the Load the stage is over (the script switches it).
+                    if (!doorLoad && door_frame(dt, before, riding, locked, /*live=*/true)) {
                         doorLoad = true;
-                        if (road && plain_ride) {
-                            carry.horse = HorsePose{pr.horsePos, pr.horseYaw};
-                        }
                     }
                     audio.update(dt, player.position, camera_look_yaw(camera));
                 };
@@ -6788,16 +6815,25 @@ int run_app(const AppOptions& opts) {
                     if (!carry.horse) {
                         return fail("no carried pose for Agro");
                     }
-                    const Vec3 left = carry.horse->pos;
-                    const float moved = std::sqrt(vec3_dot(
-                        Vec3{pr.horsePos.x - left.x, pr.horsePos.y - left.y, pr.horsePos.z - left.z},
-                        Vec3{pr.horsePos.x - left.x, pr.horsePos.y - left.y, pr.horsePos.z - left.z}));
+                    if (!s9AgroLeft) {
+                        return fail("the script never left Agro");
+                    }
+                    const auto distance = [](Vec3 a, Vec3 b) {
+                        const Vec3 d{a.x - b.x, a.y - b.y, a.z - b.z};
+                        return std::sqrt(vec3_dot(d, d));
+                    };
+                    // agro_moved: the reload against where the script left her; the
+                    // production store (door_frame's carry.horse) is checked too.
+                    const float moved = distance(pr.horsePos, s9AgroLeft->pos);
+                    const float movedCarry = distance(pr.horsePos, carry.horse->pos);
                     std::printf("s9-door from=%s to=%s spawn=%.2f,%.2f,%.2f agro_moved=%.3f\n",
                                 stage_label(kDoors[carry.door.row].from),
                                 stage_label(kDoors[carry.door.row].to), player.position.x,
                                 player.position.y, player.position.z, moved);
                     if (!near(player.position, rd::kDoorArena.arrive, kS9SpawnTolerance) ||
-                        !(moved <= kS9AgroMovedMax)) {
+                        !(moved <= kS9AgroMovedMax) || !(movedCarry <= kS9AgroMovedMax) ||
+                        !(std::fabs(std::remainder(pr.horseYaw - s9AgroLeft->yawDeg, 360.0f)) <=
+                          0.01f)) {
                         return fail("the road's arrival is off (spawn or Agro's pose)");
                     }
                     if (!frames_until(3.0f, door_settled)) {
@@ -6981,6 +7017,7 @@ int run_app(const AppOptions& opts) {
                     return fail("E at a stand did not dismount");
                 }
                 frame();
+                s9AgroLeft = HorsePose{pr.horsePos, pr.horseYaw};  // where the script leaves her
 
                 // --- 6. Up the entrance stairs on foot -----------------------------
                 place_player(on_floor(rd::kStairsFoot[0], rd::kStairsFoot[2], rd::kStairsFoot[1]),
@@ -8493,9 +8530,20 @@ int run_app(const AppOptions& opts) {
                         namespace rd = road_points;
                         ++carry.e2eFrame;
                         if (++s9e.frames > kS9E2eMaxStageFrames) {
+                            // The arena and the shrine after the return run on the
+                            // death and return machines; the road and the first
+                            // shrine on the script's phases.
+                            const std::string step =
+                                here == StageId::Arena
+                                    ? std::string("the death (") + death_phase_name(death.phase) +
+                                          ") and the return (" +
+                                          return_phase_name(carry.ret.phase) + ")"
+                                : carry.s9Step == 3
+                                    ? std::string("the return to Free (") +
+                                          return_phase_name(carry.ret.phase) + ")"
+                                    : "script phase " + std::to_string(s9e.phase);
                             return s9e_fail(std::string("the ") + stage_name +
-                                            " never finished its step (phase " +
-                                            std::to_string(s9e.phase) + ")");
+                                            " never finished its step: " + step);
                         }
                         s9e.seconds += dt;
                         s9e.t += dt;
@@ -9074,8 +9122,11 @@ int run_app(const AppOptions& opts) {
                     if (e2eHitNow || s9HitNow) {
                         // --s7-e2e's one lethal hit, landed as a strike lands.
                         events.damageDealt = 100;
-                        e2e.hit = true;
-                        s9e.hit = s9e.hit || s9HitNow;
+                        if (s9HitNow) {
+                            s9e.hit = true;
+                        } else {
+                            e2e.hit = true;
+                        }
                     }
                     if (events.damageDealt > 0 && entityRig < playbacks.size()) {
                         apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
@@ -9148,28 +9199,9 @@ int run_app(const AppOptions& opts) {
                     // stage (this frame still draws, faded).
                     // R16: only while the stage still runs (R or Escape this frame
                     // ended it), from the kDoors rows of this stage.
-                    if (s8_wired) {
-                        // S9: the corridor and arena rows only when S9-wired.
-                        // S9 (Task 7 review): no door while the return runs (its
-                        // 2 s Hold leaves the input unlocked).
-                        const bool returnSettled = carry.ret.phase == ReturnPhase::Idle ||
-                                                   carry.ret.phase == ReturnPhase::Free;
-                        const int row =
-                            running && !riding && !inputLocked && returnSettled
-                                ? door_entered_row(here, positionBefore, player.position,
-                                                   s9_wired ? kDoorCount : kS8DoorCount)
-                                : -1;
-                        const DoorState doorBefore = carry.door;
-                        carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);
-                        if (running && door_wants_load(doorBefore, carry.door)) {
-                            request = StageRequest{false, kDoors[carry.door.row].to};
-                            running = false;
-                            // S9 (D4, a labelled deviation: either door): leaving
-                            // the road, Agro stays where she is now.
-                            if (road && plain_ride) {
-                                carry.horse = HorsePose{pr.horsePos, pr.horseYaw};
-                            }
-                        }
+                    if (s8_wired && door_frame(dt, positionBefore, riding, inputLocked, running)) {
+                        request = StageRequest{false, kDoors[carry.door.row].to};
+                        running = false;
                     }
                     if (wakeFrame) {
                         camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, wake_clock(),
