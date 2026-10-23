@@ -400,12 +400,7 @@ SwordProbe StageCtx::sword_frame(float dt, bool held, bool inputLocked, const st
                          bone.m[2] * t[0] + bone.m[6] * t[1] + bone.m[10] * t[2] + bone.m[14]};
     }
     const Vec3 tip = probe.tip;
-    if (sword.raise > 0.0f) {
-        const float look = camera_look_yaw(camera) * kDegToRad;
-        const float shift = kSwordShoulderM * sword.raise;
-        camera.target.x += std::cos(look) * shift;  // left = (cos, 0, -sin)
-        camera.target.z -= std::sin(look) * shift;
-    }
+    // The camera already carries the shoulder shift (camera_sword_shoulder).
     const Vec3 eye = camera_eye(camera);
     const Vec3 aim = vec3_normalize(Vec3{camera.target.x - eye.x,
                                          camera.target.y - eye.y,

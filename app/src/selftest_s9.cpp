@@ -174,6 +174,7 @@ SelftestResult run_s9(StageCtx& ctx, RunState& run) {
         }
         fx = SwordFxFrame{};
         if (sword_wired) {
+            camera_sword_shoulder(camera, sword.raise);
             probe = ctx.sword_frame(dt, held, locked, palettes, fx);
         }
         // The doors: the production step (the horse store included);

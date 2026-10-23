@@ -274,7 +274,8 @@ struct StageCtx {
     // ground, both rigs' blended poses, the rider on the saddle, and the
     // cues. `locked` (a door fade) eats every press; a key held through
     // it is not a fresh press when it ends (ride_presses).
-    void plain_step(float dt, RideKeys keys, bool locked, std::vector<std::vector<Mat4>>& palettes);
+    void plain_step(float dt, RideKeys keys, bool locked,
+                    std::vector<std::vector<Mat4>>& palettes);
     // The one soft reset (design §7.5 and S6): the player's and Valus's
     // opening state, the death machine back to Idle, the corpse hidden and
     // the live body shown, the cameras back to the follow pose. The
@@ -295,8 +296,10 @@ struct StageCtx {
     // shade and the lock, the machine, the cues and the light — after the
     // rig's model is final for this frame (on foot or in the saddle). The
     // interactive loop and --s9-selftest both call it; `fx` is this frame's
-    // light (active only while the sword is up and the pass is ready).
-    SwordProbe sword_frame(float dt, bool held, bool inputLocked, const std::vector<std::vector<Mat4>>& palettes, SwordFxFrame& fx);
+    // light (active only while the sword is up and the pass is ready). The
+    // camera is read, not moved: the callers run camera_sword_shoulder first.
+    SwordProbe sword_frame(float dt, bool held, bool inputLocked,
+                           const std::vector<std::vector<Mat4>>& palettes, SwordFxFrame& fx);
     // S8 (D14): the doors — the shrine's front exit and the plain's shrine
     // steps, S9's corridor and arena doors — fire on entry, on foot, through
     // the door machine; true when its Load must end the iteration for the

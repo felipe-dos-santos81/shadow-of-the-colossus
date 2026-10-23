@@ -62,6 +62,15 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
     return palette;
 }
 
+void camera_sword_shoulder(Camera& camera, float raise) {
+    if (raise > 0.0f) {
+        const float look = camera_look_yaw(camera) * kDegToRad;
+        const float shift = kSwordShoulderM * raise;
+        camera.target.x += std::cos(look) * shift;  // left = (cos, 0, -sin)
+        camera.target.z -= std::sin(look) * shift;
+    }
+}
+
 Mat4 sword_grip(float raise) {
     const float half = 0.5f * 90.0f * kDegToRad * std::clamp(raise, 0.0f, 1.0f);
     return mat4_from_trs(Vec3{0.0f, 0.0f, 0.0f}, Quat{std::sin(half), 0.0f, 0.0f, std::cos(half)},

@@ -357,6 +357,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         camera_look_along(camera, *in.lookAlong);
     }
     if (sword_wired) {
+        camera_sword_shoulder(camera, sword.raise);
         result.probe = ctx.sword_frame(dt, swordHeld, inputLocked, palettes, result.sword);
     }
     // S8 (D14): the doors — the shrine's front exit and the

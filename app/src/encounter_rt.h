@@ -89,6 +89,12 @@ Mat4 sword_grip(float raise);
 // runs into the centre instead of hiding behind his head. The look direction, the
 // aim and the movement basis are unchanged; camera_follow resets the target.
 constexpr float kSwordShoulderM = 0.9f;
+// The raised sword's camera step (S10: out of sword_frame, unchanged): the
+// shoulder shift of camera.target for `raise` (none at 0). It runs after the
+// frame's follow/climb camera and scripted look, right before sword_frame reads
+// the eye and the aim — the place it always ran (sword_frame computed only the
+// tip, which never reads the camera, before it).
+void camera_sword_shoulder(Camera& camera, float raise);
 
 // One sword frame's readings (sword_frame): the tip, the beam, the shade ray and
 // the locked ray's hit (NaN = none).
