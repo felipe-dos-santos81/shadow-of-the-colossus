@@ -181,6 +181,16 @@ void upshift(RideState& s) {
     }
 }
 
+// Ruling R8: kicks and dismount presses are ignored while these play.
+bool in_transition(const std::string& clip) {
+    static const char* const kTransitions[] = {"run_stop1",      "run_stop2", "run_stop3",
+                                               "run_n_stop",     "walk_stop", "run_from_run_n",
+                                               "run_n_from_walk"};
+    for (const char* t : kTransitions)
+        if (clip == std::string(kHorsePrefix) + t) return true;
+    return false;
+}
+
 bool moving_gait(Gait g) { return g == Gait::Walk || g == Gait::Trot || g == Gait::Gallop; }
 
 // The kick buffer (D9): ages advance and expire after the window; the cooldown runs down.
@@ -191,7 +201,7 @@ void age_kicks(RideState& s, float dt) {
 }
 
 void kick(RideState& s) {
-    if (s.gait == Gait::Back || s.kickCooldown > 0.0f) return;
+    if (s.gait == Gait::Back || s.kickCooldown > 0.0f || in_transition(s.horseClip)) return;
     if (ride_speed(s) >= kKickRefuseFraction * rp::kSpeedGallop) {
         s.kickRefused = true;
         return;
@@ -292,10 +302,12 @@ RideState step_ride(RideState s, float dt, const RideInput& in, const RideContex
                 play(s, kStand1, "player_a_uma_stand_getoff_fall", s.clipTime - d);
                 d = clip_duration(s.riderClip);
             }
-            if (s.clipTime >= d) {
+            if (s.clipTime >= d) {  // on foot; the side stays for dismount_offset(side)
                 const float yaw = s.yawDeg;
+                const Side side = s.side;
                 s = reset_ride();
                 s.yawDeg = yaw;
+                s.side = side;
             }
             break;
         }
@@ -311,7 +323,7 @@ RideState step_ride(RideState s, float dt, const RideInput& in, const RideContex
             }
             steer(s, dt, in.steerX);
             if (in.mountPressed && (s.gait == Gait::Stand || s.gait == Gait::Walk) &&
-                pick_side(s.side, ctx, side)) {
+                !in_transition(s.horseClip) && pick_side(s.side, ctx, side)) {
                 if (s.horseClip == kStand1) {
                     start_dismount(s, side);
                     break;
@@ -406,8 +418,11 @@ AgroState step_agro(AgroState a, float dt, bool whistled, float distanceToPlayer
                 play_agro(horse("neigh"), 0.0f);
                 break;
             }
-            if (const std::string want = approach_clip(distanceToPlayer); want != a.clip)
-                play_agro(want, 0.0f);
+            // Ruling R9: gallop above 42 m, trot below 38 m, else keep the clip.
+            if (distanceToPlayer > kApproachGallopAbove && a.clip != horse("run"))
+                play_agro(horse("run"), 0.0f);
+            else if (distanceToPlayer < kApproachTrotBelow && a.clip != horse("run_n"))
+                play_agro(horse("run_n"), 0.0f);
             a.stuckSeconds = progressed ? 0.0f : a.stuckSeconds + dt;
             if (a.stuckSeconds >= kStuckWarpSeconds) {
                 a.warp = true;

@@ -346,6 +346,9 @@ TEST_CASE("dismount: _start then _fall on both sides, then on foot") {
         CHECK(s.phase == RidePhase::OnFoot);
         CHECK(s.horseClip.empty());
         CHECK(s.riderClip.empty());
+        // The completion step keeps the dismount's side for dismount_offset(side).
+        CHECK(s.side == side);
+        CHECK(dismount_offset(s.side).x * (side == Side::Left ? -1.0f : 1.0f) > 0.85f);
     }
 }
 
@@ -534,28 +537,19 @@ TEST_CASE("a non-finite or negative dt advances nothing") {
     }
 }
 
-TEST_CASE("reset_ride from every phase: on foot, standing, no clip, empty buffer") {
-    std::vector<RideState> states{reset_ride(), step_ride(reset_ride(), kDt, mount(), kNear),
-                                  at(Gait::Gallop), step_ride(riding(), kDt, mount(), kNear)};
-    states[2] = step_ride(states[2], kDt, kick(), kNear);  // refused, mid-gallop
-    REQUIRE(states[1].phase == RidePhase::Mounting);
-    REQUIRE(states[2].phase == RidePhase::Riding);
-    REQUIRE(states[3].phase == RidePhase::Dismounting);
-    for (const RideState& before : states) {
-        (void)before;
-        const RideState s = reset_ride();
-        CHECK(s.phase == RidePhase::OnFoot);
-        CHECK(s.gait == Gait::Stand);
-        CHECK(s.horseClip.empty());
-        CHECK(s.riderClip.empty());
-        CHECK(s.blendFrom == -1.0f);
-        CHECK(s.kicks == std::array<float, 3>{-1, -1, -1});
-        CHECK(s.kickCooldown == 0.0f);
-        CHECK_FALSE(s.kickRefused);
-        CHECK_FALSE(s.dismountQueued);
-        CHECK(s.reinSeconds == -1.0f);
-        CHECK(s.speed == 0.0f);
-    }
+TEST_CASE("reset_ride: on foot, standing, no clip, empty buffer (stateless, so any phase)") {
+    const RideState s = reset_ride();
+    CHECK(s.phase == RidePhase::OnFoot);
+    CHECK(s.gait == Gait::Stand);
+    CHECK(s.horseClip.empty());
+    CHECK(s.riderClip.empty());
+    CHECK(s.blendFrom == -1.0f);
+    CHECK(s.kicks == std::array<float, 3>{-1, -1, -1});
+    CHECK(s.kickCooldown == 0.0f);
+    CHECK_FALSE(s.kickRefused);
+    CHECK_FALSE(s.dismountQueued);
+    CHECK(s.reinSeconds == -1.0f);
+    CHECK(s.speed == 0.0f);
     // And a reset machine mounts again.
     CHECK(step_ride(reset_ride(), kDt, mount(), kNear).phase == RidePhase::Mounting);
 }
@@ -581,7 +575,7 @@ TEST_CASE("the whistle: Approach (gallop beyond 40 m, trot within), Neigh at 3 m
     CHECK(horse_clip_speed(a.clip, a.clipTime) == doctest::Approx(14.7f));
     a = step_agro(a, kDt, false, 41.0f, true);
     CHECK(a.clip == "horse_a_uma_run");
-    a = step_agro(a, kDt, false, 39.0f, true);
+    a = step_agro(a, kDt, false, 37.0f, true);
     CHECK(a.clip == "horse_a_uma_run_n");
     CHECK(a.blendFrom == 0.0f);
     a = step_agro(a, kDt, false, 3.0f, true);
@@ -630,4 +624,84 @@ TEST_CASE("a default AgroState is Idle with no warp (the reset)") {
     CHECK(a.phase == AgroPhase::Idle);
     CHECK(a.stuckSeconds == 0.0f);
     CHECK_FALSE(a.warp);
+}
+
+TEST_CASE("R9: the approach's trot/gallop switch has 38/42 m hysteresis") {
+    AgroState a = step_agro({}, kDt, true, 60.0f, false);
+    REQUIRE(a.clip == "horse_a_uma_run");
+    a = step_agro(a, 0.5f, false, 39.0f, true);  // inside the band: keep the gallop
+    CHECK(a.clip == "horse_a_uma_run");
+    CHECK(a.blendFrom == -1.0f);
+    // Blocked at ~40 m: the distance wobbles across 40 without a single switch.
+    for (int i = 0; i < 120; ++i) {
+        a = step_agro(a, kDt, false, (i % 2) ? 39.0f : 41.0f, false);
+        REQUIRE(a.clip == "horse_a_uma_run");
+    }
+    a = step_agro(a, kDt, false, 37.9f, true);
+    CHECK(a.clip == "horse_a_uma_run_n");
+    CHECK(a.blendFrom == 0.0f);
+    a = step_agro(a, 0.5f, false, 41.5f, true);  // back inside the band: keep the trot
+    CHECK(a.clip == "horse_a_uma_run_n");
+    a = step_agro(a, kDt, false, 42.1f, true);
+    CHECK(a.clip == "horse_a_uma_run");
+    // The whistle step itself still splits at 40 m.
+    CHECK(step_agro({}, kDt, true, 39.0f, false).clip == "horse_a_uma_run_n");
+    CHECK(step_agro({}, kDt, true, 41.0f, false).clip == "horse_a_uma_run");
+}
+
+TEST_CASE("R8: a kick during a stop clip does not change the clip chain") {
+    RideState s = at(Gait::Gallop);
+    s = run(s, 0.6f, rein(true, true));
+    s = step_ride(s, kDt, rein(false, false), kNear);
+    REQUIRE(s.horseClip == "horse_a_uma_run_stop1");
+    std::vector<std::string> seq{s.horseClip};
+    s = step_ride(s, kDt, kick(), kNear);
+    CHECK(s.horseClip == "horse_a_uma_run_stop1");
+    CHECK(s.gait == Gait::Stand);
+    CHECK_FALSE(s.kickRefused);
+    CHECK(s.kicks == std::array<float, 3>{-1, -1, -1});  // not counted
+    for (int i = 0; i < 180; ++i) {
+        // Kick only while the current stop clip still has more than a step left, so
+        // no kick lands on the step that reaches stand1.
+        const bool k = i % 10 == 0 && s.clipTime + 2 * kDt < duration(s.horseClip.c_str());
+        s = step_ride(s, kDt, k ? kick() : none(), kNear);
+        if (s.horseClip != seq.back()) seq.push_back(s.horseClip);
+        if (s.horseClip == "horse_a_uma_stand1") break;
+    }
+    std::vector<std::string> w;
+    for (const char* n : {"run_stop1", "run_stop2", "run_stop3", "stand1"})
+        w.push_back(std::string("horse_a_uma_") + n);
+    CHECK(seq == w);
+    // Every R8 clip ignores the kick, the downshifts included.
+    for (const char* n : {"run_n_stop", "walk_stop", "run_from_run_n", "run_n_from_walk"}) {
+        CAPTURE(n);
+        RideState q = at(Gait::Trot);
+        q.horseClip = std::string("horse_a_uma_") + n;
+        q.clipTime = 0.1f;
+        const Gait g = q.gait;
+        q = step_ride(q, kDt, kick(), kNear);
+        CHECK(q.horseClip == std::string("horse_a_uma_") + n);
+        CHECK(q.gait == g);
+    }
+    // Once the loop is reached the kick counts again.
+    s = step_ride(s, kDt, kick(), kNear);
+    CHECK(s.horseClip == "horse_a_uma_walk_start");
+}
+
+TEST_CASE("R8: a dismount pressed during a downshift clip is refused, not queued") {
+    RideState s = tap(at(Gait::Trot));
+    REQUIRE(s.horseClip == "horse_a_uma_run_n_from_walk");
+    REQUIRE(s.gait == Gait::Walk);
+    s = step_ride(s, kDt, mount(), kNear);
+    CHECK(s.phase == RidePhase::Riding);
+    CHECK(s.horseClip == "horse_a_uma_run_n_from_walk");
+    CHECK_FALSE(s.dismountQueued);
+    s = run(s, 3.0f, none());  // reaches the walk loop and stays riding
+    CHECK(s.horseClip == "horse_a_uma_walk");
+    CHECK(s.phase == RidePhase::Riding);
+    // Pressed again at Walk, the normal path runs: stop, then get off.
+    s = step_ride(s, kDt, mount(), kNear);
+    CHECK(s.dismountQueued);
+    s = run(s, 1.0f, none());
+    CHECK(s.phase == RidePhase::Dismounting);
 }

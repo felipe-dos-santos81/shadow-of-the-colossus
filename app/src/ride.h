@@ -51,14 +51,19 @@
 // - S at a standstill (gait Stand on `stand1`) backs up while held; a hold that
 //   stops the horse therefore rolls into backing up if it is still held at `stand1`.
 //   Releasing S during `back_start` or `back` plays `back_stop` at once.
-// - a kick during a stop or downshift clip raises from the gait being entered
-//   (a kick during `walk_stop` replays `walk_start`); a kick in Back is ignored;
-//   a kick during the cooldown is ignored silently (no neigh, not counted).
+// - ruling R8: kicks and dismount presses are ignored (not counted, not queued,
+//   no neigh) while a stop or downshift clip plays — `run_stop1/2/3`,
+//   `run_n_stop`, `walk_stop`, `run_from_run_n`, `run_n_from_walk` — so a kick in
+//   `run_stop1` cannot snap Agro from ~6.6 to ~0.1 m/s; press again once the
+//   loop (or `stand1`) is reached. A kick in Back, or during the cooldown, is
+//   ignored too (silently: no neigh, not counted).
 // - a kick at Gallop below the refusal speed (early in `run_start`) is counted
 //   (it fills the buffer) but the gait never exceeds Gallop.
-// - dismount at Walk (or while a stop clip still plays) queues: Agro stops through
-//   `walk_stop` and the dismount starts on reaching `stand1`; a kick cancels the
-//   queue. The side is re-chosen then; with no walkable side it is dropped.
+// - dismount at Walk (or during `back_stop`/`walk_start`) queues: Agro stops
+//   through `walk_stop` and the dismount starts on reaching `stand1`; a kick
+//   cancels the queue. The side is re-chosen then; with no walkable side it is
+//   dropped. When the dismount completes (OnFoot) `side` keeps the dismount's
+//   side, for dismount_offset(side).
 // - the dismount prefers the side mounted from, then the other walkable side.
 // - Back turns at Walk's 60 °/s; the yaw rate follows `gait` (a stop clip turns
 //   at Stand's 90 °/s). A positive steerX turns right: yaw decreases (yaw 0 faces
@@ -154,7 +159,9 @@ Vec3 dismount_offset(Side side);
 const char* gait_name(Gait gait);
 
 // Agro on foot (D12, authored): the whistle within kWhistleRange makes her approach
-// (trot within kApproachGallopBeyond, gallop beyond) until kApproachStop, then
+// (trot within kApproachGallopBeyond, gallop beyond; once approaching, ruling R9's
+// hysteresis: gallop above kApproachGallopAbove, trot below kApproachTrotBelow,
+// else the clip is kept, so a blocked Agro at ~40 m does not flicker) until kApproachStop, then
 // `neigh` -> `neigh_end` -> Idle. The app turns and moves her (horse_clip_speed of
 // `clip`, the same walkability as the player) and passes `progressed` = she got
 // closer last frame; kStuckWarpSeconds without progress raises `warp` for one step
@@ -172,7 +179,9 @@ struct AgroState {
 };
 
 inline constexpr float kWhistleRange = 150.0f;
-inline constexpr float kApproachGallopBeyond = 40.0f;
+inline constexpr float kApproachGallopBeyond = 40.0f;  // the whistle step's choice
+inline constexpr float kApproachGallopAbove = 42.0f;   // R9
+inline constexpr float kApproachTrotBelow = 38.0f;     // R9
 inline constexpr float kApproachStop = 3.0f;
 inline constexpr float kStuckWarpSeconds = 10.0f;  // the binary's stuck recovery
 inline constexpr float kWarpBehind = 6.0f;
