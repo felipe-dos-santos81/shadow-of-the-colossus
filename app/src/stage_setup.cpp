@@ -1,5 +1,7 @@
 #include "stage_ctx.h"
 
+#include "selftests.h"
+
 #include "door.h"
 #include "ride_points.h"
 #include "road_points.h"
@@ -379,21 +381,10 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
     // --s4-selftest pins the entity at t = 0 (the idle's first frame): the
     // walk's collision proxy and the status bbox must sample one known pose.
     if (opts.s4Selftest) {
-        if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
-            entityRig >= playbacks.size()) {
-            std::fprintf(stderr,
-                         "sotc-viewer: --s4-selftest: the manifest has no entity\n");
-            return 2;
+        const SelftestResult pinned = s4_pin_entity(ctx);
+        if (pinned.exitCode) {
+            return pinned.exitCode;
         }
-        Playback& entity_playback = playbacks[entityRig];
-        if (entity_playback.index < 0) {
-            std::fprintf(stderr,
-                         "sotc-viewer: --s4-selftest: the entity has no clip to pin\n");
-            return 2;
-        }
-        entity_playback.time = 0.0f;
-        entity_playback.playing = false;
-        entity_playback.pinned = true;
     }
     // S8 (D4): Agro's rig (never an encounter entity) idles on stand1;
     // on the plain the ride wiring poses her from here on.

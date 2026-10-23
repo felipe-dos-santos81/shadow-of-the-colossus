@@ -77,6 +77,11 @@ constexpr float kRideCameraEase = 8.0f;             // s^-1, the follow camera's
 constexpr float kApproachTurnDegPerSecond = 90.0f;  // D12, authored: Agro turning to the player
 constexpr float kStickPressThreshold = 0.5f;        // authored: a stick "press" (kick/rein)
 
+constexpr int kS4MaxWalkFrames = 1200;       // 20 simulated seconds at 1/60 s
+constexpr int kS4StopFrames = 5;             // consecutive frames below the epsilon
+constexpr float kS4StopEpsilon = 1e-3f;      // metres of horizontal travel per frame
+constexpr float kS4GroundTolerance = 1e-3f;  // the player's feet vs the heightmap sample
+
 // What crosses the stages of one run (design §13.9): the process's window,
 // device, renderer and audio engine, the stage to compose next, the carry
 // (StageCarry, app.h) and the per-run latches.
