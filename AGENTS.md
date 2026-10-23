@@ -6,6 +6,25 @@ This file is workspace guidance and is tracked with the project.
 
 ## Status (2026-10-23)
 
+**Milestone S11 "Quadratus" — implemented; scripted acceptance green, user walk PENDING.**
+The second colossus fights in his own arena: `out/re/stage/arena_02.manifest` (`probe.py compose --stage
+arena_02`, `make arena02-manifest`; the `encounter quadratus` directive selects him; `make quadratus`
+plays it). Stab a rear hoof while it is lifted (≥ 0.5 m) and he kneels (no damage, 20 s); climb the
+kneeling leg's fur (hoof → shin → thigh → rump), strike the back sigil on the rump's rear face, stand on
+and walk his back (hold `E`), hold through the shake-off (`refuse_shoulder`, the first 5 s of each 20 s
+attached), climb the neck and strike the head sigil; his death clip is held where its root leaves him (no
+corpse swap) and there is **no return to the shrine**; `R` resets. Behaviour is data from `eboot.elf`'s
+MAMMOTH tables (HP 220, the hoof gate, 20 s sprain, 2/10 s rise, the shake rule, ±30° turn); the rest is
+measured or authored (`app/src/encounters/quadratus.h`, `app/src/quadratus_fight.h`). Valus is unchanged.
+The proof is `--s11-selftest --s11-stills out/s11/stills` and `--s11-e2e` (manifest arena_02); the
+acceptance script is `scripts/s11-acceptance.sh` (the frozen S9 chain first); the runner's
+`tools/verify/s11.sh` has blessed goldens. Quadratus's bake (58 `boss_a_*` clips) is in the base
+`out/library` (ruling A16; `make bake` includes `bake-quadratus`). Numbers: `docs/notes/s11-results.md`.
+Known gaps: his fight is silent (D10), no hit reactions or anger, the 45 s sprain cap is moot, the
+tendril window is Valus's, the neck hand-over drops sideways, releasing `E` on the back drops you
+through, the 0.6 m blade reach and 0.5 m hoof lift are authored. Backlog (the user: "Fix later"): Valus
+from his own eboot tables; the Valus `boss01`/`boss15` bank conflict is recorded, not corrected.
+
 **Milestone S10 "The fast loop" — implemented; no game change, so no user walk.**
 Tooling and a refactor, every frozen output unchanged. `scripts/verify` (`make verify`; `tools/verify/`)
 re-runs each milestone's selftests once against 83 blessed goldens (`tools/verify/golden/`, `PIN` = the
@@ -122,10 +141,10 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 |---|---|
 | `app/` | the native viewer (`app/src/`: `app.cpp` is the shell, then `stage_ctx`/`stage_setup`, one `selftest_sN.cpp` per milestone, `interactive`, `encounter_rt`, `capture`, `audio_seam`, `gamepad_input`, `run_flags`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6`/`s7`/`s8` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
-| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`), `libview.sh`, `golden/` (83 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`, `s11`); `s3`…`s9` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
+| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`, `s11`), `libview.sh`, `golden/` (90 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
 | `tools/re/census/` | `census.py` and `census.json`: the 16 colossi (`make census`) |
-| `docs/notes/` | RE records and per-milestone results notes (`s10-results.md` is this milestone's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
+| `docs/notes/` | RE records and per-milestone results notes (`s11-results.md` is this milestone's, `s10-results.md` S10's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
 | `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
@@ -160,7 +179,7 @@ runs sharing an `out/` directory; the runner parallelises within its own `out/ve
 change and before reporting it done. It runs only the steps whose inputs changed (`make verify
 ARGS="--quick"` skips the e2e runs for the inner loop, `ARGS="--only s7"` one milestone, `ARGS=--dry-run`
 lists the decisions). `make verify-long` (`scripts/verify --long`, the highest frozen
-`scripts/sN-acceptance.sh`, ~13 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
+`scripts/sN-acceptance.sh` — `s11`, ~15 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
 (`ARGS=--bless`, clean tree, nothing else running) only for a deliberate output change; a new milestone
 adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git worktree needs
 `git submodule update --init --recursive` before dotnet or verify works in it.
@@ -272,14 +291,28 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --stage shrine --s9-e2e                    # the interactive loop, scripted: shrine -> road -> Valus -> shrine
 ```
 
+Quadratus fights in arena_02 (`make quadratus`; the controls are the arena's; `J` under a lifted rear hoof
+kneels him; `R` resets; no return to the shrine). The S11 proof:
+
+```bash
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/arena_02.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s11-selftest --s11-stills out/s11/stills  # hoof -> kneel -> fur -> back sigil -> back -> shake -> head -> death -> R
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/arena_02.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s11-e2e                                   # the same fight through the interactive loop
+```
+
 ## Acceptance
 
 ```bash
 export SOTC_LIB=<repo>/out/library
-caffeinate -dimsu ./scripts/s9-acceptance.sh   # S9 + S8 (which runs S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
+caffeinate -dimsu ./scripts/s11-acceptance.sh  # S11 + S9 (which runs S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s8-acceptance.sh`, `scripts/s7-acceptance.sh`, `scripts/s6-acceptance.sh`,
+Never modify `scripts/s9-acceptance.sh` for an S11 change: it is S11's regression. Never modify `scripts/s8-acceptance.sh`, `scripts/s7-acceptance.sh`, `scripts/s6-acceptance.sh`,
 `scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh`,
 `scripts/s4-acceptance.sh` or `scripts/s3-acceptance.sh` for an S9 change: they are the regression.
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
