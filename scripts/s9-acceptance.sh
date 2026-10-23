@@ -25,13 +25,14 @@
 #   7. the flag refusals (exit 2): --s9-e2e with --s9-selftest, with
 #      --screenshot, with --no-return, without --stage shrine; --s9-selftest
 #      without --manifest; --s9-stills without --s9-selftest;
-#   8. the S9 bake in the library: Wander's clips 43…48 are the six raise
-#      clips (49 in all) and the four sword PNGs exist (PNG magic, Task 0's
+#   8. (in the preflight, before step 1) the S9 bake in the library: Wander's
+#      clips 43…48 are the six raise clips (49 in all) and the four sword PNGs
+#      exist (PNG magic, Task 0's
 #      dimensions);
 #   9. the deterministic proof — `--s9-selftest --s9-stills out/s9/stills`: 15
 #      s9-* lines in order, each with its values/tolerances (the load <= 15 s,
 #      the sun, the raise, the fan, the partial, the lock — locked=1, hit=1,
-#      hit_m <= 150, ruling B6 —, the sparks, the shade, the mounted raise, the
+#      10 <= hit_m <= 150, ruling B6 —, the sparks, the shade, the mounted raise, the
 #      entrance, both doors, the audio counters, the perf <= 16.7 ms, the exact
 #      reset); plus the `s1-status` window/cursor line;
 #  10. the end-to-end loop — `--stage shrine --s9-e2e`: the interactive loop
@@ -113,7 +114,7 @@ need() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
-for c in dotnet cmake ctest caffeinate shasum awk grep sed sort tee tr wc python3 od cmp diff; do
+for c in dotnet cmake ctest caffeinate shasum awk grep sed sort tee tr wc python3 od cmp diff cut; do
   need "$c"
 done
 
@@ -135,6 +136,35 @@ fi
 [[ -f "$road_manifest" ]] || fail "road manifest not found: $road_manifest (make road-manifest)"
 [[ -f "$placements" ]] || fail "S9 placements not found: $placements"
 [[ -f "$audio_map" ]] || fail "S9 audio map not found: $audio_map"
+
+# The S9 bake in the library (step 8, preflight): next to the 49-clip count —
+# a library without it fails before the builds and the ~10 min S8 chain.
+stamp "the S9 bake: Wander's raise clips 43…48 and the four sword PNGs"
+raise_clips="$(python3 -I -c '
+import json, sys
+c = json.load(open(sys.argv[1]))["clips"]
+print(",".join((x if isinstance(x, str) else x["name"]) for x in c[43:49]))' "$clips_json")"
+[[ "$raise_clips" = "player_a_hoist_sword_start,player_a_hoist_sword_loop,player_a_hoist_sword_end,player_a_uma_hoist_sword_start,player_a_uma_hoist_sword_loop,player_a_uma_hoist_sword_end" ]] ||
+  fail "Wander's clips 43…48 are '$raise_clips' (expected the six raise clips in D9 order)"
+
+sword_pngs="$(python3 -I -c '
+import json, sys
+t = json.load(open(sys.argv[1]))["textures"]
+print(" ".join(t[k] for k in ("lines", "overlay", "flare", "hit")))' "$placements")"
+sword_rows=""
+set -- $sword_dims
+for png in $sword_pngs; do
+  path="$lib/$png"
+  [[ -f "$path" ]] || fail "sword texture missing: $path"
+  magic="$(od -An -tx1 -N8 "$path" | tr -d ' \n')"
+  [[ "$magic" = "89504e470d0a1a0a" ]] || fail "$path lacks the PNG magic (got $magic)"
+  # IHDR: width and height, big-endian, at bytes 16..23.
+  w="$(od -An -tu1 -j16 -N4 "$path" | tr -s ' \n' ' ' | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
+  h="$(od -An -tu1 -j20 -N4 "$path" | tr -s ' \n' ' ' | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
+  [[ "${w}x${h}" = "$1" ]] || fail "$path is ${w}x${h} (expected $1, Task 0's decode)"
+  sword_rows="${sword_rows}${sword_rows:+, }${png##*/} ${w}x${h}"
+  shift
+done
 
 export SOTC_GAME_ROOT="$game_root"
 export SOTC_LIB="$lib"
@@ -254,8 +284,13 @@ road_instances="$(grep -c '^instance ' "$road_manifest" || true)"
 road_backdrops="$(grep -c '^backdrop ' "$road_manifest" || true)"
 
 stamp "probe.py check-manifest --stage shrine|plain|road"
-python3 "$probe" check-manifest "$shrine_manifest" --library "$lib" --stage shrine
-python3 "$probe" check-manifest "$plain_manifest" --library "$lib" --stage plain
+for stage in shrine plain; do
+  manifest_var="${stage}_manifest"
+  stage_manifest="${!manifest_var}"
+  stage_check_out="$(python3 "$probe" check-manifest "$stage_manifest" --library "$lib" --stage "$stage")"
+  printf '%s\n' "$stage_check_out"
+  grep -q '^gate: MET$' <<<"$stage_check_out" || fail "check-manifest --stage $stage did not print gate: MET"
+done
 road_check_out="$(python3 "$probe" check-manifest "$road_manifest" --library "$lib" --stage road)"
 printf '%s\n' "$road_check_out"
 grep -q '^gate: MET$' <<<"$road_check_out" || fail "check-manifest --stage road did not print gate: MET"
@@ -290,35 +325,6 @@ refused "--s9-e2e without --stage shrine" "${base_args[@]}" --s9-e2e
 refused "--s9-selftest without --manifest" --library "$lib" --model "$player" --s9-selftest
 refused "--s9-stills without --s9-selftest" "${base_args[@]}" --s9-stills "$stills_dir"
 [[ ! -e "$out_dir/refused.png" ]] || fail "a refused run wrote $out_dir/refused.png"
-
-# --- Step 8: the S9 bake in the library ----------------------------------------
-
-stamp "the S9 bake: Wander's raise clips 43…48 and the four sword PNGs"
-raise_clips="$(python3 -I -c '
-import json, sys
-c = json.load(open(sys.argv[1]))["clips"]
-print(",".join((x if isinstance(x, str) else x["name"]) for x in c[43:49]))' "$clips_json")"
-[[ "$raise_clips" = "player_a_hoist_sword_start,player_a_hoist_sword_loop,player_a_hoist_sword_end,player_a_uma_hoist_sword_start,player_a_uma_hoist_sword_loop,player_a_uma_hoist_sword_end" ]] ||
-  fail "Wander's clips 43…48 are '$raise_clips' (expected the six raise clips in D9 order)"
-
-sword_pngs="$(python3 -I -c '
-import json, sys
-t = json.load(open(sys.argv[1]))["textures"]
-print(" ".join(t[k] for k in ("lines", "overlay", "flare", "hit")))' "$placements")"
-sword_rows=""
-set -- $sword_dims
-for png in $sword_pngs; do
-  path="$lib/$png"
-  [[ -f "$path" ]] || fail "sword texture missing: $path"
-  magic="$(od -An -tx1 -N8 "$path" | tr -d ' \n')"
-  [[ "$magic" = "89504e470d0a1a0a" ]] || fail "$path lacks the PNG magic (got $magic)"
-  # IHDR: width and height, big-endian, at bytes 16..23.
-  w="$(od -An -tu1 -j16 -N4 "$path" | tr -s ' \n' ' ' | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
-  h="$(od -An -tu1 -j20 -N4 "$path" | tr -s ' \n' ' ' | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
-  [[ "${w}x${h}" = "$1" ]] || fail "$path is ${w}x${h} (expected $1, Task 0's decode)"
-  sword_rows="${sword_rows}${sword_rows:+, }${png##*/} ${w}x${h}"
-  shift
-done
 
 # --- Step 9: the deterministic proof (--s9-selftest) ----------------------------
 
@@ -365,6 +371,8 @@ near() {
 # cmp_ok VALUE OP LIMIT — an awk comparison (OP one of < <= > >=); empty fails.
 cmp_ok() {
   [[ -n "$1" && -n "$3" ]] || fail "cmp_ok: an empty argument ('$1' '$2' '$3')"
+  [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ && "$3" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] ||
+    fail "cmp_ok: a non-numeric argument ('$1' '$2' '$3')"
   awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN {
     if (op == "<") exit !(v < l); if (op == "<=") exit !(v <= l);
     if (op == ">") exit !(v > l); if (op == ">=") exit !(v >= l); exit 1 }'
@@ -434,7 +442,7 @@ cmp_ok "$lock_k" "<" 0.01 || fail "s9-lock k=$lock_k (the lock is k < 0.01)"
 [[ "$lock_locked" = "1" ]] || fail "s9-lock locked=$lock_locked"
 [[ "$lock_ray" = "150.0" ]] || fail "s9-lock ray_m=$lock_ray (expected 150.0 at raise 1)"
 [[ "$lock_hit" = "1" ]] || fail "s9-lock hit=$lock_hit (B6: the ray meets the entrance's east bank)"
-cmp_ok "$lock_hit_m" ">" 0 || fail "s9-lock hit_m=$lock_hit_m"
+cmp_ok "$lock_hit_m" ">=" 10 || fail "s9-lock hit_m=$lock_hit_m (floor 10 m: the ray left the sword)"
 cmp_ok "$lock_hit_m" "<=" 150 || fail "s9-lock hit_m=$lock_hit_m (B6: within the 150 m ray)"
 
 spark_line="$(one_line '^s9-spark ' "s9-spark")"
@@ -564,8 +572,8 @@ e2e_lock_hit="$(field "$e2e_lock" hit)"
 e2e_lock_hit_m="$(field "$e2e_lock" hit_m)"
 cmp_ok "$e2e_lock_k" "<" 0.01 || fail "s9e2e-lock k=$e2e_lock_k (the lock is k < 0.01)"
 [[ "$e2e_lock_hit" = "1" ]] || fail "s9e2e-lock hit=$e2e_lock_hit (B6: 1 expected at kAgroStairs)"
-cmp_ok "$e2e_lock_hit_m" ">" 0 && cmp_ok "$e2e_lock_hit_m" "<=" 150 ||
-  fail "s9e2e-lock hit_m=$e2e_lock_hit_m (B6: within the 150 m ray)"
+cmp_ok "$e2e_lock_hit_m" ">=" 10 && cmp_ok "$e2e_lock_hit_m" "<=" 150 ||
+  fail "s9e2e-lock hit_m=$e2e_lock_hit_m (B6: 10 m floor, within the 150 m ray)"
 
 e2e_stairs="$(e2e_one '^s9e2e-stairs ' "s9e2e-stairs")"
 [[ "$(field "$e2e_stairs" mounted)" = "1" ]] || fail "s9e2e-stairs is not mounted: $e2e_stairs"
