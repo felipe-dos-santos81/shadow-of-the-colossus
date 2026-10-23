@@ -5,7 +5,8 @@
 # the converter rewrites every texture PNG on each bake, a symlink would write through into the base.
 # The view is built in a temp sibling and renamed into place last, so a view that exists is complete.
 set -eu
-root="$(cd "$(dirname "$0")/../.." && pwd)"
+# The primary checkout's out/ (a linked worktree has no library of its own; views are shared there).
+root="$(dirname "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)")"
 branch="${1:?usage: libview.sh <branch> [base-library]}"
 base="${2:-$root/out/library}"
 name="$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-\n' '-')"   # feature/x -> feature-x
