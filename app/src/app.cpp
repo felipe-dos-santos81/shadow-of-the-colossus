@@ -685,6 +685,12 @@ constexpr float kS7WakeStillFraction = 0.85f;  // wake.png: the rise, the altar 
 // the still reads as near-white over the arena (the acceptance's luma gate).
 constexpr float kS7FadeStillFade = 0.6f;
 
+// --s7-e2e (Task 13): the script's three waits, and a generous budget for
+// each stage (the arena's 1 + 8 + 2 + 1 s, the shrine's 1.5 + ~11.8 + 1 s).
+constexpr float kS7E2eLeadSeconds = 1.0f;  // arena before the hit; Free and arena before R/exit
+constexpr int kS7E2eMaxStageFrames = 3600;  // 60 s at 1/60 s
+constexpr float kS7E2eFloorTolerance = 0.05f;  // the feet vs heightmap_floor at Free
+
 // The R3 reaction names, plus the generic body reaction a strike on a band with
 // no weakpoint plays (the pinned bands without a weakpoint are not silent). The
 // player's combat clips are the binding's mode mapping. Every name is resolved
@@ -2199,6 +2205,10 @@ int run_app(const AppOptions& opts) {
                     std::printf("s7-load stage=%s instances=%zu meshes=%zu ms=%.1f\n",
                                 shrine ? "shrine" : "arena", manifest.instances.size(),
                                 scene.meshes.size(), load_ms);
+                    if (opts.s7E2e) {
+                        std::printf("s7e2e-load stage=%s meshes=%zu ms=%.1f\n",
+                                    shrine ? "shrine" : "arena", scene.meshes.size(), load_ms);
+                    }
                 }
             } else if (!opts.modelRelPath.empty()) {
                 scene = load_scene(opts.libraryDir, opts.modelRelPath);
@@ -5903,6 +5913,74 @@ int run_app(const AppOptions& opts) {
             // How the iteration ends: quit (Escape, the close button), or —
             // S7 — the shrine at the return's Load, or the arena on R.
             StageRequest request{};
+            // The R key's handler. In manifest mode it is the full soft reset
+            // (design §7.5): the player and Valus go back to their opening
+            // state, the death pin/hurt one-shot is left behind, and the follow
+            // camera snaps behind the spawn. The shared helper is the one the S6
+            // selftest calls, so the acceptance proves this path. S7: from the
+            // shrine R reloads the arena. --s7-e2e's scripted R calls this too.
+            const auto press_r_key = [&]() {
+                if (follow_mode) {
+                    if (press_reset(death, deathCueFired, &deathCameraSet)) {
+                        request = StageRequest{false, StageId::Arena};
+                        running = false;
+                    }
+                } else {
+                    playback.time = 0.0f;
+                }
+            };
+            // --s7-e2e (Task 13): the script's view of this stage. The loop
+            // below is the interactive one; the script only picks the input
+            // and dt, injects the one lethal hit and the one R, and prints and
+            // checks the transitions it sees.
+            struct E2eScript {
+                int frames = 0;             // this stage's frames, against the budget
+                float stageSeconds = 0.0f;  // fixed-step seconds in this stage
+                float freeSeconds = 0.0f;   // seconds the shrine has held Free
+                bool hit = false;
+                bool lockPrinted = false;
+                bool unlockPrinted = false;
+                int wakeClip = -1;
+                int wakeClips = 0;
+                DeathPhase death = DeathPhase::Idle;
+                ReturnPhase ret = ReturnPhase::Idle;
+            } e2e;
+            const auto e2e_fail = [](const std::string& message) {
+                std::fprintf(stderr, "sotc-viewer: --s7-e2e: %s\n", message.c_str());
+                return 1;
+            };
+            const auto e2e_print_death = [&]() {
+                std::printf("s7e2e-death phase=%s total=%.3f\n", death_phase_name(death.phase),
+                            death.total);
+                e2e.death = death.phase;
+            };
+            const auto e2e_print_return = [&]() {
+                std::printf("s7e2e-return phase=%s t=%.3f fade=%.3f lock=%d\n",
+                            return_phase_name(carry.ret.phase), carry.ret.t, carry.ret.fade,
+                            carry.ret.inputLocked ? 1 : 0);
+                e2e.ret = carry.ret.phase;
+            };
+            if (opts.s7E2e) {
+                if (!return_wired ||
+                    (!shrine && (!death_wired || !corpse.loaded || entityRig >= playbacks.size() ||
+                                 entityClips.death < 0))) {
+                    return e2e_fail("the arena has no death or return to drive");
+                }
+                e2e.ret = carry.ret.phase;
+                if (shrine) {
+                    // The join: the shrine is the next iteration of the arena's
+                    // StageRequest, entered in Load and nowhere else.
+                    if (carry.e2eStep != 0 || carry.ret.phase != ReturnPhase::Load) {
+                        return e2e_fail(std::string("the shrine loaded outside the return's Load "
+                                                    "(phase ") +
+                                        return_phase_name(carry.ret.phase) + ")");
+                    }
+                    carry.e2eStep = 1;
+                } else if (carry.e2eStep == 0) {
+                    e2e_print_death();
+                    e2e_print_return();
+                }
+            }
             while (running) {
                 // This frame's drag and wheel deltas (motion events arrive several
                 // per frame; the follow camera takes their sum).
@@ -5913,6 +5991,9 @@ int run_app(const AppOptions& opts) {
 
                 SDL_Event event;
                 while (SDL_PollEvent(&event)) {
+                    if (opts.s7E2e && event.type != SDL_EVENT_QUIT) {
+                        continue;  // --s7-e2e: the script owns the input
+                    }
                     switch (event.type) {
                         case SDL_EVENT_QUIT:
                             running = false;
@@ -5969,21 +6050,7 @@ int run_app(const AppOptions& opts) {
                                     camera_target_toggle(camera, follow, targetCamera, entityChest);
                                 }
                             } else if (event.key.key == SDLK_R) {
-                                if (follow_mode) {
-                                    // The full soft reset (design §7.5): the player
-                                    // and Valus go back to their opening state, the
-                                    // death pin/hurt one-shot is left behind, and
-                                    // the follow camera snaps behind the spawn. The
-                                    // shared helper is the one the S6 selftest
-                                    // calls, so the acceptance proves this path.
-                                    // S7: from the shrine R reloads the arena.
-                                    if (press_reset(death, deathCueFired, &deathCameraSet)) {
-                                        request = StageRequest{false, StageId::Arena};
-                                        running = false;
-                                    }
-                                } else {
-                                    playback.time = 0.0f;
-                                }
+                                press_r_key();
                             } else if (!playback.clips.empty() &&
                                        (event.key.key == SDLK_LEFTBRACKET ||
                                         event.key.key == SDLK_RIGHTBRACKET)) {
@@ -6023,10 +6090,14 @@ int run_app(const AppOptions& opts) {
                 }
 
                 const Uint64 now = SDL_GetTicks();
-                const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
+                // --s7-e2e steps the real loop at the selftests' fixed 1/60 s.
+                const float dt = opts.s7E2e ? kFixedFrameSeconds
+                                            : static_cast<float>(now - last_ticks) / 1000.0f;
                 last_ticks = now;
 
-                gamepad.poll();
+                if (!opts.s7E2e) {
+                    gamepad.poll();
+                }
                 if (gamepad.pausePressed) {
                     playback.playing = !playback.playing;
                 }
@@ -6036,6 +6107,61 @@ int run_app(const AppOptions& opts) {
                 EffectFrame effectFrame;
                 const EffectFrame* effectFramePtr = nullptr;
                 if (follow_mode) {
+                    // --s7-e2e: the stage's clock, the budget, and the script's
+                    // two late actions — R 1 s into Free (the key's handler),
+                    // and the exit 1 s into the reloaded arena.
+                    if (opts.s7E2e) {
+                        ++carry.e2eFrame;
+                        if (++e2e.frames > kS7E2eMaxStageFrames) {
+                            return e2e_fail(std::string(shrine ? "the shrine" : "the arena") +
+                                            " never finished its step (death " +
+                                            death_phase_name(death.phase) + ", return " +
+                                            return_phase_name(carry.ret.phase) + ")");
+                        }
+                        e2e.stageSeconds += dt;
+                        if (shrine && e2e.freeSeconds + kS7Eps >= kS7E2eLeadSeconds) {
+                            const float floor =
+                                heightmap_floor(heightmap, player.position, kFloorStep);
+                            std::printf("s7e2e-status stage=shrine phase=%s lock=%d player_y=%.3f "
+                                        "floor=%.3f\n",
+                                        return_phase_name(carry.ret.phase),
+                                        carry.ret.inputLocked ? 1 : 0, player.position.y, floor);
+                            if (e2e.wakeClips != 2) {
+                                return e2e_fail("the wake did not play both clips");
+                            }
+                            if (!(std::fabs(player.position.y - floor) <= kS7E2eFloorTolerance)) {
+                                return e2e_fail("the player is not on the floor at Free");
+                            }
+                            carry.e2eStep = 2;
+                            press_r_key();
+                            if (running) {
+                                return e2e_fail("R in the shrine did not ask for the arena");
+                            }
+                        } else if (!shrine && carry.e2eStep == 2 &&
+                                   e2e.stageSeconds + kS7Eps >= kS7E2eLeadSeconds) {
+                            const bool entityShown =
+                                entityRig < scene.rigs.size() &&
+                                mesh_range_visible(scene, scene.rigs[entityRig].meshBegin,
+                                                   scene.rigs[entityRig].meshEnd);
+                            const bool corpseHidden =
+                                !corpse.loaded ||
+                                !mesh_range_visible(scene, corpse.meshBegin, corpse.meshEnd);
+                            const int valus = static_cast<int>(std::lround(encounter.health));
+                            const int hero = static_cast<int>(std::lround(combat.health));
+                            if (carry.ret.phase != ReturnPhase::Idle ||
+                                death.phase != DeathPhase::Idle || encounter.defeated ||
+                                !entityShown || !corpseHidden || valus != 100 || hero != 100) {
+                                return e2e_fail("R did not restore the arena's opening state");
+                            }
+                            std::printf("s7e2e-reset stage=arena valus=%d player=%d death=%s "
+                                        "return=%s\n",
+                                        valus, hero, death_phase_name(death.phase),
+                                        return_phase_name(carry.ret.phase));
+                            print_status_line(opts, shell.win);
+                            request = StageRequest{};
+                            running = false;
+                        }
+                    }
                     // S6: the death sequence's clock runs on the real frame time.
                     // The defeat transition happens later in this frame (in
                     // apply_combat_events), so the machine starts on the next frame
@@ -6061,26 +6187,73 @@ int run_app(const AppOptions& opts) {
                             running = false;
                         }
                     }
-                    const bool* keys = SDL_GetKeyboardState(nullptr);
+                    // --s7-e2e watches the transitions the loop just made (until
+                    // its R) and expects the lock from FadeOut through Wake.
+                    bool e2eExpectLocked = false;
+                    bool e2eHitNow = false;
+                    if (opts.s7E2e && carry.e2eStep < 2) {
+                        if (death.phase != e2e.death) {
+                            e2e_print_death();
+                        }
+                        if (carry.ret.phase != e2e.ret) {
+                            e2e_print_return();
+                        }
+                        if (carry.ret.phase == ReturnPhase::Free) {
+                            e2e.freeSeconds += dt;
+                        }
+                        const ReturnPhase phase = carry.ret.phase;
+                        e2eExpectLocked = phase == ReturnPhase::FadeOut ||
+                                          phase == ReturnPhase::Load ||
+                                          phase == ReturnPhase::FadeIn || phase == ReturnPhase::Wake;
+                        e2eHitNow = !shrine && !e2e.hit &&
+                                    e2e.stageSeconds + kS7Eps >= kS7E2eLeadSeconds;
+                    }
                     const auto deadzoned = [](float value) {
                         return std::fabs(value) > kS41StickDeadzone ? value : 0.0f;
                     };
+                    // The one input seam: the keyboard and gamepad, or under
+                    // --s7-e2e the script's (empty, except a held W while the
+                    // return should lock it — the lock below must eat it).
                     PlayerInput input;
-                    input.forward = keys[SDL_SCANCODE_W] || deadzoned(gamepad.leftY) < 0.0f;
-                    input.back = keys[SDL_SCANCODE_S] || deadzoned(gamepad.leftY) > 0.0f;
-                    input.left = keys[SDL_SCANCODE_A] || deadzoned(gamepad.leftX) < 0.0f;
-                    input.right = keys[SDL_SCANCODE_D] || deadzoned(gamepad.leftX) > 0.0f;
-                    input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
-                    input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
-                    input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
+                    if (opts.s7E2e) {
+                        input.forward = e2eExpectLocked;
+                    } else {
+                        const bool* keys = SDL_GetKeyboardState(nullptr);
+                        input.forward = keys[SDL_SCANCODE_W] || deadzoned(gamepad.leftY) < 0.0f;
+                        input.back = keys[SDL_SCANCODE_S] || deadzoned(gamepad.leftY) > 0.0f;
+                        input.left = keys[SDL_SCANCODE_A] || deadzoned(gamepad.leftX) < 0.0f;
+                        input.right = keys[SDL_SCANCODE_D] || deadzoned(gamepad.leftX) > 0.0f;
+                        input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
+                        input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
+                        input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
+                    }
                     // S6 D7: the death cinematic locks the body — movement, grab
                     // and strike are ignored while the camera runs; R, M and Escape
                     // are handled above and stay live. Control returns in Done.
                     // S7: the return locks it from FadeOut through Wake.
-                    if (death_locks_input(death) || carry.ret.inputLocked) {
+                    const bool inputLocked = death_locks_input(death) || carry.ret.inputLocked;
+                    if (inputLocked) {
                         input = PlayerInput{};
                     }
                     const bool moving = input.forward || input.back || input.left || input.right;
+                    if (opts.s7E2e && carry.e2eStep < 2) {
+                        if (e2eExpectLocked && moving) {
+                            return e2e_fail(std::string("input is not locked in ") +
+                                            return_phase_name(carry.ret.phase));
+                        }
+                        if (carry.ret.phase == ReturnPhase::Free && inputLocked) {
+                            return e2e_fail("input is still locked at Free");
+                        }
+                        if (inputLocked && !e2e.lockPrinted && !shrine) {
+                            std::printf("s7e2e-input frame=%d locked=1\n", carry.e2eFrame);
+                            e2e.lockPrinted = true;
+                        }
+                        if (!inputLocked && !e2e.unlockPrinted &&
+                            carry.ret.phase == ReturnPhase::Free) {
+                            std::printf("s7e2e-input frame=%d locked=0\n", carry.e2eFrame);
+                            e2e.unlockPrinted = true;
+                        }
+                    }
 
                     // The right stick feeds the cameras' drag channel; clamp the
                     // frame time so a hitch cannot fling the view.
@@ -6130,6 +6303,15 @@ int run_app(const AppOptions& opts) {
                     const bool wakeFrame = waking();
                     if (wakeFrame) {
                         pose_wake();
+                        if (opts.s7E2e && carry.ret.phase == ReturnPhase::Wake &&
+                            playback.index != e2e.wakeClip) {
+                            e2e.wakeClip = playback.index;
+                            ++e2e.wakeClips;
+                            std::printf("s7e2e-wake clip=%s t=%.3f\n",
+                                        playback.clips[static_cast<std::size_t>(playback.index)]
+                                            .name.c_str(),
+                                        wake_clock());
+                        }
                     } else {
                         leave_wake();
                         update_combat_clips(playback, scene, combat, input, manual_clip);
@@ -6176,9 +6358,17 @@ int run_app(const AppOptions& opts) {
                     if (audio_on) {
                         append_player_sfx(events, player.position, frameSfx);
                     }
+                    if (e2eHitNow) {
+                        // --s7-e2e's one lethal hit, landed as a strike lands.
+                        events.damageDealt = 100;
+                        e2e.hit = true;
+                    }
                     if (events.damageDealt > 0 && entityRig < playbacks.size()) {
                         apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
                                             weakpoint, audio_on ? &frameSfx : nullptr);
+                    }
+                    if (e2eHitNow && !encounter.defeated) {
+                        return e2e_fail("the lethal hit did not defeat Valus");
                     }
                     // Valus's impact runs after the player's step: a strike that
                     // landed this frame has already cancelled the attack above, so

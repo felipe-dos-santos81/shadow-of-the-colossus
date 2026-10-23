@@ -182,6 +182,16 @@ struct AppOptions {
     // --s7-stills DIR: with --s7-selftest, write fade.png, wake.png,
     // altar.png, idols.png and hall.png into DIR (the script creates it).
     std::string s7StillsPath;
+    // --s7-e2e: the end-to-end proof (Task 13). The *interactive* loop runs
+    // with a fixed 1/60 s step and a scripted input source instead of the
+    // keyboard and gamepad: after 1 s in the arena one lethal hit lands
+    // through the production combat-event path, then the S6 death, the return,
+    // the real stage switch, the shrine's wake and Free play out untouched; 1 s
+    // into Free the script presses R (the key's own handler) and exits 0 1 s
+    // into the reloaded arena. Prints the `s7e2e-*` lines. Requires --manifest
+    // and --model; runs alone (no selftest, capture, --stage shrine or
+    // --no-return).
+    bool s7E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode
@@ -197,7 +207,15 @@ inline bool entity_target_key_allowed(bool followMode, bool entityChestResolved)
 struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
 // What crosses an iteration: the return machine's state, the --s7-selftest's
 // progress, and the first shrine load's mesh count (a reload must match it).
-struct StageCarry { ReturnState ret{}; int s7Step = 0; std::size_t shrineMeshes = 0; };
+// `e2eStep`/`e2eFrame` are --s7-e2e's progress (0 the first arena, 1 the
+// shrine, 2 the arena after R) and its frame count across stages.
+struct StageCarry {
+    ReturnState ret{};
+    int s7Step = 0;
+    std::size_t shrineMeshes = 0;
+    int e2eStep = 0;
+    int e2eFrame = 0;
+};
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the
 // window close button). With opts.selftest, runs exactly one frame, prints the

@@ -74,7 +74,11 @@ void print_usage(FILE* out) {
                  "                    wake and the shrine probes, R back and reload;\n"
                  "                    print the s7-* lines, exit\n"
                  "  --s7-stills DIR   with --s7-selftest: write the fade, wake, altar,\n"
-                 "                    idols and hall stills to DIR\n");
+                 "                    idols and hall stills to DIR\n"
+                 "  --s7-e2e          drive the interactive loop at fixed 1/60 s with\n"
+                 "                    scripted input: one lethal hit, the death, the\n"
+                 "                    return, the shrine load, the wake, Free, then R\n"
+                 "                    back to the arena; print the s7e2e-* lines, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -138,6 +142,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--s7-selftest") {
             opts.s7Selftest = true;
+            continue;
+        }
+        if (arg == "--s7-e2e") {
+            opts.s7E2e = true;
             continue;
         }
         if (arg == "--no-return") {
@@ -331,6 +339,19 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "sotc-viewer: --s7-selftest cannot be combined with another selftest; "
                      "pass one\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s7E2e && (opts.manifestPath.empty() || opts.modelRelPath.empty())) {
+        std::fprintf(stderr, "sotc-viewer: --s7-e2e needs --manifest and --model\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s7E2e && (frozen_selftest || opts.s7Selftest || opts.stage == StageId::Shrine ||
+                       opts.noReturn || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s7-e2e runs alone: no selftest, capture, --entity-time, "
+                     "--stage shrine or --no-return\n");
         print_usage(stderr);
         return 2;
     }
