@@ -34,6 +34,10 @@ inline constexpr float kFloorDrop = 3.0f;   // the most a horizontal move may st
 inline constexpr float kBodyBandLow = 0.6f;
 inline constexpr float kBodyBandHigh = 1.8f;
 inline constexpr float kWallSteepness = 0.5f;
+// S8 (the plain): a map that refuses holes also refuses a move onto a node with no
+// ground, a rise above kHoleRiseMax or a drop below kHoleDropMax.
+inline constexpr float kHoleDropMax = 1.5f;
+inline constexpr float kHoleRiseMax = 1.0f;
 
 struct Heightmap {
     float cellSize;
@@ -43,6 +47,7 @@ struct Heightmap {
     int maxLayers = 0;                  // 0 = unlayered
     std::vector<float> layers;          // node-major, maxLayers per node, ascending, NaN-padded
     std::vector<uint8_t> blocked;       // same layout: non-zero = a wall in that layer's body band (higher = nearer it)
+    bool refuseHoles = false;           // set by the caller after build for stages that ask (the plain)
 };
 
 // Rasterizes the scene's static meshes (`mesh.rig < 0` — the manifest's

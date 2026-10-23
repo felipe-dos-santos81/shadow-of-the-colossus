@@ -482,7 +482,34 @@ float heightmap_floor(const Heightmap& heightmap, Vec3 p, float step) {
     return best;
 }
 
+// refuseHoles: the target's nearest node must hold ground (read straight from
+// `heights`, before any floor query — heightmap_sample scans the whole grid at a
+// hole), and the floor may not rise above kHoleRiseMax or drop below kHoleDropMax.
+// A source over a hole may leave. The layered rules, when the map has them, still
+// apply after this.
+static bool hole_move_allowed(const Heightmap& hm, Vec3 from, Vec3 to) {
+    if (hm.width <= 0 || hm.height <= 0 ||
+        hm.heights.size() < static_cast<std::size_t>(hm.width) * hm.height) {
+        return true;  // no grid: nothing to refuse
+    }
+    int si = 0, sj = 0, ti = 0, tj = 0;
+    nearest_node(hm, from, si, sj);
+    nearest_node(hm, to, ti, tj);
+    if (std::isnan(hm.heights[static_cast<std::size_t>(tj) * hm.width + ti])) {
+        return false;
+    }
+    if (std::isnan(hm.heights[static_cast<std::size_t>(sj) * hm.width + si])) {
+        return true;
+    }
+    const float from_floor = heightmap_floor(hm, from, kFloorStep);
+    const float rise = heightmap_floor(hm, Vec3{to.x, from.y, to.z}, kFloorStep) - from_floor;
+    return !(rise > kHoleRiseMax) && !(-rise > kHoleDropMax);
+}
+
 bool heightmap_walkable(const Heightmap& heightmap, Vec3 from, Vec3 to) {
+    if (heightmap.refuseHoles && !hole_move_allowed(heightmap, from, to)) {
+        return false;
+    }
     if (!is_layered(heightmap)) {
         return true;
     }
