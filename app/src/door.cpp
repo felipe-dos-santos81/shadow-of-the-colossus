@@ -19,11 +19,11 @@ bool inside(Vec3 p, Vec3 mn, Vec3 mx) {
 
 }  // namespace
 
-DoorState step_door(DoorState s, float dt, bool entered, int target, bool loadDone) {
+DoorState step_door(DoorState s, float dt, bool entered, int row, bool loadDone) {
     switch (s.phase) {
         case DoorPhase::Idle:
             if (entered) {
-                s = DoorState{DoorPhase::FadeOut, 0.0f, 0.0f, true, target};
+                s = DoorState{DoorPhase::FadeOut, 0.0f, 0.0f, true, row};
             }
             return s;
         case DoorPhase::FadeOut:

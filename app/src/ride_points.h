@@ -87,4 +87,26 @@ inline constexpr float kFootfallWalk[4] = {0.25f, 0.375f, 0.75f, 0.875f};
 inline constexpr float kFootfallTrot[4] = {0.0f, 0.0f, 0.33f, 0.89f};
 inline constexpr float kFootfallGallop[4] = {0.11f, 0.44f, 0.67f, 0.95f};
 
+// The doors (design D14; source: authored): trigger boxes that fire on entry, each with
+// the arrival spawn on the other stage. `door_shrine` is in the shrine's frame and
+// arrives on the plain (world frame); `door_plain` is in the world frame and arrives
+// in the shrine's frame.
+struct Door {
+    float min[3], max[3];
+    float arrive[3];
+    float arriveYawDeg;
+};
+
+inline constexpr Door kDoorShrine{{-2.5f, -0.5f, 44.0f}, {2.5f, 3.0f, 46.0f}, {301.0f, -2.333f, -245.0f}, 0.0f};
+inline constexpr Door kDoorPlain{{296.0f, -2.0f, -258.5f}, {306.0f, 2.5f, -252.5f}, {0.0f, 9.79f, 34.0f}, 180.0f};
+
+// The selftest/e2e probe points (source: authored), world x/z on the plain: the whistle's
+// standpoint, the gallop line (start, heading, length) and the cliff-edge walk.
+inline constexpr float kProbeWhistleFrom[2] = {252.5f, -167.7f};
+inline constexpr float kProbeGallopFrom[2] = {301.0f, -203.0f};
+inline constexpr float kProbeGallopHeadingDeg = -54.0f;
+inline constexpr float kProbeGallopLength = 300.0f;
+inline constexpr float kProbeEdgeFrom[2] = {114.3f, -280.5f};
+inline constexpr float kProbeEdgeTo[2] = {76.9f, -294.6f};
+
 }  // namespace ride_points

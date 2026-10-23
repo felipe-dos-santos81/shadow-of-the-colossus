@@ -371,6 +371,27 @@ bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
     return false;
 }
 
+bool rig_bone_world(const Scene& scene, std::size_t rigIndex, const std::vector<Mat4>& palette,
+                    const std::string& boneName, Mat4& out) {
+    const RigCpu& rig = rig_at(scene, rigIndex);
+    for (std::size_t joint = 0; joint < rig.skin.joints.size(); ++joint) {
+        if (rig.skin.joints[joint].name != boneName) {
+            continue;
+        }
+        if (joint >= palette.size()) {
+            return false;
+        }
+        // The rig's placement, as posed_joint_world_position takes it.
+        Mat4 model = mat4_identity();
+        if (rig.meshBegin < rig.meshEnd && rig.meshBegin < scene.meshes.size()) {
+            model = scene.meshes[rig.meshBegin].model;
+        }
+        out = mat4_mul(mat4_mul(model, palette[joint]), rig.skin.joints[joint].bindWorld);
+        return true;
+    }
+    return false;
+}
+
 Mat4 club_model(const Scene& scene, const std::vector<Mat4>& entityPalette,
                 std::size_t swordJoint, const Mat4& entityMeshModel) {
     // The interface carries no rig index: the palette's size is what names its

@@ -146,7 +146,7 @@ void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float p
 
     // The head point is the orbit target, set exactly (no smoothing on it).
     if (std::isfinite(playerPos.x) && std::isfinite(playerPos.y) && std::isfinite(playerPos.z)) {
-        camera.target = Vec3{playerPos.x, playerPos.y + kFollowHeadHeight, playerPos.z};
+        camera.target = Vec3{playerPos.x, playerPos.y + follow.headHeight, playerPos.z};
     }
 
     // The look yaw targets the player's facing plus the drag offset; the orbit

@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "door.h"
+#include "ride_points.h"
 #include "transition.h"
 #include "valus.h"
 
@@ -71,8 +73,9 @@ inline void reset_encounter(Encounter& encounter) {
     encounter.entityYawDeg = encounter.entityBaseYawDeg;
 }
 
-// The stages run_app can compose (S7 D6): the --manifest arena, or the shrine.
-enum class StageId { Arena, Shrine };
+// The stages run_app can compose (S7 D6, S8 D2): the --manifest arena, the
+// shrine, or the plain in front of it.
+enum class StageId { Arena, Shrine, Plain };
 
 // One viewer run's parameters, filled by the argument parser in main.cpp.
 struct AppOptions {
@@ -171,6 +174,9 @@ struct AppOptions {
     StageId stage = StageId::Arena;
     bool noReturn = false;
     std::string shrineManifestPath = "out/re/stage/shrine.manifest";
+    // S8 (D2): --stage plain starts on the plain (Agro, riding, the shrine's
+    // door); --plain-manifest is the plain's composed manifest.
+    std::string plainManifestPath = "out/re/stage/plain.manifest";
     // --s7-selftest: the S7 acceptance timeline (design §8.6). In the arena,
     // seed Valus dead (death Done, the corpse shown), run the return machine
     // at fixed 1/60 s steps (an R during the first FadeOut, then again to
@@ -192,6 +198,25 @@ struct AppOptions {
     // and --model; runs alone (no selftest, capture, --stage shrine or
     // --no-return).
     bool s7E2e = false;
+    // --s8-selftest (S8 Task 9, D17): starts on the plain at fixed 1/60 s with
+    // no window input — the whistle from probes.whistle_from, a left mount,
+    // kicks through Walk/Trot/Gallop (each loop's speed measured), a full-right
+    // steer at the gallop, a held S through the stop clips, S at a standstill
+    // backing up, a ride into the plateau's edge (R11's stop), a right dismount
+    // there, the on-foot edge walk, the rider/audio/perf probes, then R mounted
+    // at a gallop and the arena's opening state. Prints the `s8-*` lines and
+    // exits 0. Requires --manifest (the arena R returns to) and --model.
+    bool s8Selftest = false;
+    // --s8-stills DIR: with --s8-selftest, write mount.png, gallop.png,
+    // whistle.png and plain.png into DIR (the caller creates it).
+    std::string s8StillsPath;
+    // --s8-e2e: the interactive loop at fixed 1/60 s with a scripted input
+    // source (its own script state, a ride-input path): from --stage shrine it
+    // walks into the shrine's door, whistles on the plain, mounts, gallops 5 s
+    // along probes.gallop_line, stops, dismounts, walks into the plain's door,
+    // presses R in the shrine and exits 1 s into the arena. Prints the
+    // `s8e2e-*` lines; a failed join exits 1 naming the step.
+    bool s8E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode
@@ -200,6 +225,50 @@ struct AppOptions {
 // than parking the camera on an unset target.
 inline bool entity_target_key_allowed(bool followMode, bool entityChestResolved) {
     return followMode && entityChestResolved;
+}
+
+// The doors (S8 D14, ruling R16): one row per door — the stage its box is in, the
+// box and the arrival spawn (`ride_points::Door`, the arrival is on `to`'s floor),
+// and the stage it leads to. Entry iterates the rows of the current stage; the
+// arrival is the row recorded at entry (DoorState::row).
+struct DoorRow {
+    StageId from;
+    const ride_points::Door* door;
+    StageId to;
+};
+inline constexpr DoorRow kDoors[] = {
+    {StageId::Shrine, &ride_points::kDoorShrine, StageId::Plain},  // the shrine's front exit
+    {StageId::Plain, &ride_points::kDoorPlain, StageId::Shrine},   // the plain's shrine steps
+};
+inline constexpr int kDoorCount = static_cast<int>(sizeof(kDoors) / sizeof(kDoors[0]));
+
+// The row of a door on `here` whose box the step prev -> now entered (box_entered),
+// or -1. The first row in table order wins.
+inline int door_entered_row(StageId here, Vec3 prev, Vec3 now) {
+    for (int i = 0; i < kDoorCount; ++i) {
+        const ride_points::Door& d = *kDoors[i].door;
+        if (kDoors[i].from == here &&
+            box_entered(prev, now, Vec3{d.min[0], d.min[1], d.min[2]},
+                        Vec3{d.max[0], d.max[1], d.max[2]})) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// The row a stage starting at `here` arrives through: the machine waits in Load
+// with a valid row whose destination is `here`; otherwise nullptr.
+inline const DoorRow* arriving_door(const DoorState& s, StageId here) {
+    if (s.phase != DoorPhase::Load || s.row < 0 || s.row >= kDoorCount) return nullptr;
+    const DoorRow& r = kDoors[s.row];
+    return r.to == here ? &r : nullptr;
+}
+
+// The door machine as a stage starts (R16): a door arrival keeps it; any other
+// start (R, the return, the first stage) resets it, so a door entered on the frame
+// that ended the last stage can never leave the next one locked.
+inline DoorState door_stage_start(const DoorState& s, StageId here) {
+    return arriving_door(s, here) ? s : reset_door();
 }
 
 // The stage loop (S7 D6): run_app composes one stage per iteration; the
@@ -211,10 +280,17 @@ struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
 // shrine, 2 the arena after R) and its frame count across stages.
 struct StageCarry {
     ReturnState ret{};
+    // S8 (D14): the door machine crosses the stage switch (FadeOut in one
+    // stage, Load at the switch, FadeIn in the next); `door.row` is the entered
+    // kDoors row while it runs.
+    DoorState door{};
     int s7Step = 0;
     std::size_t shrineMeshes = 0;
     int e2eStep = 0;
     int e2eFrame = 0;
+    // --s8-selftest's progress (0 the plain, 1 the arena after R) and
+    // --s8-e2e's (0 the shrine, 1 the plain, 2 the shrine again, 3 the arena).
+    int s8Step = 0;
 };
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the

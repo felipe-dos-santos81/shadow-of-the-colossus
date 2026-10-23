@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 
+#include "app.h"
 #include "door.h"
 
 namespace {
@@ -25,19 +26,19 @@ TEST_CASE("Idle stays Idle without entered, whatever else is passed") {
     CHECK_FALSE(s.inputLocked);
     CHECK(s.fade == 0.0f);
     CHECK(s.t == 0.0f);
-    CHECK(s.target == -1);
+    CHECK(s.row == -1);
 }
 
-TEST_CASE("entered starts FadeOut, locked, clear, with the target, not spending dt") {
+TEST_CASE("entered starts FadeOut, locked, clear, with the entered row, not spending dt") {
     DoorState s = step_door({}, 0.5f, true, 3, false);
     CHECK(s.phase == DoorPhase::FadeOut);
     CHECK(s.inputLocked);
     CHECK(s.fade == 0.0f);
     CHECK(s.t == 0.0f);
-    CHECK(s.target == 3);
-    // entered and target are not re-read afterwards.
+    CHECK(s.row == 3);
+    // entered and row are not re-read afterwards.
     s = step_door(s, 0.25f, true, 9, false);
-    CHECK(s.target == 3);
+    CHECK(s.row == 3);
     CHECK(s.t == doctest::Approx(0.25f));
 }
 
@@ -61,7 +62,7 @@ TEST_CASE("FadeOut ends in Load at fade 1, requesting the load exactly once") {
     CHECK(after.phase == DoorPhase::Load);
     CHECK(after.fade == 1.0f);
     CHECK(after.inputLocked);
-    CHECK(after.target == 3);
+    CHECK(after.row == 3);
     CHECK(door_wants_load(before, after));
     DoorState next = step_door(after, 100.0f, false, 0, false);
     CHECK(next.phase == DoorPhase::Load);
@@ -94,17 +95,17 @@ TEST_CASE("loadDone starts FadeIn at fade 1 without spending dt; it ramps 1 to 0
     CHECK(s.fade > 0.0f);
 }
 
-TEST_CASE("FadeIn ends back in Idle, unlocked, clear, without a target") {
+TEST_CASE("FadeIn ends back in Idle, unlocked, clear, without a row") {
     DoorState s = step_door(fading_in(), kDoorFadeIn, false, 0, true);
     CHECK(s.phase == DoorPhase::Idle);
     CHECK_FALSE(s.inputLocked);
     CHECK(s.fade == 0.0f);
     CHECK(s.t == 0.0f);
-    CHECK(s.target == -1);
+    CHECK(s.row == -1);
     // and a second door can start.
     s = step_door(s, 0.0f, true, 5, false);
     CHECK(s.phase == DoorPhase::FadeOut);
-    CHECK(s.target == 5);
+    CHECK(s.row == 5);
 }
 
 TEST_CASE("the door_wants_load is true only on the FadeOut to Load step across a whole run") {
@@ -149,7 +150,7 @@ TEST_CASE("reset from every phase equals the initial state") {
         CHECK(r.t == fresh.t);
         CHECK(r.fade == fresh.fade);
         CHECK(r.inputLocked == fresh.inputLocked);
-        CHECK(r.target == -1);
+        CHECK(r.row == -1);
     }
     CHECK((seen[0] && seen[1] && seen[2] && seen[3]));
     // A reset machine is a working one.
@@ -178,4 +179,80 @@ TEST_CASE("door_phase_name spells the enum") {
     CHECK(std::strcmp(door_phase_name(DoorPhase::FadeOut), "FadeOut") == 0);
     CHECK(std::strcmp(door_phase_name(DoorPhase::Load), "Load") == 0);
     CHECK(std::strcmp(door_phase_name(DoorPhase::FadeIn), "FadeIn") == 0);
+}
+
+TEST_CASE("the door table: entry -> row -> arrival reproduces S8's two doors (R16)") {
+    REQUIRE(kDoorCount == 2);
+    const ride_points::Door& ds = ride_points::kDoorShrine;
+    const ride_points::Door& dp = ride_points::kDoorPlain;
+    // The shrine's front exit: a step into its box on the shrine.
+    const Vec3 shrineOut{0.0f, 1.0f, 43.0f}, shrineIn{0.0f, 1.0f, 45.0f};
+    const int r0 = door_entered_row(StageId::Shrine, shrineOut, shrineIn);
+    REQUIRE(r0 >= 0);
+    CHECK(kDoors[r0].from == StageId::Shrine);
+    CHECK(kDoors[r0].door == &ds);
+    CHECK(kDoors[r0].to == StageId::Plain);
+    // A box belongs to its stage: the same step elsewhere enters nothing.
+    CHECK(door_entered_row(StageId::Plain, shrineOut, shrineIn) == -1);
+    CHECK(door_entered_row(StageId::Arena, shrineOut, shrineIn) == -1);
+    CHECK(door_entered_row(StageId::Shrine, shrineIn, shrineIn) == -1);  // a spawn inside
+    // The plain's shrine steps.
+    const Vec3 plainOut{301.0f, 0.0f, -250.0f}, plainIn{301.0f, 0.0f, -255.0f};
+    const int r1 = door_entered_row(StageId::Plain, plainOut, plainIn);
+    REQUIRE(r1 >= 0);
+    CHECK(r1 != r0);
+    CHECK(kDoors[r1].door == &dp);
+    CHECK(kDoors[r1].to == StageId::Shrine);
+
+    // The row recorded at entry is the arrival, only in Load and only on its target.
+    DoorState s = step_door({}, 0.0f, true, r0, false);
+    CHECK(s.row == r0);
+    CHECK(arriving_door(s, StageId::Plain) == nullptr);  // still FadeOut
+    s = step_door(s, kDoorFadeOut, false, -1, false);
+    REQUIRE(s.phase == DoorPhase::Load);
+    const DoorRow* a = arriving_door(s, StageId::Plain);
+    REQUIRE(a == &kDoors[r0]);
+    CHECK(a->door->arrive[0] == 301.0f);  // S8: the plain arrival from the shrine
+    CHECK(a->door->arrive[1] == -2.333f);
+    CHECK(a->door->arrive[2] == -245.0f);
+    CHECK(a->door->arriveYawDeg == 0.0f);
+    CHECK(arriving_door(s, StageId::Shrine) == nullptr);
+    CHECK(arriving_door(s, StageId::Arena) == nullptr);
+
+    s = step_door(step_door({}, 0.0f, true, r1, false), kDoorFadeOut, false, -1, false);
+    a = arriving_door(s, StageId::Shrine);
+    REQUIRE(a == &kDoors[r1]);
+    CHECK(a->door->arrive[0] == 0.0f);  // S8: the shrine arrival from the plain
+    CHECK(a->door->arrive[1] == 9.79f);
+    CHECK(a->door->arrive[2] == 34.0f);
+    CHECK(a->door->arriveYawDeg == 180.0f);
+
+    // An out-of-range row never arrives.
+    DoorState bad = s;
+    bad.row = kDoorCount;
+    CHECK(arriving_door(bad, StageId::Shrine) == nullptr);
+    bad.row = -1;
+    CHECK(arriving_door(bad, StageId::Shrine) == nullptr);
+}
+
+TEST_CASE("door_stage_start keeps only a door arrival (R16: R on a door-entry frame)") {
+    // The door entered on the frame R ended the plain: FadeOut, locked; the arena
+    // that loads next starts with the machine idle and the input free.
+    const DoorState entering = step_door({}, 0.0f, true, 1, false);
+    REQUIRE(entering.inputLocked);
+    DoorState a = door_stage_start(entering, StageId::Arena);
+    CHECK(a.phase == DoorPhase::Idle);
+    CHECK_FALSE(a.inputLocked);
+    CHECK(a.fade == 0.0f);
+    CHECK(a.row == -1);
+    // A Load whose row leads elsewhere is not an arrival either.
+    const DoorState load = step_door(step_door({}, 0.0f, true, 0, false), kDoorFadeOut, false,
+                                     -1, false);
+    CHECK(door_stage_start(load, StageId::Arena).phase == DoorPhase::Idle);
+    CHECK(door_stage_start(load, StageId::Shrine).phase == DoorPhase::Idle);
+    // The arrival keeps the machine as it is (the stage completes Load itself).
+    const DoorState kept = door_stage_start(load, StageId::Plain);
+    CHECK(kept.phase == DoorPhase::Load);
+    CHECK(kept.row == 0);
+    CHECK(kept.inputLocked);
 }
