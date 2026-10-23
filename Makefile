@@ -3,7 +3,7 @@
 
 GAME_ROOT ?= /Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 UROOT     ?= /Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/uroot
-LIB       ?= $(CURDIR)/out/library
+LIB       ?= $(or $(SOTC_LIB),$(CURDIR)/out/library)
 BIN       ?= $(CURDIR)/out/bin
 JOBS      ?= 8
 f         ?= models/shadow/characters/wander/_cmn/wander.cmsh
@@ -50,7 +50,7 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake run shrine viewer shrine-manifest probe-check accept clean
+        bake run shrine viewer shrine-manifest probe-check accept clean libview
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -125,6 +125,9 @@ accept: shrine-manifest accept-s7 ## Run the current milestone's acceptance (S7 
 
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s7 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
+
+libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export
+	@./tools/verify/libview.sh "$(BRANCH)"
 
 clean: ## Remove build outputs (out/bin, app/build); the library and out/re stay
 	rm -rf $(BIN) app/build

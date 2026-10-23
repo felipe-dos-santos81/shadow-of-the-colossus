@@ -80,6 +80,14 @@ export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extra
 export SOTC_LIB=<repo>/out/library
 ```
 
+**A branch works in a library view, never in `out/library`.** `make libview BRANCH=<name>` clones the
+shared library (`cp -cR`: models, textures, audio, coredata, `catalog.json`; ~5 s, ~0 bytes until a file is
+rewritten) into `out/libviews/<name>/` and prints `export SOTC_LIB=...`. Export it: the Makefile's
+`LIB ?= $(or $(SOTC_LIB),$(CURDIR)/out/library)` then points `make bake`/`audio`/`convert`, the viewer and
+the tests at the view, so a branch's re-bakes and audio decodes never touch the base or `main`. Everything
+is cloned, no symlinks (the converter rewrites every referenced texture PNG on a bake and would write
+through). Delete a view with `rm -rf out/libviews/<name>` when the branch is done.
+
 The machine suspends idle background work. **Every viewer run and every acceptance run must be
 wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Never run two
 acceptances concurrently.
