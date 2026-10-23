@@ -484,9 +484,13 @@ float heightmap_floor(const Heightmap& heightmap, Vec3 p, float step) {
 
 // refuseHoles: the target's nearest node must hold ground (read straight from
 // `heights`, before any floor query — heightmap_sample scans the whole grid at a
-// hole), and the floor may not rise above kHoleRiseMax or drop below kHoleDropMax.
-// A source over a hole may leave. The layered rules, when the map has them, still
-// apply after this.
+// hole). When the move crosses into a different node, that node's height may not
+// rise above the source node's by more than kHoleRiseMax nor drop below it by more
+// than kHoleDropMax. The two stored node heights are compared, never the
+// interpolated floors: a cliff between adjacent nodes would read as a ramp across
+// the cell and let frame-sized steps through. A move inside one node crosses no
+// boundary and is allowed; a source over a hole may leave. The layered rules, when
+// the map has them, still apply after this.
 static bool hole_move_allowed(const Heightmap& hm, Vec3 from, Vec3 to) {
     if (hm.width <= 0 || hm.height <= 0 ||
         hm.heights.size() < static_cast<std::size_t>(hm.width) * hm.height) {
@@ -495,14 +499,18 @@ static bool hole_move_allowed(const Heightmap& hm, Vec3 from, Vec3 to) {
     int si = 0, sj = 0, ti = 0, tj = 0;
     nearest_node(hm, from, si, sj);
     nearest_node(hm, to, ti, tj);
-    if (std::isnan(hm.heights[static_cast<std::size_t>(tj) * hm.width + ti])) {
+    const float target = hm.heights[static_cast<std::size_t>(tj) * hm.width + ti];
+    if (std::isnan(target)) {
         return false;
     }
-    if (std::isnan(hm.heights[static_cast<std::size_t>(sj) * hm.width + si])) {
+    if (si == ti && sj == tj) {
         return true;
     }
-    const float from_floor = heightmap_floor(hm, from, kFloorStep);
-    const float rise = heightmap_floor(hm, Vec3{to.x, from.y, to.z}, kFloorStep) - from_floor;
+    const float source = hm.heights[static_cast<std::size_t>(sj) * hm.width + si];
+    if (std::isnan(source)) {
+        return true;
+    }
+    const float rise = target - source;
     return !(rise > kHoleRiseMax) && !(-rise > kHoleDropMax);
 }
 

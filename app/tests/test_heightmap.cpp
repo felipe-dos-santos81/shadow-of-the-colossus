@@ -537,3 +537,27 @@ TEST_CASE("refuseHoles allows a 0.8 m rise and a 1.4 m drop, and a body in a hol
     CHECK(kHoleDropMax == 1.5f);
     CHECK(kHoleRiseMax == 1.0f);
 }
+
+TEST_CASE("refuseHoles refuses a cliff between adjacent nodes at any step size") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 3, 0, 4, 0.0f);
+    add_floor(tris, 4, 7, 0, 4, 5.0f);  // nodes 3 and 4 are both valid, 5 m apart
+    Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    hm.refuseHoles = true;
+    CHECK_FALSE(heightmap_walkable(hm, {3.45f, 0, 2}, {3.55f, 0, 2}));  // up the cliff
+    CHECK_FALSE(heightmap_walkable(hm, {3.55f, 5, 2}, {3.45f, 5, 2}));  // off it
+    CHECK(heightmap_walkable(hm, {3.0f, 0, 2}, {3.4f, 0, 2}));          // inside one node
+    CHECK(heightmap_walkable(hm, {4.0f, 5, 2}, {4.4f, 5, 2}));
+}
+
+TEST_CASE("refuseHoles lets a 0.8 m step-up across a node boundary walk in 0.1 m steps") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 3, 0, 4, 0.0f);
+    add_floor(tris, 4, 7, 0, 4, 0.8f);
+    Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    hm.refuseHoles = true;
+    for (int n = 0; n < 40; ++n) {
+        const float x = 2.0f + 0.1f * static_cast<float>(n);
+        CHECK(heightmap_walkable(hm, {x, 0, 2}, {x + 0.1f, 0, 2}));
+    }
+}
