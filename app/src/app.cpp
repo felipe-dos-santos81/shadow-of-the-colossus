@@ -210,7 +210,8 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
     }
     const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
     const float time = playback_time(playback, clip.duration);
-    std::vector<Mat4> palette = animation_pose(scene, rigIndex, clip, time);
+    std::vector<Mat4> palette =
+        pose_palette(scene, rigIndex, animation_local_pose(scene, rigIndex, clip, time));
     renderer.upload_pose(rigIndex, palette);
     return palette;
 }

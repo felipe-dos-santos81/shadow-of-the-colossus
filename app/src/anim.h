@@ -34,13 +34,39 @@ float animation_clamp_time(float time, float duration);
 // values are truncated — writes nothing, leaving the caller's default in place.
 void animation_sample(const AnimationChannelCpu& ch, float t, float* out);
 
-// The skin palette of rig `rigIndex` at `time`: one matrix per joint of that
-// rig's skin (worldJoint * inverseBind), sized by that rig's own joint count.
-// Channels override the component they target (T/R/S); a channel whose joint is
-// outside this rig's skin — a clip from another rig — is ignored, never read
-// out of bounds. Joints and components without a channel keep their rest
-    // values. `time` is taken as given — sample it with playback_time() (the
-    // loop wrap, or the --entity-time clamp).
+// A rig's local pose: one translation / rotation / scale per skin joint, before
+// the hierarchy walk. The unit clips blend in (S8, design D7).
+struct LocalPose {
+    std::vector<Vec3> t;
+    std::vector<Quat> r;
+    std::vector<Vec3> s;
+};
+
+// Every clip switch on Agro and the mounted rider blends over this long (D7).
+inline constexpr float kClipBlendSeconds = 0.25f;
+
+// The local pose of rig `rigIndex` at `time`: one TRS per joint of that rig's
+// skin. Channels override the component they target (T/R/S); a channel whose
+// joint is outside this rig's skin — a clip from another rig — is ignored,
+// never read out of bounds. Joints and components without a channel keep their
+// rest values. `time` is taken as given — sample it with playback_time() (the
+// loop wrap, or the --entity-time clamp).
+LocalPose animation_local_pose(const Scene& scene, std::size_t rigIndex,
+                               const AnimationCpu& clip, float time);
+
+// The skin palette of rig `rigIndex` for a local pose: the hierarchy walk, then
+// worldJoint * inverseBind per joint, sized by that rig's own joint count. A
+// pose sized for another rig yields an all-zero palette of the rig's size.
+std::vector<Mat4> pose_palette(const Scene& scene, std::size_t rigIndex, const LocalPose& pose);
+
+// The blend of two local poses of one rig: lerp t and s, shortest-path slerp r;
+// `w` is clamped to [0, 1] (0 = a, 1 = b). Poses of different sizes return the
+// nearer of the two unmixed.
+LocalPose blend_poses(const LocalPose& a, const LocalPose& b, float w);
+
+// The skin palette of rig `rigIndex` at `time`:
+// pose_palette(animation_local_pose(...)), bit for bit what it was before the
+// split.
 std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
                                  const AnimationCpu& clip, float time);
 

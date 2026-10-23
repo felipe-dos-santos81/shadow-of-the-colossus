@@ -111,24 +111,21 @@ void animation_sample(const AnimationChannelCpu& ch, float t, float* out) {
     }
 }
 
-std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
-                                 const AnimationCpu& clip, float time) {
+LocalPose animation_local_pose(const Scene& scene, std::size_t rigIndex,
+                               const AnimationCpu& clip, float time) {
     const std::vector<JointCpu>& joints = rig_at(scene, rigIndex).skin.joints;
     const std::size_t joint_count = joints.size();
-    std::vector<Mat4> palette(joint_count);
-    if (joint_count == 0) {
-        return palette;
-    }
 
     // Local TRS per joint, seeded from the rest pose and overridden by each
     // channel's sampled component.
-    std::vector<Vec3> translations(joint_count);
-    std::vector<Quat> rotations(joint_count);
-    std::vector<Vec3> scales(joint_count);
+    LocalPose pose;
+    pose.t.resize(joint_count);
+    pose.r.resize(joint_count);
+    pose.s.resize(joint_count);
     for (std::size_t i = 0; i < joint_count; ++i) {
-        translations[i] = joints[i].restT;
-        rotations[i] = joints[i].restR;
-        scales[i] = joints[i].restS;
+        pose.t[i] = joints[i].restT;
+        pose.r[i] = joints[i].restR;
+        pose.s[i] = joints[i].restS;
     }
     for (const AnimationChannelCpu& channel : clip.channels) {
         if (channel.joint < 0 || static_cast<std::size_t>(channel.joint) >= joint_count ||
@@ -139,12 +136,26 @@ std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
         animation_sample(channel, time, sampled);
         const std::size_t index = static_cast<std::size_t>(channel.joint);
         switch (channel.path) {
-            case 0: translations[index] = Vec3{sampled[0], sampled[1], sampled[2]}; break;
-            case 1: rotations[index] = Quat{sampled[0], sampled[1], sampled[2], sampled[3]}; break;
-            case 2: scales[index] = Vec3{sampled[0], sampled[1], sampled[2]}; break;
+            case 0: pose.t[index] = Vec3{sampled[0], sampled[1], sampled[2]}; break;
+            case 1: pose.r[index] = Quat{sampled[0], sampled[1], sampled[2], sampled[3]}; break;
+            case 2: pose.s[index] = Vec3{sampled[0], sampled[1], sampled[2]}; break;
             default: break;  // unknown paths are ignored (the parser only emits 0/1/2)
         }
     }
+    return pose;
+}
+
+std::vector<Mat4> pose_palette(const Scene& scene, std::size_t rigIndex, const LocalPose& pose) {
+    const std::vector<JointCpu>& joints = rig_at(scene, rigIndex).skin.joints;
+    const std::size_t joint_count = joints.size();
+    std::vector<Mat4> palette(joint_count);
+    if (joint_count == 0 || pose.t.size() != joint_count || pose.r.size() != joint_count ||
+        pose.s.size() != joint_count) {
+        return palette;  // no skin, or a pose sized for another rig
+    }
+    const std::vector<Vec3>& translations = pose.t;
+    const std::vector<Quat>& rotations = pose.r;
+    const std::vector<Vec3>& scales = pose.s;
 
     // World = parent world × local. Converted data lists parents before their
     // children, but resolve parent-first anyway so any joint order is correct:
@@ -184,6 +195,29 @@ std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
         palette[i] = mat4_mul(world[i], joints[i].inverseBind);
     }
     return palette;
+}
+
+std::vector<Mat4> animation_pose(const Scene& scene, std::size_t rigIndex,
+                                 const AnimationCpu& clip, float time) {
+    return pose_palette(scene, rigIndex, animation_local_pose(scene, rigIndex, clip, time));
+}
+
+LocalPose blend_poses(const LocalPose& a, const LocalPose& b, float w) {
+    if (a.t.size() != b.t.size() || a.r.size() != b.r.size() || a.s.size() != b.s.size()) {
+        return w < 0.5f ? a : b;  // poses of different rigs cannot mix: take the nearer
+    }
+    w = std::clamp(w, 0.0f, 1.0f);
+    LocalPose out = a;
+    for (std::size_t i = 0; i < a.t.size(); ++i) {
+        out.t[i] = Vec3{a.t[i].x + (b.t[i].x - a.t[i].x) * w, a.t[i].y + (b.t[i].y - a.t[i].y) * w,
+                        a.t[i].z + (b.t[i].z - a.t[i].z) * w};
+        out.s[i] = Vec3{a.s[i].x + (b.s[i].x - a.s[i].x) * w, a.s[i].y + (b.s[i].y - a.s[i].y) * w,
+                        a.s[i].z + (b.s[i].z - a.s[i].z) * w};
+    }
+    for (std::size_t i = 0; i < a.r.size(); ++i) {
+        out.r[i] = quat_slerp(a.r[i], b.r[i], w);
+    }
+    return out;
 }
 
 void posed_bounds(const Scene& scene, const std::vector<Mat4>& palette, Vec3& outMin,
