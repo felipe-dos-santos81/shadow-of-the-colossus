@@ -14,8 +14,9 @@ kneeling leg's fur (hoof → shin → thigh → rump), strike the back sigil on 
 and walk his back (hold `E`), hold through the shake-off (`refuse_shoulder`, the first 5 s of each 20 s
 attached), climb the neck and strike the head sigil; his death clip is held where its root leaves him (no
 corpse swap) and there is **no return to the shrine**; `R` resets. Behaviour is data from `eboot.elf`'s
-MAMMOTH tables (HP 220, the hoof gate, 20 s sprain, 2/10 s rise, the shake rule, ±30° turn); the rest is
-measured or authored (`app/src/encounters/quadratus.h`, `app/src/quadratus_fight.h`). Valus is unchanged.
+MAMMOTH tables (the 220 of `boss_param[1]`, read as his HP: a guess; the hoof gate, 20 s sprain, 2/10 s
+rise, the shake rule, ±30° turn); the rest is measured or authored (`app/src/encounters/quadratus.h`,
+`app/src/quadratus_fight.h`). Valus is unchanged.
 The proof is `--s11-selftest --s11-stills out/s11/stills` and `--s11-e2e` (manifest arena_02); the
 acceptance script is `scripts/s11-acceptance.sh` (the frozen S9 chain first); the runner's
 `tools/verify/s11.sh` has blessed goldens. Quadratus's bake (58 `boss_a_*` clips) is in the base
@@ -312,8 +313,7 @@ export SOTC_LIB=<repo>/out/library
 caffeinate -dimsu ./scripts/s11-acceptance.sh  # S11 + S9 (which runs S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s9-acceptance.sh` for an S11 change: it is S11's regression. Never modify `scripts/s8-acceptance.sh`, `scripts/s7-acceptance.sh`, `scripts/s6-acceptance.sh`,
-`scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh`,
-`scripts/s4-acceptance.sh` or `scripts/s3-acceptance.sh` for an S9 change: they are the regression.
+Never modify `scripts/s3-acceptance.sh` … `scripts/s9-acceptance.sh` (s3, s4, s41, s42, s5, s6, s7, s8,
+s9) for an S11 change: they are S11's regression (s9 runs the other eight inside it).
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
 measured values, not adjectives.
