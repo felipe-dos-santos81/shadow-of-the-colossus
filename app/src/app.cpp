@@ -5925,7 +5925,9 @@ int run_app(const AppOptions& opts) {
                     out = to_body_frame(pelvis, seat, horseYaw);
                     return true;
                 };
-                frame(RideKeys{});
+                // Riding is reached as the Mount -> stand1 blend starts: sample the
+                // rest once the blend has finished, not two frames into it.
+                hold(kClipBlendSeconds, RideKeys{});
                 Vec3 seatRest{};
                 if (!pelvis_on_seat(seatRest)) {
                     return fail("no Bone_KOSI on the rider or OptBone_boy on Agro");
