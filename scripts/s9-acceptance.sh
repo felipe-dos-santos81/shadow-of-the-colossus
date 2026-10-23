@@ -313,8 +313,8 @@ for png in $sword_pngs; do
   magic="$(od -An -tx1 -N8 "$path" | tr -d ' \n')"
   [[ "$magic" = "89504e470d0a1a0a" ]] || fail "$path lacks the PNG magic (got $magic)"
   # IHDR: width and height, big-endian, at bytes 16..23.
-  w="$(od -An -tu1 -j16 -N4 "$path" | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
-  h="$(od -An -tu1 -j20 -N4 "$path" | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
+  w="$(od -An -tu1 -j16 -N4 "$path" | tr -s ' \n' ' ' | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
+  h="$(od -An -tu1 -j20 -N4 "$path" | tr -s ' \n' ' ' | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
   [[ "${w}x${h}" = "$1" ]] || fail "$path is ${w}x${h} (expected $1, Task 0's decode)"
   sword_rows="${sword_rows}${sword_rows:+, }${png##*/} ${w}x${h}"
   shift
