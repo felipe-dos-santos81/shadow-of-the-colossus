@@ -55,7 +55,8 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
 // geometry: no rig record, every appended mesh carries rig = -1 (static meshes
 // draw with palette slot 0), and its materials/textures append with their
 // indices kept valid (materials shift by the scene's existing material count;
-// textures already are global). `model` is baked into the appended meshes'
+// textures are global, and a texture an earlier glb already decoded is reused
+// rather than appended again). `model` is baked into the appended meshes'
 // `model` — identity by default — and the scene's world bounds grow by their
 // placed vertices. Returns the first appended mesh index; a glb that contributes
 // no geometry returns `scene.meshes.size()` unchanged.

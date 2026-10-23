@@ -1000,8 +1000,8 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
     CHECK(player.skin.joints.size() == 348);
     CHECK(entity.skin.joints.size() == 238);
 
-    // The player keeps its own fifteen baked clips (S4.1's climb set plus S4.2's
-    // fight set).
+    // The player keeps its own baked clips: the fifteen S2-S6 clips first
+    // (S4.1's climb set plus S4.2's fight set), then S7's wake clips.
     check_wander_s2s6_clips(player.animations);
     CHECK(player.animations[0].name == "player_a_stand");
     // The entity carries Valus's eight baked clips (S4.2 adds the three attack
@@ -1065,7 +1065,7 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
 
     // --- S4 task 4: per-rig palettes, playback and grounding ------------------
 
-    // One playback per rig: the player keeps its fifteen clips, the entity its
+    // One playback per rig: the player keeps its own clips, the entity its
     // eight; each pose is sized by its own rig's joint count.
     Playback player_playback;
     Playback entity_playback;

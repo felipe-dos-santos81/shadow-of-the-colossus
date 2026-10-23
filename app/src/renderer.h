@@ -42,8 +42,9 @@ public:
     // pipelines, the HUD and the white fallback texture stay.
     void release_scene();
 
-    // Static meshes drawn / frustum-culled by the last render_frame (hidden and
-    // empty meshes count as neither; rigged meshes count as drawn).
+    // Meshes drawn / frustum-culled by the last render_frame: drawn counts every
+    // drawn mesh, static and rigged (rigged meshes are never culled); culled
+    // counts static meshes only; hidden and empty meshes count as neither.
     int drawn_last_frame() const { return drawn_last_frame_; }
     int culled_last_frame() const { return culled_last_frame_; }
 

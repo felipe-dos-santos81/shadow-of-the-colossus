@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 
@@ -93,12 +94,13 @@ std::size_t layer_base(const Heightmap& hm, int i, int j) {
 
 // Adds `y` to one node's ascending, NaN-padded list: within kLayerMerge of an
 // existing layer it merges to the higher; a full list drops its lowest.
-void insert_layer(float* node, int capacity, float y) {
+// Returns false when the list was full (a layer was lost: the node saturated).
+bool insert_layer(float* node, int capacity, float y) {
     int count = 0;
     while (count < capacity && !std::isnan(node[count])) {
         if (std::fabs(node[count] - y) <= kLayerMerge) {
             node[count] = std::max(node[count], y);
-            return;
+            return true;
         }
         ++count;
     }
@@ -108,18 +110,19 @@ void insert_layer(float* node, int capacity, float y) {
     }
     if (count == capacity) {
         if (at == 0) {
-            return;  // lower than everything kept
+            return false;  // lower than everything kept
         }
         for (int k = 0; k + 1 < at; ++k) {
             node[k] = node[k + 1];  // drop the lowest
         }
         node[at - 1] = y;
-        return;
+        return false;
     }
     for (int k = count; k > at; --k) {
         node[k] = node[k - 1];
     }
     node[at] = y;
+    return true;
 }
 
 // The layer index a body at height `y` stands on at one node: the highest layer
@@ -257,6 +260,7 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
         return length > 0.0f ? std::fabs(n.y) / length : -1.0f;
     };
 
+    bool saturated = false;  // the saturation warning prints once per build
     for_each_triangle([&](Vec3 p0, Vec3 p1, Vec3 p2) {
         const float area = cross_xz(p0, p1, p2);
         if (area == 0.0f) {
@@ -302,9 +306,15 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
                 if (std::isnan(cell) || y > cell) {
                     cell = y;
                 }
-                if (floor_triangle) {
-                    insert_layer(&heightmap.layers[layer_base(heightmap, i, j)],
-                                 heightmap.maxLayers, y);
+                if (floor_triangle &&
+                    !insert_layer(&heightmap.layers[layer_base(heightmap, i, j)],
+                                  heightmap.maxLayers, y) &&
+                    !saturated) {
+                    saturated = true;
+                    std::fprintf(stderr,
+                                 "sotc-viewer: a heightmap node holds more than %d floor layers "
+                                 "at (%.2f, %.2f); the lowest are dropped\n",
+                                 kHeightmapLayers, node.x, node.z);
                 }
             }
         }
