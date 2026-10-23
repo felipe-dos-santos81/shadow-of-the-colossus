@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 
 namespace q = encounters::quadratus_detail;
@@ -432,12 +433,12 @@ bool quadratus_hoof_window(const QuadratusFight& fight, const Encounter& encount
     if (lift != nullptr) {
         *lift = quadratus_hoof_lift(sole, toe, floor);
     }
-    // The stab's sword reaches past the body capsule (kQuadStabReachMeters).
+    // The blade reaches past the body capsule (kQuadBladeReachMeters).
     const WeakpointProxyLookup reach = [&proxy](int weakpoint, Vec3& centre, float& radius) {
         if (!proxy || !proxy(weakpoint, centre, radius)) {
             return false;
         }
-        radius += kQuadStabReachMeters;
+        radius += kQuadBladeReachMeters;
         return true;
     };
     return quadratus_hoof_kneels(sole, toe, floor,

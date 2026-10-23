@@ -159,13 +159,15 @@ QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Pl
 // The open sigil's weakpoint (kSigilOrder), -1 once every share is spent.
 int quadratus_open_sigil(const QuadratusFight& fight, const Encounter& encounter);
 
-// Authored: the ground stab's sword reaches this far past the player's body
-// capsule (the hoof rule's strike_reaches_shell gets the sole's shell radius plus
-// it). The hoof's own collision capsule (r 2.5, the cgpr B field) holds the
+// The blade's reach past the body (authored for now; measure it from
+// wander_sword.glb later): the ground stab's sword reaches this far past the
+// player's body capsule (the hoof rule's strike_reaches_shell gets the sole's
+// shell radius plus it). Only the ground stab uses it — the one strike made by a
+// player a collision capsule holds off; attached strikes have no pushout. The hoof's own collision capsule (r 2.5, the cgpr B field) holds the
 // player 2.85 m off its axis, and the sole's shell radius is 2.4-2.8 m, so
 // without the blade's reach no stab lands (measured in the selftest's trace:
 // 3.0 m at best against 2.7 m); the recon's windows assumed it (clips.md §3).
-inline constexpr float kQuadStabReachMeters = 0.6f;
+inline constexpr float kQuadBladeReachMeters = 0.6f;
 
 // Whether a stab now at the player's feet would kneel him by kHooves[row]: the
 // hoof rule (quadratus_hoof_kneels, the blocked rule above) on the toe bone posed

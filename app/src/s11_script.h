@@ -18,6 +18,7 @@
 struct S11Script {
     const char* prefix = "s11";  // the lines' prefix: "s11" or "s11e2e"
     int phase = 0;
+    int phasesDone = 0;  // the furthest phase reached (the status line; 11 = reset)
     float phaseSeconds = 0.0f;
     float seconds = 0.0f;  // fixed-step seconds since the start
     int frames = 0;

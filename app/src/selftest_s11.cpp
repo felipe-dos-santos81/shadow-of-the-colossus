@@ -53,6 +53,7 @@ constexpr float kResetTolerance = 1e-3f;
 constexpr int kS11PerfFrames = 240;
 
 void next(S11Script& sc, int phase) {
+    sc.phasesDone = std::max(sc.phasesDone, phase);  // the furthest phase reached
     sc.phase = phase;
     sc.phaseSeconds = 0.0f;
     sc.step = 0;
@@ -699,7 +700,7 @@ SelftestResult run_s11(StageCtx& ctx, RunState& run) {
     std::printf("s11-perf frames=%d frame_ms=%.3f drawn=%d culled=%d\n", kS11PerfFrames,
                 perfMs / static_cast<double>(kS11PerfFrames), run.renderer.drawn_last_frame(),
                 run.renderer.culled_last_frame());
-    std::printf("s11-status phases=%d frames=%d seconds=%.1f health=%.0f\n", kPhaseCount,
+    std::printf("s11-status phases_done=%d frames=%d seconds=%.1f health=%.0f\n", sc.phasesDone,
                 sc.frames, sc.seconds, ctx.encounter.health);
     print_status_line(opts, run.shell.win);
     return 0;

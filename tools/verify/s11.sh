@@ -50,6 +50,7 @@ refused "--s11-stills without --s11-selftest" "${base_args[@]}" --s11-stills "$s
 refused "--s11-selftest with --s11-e2e" "${base_args[@]}" --s11-selftest --s11-e2e
 refused "--s11-e2e with --stage shrine" "${base_args[@]}" --stage shrine --s11-e2e
 refused "--s11-selftest without --manifest" --library "$lib" --model "$player" --s11-selftest
+refused "--s11-selftest with --stage plain" "${base_args[@]}" --stage plain --s11-selftest
 
 stamp "s11-selftest + stills: $arena02_manifest"
 if ! selftest_out="$(caffeinate -dimsu "$viewer" "${base_args[@]}" --s11-selftest \
@@ -105,6 +106,8 @@ corpse_line="$(one_line '^s11-corpse ' s11-corpse)"
 perf_line="$(one_line '^s11-perf ' s11-perf)"
 [[ "$perf_line" =~ ^s11-perf\ frames=240\ frame_ms=[0-9]+\.[0-9]+\ drawn=[0-9]+\ culled=[0-9]+$ ]] ||
   fail "s11-perf is malformed: $perf_line"
+[[ "$(one_line '^s11-status ' s11-status)" =~ ^s11-status\ phases_done=11\  ]] ||
+  fail "the selftest did not reach its last phase (reset)"
 one_line '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' s1-status > /dev/null
 
 for name in kneel back head death; do
