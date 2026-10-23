@@ -65,7 +65,8 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 | `app/` | the native viewer (`app/src/`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
 | `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6` are invoked unchanged as later milestones' regressions |
-| `docs/notes/` | RE records and per-milestone results notes (`s6-results.md` is this milestone's; `s6-recon.md` is its asset gate) |
+| `docs/notes/` | RE records and per-milestone results notes (`s7-results.md` is this milestone's; `s7-recon.md` is its RE gates) |
+| `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
 | `out/` | gitignored: symlink to the 12 GB converted library, manifests, captures, run logs |
@@ -82,6 +83,9 @@ wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Neve
 acceptances concurrently.
 
 ## Build and test
+
+`make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make accept`, `make
+accept-s6`, …). The underlying commands:
 
 ```bash
 dotnet build BpConvert.sln
@@ -147,6 +151,6 @@ caffeinate -dimsu ./scripts/s7-acceptance.sh   # S7 + S6 (which runs S5 → S4.2
 ```
 
 Never modify `scripts/s6-acceptance.sh`, `scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`,
-`scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh` for an S7 change: they are the regression. Assets, derived glbs and
-the decoded audio are gitignored and never committed; results notes quote measured values, not
-adjectives.
+`scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh` for an S7 change: they are the regression.
+Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
+measured values, not adjectives.
