@@ -1,73 +1,151 @@
-# sotc-native
+# Shadow of the Colossus (PS4, 2018) — Native Rebuild ~16%
 
-Native Apple-Silicon rebuild of **Shadow of the Colossus (2018)** from the extracted PS4 game data:
-a C++20 / SDL3 / Metal viewer and a .NET 10 asset converter. Windowed; the cursor is never captured.
+Native Apple-Silicon rebuild of **Shadow of the Colossus** (Bluepoint Games /
+SIE Japan Studio, PS4, 2018) from the game's own extracted data: a **C++20 /
+SDL3 / SDL_GPU (Metal) viewer** and a **.NET 10 asset converter** (`bp-convert`).
+The viewer runs windowed and never captures the mouse cursor.
 
-**Status:** the first colossus is playable end to end. Walk the Valus arena, climb him, strike his
-weakpoints, hear the game's own audio, watch his death and the black tendrils, wake in the
-Shrine of Worship, walk out of its front door onto the plain, whistle for Agro and ride her, then
-ride up the arena's entrance into Valus's arena with the raised sword's light pointing the way
-(S1–S9; each milestone's measured results are in `docs/notes/s*-results.md`). The user walks for
-S4.1–S9 are still pending. [`AGENTS.md`](AGENTS.md) has the full status, the
-controls and the working rules.
+It is a rebuild, not a recompilation. The PS4 executable (`eboot.elf`) is a
+reference, read in Ghidra for timings, rules and data tables. The runtime never
+parses the original containers: the converter turns them into glTF models, PNG
+textures, WAV audio and stage manifests ahead of time (offline-first, design §8).
 
-## Quick start
+## Game assets
 
-```bash
-brew install sdl3 sdl3_ttf          # plus .NET 10, cmake, python3
-make help                           # every target
-make convert                        # the asset library into out/library (resumable, ~33 min)
-make libview BRANCH=s9-road         # until S9's merge: a library view; export the SOTC_LIB it prints
-make bake                           # bake the clips: Mono's pose, Wander's 49, Agro's 20, the sword's light (S2–S9)
-make audio                          # the curated audio slice (36 cues)
-make accept-s4                      # composes and gates the encounter manifest
-make run                            # play the Valus encounter
-make shrine                         # start in the Shrine of Worship
-make plain                          # start on the plain (the road) with Agro
-make road                           # the same start: ride to the arena's entrance, C raises the sword
-make accept                         # the S9 acceptance (runs S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
-```
+The game files are **not included** in this repository and are required to
+build, run or reverse-engineer anything here. Extract your own copy of the PS4
+release (CUSA08809) into `../SOTC-extract/extracted/game/` (130,155 files,
+~14.4 GB; `GAME_ROOT=` overrides the path). That tree is read-only input: the
+tools and tests never write to it. The converted library (~12 GB) lives in the
+git-ignored `out/` tree.
 
-`make run`, `make shrine`, `make plain` and `make accept` compose the shrine, plain and road manifests
-(`make shrine-manifest`, `make plain-manifest`, `make road-manifest`) when they are missing. Without the shrine manifest,
-or without the wake clips from `make bake`, `make run` warns once and plays without the return to
-the shrine (`--no-return` does the same on purpose).
+## Status
 
-The game data is read from `../SOTC-extract/extracted/game/` (`GAME_ROOT=` overrides it) and is never
-modified. Converted assets live in the gitignored `out/` tree.
+Two colossi are playable end to end:
+- **Valus:** walk his arena, climb him, strike his weak points, hear the game's
+  own audio, watch his death and the black tendrils, then wake in the Shrine of
+  Worship.
+- **Journey to his arena:** walk out of the shrine's front door onto the plain,
+  whistle for Agro and ride her to the arena's entrance, with the raised
+  sword's light pointing the way.
+- **Quadratus:** in his own arena, stab a lifted hoof to make him kneel, climb
+  his fur, walk his back, and strike the back and head sigils.
 
-## Riding (S8)
+Milestones S1–S11 are implemented, each with its measured results in
+`docs/notes/s*-results.md`. Only S8 has been played and signed off by hand; the
+other play-throughs are pending. Two claims back the number:
 
-On the plain: `Q` (gamepad north) whistles for Agro; `E` (south) beside her mounts from that side.
-Mounted, each `W` press (stick-forward press) kicks her up one gait — walk, trot, gallop; a tap of
-`S` lowers one gait, holding `S` stops her, and `S` at a stand backs her up; `A`/`D` (left stick)
-steer; `E` at a stand or walk dismounts. Walk into the shrine's front door to reach the plain, and
-into the shrine steps to go back. `R` returns to the arena from anywhere.
+- **Rebuild — ~16% (estimate).** By content:
+  - colossi: 2 of 16 fightable, Valus and Quadratus, with 14 still to do;
+  - world: the shrine, the plain around it, the road to Valus and two arenas,
+    out of the 71 areas the world is built from;
+  - Wander: walk, run, climb, strike, the sword's light and riding Agro; swimming,
+    jumping, the bow and the moving mount are not done;
+  - not started: cutscenes, Dormin, menus and save.
 
-## The road to Valus (S9)
+  The asset pipeline is largely complete: the 16,782-source model batch
+  converts, with its known failure classes listed in `docs/notes/m0-results.md`,
+  along with clips, audio and stage composition. The S10 census
+  records all 16 colossi, and the S11 behaviour RE found each colossus's state
+  machine stored as **data tables inside `eboot.elf`**: 21 modes each, with
+  timers, angles, health and anger. Later colossi can read those tables instead
+  of having values authored by hand.
+- **Verification — goldens plus a frozen chain.** `scripts/verify` re-runs each
+  milestone's scripted selftest and compares it with blessed goldens
+  (`tools/verify/golden/`; timing fields masked). Content-hash stamps skip
+  unchanged steps:
+  - cold: about 5 min;
+  - warm: 1.4 s;
+  - one milestone after an app change: about 95 s.
 
-In interactive play the plain runs on to the arena's entrance: ride up the stairs and into the
-corridor; its dead end fades into Valus's arena, and the arena's rim above it fades back to the
-corridor floor, where Agro waits where you left her. Hold `C` (gamepad left shoulder) to raise the
-sword — on foot it stops you and `W`/`A`/`S`/`D` turn you; mounted only at a stand. In sunlight its
-eight-line fan narrows as the camera looks toward Valus and locks into one beam that sparks where it
-lands; in shade the light fades. Release `C` to lower it.
+  The milestone gate is the frozen acceptance chain
+  `scripts/s11-acceptance.sh`, which runs S9 → S8 → … → S3 first and then
+  Quadratus; it passes in 892 s. Behind both sit 528 app unit cases and the
+  converter's xUnit suite.
+
+The detailed, continuously-updated status — every milestone, its rulings, its
+authored-vs-data values and its known gaps — is in
+**[`AGENTS.md`](AGENTS.md)** and the per-milestone `docs/notes/s*-results.md`.
 
 ## Layout
 
-- `app/` — the viewer ([`app/README.md`](app/README.md): controls and options)
-- `src/`, `tests/` — the `bp-convert` converter and its tests (`BpConvert.sln`)
-- `tools/re/` — reverse-engineering probes and gates (stdlib Python)
-- `scripts/` — milestone acceptance scripts
-- `docs/` — designs and plans (`docs/superpowers/`), RE notes and results (`docs/notes/`)
+| Path | What |
+|---|---|
+| `AGENTS.md` | Running status per milestone, the controls, the working rules |
+| `app/` | The viewer: `src/` (one file per selftest, `stage_setup`, `interactive`, `encounters/`), shaders, headless tests; [`app/README.md`](app/README.md) has the controls and options |
+| `src/`, `tests/` | The `bp-convert` converter and its xUnit suite (`BpConvert.sln`) |
+| `tools/re/` | Reverse-engineering probes, stage composer (`stage/probe.py`), census, generated-table scripts (stdlib Python) |
+| `tools/verify/` | The regression runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone, `golden/`, `libview.sh` |
+| `scripts/` | Milestone acceptance scripts `s3`…`s11`; the older ones are frozen as later milestones' regressions; `verify` |
+| `docs/superpowers/` | Milestone designs (`specs/`) and plans (`plans/`) |
+| `docs/notes/` | RE records and per-milestone results notes |
+| `third_party/PSO2-Aqua-Library` | Pinned GPL-3.0 submodule, used parse-only behind the converter's adapter |
+| `out/` | Git-ignored: the converted library, library views per branch, stage manifests, captures, run logs |
+| `Makefile` | `make help` — build, convert, bake, run, verify and acceptance targets |
 
-## Notes
+## Toolchain
 
-- Run the published CLI as `dotnet exec out/bin/bp-convert.dll`; the bare apphost needs `DOTNET_ROOT`
-  on this machine ([`docs/notes/aqua-core-api.md`](docs/notes/aqua-core-api.md) §0).
-- `third_party/PSO2-Aqua-Library` is a pinned GPL-3.0 submodule used parse-only.
-- `tools/native/liboo2core_8_win64_.dylib` is the RAD Oodle decoder, vendored to read the game's
-  compressed data. **Personal use only — never redistribute**
+* **Xcode command-line tools** and **CMake 4.4** for the C++20 viewer; **SDL3
+  3.4** and **SDL3_ttf 3.2** from Homebrew (`brew install sdl3 sdl3_ttf`).
+* **.NET 10** SDK for the converter.
+* **Python 3** (stdlib only) for the RE tools, the stage composer and the
+  regression runner.
+* **Ghidra 12** (headless, read-only over `out/re/ghidra`), plus Ghidra-MCP and
+  REA for interactive follow-up; the `eboot.bin` SELF → ELF unwrap and the
+  baseline are in [`docs/notes/re-toolchain.md`](docs/notes/re-toolchain.md).
+
+## Build and run
+
+```bash
+export SOTC_GAME_ROOT=$PWD/../SOTC-extract/extracted/game
+make help                           # every target
+make convert                        # the asset library into out/library (resumable, ~33 min)
+make bake                           # the clips: Mono, Wander's 49, Agro's 20, the sword's light, Quadratus's 58
+make audio                          # the curated audio slice (36 cues)
+make run                            # play the Valus encounter
+make shrine                         # start in the Shrine of Worship
+make road                           # start on the plain: ride to Valus's arena, C raises the sword
+```
+
+`make run`, `make shrine` and `make road` compose the stage manifests they
+need when they are missing. Run the published CLI as
+`dotnet exec out/bin/bp-convert.dll`; the bare apphost needs `DOTNET_ROOT` on
+this machine ([`docs/notes/aqua-core-api.md`](docs/notes/aqua-core-api.md) §0).
+A branch that re-bakes works in its own clone of the library:
+`make libview BRANCH=<name>`, then export the `SOTC_LIB` it prints.
+
+**Controls.** `WASD` move (Shift runs), `E` grab (hold), `J` strike (hold to
+charge), `W`/`S` climb, `A`/`D` shimmy, `R` soft-reset, `M` mute, `Escape`
+quit. On the plain: `Q` whistles for Agro, `E` beside her mounts. Mounted, a
+`W` press kicks one gait up, `S` reins in (held: stop; at a stand: back up),
+`A`/`D` steer and `E` dismounts. Hold `C` to raise the sword. A gamepad works
+too; the full mapping is in [`app/README.md`](app/README.md).
+
+### Verify
+
+```bash
+make verify                         # per-task gate: re-runs only what changed, against the goldens
+make verify-long                    # milestone gate: the frozen acceptance chain (~15 min)
+caffeinate -dimsu ./scripts/s11-acceptance.sh
+```
+
+Every viewer and acceptance run is wrapped in `caffeinate -dimsu`, because
+this machine suspends idle background work. GPU runs stay serial: measured, three
+concurrent viewers add up to 2 ms to the 8.2 ms frame. Goldens are re-blessed
+(`make verify ARGS=--bless`, clean tree, nothing else running) only for a
+deliberate output change.
+
+## Third-party
+
+- **PSO2-Aqua-Library** (GPL-3.0), a pinned submodule at
+  `third_party/PSO2-Aqua-Library`, used parse-only behind
+  `src/BpConvert.Core/Aqua/AquaModelAdapter.cs`.
+- **RAD Oodle** decoder (`tools/native/liboo2core_8_win64_.dylib`), vendored to
+  read the game's compressed data, and **SixLabors.ImageSharp** in the
+  converter. Both are **personal use only — never redistribute**
   ([`tools/native/NOTICE.md`](tools/native/NOTICE.md)).
+- **cgltf**, **stb_image**, **stb_image_write** and **doctest** are vendored
+  single headers in `app/third_party/` (versions in `VERSIONS.md`).
 
-Personal-use fan project. No game assets are distributed in this repository.
+GPL-3.0 project. Personal-use fan project: no game assets, and nothing derived
+from them, are distributed in this repository.
