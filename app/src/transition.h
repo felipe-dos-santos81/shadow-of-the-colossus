@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 // The return-to-shrine phase machine (S7 Task 4, design §8.4): a pure,
 // headless-testable clock for "Valus is dead, walk back to the shrine". `app.cpp`
 // owns the stage switch, the shrine scene and the fade quad's drawing; everything
@@ -55,3 +57,12 @@ bool return_wants_load(const ReturnState& before, const ReturnState& after);
 
 // "Idle", "Hold", "FadeOut", "Load", "FadeIn", "Wake", "Free", for telemetry.
 const char* return_phase_name(ReturnPhase phase);
+
+// S7 ruling R16: interactive play checks the return's two inputs once, before
+// the first frame (the AGENTS audio pattern). Empty when the shrine manifest
+// exists and the player glb carries both wake clips; otherwise the single
+// stderr line that names what is missing, `make shrine-manifest`, `make bake`
+// and `--no-return` — the app then plays with the return disabled. The
+// --s7-selftest and --s7-e2e never ask: a missing input stays fatal there.
+std::string return_unavailable_warning(const std::string& shrineManifestPath, bool manifestExists,
+                                       const std::string& modelRelPath, bool wakeClipsPresent);

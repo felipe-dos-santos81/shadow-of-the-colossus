@@ -3,9 +3,11 @@
 // single Load request and the reset.
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string>
 
 #include "transition.h"
 
@@ -197,4 +199,32 @@ TEST_CASE("return_phase_name spells the enum") {
     CHECK(std::strcmp(return_phase_name(ReturnPhase::FadeIn), "FadeIn") == 0);
     CHECK(std::strcmp(return_phase_name(ReturnPhase::Wake), "Wake") == 0);
     CHECK(std::strcmp(return_phase_name(ReturnPhase::Free), "Free") == 0);
+}
+
+TEST_CASE("return_unavailable_warning: empty when the shrine manifest and the wake clips are there") {
+    CHECK(return_unavailable_warning("out/re/stage/shrine.manifest", true, "w.glb", true).empty());
+}
+
+TEST_CASE("return_unavailable_warning names the missing input and every way out (R16)") {
+    const std::string noManifest =
+        return_unavailable_warning("/nonexistent/shrine.manifest", false, "w.glb", true);
+    CHECK(noManifest.find("/nonexistent/shrine.manifest") != std::string::npos);
+    CHECK(noManifest.find("wake clips") == std::string::npos);
+
+    const std::string noClips =
+        return_unavailable_warning("out/re/stage/shrine.manifest", true, "w.glb", false);
+    CHECK(noClips.find("w.glb") != std::string::npos);
+    CHECK(noClips.find("wake clips") != std::string::npos);
+    CHECK(noClips.find("shrine.manifest") == std::string::npos);
+
+    const std::string both = return_unavailable_warning("s.manifest", false, "w.glb", false);
+    for (const std::string& w : {noManifest, noClips, both}) {
+        CHECK(w.find("make shrine-manifest") != std::string::npos);
+        CHECK(w.find("make bake") != std::string::npos);
+        CHECK(w.find("--no-return") != std::string::npos);
+        CHECK(std::count(w.begin(), w.end(), '\n') == 1);  // one line
+        CHECK(w.back() == '\n');
+    }
+    CHECK(both.find("s.manifest") != std::string::npos);
+    CHECK(both.find("wake clips") != std::string::npos);
 }

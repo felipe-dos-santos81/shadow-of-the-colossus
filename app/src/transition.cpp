@@ -101,3 +101,19 @@ const char* return_phase_name(ReturnPhase phase) {
     }
     return "?";
 }
+
+std::string return_unavailable_warning(const std::string& shrineManifestPath, bool manifestExists,
+                                       const std::string& modelRelPath, bool wakeClipsPresent) {
+    if (manifestExists && wakeClipsPresent) {
+        return {};
+    }
+    std::string missing;
+    if (!manifestExists) {
+        missing = "no shrine manifest at " + shrineManifestPath;
+    }
+    if (!wakeClipsPresent) {
+        missing += (missing.empty() ? "" : "; ") + modelRelPath + " carries no wake clips";
+    }
+    return "sotc-viewer: the return to the shrine is disabled (" + missing +
+           "): run `make shrine-manifest` and `make bake`, or pass --no-return\n";
+}
