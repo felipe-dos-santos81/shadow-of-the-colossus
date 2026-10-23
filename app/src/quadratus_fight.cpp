@@ -82,6 +82,35 @@ void enter(QuadratusFight& fight, int state) {
     fight.lastTime = 0.0f;
 }
 
+// The yaw `state` has added by its time `t`: a turn's full kClipYaw from its clip
+// end on, before it the measured heading its bones have turned (kTurnHeading).
+// 0 for every other state.
+float turn_yaw_at(const QuadratusFight& fight, int state, float t) {
+    const int clip = state_clip(state);
+    if (clip < 0 || clip_yaw(state) == 0.0f) {
+        return 0.0f;
+    }
+    if (t >= fight.seconds[static_cast<std::size_t>(clip)]) {
+        return clip_yaw(state);
+    }
+    return quadratus_turn_heading_deg(clip_name(clip), t);
+}
+
+// Leaves the state before its clip end (a hoof's kneel, a kill) for `next`: a turn
+// keeps the yaw it has turned so far (the next clip starts from unturned bones,
+// so without it the body snaps back), and a chain cut short still sets its
+// attack's cooldown (A5).
+void cut(QuadratusFight& fight, Encounter& encounter, const BehaviourRuntime& next) {
+    encounter.entityYawDeg = std::remainder(
+        encounter.entityYawDeg + turn_yaw_at(fight, fight.rt.state, fight.rt.stateSeconds), 360.0f);
+    fight.rt = next;
+    if (fight.chain >= 0) {
+        fight.rt.cooldownSeconds = q::kAttacks[static_cast<std::size_t>(fight.chain)].cooldownSeconds;
+        fight.chain = -1;
+    }
+    fight.lastTime = 0.0f;
+}
+
 }  // namespace
 
 const char* quad_state_name(int state) {
@@ -226,7 +255,7 @@ QuadratusFrame quadratus_fight_step(QuadratusFight& fight, Encounter& encounter,
         // The death sequence drives the clip (advance_death_frame pins its time);
         // he travels its root (the fall moves him 17.5 m, C§1) and holds.
         if (fight.rt.state != q::S::Death) {
-            enter(fight, q::S::Death);
+            cut(fight, encounter, behaviour_enter(table(), fight.rt, q::S::Death));
         }
         const float t = entity.time;
         if (fight.lastClip != q::C::Death) {
@@ -256,7 +285,9 @@ QuadratusFrame quadratus_fight_step(QuadratusFight& fight, Encounter& encounter,
         const float oldEnd = beforeT + (dt - fight.rt.stateSeconds);
         travel(encounter, ground,
                quadratus_root_delta(clip_name(state_clip(before)), fight.lastTime, oldEnd));
-        out.yawAddedDeg = clip_yaw(before);
+        const int beforeClip = state_clip(before);
+        out.yawAddedDeg =
+            turn_yaw_at(fight, before, fight.seconds[static_cast<std::size_t>(beforeClip)]);
         encounter.entityYawDeg = std::remainder(encounter.entityYawDeg + out.yawAddedDeg, 360.0f);
         if (fight.chain >= 0) {
             const int impact = impact_state(fight.chain);
@@ -360,7 +391,8 @@ int quadratus_open_sigil(const QuadratusFight& fight, const Encounter& encounter
 }
 
 QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Playback& entity,
-                                 const EntityClips& clips, int weakpoint, float damage) {
+                                 const EntityClips& clips, int weakpoint, float damage,
+                                 bool attached) {
     QuadratusHit out;
     out.weakpoint = weakpoint;
     if (encounter.defeated || !(damage > 0.0f)) {
@@ -372,9 +404,11 @@ QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Pl
         return out;
     }
     if (hit.kind == GateKind::Transition) {
-        fight.rt = hit.runtime;  // a hoof: its kneel, no damage
-        fight.chain = -1;
-        fight.lastTime = 0.0f;
+        if (quadratus_hoof_blocked(fight.rt.state, attached)) {
+            out.kind = GateKind::Ignore;  // the one hoof rule: no kneel under a climber
+            return out;
+        }
+        cut(fight, encounter, hit.runtime);  // a hoof: its kneel, no damage
         return out;
     }
     const int open = quadratus_open_sigil(fight, encounter);
@@ -397,8 +431,7 @@ QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Pl
         encounter.pendingCooldownSeconds = 0.0f;
         encounter.deathWeakpoint = weakpoint;
         start_encounter_one_shot(entity, encounter, clips.death);
-        enter(fight, q::S::Death);
-        fight.chain = -1;
+        cut(fight, encounter, behaviour_enter(table(), fight.rt, q::S::Death));
         fight.lastClip = q::C::Death;
         out.killed = true;
     }
@@ -467,9 +500,7 @@ QuadratusStab quadratus_ground_stab(QuadratusFight& fight, Encounter& encounter,
         if (out.hoof < 0 && kneels) {
             const BehaviourHit hit = behaviour_hit(table(), fight.rt, q::kHooves[i].weakpoint);
             if (hit.kind == GateKind::Transition) {
-                fight.rt = hit.runtime;
-                fight.chain = -1;
-                fight.lastTime = 0.0f;
+                cut(fight, encounter, hit.runtime);
                 out.hoof = q::kHooves[i].weakpoint;
             }
         }

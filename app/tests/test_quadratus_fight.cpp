@@ -172,7 +172,7 @@ TEST_CASE("hits route through the gates: back sigil first, each sigil to its sha
     clips.death = 0;
 
     // The head before the back is sealed: no damage.
-    QuadratusHit hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HeadSigil, 34.0f);
+    QuadratusHit hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HeadSigil, 34.0f, false);
     CHECK(hit.kind == GateKind::Ignore);
     CHECK(hit.sealed);
     CHECK(e.health == 220.0f);
@@ -180,32 +180,36 @@ TEST_CASE("hits route through the gates: back sigil first, each sigil to its sha
 
     // The back takes 34, 34, 34, then the 8 left of its 110 share.
     for (const float want : {34.0f, 34.0f, 34.0f, 8.0f}) {
-        hit = quadratus_fight_hit(fight, e, entity, clips, q::W::BackSigil, 34.0f);
+        hit = quadratus_fight_hit(fight, e, entity, clips, q::W::BackSigil, 34.0f, false);
         CHECK(hit.kind == GateKind::Damage);
         CHECK(hit.damage == doctest::Approx(want));
     }
     CHECK(e.health == doctest::Approx(110.0f));
     CHECK(quadratus_open_sigil(fight, e) == q::W::HeadSigil);
-    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::BackSigil, 34.0f);
+    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::BackSigil, 34.0f, false);
     CHECK(hit.sealed);  // spent
     CHECK(e.health == doctest::Approx(110.0f));
 
-    // A hoof on the climb (no strike reaches one; the gate still routes it): a
+    // A hoof struck by a climber: the one hoof rule ignores it.
+    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRL, 34.0f, true);
+    CHECK(hit.kind == GateKind::Ignore);
+    CHECK(fight.rt.state == q::S::Stand);
+    // A hoof from the ground (no strike reaches one; the gate still routes it): a
     // Transition into its kneel, no damage.
-    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRL, 34.0f);
+    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRL, 34.0f, false);
     CHECK(hit.kind == GateKind::Transition);
     CHECK(fight.rt.state == q::S::DownBLStart);
     CHECK(e.health == doctest::Approx(110.0f));
-    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRR, 34.0f);
+    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRR, 34.0f, false);
     CHECK(hit.kind == GateKind::Ignore);  // a kneel ignores every hoof (tagged deviation)
     CHECK(fight.rt.state == q::S::DownBLStart);
 
     // The head: 34, 34, 34, then the killing 8.
     for (int i = 0; i < 3; ++i) {
-        hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HeadSigil, 34.0f);
+        hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HeadSigil, 34.0f, false);
         CHECK_FALSE(hit.killed);
     }
-    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HeadSigil, 34.0f);
+    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HeadSigil, 34.0f, false);
     CHECK(hit.killed);
     CHECK(hit.damage == doctest::Approx(8.0f));
     CHECK(e.defeated);
@@ -216,7 +220,7 @@ TEST_CASE("hits route through the gates: back sigil first, each sigil to its sha
     CHECK(quadratus_open_sigil(fight, e) == -1);
 
     // Nothing counts after: no damage, no transition.
-    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRL, 34.0f);
+    hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRL, 34.0f, false);
     CHECK(hit.kind == GateKind::Ignore);
     CHECK(fight.rt.state == q::S::Death);
 }
@@ -250,8 +254,96 @@ TEST_CASE("a turn holds his yaw while it plays and adds its 45° at its end") {
     const std::vector<QuadratusFrame> frames = run(fight, e, ground, player, combat, 2.3f);
     CHECK(e.entityYawDeg == 0.0f);
     const std::vector<QuadratusFrame> end = run(fight, e, ground, player, combat, 0.1f);
-    CHECK(e.entityYawDeg == doctest::Approx(45.0f));
+    CHECK(e.entityYawDeg == 45.0f);  // exactly the table's kClipYaw
     CHECK(fight.rt.state == q::S::Stand);
+
+    // walk_turn_r's end adds exactly its -44.3° too.
+    fight = fight_of_lengths();
+    e = quadratus_encounter();
+    fight.rt.state = q::S::WalkTurnR;
+    run(fight, e, ground, player, combat, 2.1f);
+    CHECK(e.entityYawDeg == -44.3f);
+    CHECK(fight.rt.state == q::S::Walk);
+}
+
+TEST_CASE("a turn cut short by a hoof keeps the yaw it has turned: 0, the measured mid, the full yaw") {
+    struct Turn {
+        int state;
+        const char* clip;
+        float seconds;
+        float full;
+    };
+    const Turn turns[] = {{q::S::TurnL, "boss_a_turn_l", 2.3333f, 45.0f},
+                          {q::S::TurnR, "boss_a_turn_r", 2.3333f, -45.0f},
+                          {q::S::WalkTurnL, "boss_a_walk_turn_l", 2.1333f, 45.0f},
+                          {q::S::WalkTurnR, "boss_a_walk_turn_r", 2.1333f, -44.3f}};
+    EntityClips clips;
+    for (const Turn& turn : turns) {
+        CAPTURE(turn.clip);
+        for (const float part : {0.0f, 0.5f, 1.0f}) {
+            CAPTURE(part);
+            QuadratusFight fight = fight_of_lengths();
+            fight.seconds[static_cast<std::size_t>(q::kStates[static_cast<std::size_t>(turn.state)].clip)] =
+                turn.seconds;
+            Encounter e = quadratus_encounter();
+            e.entityYawDeg = 10.0f;
+            Playback entity;
+            fight.rt.state = turn.state;
+            fight.rt.stateSeconds = part * turn.seconds;
+            const QuadratusHit hit =
+                quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRL, 34.0f, false);
+            REQUIRE(hit.kind == GateKind::Transition);
+            CHECK(fight.rt.state == q::S::DownBLStart);
+            const float want = part == 0.0f   ? 0.0f
+                               : part == 1.0f ? turn.full
+                                              : quadratus_turn_heading_deg(turn.clip, 0.5f * turn.seconds);
+            CHECK(e.entityYawDeg == doctest::Approx(10.0f + want));
+        }
+    }
+    // The measured mid values (half a clip: between frames 17/18 of 36 and at frame 16 of 33).
+    CHECK(quadratus_turn_heading_deg("boss_a_turn_l", 0.5f * 2.3333f) == doctest::Approx(19.29f).epsilon(0.002));
+    CHECK(quadratus_turn_heading_deg("boss_a_walk_turn_r", 0.5f * 2.1333f) ==
+          doctest::Approx(-21.15f).epsilon(0.002));
+}
+
+TEST_CASE("a stab mid-turn keeps his facing continuous: no snap across the kneel") {
+    // His facing = the entity yaw + the yaw his bones have turned (the kneel's
+    // first frame has turned none). Every frame of every turn, cut by a hoof.
+    EntityClips clips;
+    for (const int state : {q::S::TurnL, q::S::TurnR, q::S::WalkTurnL, q::S::WalkTurnR}) {
+        const int clip = q::kStates[static_cast<std::size_t>(state)].clip;
+        const char* name = q::kClips[static_cast<std::size_t>(clip)];
+        CAPTURE(name);
+        const float length = state == q::S::TurnL || state == q::S::TurnR ? 2.3333f : 2.1333f;
+        for (float t = 0.0f; t < length; t += 1.0f / 60.0f) {
+            QuadratusFight fight = fight_of_lengths();
+            fight.seconds[static_cast<std::size_t>(clip)] = length;
+            Encounter e = quadratus_encounter();
+            e.entityYawDeg = 170.0f;  // the wrap at ±180 too
+            Playback entity;
+            fight.rt.state = state;
+            fight.rt.stateSeconds = t;
+            const float before = 170.0f + quadratus_turn_heading_deg(name, t);
+            REQUIRE(quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRR, 34.0f, false).kind ==
+                    GateKind::Transition);
+            CHECK(std::fabs(std::remainder(e.entityYawDeg - before, 360.0f)) < 1.0f);
+        }
+    }
+}
+
+TEST_CASE("a hoof that cuts a stomp chain short still sets the attack's cooldown") {
+    QuadratusFight fight = fight_of_lengths();
+    Encounter e = quadratus_encounter();
+    Playback entity;
+    EntityClips clips;
+    fight.chain = 1;
+    fight.rt.state = q::kAttackChains[1].last;
+    fight.rt.stateSeconds = 1.0f;
+    const QuadratusHit hit = quadratus_fight_hit(fight, e, entity, clips, q::W::HoofRR, 34.0f, false);
+    REQUIRE(hit.kind == GateKind::Transition);
+    CHECK(fight.chain == -1);
+    CHECK(fight.rt.cooldownSeconds == doctest::Approx(q::kAttacks[1].cooldownSeconds));
+    CHECK(e.entityYawDeg == 0.0f);
 }
 
 TEST_CASE("the walk carries him 20 m per cycle along his yaw, on the ground") {

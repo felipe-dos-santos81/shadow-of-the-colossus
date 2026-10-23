@@ -334,7 +334,8 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
             // the hooves' kneels, nothing in Death); his fight is silent (D10).
             ctx.quadHit = quadratus_fight_hit(ctx.quad, encounter, playbacks[entityRig],
                                               entityClips, weakpoint,
-                                              static_cast<float>(events.damageDealt));
+                                              static_cast<float>(events.damageDealt),
+                                              attached_before);
         } else {
             apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
                                 weakpoint, audio_on ? &frameSfx : nullptr);

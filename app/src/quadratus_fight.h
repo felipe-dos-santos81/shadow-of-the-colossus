@@ -139,9 +139,11 @@ ShakeOff quadratus_shake(const QuadratusFight& fight);
 // A swing released while attached (hit or whiff): the shake rule's 3 s pause.
 void quadratus_fight_struck(QuadratusFight& fight);
 
-// An attached strike's damage routed through his gates (carry item 1): a dead
+// A strike's damage routed through his gates (carry item 1): a dead
 // Quadratus ignores everything; Ignore rows do nothing; a hoof Transition enters
-// its kneel with no damage; a sigil's Damage counts only on the open sigil of
+// its kneel with no damage unless quadratus_hoof_blocked(state, `attached`) (the
+// one hoof rule: then it is an Ignore); leaving a turn early keeps the yaw turned
+// so far, and cutting an attack chain sets its cooldown; a sigil's Damage counts only on the open sigil of
 // kSigilOrder (back, then head) and only up to its share of his health
 // (authored: maxHealth split evenly, the HP formula is open — F "Open"); the
 // blow that empties the last share defeats him: the death clip starts, the
@@ -154,7 +156,8 @@ struct QuadratusHit {
     bool killed = false;
 };
 QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Playback& entity,
-                                 const EntityClips& clips, int weakpoint, float damage);
+                                 const EntityClips& clips, int weakpoint, float damage,
+                                 bool attached);
 
 // The open sigil's weakpoint (kSigilOrder), -1 once every share is spent.
 int quadratus_open_sigil(const QuadratusFight& fight, const Encounter& encounter);
