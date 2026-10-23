@@ -595,8 +595,13 @@ void AudioEngine::ensure_device() {
     }
     SDL_SetAudioStreamGain(stream_, 1.0f);
     // Prime before the device has a chance to run dry: the lead contains the
-    // voice that just started (play* opens after the slot is filled).
-    top_up();
+    // voice that just started (play* opens after the slot is filled). Exactly
+    // kLeadBlocks, not `top_up()`: the device thread drains the fresh stream
+    // while top_up re-reads the queue, so its block count (and how far every
+    // voice advances before the caller's next mix) would race the hardware.
+    for (int block = 0; stream_ != nullptr && block < kLeadBlocks; ++block) {
+        push_block(kBlockFrames);
+    }
 }
 
 void AudioEngine::update(float dt, const Vec3& listenerPos, float listenerYawDeg) {
