@@ -1,0 +1,309 @@
+{
+ "idols": [
+  {
+   "slot": 1,
+   "glb": "models/shadow/objects/actors/statues/_cmn/mino_a_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -3.06
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Minotar_A_Statue_Whole",
+   "offset": "0xd189"
+  },
+  {
+   "slot": 2,
+   "glb": "models/shadow/objects/actors/statues/_cmn/mammoth_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -3.0661
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Mammoth_Statue_Whole",
+   "offset": "0xf2b9"
+  },
+  {
+   "slot": 3,
+   "glb": "models/shadow/objects/actors/statues/_cmn/knight_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -9.3978
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Knight_Statue_Whole",
+   "offset": "0x115c7"
+  },
+  {
+   "slot": 4,
+   "glb": "models/shadow/objects/actors/statues/_cmn/kirin_statue1.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -9.4276
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Kirin_Statue_Whole",
+   "offset": "0x13894"
+  },
+  {
+   "slot": 5,
+   "glb": "models/shadow/objects/actors/statues/_cmn/bird_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -15.719
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Bird_Statue_Whole",
+   "offset": "0x15b82"
+  },
+  {
+   "slot": 6,
+   "glb": "models/shadow/objects/actors/statues/_cmn/mino_b_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -15.5283
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "MinotaurB_Statue_Whole",
+   "offset": "0x17eb5"
+  },
+  {
+   "slot": 7,
+   "glb": "models/shadow/objects/actors/statues/_cmn/eel_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -21.7962
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Eel_Statue_Whole",
+   "offset": "0x1a219"
+  },
+  {
+   "slot": 8,
+   "glb": "models/shadow/objects/actors/statues/_cmn/colossus_08_lizard_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -21.8877
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Yamori_Statue_Whole",
+   "offset": "0x1c67b"
+  },
+  {
+   "slot": 9,
+   "glb": "models/shadow/objects/actors/statues/_cmn/colossus_09_tortoise_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -28.0612
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Tortoise_Statue_Whole",
+   "offset": "0x1ea1d"
+  },
+  {
+   "slot": 10,
+   "glb": "models/shadow/objects/actors/statues/_cmn/sand_serpent_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -28.0599
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Narga_Statue_Whole",
+   "offset": "0x20d96"
+  },
+  {
+   "slot": 11,
+   "glb": "models/shadow/objects/actors/statues/_cmn/lion_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -34.4014
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Leo_Statue_Whole",
+   "offset": "0x230e1"
+  },
+  {
+   "slot": 12,
+   "glb": "models/shadow/objects/actors/statues/_cmn/lake_turtle_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -34.4056
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Poseidon_Statue_Whole",
+   "offset": "0x253db"
+  },
+  {
+   "slot": 13,
+   "glb": "models/shadow/objects/actors/statues/_cmn/sky_serpent_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -40.6206
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "Snake_Statue_Whole",
+   "offset": "0x2770b"
+  },
+  {
+   "slot": 14,
+   "glb": "models/shadow/objects/actors/statues/_cmn/cerberus_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -40.5911
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Ceberus_Statue_Whole",
+   "offset": "0x29a62"
+  },
+  {
+   "slot": 15,
+   "glb": "models/shadow/objects/actors/statues/_cmn/mino_c_statue.glb",
+   "p": [
+    14.0,
+    9.6366,
+    -46.7353
+   ],
+   "yaw_deg": -90.0,
+   "source": "data",
+   "record": "MinotaurC_Statue_Whole",
+   "offset": "0x2bd5e"
+  },
+  {
+   "slot": 16,
+   "glb": "models/shadow/objects/actors/statues/_cmn/mega_maid_statue.glb",
+   "p": [
+    -14.159,
+    9.5917,
+    -46.8702
+   ],
+   "yaw_deg": 90.007,
+   "source": "data",
+   "record": "Evis_Statue_Whole",
+   "offset": "0x2e3c0"
+  }
+ ],
+ "broken": {
+  "slot": 1,
+  "glbs": [
+   "models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn/mino_a_statue_broke.glb",
+   "models/shadow/objects/actors/statues/colossus_01_minotaur_a/_cmn/mino_a_statue_broke_skirt.glb"
+  ],
+  "ps": [
+   [
+    14.0,
+    9.6563,
+    -3.107
+   ],
+   [
+    14.0,
+    9.6614,
+    -3.107
+   ]
+  ],
+  "yaw_deg": -90.0,
+  "source": "data",
+  "records": [
+   "Minotar_A_Statue_Broke@0xd2fe",
+   "Statue_Broke_skirt@0xd522"
+  ]
+ },
+ "mono": {
+  "glb": "models/shadow/characters/mono/_cmn/mono.glb",
+  "clip": "girl_a_death_loop",
+  "seconds": 0.0,
+  "p": [
+   0.0,
+   11.4023,
+   23.0
+  ],
+  "yaw_deg": 0.0,
+  "source": "authored"
+ },
+ "spawn": {
+  "p": [
+   0.0,
+   8.998,
+   1.0
+  ],
+  "yaw_deg": 0.0,
+  "source": "data",
+  "yaw_source": "authored",
+  "record": "$/scripts/shadow/world/cathedral/cathedral_int.sgpr"
+ },
+ "wake": {
+  "clips": [
+   "player_a_home_boss01_cut04",
+   "player_a_home_boss01_cut05"
+  ],
+  "seconds": 15.456,
+  "source": "data",
+  "root_series": false,
+  "pelvis_m": [
+   0.1,
+   0.72
+  ],
+  "end_heading_deg": 2.5
+ },
+ "flow": {
+  "hold_s": 2.0,
+  "fade_out_s": 1.0,
+  "fade_in_s": 1.5,
+  "colour": [
+   1,
+   1,
+   1
+  ],
+  "source": "authored"
+ },
+ "probes": {
+  "altar_step": [
+   0.0,
+   20.0
+  ],
+  "hall": [
+   0.0,
+   -20.0
+  ],
+  "stair": [
+   0.0,
+   -68.0
+  ],
+  "wall": {
+   "from": [
+    0.0,
+    -13.0
+   ],
+   "to": [
+    14.0,
+    -13.0
+   ]
+  }
+ }
+}

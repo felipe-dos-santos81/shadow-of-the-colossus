@@ -56,6 +56,10 @@ HudRect hud_player_health_rect(float fraction) {
                    kPlayerHealthWidth * clamped, kPlayerHealthHeight};
 }
 
+HudFade hud_fade_rect(float fade) {
+    return HudFade{HudRect{0.0f, 0.0f, kDesignWidth, kDesignHeight}, clamp_fraction(fade)};
+}
+
 void hud_format_stamina(char (&out)[32], float fraction) {
     const long percent = std::lround(clamp_fraction(fraction) * 100.0f);
     std::snprintf(out, sizeof(out), "STAMINA %ld", percent);

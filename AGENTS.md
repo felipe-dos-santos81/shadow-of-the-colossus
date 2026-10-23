@@ -6,6 +6,24 @@ This file is workspace guidance and is tracked with the project.
 
 ## Status (2026-10-22)
 
+**Milestone S7 "Return to the Shrine" — implemented; scripted acceptance green, user walk PENDING.**
+After the death sequence reaches `Done` the interactive game now returns to the shrine: a transition
+machine (`app/src/transition.h`) holds on the corpse (2.0 s), fades to white (1.0 s), loads
+`out/re/stage/shrine.manifest` (the cathedral glbs, 16 idols with slot 1 broken, a posed Mono on the
+altar), fades in (1.5 s), plays the baked `player_a_home_boss01_cut04`+`cut05` wake (11.669 s) under an
+authored two-key camera and hands over control; `R` in the shrine goes back to the arena. The shrine
+ground is a layered heightmap (the floor under the feet; `kHeightmapLayers` 64) with a coarse 1 m wall
+mask; off-screen meshes are culled. The timings, Mono's placement, the spawn yaw, the probes, the wake
+camera and the fade still are **authored** (R2 found no timings in the binary); the idol positions and
+the wake clips are data (R1/R3 PASS). The shrine is silent. `--no-return` keeps S6's end state for the
+S6 walk. The proof is `--s7-selftest --s7-stills out/s7/stills` (25 `s7-*` lines + five 2560×1440
+stills); `--s7-e2e` chains a real lethal hit → the S6 death → the fade → the shrine load → the wake →
+the control returning → `R` in one process through the interactive loop (20 `s7e2e-*` lines); the
+acceptance script is `scripts/s7-acceptance.sh` (it runs the frozen S6 chain first), and
+the recorded numbers are in `docs/notes/s7-results.md`. Known gaps: Dormin's voice and light, the
+statue break animation, the cutscene cameras, the bridge and garden walk, the coarse wall mask. The shrine
+loads in 1.79–1.90 s (the arena 0.65 s) and the window pumps events during a load. The user's walk is still the user's to fill in.
+
 **Milestone S6 "The fall" — implemented; scripted acceptance green, user walk PENDING.**
 Valus's death is now a sequence instead of a freeze: his health 0 starts a phase machine
 (`app/src/death.h`) that plays `minotaur_a_death_front` (6.166877 s), erupts the black tendrils
@@ -48,8 +66,9 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 |---|---|
 | `app/` | the native viewer (`app/src/`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`); `s3`/`s4`/`s41`/`s42`/`s5` are invoked unchanged as later milestones' regressions |
-| `docs/notes/` | RE records and per-milestone results notes (`s6-results.md` is this milestone's; `s6-recon.md` is its asset gate) |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6` are invoked unchanged as later milestones' regressions |
+| `docs/notes/` | RE records and per-milestone results notes (`s7-results.md` is this milestone's; `s7-recon.md` is its RE gates) |
+| `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
 | `out/` | gitignored: symlink to the 12 GB converted library, manifests, captures, run logs |
@@ -66,6 +85,11 @@ wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Neve
 acceptances concurrently.
 
 ## Build and test
+
+`make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make accept`, `make
+accept-s6`, …). `make bake` rebakes Mono's pose and Wander's 17 clips (the 15 S2–S6 clips, then the
+two S7 wake cuts) into the shared library with `--force`; `make run`/`make accept` compose the shrine
+manifest first. The underlying commands:
 
 ```bash
 dotnet build BpConvert.sln
@@ -113,13 +137,28 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --s6-selftest --s6-stills out/s6/stills    # the S6 death timeline + the stills
 ```
 
+After the death sequence the game returns to the shrine (`--no-return` keeps the S6 end state;
+`--stage shrine` starts there; `--shrine-manifest PATH` overrides `out/re/stage/shrine.manifest`).
+The shrine load takes 1.79–1.90 s and the window keeps pumping events during it. The S7 proof:
+
+```bash
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s7-selftest --s7-stills out/s7/stills    # the S7 return timeline + the stills
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s7-e2e                                   # the interactive loop, scripted: hit -> shrine -> R
+```
+
 ## Acceptance
 
 ```bash
-caffeinate -dimsu ./scripts/s6-acceptance.sh   # S6 + S5 (which runs S4.2 → S4.1 → S4 → S3)
+caffeinate -dimsu ./scripts/s7-acceptance.sh   # S7 + S6 (which runs S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh`
-or `scripts/s4-acceptance.sh` for an S6 change: they are the regression. Assets, derived glbs and
-the decoded audio are gitignored and never committed; results notes quote measured values, not
-adjectives.
+Never modify `scripts/s6-acceptance.sh`, `scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`,
+`scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh` for an S7 change: they are the regression.
+Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
+measured values, not adjectives.

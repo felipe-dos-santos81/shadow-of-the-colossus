@@ -28,6 +28,10 @@ struct MeshCpu {
     // single-glb load, the placed instance's TRS in a composed scene. The
     // vertices stay in the glb's own space.
     Mat4 model = mat4_identity();
+    // The box of `vertices` in the mesh's own vertex space (before `model`):
+    // the renderer transforms it by the CURRENT model each frame to frustum-cull
+    // static meshes.
+    Vec3 localMin{}, localMax{};
     // The rig this mesh is drawn with: an index into Scene::rigs, or -1 for a
     // static mesh (a manifest instance). A single glb always loads as rig 0
     // (includeRig=true, skeleton or not). The player's meshes are 0, each

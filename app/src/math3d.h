@@ -101,6 +101,35 @@ inline Mat4 mat4_perspective(float fovYDeg, float aspect, float nearPlane, float
     return out;
 }
 
+// True when the box [mn, mx] (in the space `mvp` maps from) lies entirely
+// outside one clip plane — left/right/bottom/top (|x|, |y| <= w) or near/far
+// (0 <= z <= w, Metal's depth range). Conservative: a box outside no single
+// plane is kept, and a box straddling the near plane is never culled for it.
+inline bool aabb_outside_frustum(const Mat4& mvp, Vec3 mn, Vec3 mx) {
+    bool all_outside[6] = {true, true, true, true, true, true};
+    for (int corner = 0; corner < 8; ++corner) {
+        const float x = (corner & 1) ? mx.x : mn.x;
+        const float y = (corner & 2) ? mx.y : mn.y;
+        const float z = (corner & 4) ? mx.z : mn.z;
+        float c[4];
+        for (int row = 0; row < 4; ++row) {
+            c[row] = mvp.m[row] * x + mvp.m[4 + row] * y + mvp.m[8 + row] * z + mvp.m[12 + row];
+        }
+        all_outside[0] = all_outside[0] && c[0] < -c[3];
+        all_outside[1] = all_outside[1] && c[0] > c[3];
+        all_outside[2] = all_outside[2] && c[1] < -c[3];
+        all_outside[3] = all_outside[3] && c[1] > c[3];
+        all_outside[4] = all_outside[4] && c[2] < 0.0f;
+        all_outside[5] = all_outside[5] && c[2] > c[3];
+    }
+    for (bool outside : all_outside) {
+        if (outside) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Returns the identity (0, 0, 0, 1) for zero-length input (never NaN), like
 // vec3_normalize returns the zero vector.
 inline Quat quat_normalize(Quat q) {

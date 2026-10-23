@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "manifest.h"
@@ -29,7 +30,8 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 // glb's material indices are offset by what the earlier loads contributed;
 // texture indices need no offset because images append to the shared texture
 // list directly), and `boundsMin/boundsMax` cover every placed vertex in world
-// space.
+// space. A PNG several glbs reference (by resolved library path) is decoded once
+// and is one texture, shared by every material that names it.
 //
 // Every rigged glb keeps its own skeleton and clips as one RigCpu; the player's
 // rig is dynamic, an entity's plays the exact clip the manifest names. An
@@ -41,14 +43,20 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 // `playerMeshBegin` (optional) receives the player's rig's first mesh index:
 // the static instances precede it and the entities follow it. Kept for the S3
 // callers; the rig records carry the authoritative ranges now.
+//
+// `onProgress` (optional) is called on the calling thread throughout the load —
+// before each glb it loads and after each PNG this thread decodes — so a window
+// can keep pumping its events (S7 task 11).
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
-                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr);
+                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin = nullptr,
+                    const std::function<void()>& onProgress = {});
 
 // Appends `glbRelPath`'s meshes to an already-composed scene as static
 // geometry: no rig record, every appended mesh carries rig = -1 (static meshes
 // draw with palette slot 0), and its materials/textures append with their
 // indices kept valid (materials shift by the scene's existing material count;
-// textures already are global). `model` is baked into the appended meshes'
+// textures are global, and a texture an earlier glb already decoded is reused
+// rather than appended again). `model` is baked into the appended meshes'
 // `model` — identity by default — and the scene's world bounds grow by their
 // placed vertices. Returns the first appended mesh index; a glb that contributes
 // no geometry returns `scene.meshes.size()` unchanged.

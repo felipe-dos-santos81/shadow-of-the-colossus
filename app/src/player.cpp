@@ -66,8 +66,18 @@ void player_update(PlayerState& state, const PlayerInput& input, float dtSeconds
         direction.z *= inv_length;
 
         const float speed = input.run ? kRunSpeed : kWalkSpeed;
+        // Per axis, so a wall slides the player instead of stopping them; an
+        // unlayered heightmap (the arena) always allows the move.
+        const Vec3 start = state.position;
         state.position.x += direction.x * speed * dt;
+        if (!heightmap_walkable(heightmap, start, state.position)) {
+            state.position.x = start.x;
+        }
+        const Vec3 after_x = state.position;
         state.position.z += direction.z * speed * dt;
+        if (!heightmap_walkable(heightmap, after_x, state.position)) {
+            state.position.z = after_x.z;
+        }
 
         // Turn toward the movement direction at the pinned rate, shortest path.
         const float target = std::atan2(direction.x, direction.z) / kDegToRad;
@@ -86,7 +96,7 @@ void player_update(PlayerState& state, const PlayerInput& input, float dtSeconds
         state.position.z =
             clamp_inset(state.position.z, heightmap.boundsMin.z, heightmap.boundsMax.z);
 
-        const float ground = heightmap_sample(heightmap, state.position);
+        const float ground = heightmap_floor(heightmap, state.position, kFloorStep);
         if (std::isfinite(ground)) {
             state.position.y = ground;
         } else if (!std::isfinite(state.position.y)) {

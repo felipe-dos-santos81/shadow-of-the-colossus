@@ -447,7 +447,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             player.position.y += combat.fallVelocity * dt;
 
             if (frame.heightmap != nullptr) {
-                const float ground = heightmap_sample(*frame.heightmap, player.position);
+                const float ground = heightmap_floor(*frame.heightmap, player.position, kFloorStep);
                 if (std::isfinite(ground) && player.position.y <= ground) {
                     player.position.y = ground;
                     combat.fallVelocity = 0.0f;

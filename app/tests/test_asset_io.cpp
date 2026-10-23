@@ -538,6 +538,22 @@ TEST_CASE("agro carries its baked kick clip") {
     CHECK(!player_rig(scene).animations[0].channels.empty());
 }
 
+TEST_CASE("S7: wander carries the wake clips after its S2-S6 set, mono her death loop") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    const auto& clips = player_rig(scene).animations;
+    check_wander_s2s6_clips(clips);
+    REQUIRE(clips.size() >= 17);
+    CHECK(clips[15].name == "player_a_home_boss01_cut04");
+    CHECK(clips[16].name == "player_a_home_boss01_cut05");
+    CHECK(!clips[15].channels.empty());
+    CHECK(!clips[16].channels.empty());
+
+    auto mono = load_scene(test_library(), "models/shadow/characters/mono/_cmn/mono.glb");
+    REQUIRE(player_rig(mono).animations.size() == 1);
+    CHECK(player_rig(mono).animations[0].name == "girl_a_death_loop");
+    CHECK(!player_rig(mono).animations[0].channels.empty());
+}
+
 TEST_CASE("wander's joint rest transforms decompose from their node matrices") {
     // The converter emits `matrix` nodes; the fixture below uses TRS nodes, so
     // this test is what exercises the matrix path on real data. The expected
@@ -756,10 +772,10 @@ TEST_CASE("compose_scene places two plank instances and the player") {
     }
 
     // Materials and textures land at offset indices: every mesh's
-    // materialIndex and every material's texture indices stay valid. Each
-    // instance load appends its own textures (2 planks x 2 + wander's 21).
+    // materialIndex and every material's texture indices stay valid. Textures
+    // are shared scene-wide by path (S7 task 11): the planks' 2 + wander's 21.
     CHECK(scene.materials.size() == 14);
-    CHECK(scene.textures.size() == 25);
+    CHECK(scene.textures.size() == 23);
     for (const MeshCpu& mesh : scene.meshes) {
         REQUIRE(mesh.materialIndex >= 0);
         REQUIRE(static_cast<std::size_t>(mesh.materialIndex) < scene.materials.size());
@@ -780,6 +796,22 @@ TEST_CASE("compose_scene places two plank instances and the player") {
         load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     REQUIRE(plank.meshes.size() == 1);
     REQUIRE(wander.meshes.size() == 12);
+    // The shared list is exactly the serial loads' textures, first-seen order,
+    // with the same pixels.
+    std::vector<const TextureCpu*> serial;
+    for (const Scene* source : {&plank, &plank, &wander}) {
+        for (const TextureCpu& texture : source->textures) {
+            const bool seen = std::any_of(serial.begin(), serial.end(), [&](const TextureCpu* t) {
+                return t->sourceRelPath == texture.sourceRelPath;
+            });
+            if (!seen) serial.push_back(&texture);
+        }
+    }
+    REQUIRE(scene.textures.size() == serial.size());
+    for (std::size_t i = 0; i < serial.size(); ++i) {
+        CHECK(scene.textures[i].sourceRelPath == serial[i]->sourceRelPath);
+        CHECK(scene.textures[i].rgba8 == serial[i]->rgba8);
+    }
     CHECK(scene.meshes[0].materialIndex == 0);
     CHECK(scene.meshes[1].materialIndex == 1);
     check_material_matches(scene, 0, plank, plank.meshes[0].materialIndex);
@@ -789,6 +821,25 @@ TEST_CASE("compose_scene places two plank instances and the player") {
         CHECK(composed_index == 2 + wander.meshes[i].materialIndex);
         check_material_matches(scene, composed_index, wander, wander.meshes[i].materialIndex);
     }
+
+    // The cull box is the raw vertex bounds, in the mesh's own space (the
+    // translation lives in `model`, not in the box).
+    for (const MeshCpu& mesh : scene.meshes) {
+        REQUIRE_FALSE(mesh.vertices.empty());
+        Vec3 lo{mesh.vertices[0].px, mesh.vertices[0].py, mesh.vertices[0].pz};
+        Vec3 hi = lo;
+        for (const Vertex& v : mesh.vertices) {
+            lo = Vec3{std::min(lo.x, v.px), std::min(lo.y, v.py), std::min(lo.z, v.pz)};
+            hi = Vec3{std::max(hi.x, v.px), std::max(hi.y, v.py), std::max(hi.z, v.pz)};
+        }
+        CHECK(mesh.localMin.x == lo.x);
+        CHECK(mesh.localMin.y == lo.y);
+        CHECK(mesh.localMin.z == lo.z);
+        CHECK(mesh.localMax.x == hi.x);
+        CHECK(mesh.localMax.y == hi.y);
+        CHECK(mesh.localMax.z == hi.z);
+    }
+    CHECK(scene.meshes[0].localMin.x == scene.meshes[1].localMin.x);
 
     // The composed scene keeps the player's skeleton.
     CHECK(player_rig(scene).skin.joints.size() == 348);
@@ -949,8 +1000,8 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
     CHECK(player.skin.joints.size() == 348);
     CHECK(entity.skin.joints.size() == 238);
 
-    // The player keeps its own fifteen baked clips (S4.1's climb set plus S4.2's
-    // fight set).
+    // The player keeps its own baked clips: the fifteen S2-S6 clips first
+    // (S4.1's climb set plus S4.2's fight set), then S7's wake clips.
     check_wander_s2s6_clips(player.animations);
     CHECK(player.animations[0].name == "player_a_stand");
     // The entity carries Valus's eight baked clips (S4.2 adds the three attack
@@ -1014,7 +1065,7 @@ TEST_CASE("compose_scene loads an entity as a second rig") {
 
     // --- S4 task 4: per-rig palettes, playback and grounding ------------------
 
-    // One playback per rig: the player keeps its fifteen clips, the entity its
+    // One playback per rig: the player keeps its own clips, the entity its
     // eight; each pose is sized by its own rig's joint count.
     Playback player_playback;
     Playback entity_playback;
@@ -1261,4 +1312,206 @@ TEST_CASE("OptBone_sword resolves in the Valus rig and carries the club") {
     CHECK(finite);
     CHECK(maxY > minY);
     CHECK(minY > 28.369f + 1.0f);
+}
+
+// --- `posed` static props (S7 task 5) ----------------------------------------
+
+TEST_CASE("compose_scene skins a posed prop on the CPU into static meshes") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+    const SceneManifest manifest = parsed_manifest(
+        dir, "posed skin.gltf 10 0 0 0 0 0 1 1 1 1 turn 1\n");
+
+    // The fixture doubles as the player so the scene has its usual rig 0.
+    const Scene scene = compose_scene(dir.path(), manifest, "skin.gltf");
+
+    // The player's rig is the only rig: the posed prop keeps none and is static.
+    REQUIRE(scene.rigs.size() == 1);
+    REQUIRE(scene.meshes.size() == 2);
+    const MeshCpu& posed = scene.meshes[1];
+    CHECK(posed.rig == -1);
+    REQUIRE(posed.vertices.size() == 3);
+
+    // At t = 1 JointA is turned 90 degrees about Z around (0, 1, 0), so joint B
+    // (weight 1 for every vertex) sits at (-1, 1, 0): the bind positions
+    // (0,2,0) (1,2,0) (0,1,0) land at (-1,1,0) (-1,2,0) (0,1,0).
+    const float expected[3][3] = {{-1.0f, 1.0f, 0.0f}, {-1.0f, 2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+    for (int v = 0; v < 3; ++v) {
+        CAPTURE(v);
+        CHECK(posed.vertices[v].px == doctest::Approx(expected[v][0]).epsilon(1e-4));
+        CHECK(posed.vertices[v].py == doctest::Approx(expected[v][1]).epsilon(1e-4));
+        CHECK(posed.vertices[v].pz == doctest::Approx(expected[v][2]).epsilon(1e-4));
+        // The default +Y normal turns with the joint to -X.
+        CHECK(posed.vertices[v].nx == doctest::Approx(-1.0f).epsilon(1e-4));
+        CHECK(posed.vertices[v].ny == doctest::Approx(0.0f).epsilon(1e-4));
+    }
+    // Posed for good: no weight or joint survives, or the shader would re-skin the
+    // vertex with the player's live palette (static meshes bind slot 0).
+    for (const Vertex& vertex : posed.vertices) {
+        for (int i = 0; i < 4; ++i) {
+            CHECK(vertex.w[i] == 0.0f);
+            CHECK(vertex.j[i] == 0);
+        }
+    }
+    // The cull box is of the posed vertices; the TRS lives in `model`.
+    CHECK(posed.localMin.x == doctest::Approx(-1.0f).epsilon(1e-4));
+    CHECK(posed.localMin.y == doctest::Approx(1.0f).epsilon(1e-4));
+    CHECK(posed.localMax.x == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(posed.localMax.y == doctest::Approx(2.0f).epsilon(1e-4));
+    CHECK(posed.model.m[12] == doctest::Approx(10.0f));
+    // The scene bounds cover the posed, placed prop (x in [9, 10]).
+    CHECK(scene.boundsMin.x <= 9.0f + 1e-4f);
+    CHECK(scene.boundsMax.x >= 10.0f - 1e-4f);
+
+    // Clamped like a pinned clock: t = 99 samples the last key, same as t = 1.
+    const SceneManifest late = parsed_manifest(
+        dir, "posed skin.gltf 10 0 0 0 0 0 1 1 1 1 turn 99\n");
+    const Scene late_scene = compose_scene(dir.path(), late, "skin.gltf");
+    CHECK(late_scene.meshes[1].vertices[0].px == doctest::Approx(-1.0f).epsilon(1e-4));
+}
+
+TEST_CASE("compose_scene names the glb and clip of a posed prop it cannot pose") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+
+    const auto message_for = [&](const std::string& line) {
+        try {
+            compose_scene(dir.path(), parsed_manifest(dir, line), "skin.gltf");
+        } catch (const std::runtime_error& error) {
+            return std::string(error.what());
+        }
+        return std::string();
+    };
+
+    const std::string missing_clip =
+        message_for("posed skin.gltf 0 0 0 0 0 0 1 1 1 1 no_such_clip 0\n");
+    CHECK(missing_clip.find("posed") != std::string::npos);
+    CHECK(missing_clip.find("skin.gltf") != std::string::npos);
+    CHECK(missing_clip.find("no_such_clip") != std::string::npos);
+
+    const std::string missing_glb =
+        message_for("posed no_such_prop.glb 0 0 0 0 0 0 1 1 1 1 turn 0\n");
+    CHECK(missing_glb.find("posed") != std::string::npos);
+    CHECK(missing_glb.find("no_such_prop.glb") != std::string::npos);
+}
+
+TEST_CASE("mono's posed death loop composes to finite static vertices") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parsed_manifest(
+        dir, "posed models/shadow/characters/mono/_cmn/mono.glb 0 0 0 0 0 0 1 1 1 1 "
+             "girl_a_death_loop 0\n");
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+    std::size_t posed_meshes = 0;
+    for (const MeshCpu& mesh : scene.meshes) {
+        if (mesh.rig != -1) continue;
+        ++posed_meshes;
+        for (const Vertex& vertex : mesh.vertices) {
+            REQUIRE(std::isfinite(vertex.px + vertex.py + vertex.pz));
+            REQUIRE(std::isfinite(vertex.nx + vertex.ny + vertex.nz));
+        }
+    }
+    CHECK(posed_meshes > 0);
+    CHECK(scene.rigs.size() == 1);
+}
+
+TEST_CASE("compose_scene keeps the scene bounds of two posed props") {
+    TempFixtureDir dir;
+    write_text(dir.path() / "skin.gltf", skin_fixture_gltf_json());
+    const Scene scene = compose_scene(
+        dir.path(),
+        parsed_manifest(dir, "posed skin.gltf 10 0 0 0 0 0 1 1 1 1 turn 1\n"
+                             "posed skin.gltf -20 5 0 0 0 0 1 1 1 1 turn 1\n"),
+        "skin.gltf");
+    REQUIRE(scene.meshes.size() == 3);
+    REQUIRE(scene.rigs.size() == 1);
+    CHECK(scene.meshes[2].rig == -1);
+    // Posed x in [-1, 0]: props at +10 and -20 cover x in [-21, 10]; y in [1, 7].
+    CHECK(scene.boundsMin.x == doctest::Approx(-21.0f).epsilon(1e-4));
+    CHECK(scene.boundsMax.x == doctest::Approx(10.0f).epsilon(1e-4));
+    CHECK(scene.boundsMax.y == doctest::Approx(7.0f).epsilon(1e-4));
+}
+
+// --- Scene-wide texture sharing (S7 task 11) -----------------------------------
+
+TEST_CASE("two glbs sharing a PNG compose to one texture shared by both materials") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "shared.png", kPng1x1Red, sizeof kPng1x1Red);
+    std::filesystem::create_directories(dir.path() / "sub");
+    // Two different URIs, one library path: the key is the resolved path.
+    write_text(dir.path() / "sub" / "a.gltf", fixture_gltf_json("../shared.png"));
+    write_text(dir.path() / "b.gltf", fixture_gltf_json("shared.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("sub/a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+
+    const Scene scene = compose_scene(dir.path(), manifest, "b.gltf");
+
+    REQUIRE(scene.textures.size() == 1);
+    CHECK(scene.textures[0].sourceRelPath == "shared.png");
+    REQUIRE(scene.materials.size() == 2);
+    CHECK(scene.materials[0].baseColorTexture == 0);
+    CHECK(scene.materials[1].baseColorTexture == 0);
+}
+
+TEST_CASE("composed textures keep the serial first-seen order") {
+    TempFixtureDir dir;
+    for (const char* name : {"p1.png", "p2.png", "p3.png"}) {
+        write_binary(dir.path() / name, kPng1x1Red, sizeof kPng1x1Red);
+    }
+    write_text(dir.path() / "a.gltf", fixture_gltf_json("p1.png", "p2.png"));
+    write_text(dir.path() / "b.gltf", fixture_gltf_json("p2.png", "p3.png"));
+    write_text(dir.path() / "c.gltf", fixture_gltf_json("p3.png", "p1.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+    manifest.instances.push_back(placed_at("b.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+
+    // Decoding runs in parallel; the indices must not depend on who finishes first.
+    for (int run = 0; run < 3; ++run) {
+        CAPTURE(run);
+        const Scene scene = compose_scene(dir.path(), manifest, "c.gltf");
+        REQUIRE(scene.textures.size() == 3);
+        CHECK(scene.textures[0].sourceRelPath == "p1.png");
+        CHECK(scene.textures[1].sourceRelPath == "p2.png");
+        CHECK(scene.textures[2].sourceRelPath == "p3.png");
+        REQUIRE(scene.materials.size() == 3);
+        const int expected[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+        for (std::size_t m = 0; m < 3; ++m) {
+            CHECK(scene.materials[m].baseColorTexture == expected[m][0]);
+            CHECK(scene.materials[m].emissiveTexture == expected[m][1]);
+        }
+    }
+}
+
+TEST_CASE("a missing PNG shared by two glbs degrades to -1 in both") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "ok.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "a.gltf", fixture_gltf_json("missing.png", "ok.png"));
+    write_text(dir.path() / "b.gltf", fixture_gltf_json("missing.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+
+    Scene scene;
+    REQUIRE_NOTHROW(scene = compose_scene(dir.path(), manifest, "b.gltf"));
+
+    REQUIRE(scene.materials.size() == 2);
+    CHECK(scene.materials[0].baseColorTexture == -1);
+    CHECK(scene.materials[0].emissiveTexture == 0);
+    CHECK(scene.materials[1].baseColorTexture == -1);
+    REQUIRE(scene.textures.size() == 1);
+    CHECK(scene.textures[0].sourceRelPath == "ok.png");
+}
+
+TEST_CASE("compose_scene reports progress before each glb it loads") {
+    TempFixtureDir dir;
+    write_binary(dir.path() / "shared.png", kPng1x1Red, sizeof kPng1x1Red);
+    write_text(dir.path() / "a.gltf", fixture_gltf_json("shared.png"));
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{0.0f, 0.0f, 0.0f}));
+    manifest.instances.push_back(placed_at("a.gltf", Vec3{1.0f, 0.0f, 0.0f}));
+
+    int calls = 0;
+    compose_scene(dir.path(), manifest, "a.gltf", nullptr, [&calls] { ++calls; });
+
+    // Two instances + the player, plus at most one per PNG this thread decoded.
+    CHECK(calls >= 3);
+    CHECK(calls <= 4);
 }

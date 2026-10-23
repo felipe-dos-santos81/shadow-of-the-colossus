@@ -1,14 +1,21 @@
 #include "asset_io.h"
 
+#include "anim.h"
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 // The single-header implementations live here, exactly once per binary.
 #define CGLTF_IMPLEMENTATION
@@ -338,6 +345,110 @@ Vec3 transform_point(const Mat4& matrix, Vec3 point) {
         matrix.m[2] * point.x + matrix.m[6] * point.y + matrix.m[10] * point.z + matrix.m[14]};
 }
 
+// Decodes one PNG into RGBA8 (`sourceRelPath` is left to the caller). Returns
+// false when the file is absent or undecodable, with stbi_failure_reason() set
+// — thread-locally, so workers may call this concurrently.
+bool decode_png(const std::filesystem::path& file, TextureCpu& out) {
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    StbPixels pixels;
+    pixels.data = stbi_load(file.string().c_str(), &width, &height, &channels, 4);
+    if (pixels.data == nullptr) {
+        return false;
+    }
+    out.width = width;
+    out.height = height;
+    const std::size_t pixel_bytes =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
+    out.rgba8.assign(pixels.data, pixels.data + pixel_bytes);
+    return true;
+}
+
+// Library-relative PNG path -> its decoded texture, ready for load_glb_into to
+// move into the scene instead of decoding it there.
+using DecodedTextures = std::unordered_map<std::string, TextureCpu>;
+
+// Decodes every PNG the materials of `glbRelPaths` name, each once, on up to
+// hardware_concurrency threads (S7 task 11: the shrine's ~150 unique PNGs).
+// Only the pixels are made here; the serial loads still assign the texture
+// indices, so the order is the serial one whoever finishes first. A glb that
+// does not parse or a PNG that does not decode is simply left out: its serial
+// load reports it exactly as before. The calling thread decodes too, and calls
+// `onProgress` (when set) after each of its PNGs.
+DecodedTextures decode_textures(const std::filesystem::path& libraryDir,
+                                const std::vector<std::string>& glbRelPaths,
+                                const std::function<void()>& onProgress) {
+    const std::filesystem::path library = std::filesystem::weakly_canonical(libraryDir);
+    std::vector<std::string> paths;
+    std::unordered_set<std::string> seen_glbs;
+    std::unordered_set<std::string> seen_paths;
+    for (const std::string& glb : glbRelPaths) {
+        if (!seen_glbs.insert(glb).second) {
+            continue;
+        }
+        const std::filesystem::path model_path = library / glb;
+        cgltf_options options{};
+        CgltfDocument document;
+        if (cgltf_parse_file(&options, model_path.string().c_str(), &document.data) !=
+            cgltf_result_success) {
+            continue;
+        }
+        for (cgltf_size m = 0; m < document.data->materials_count; ++m) {
+            const cgltf_material& material = document.data->materials[m];
+            // The three slots load_glb_into resolves.
+            for (const cgltf_texture* texture :
+                 {material.pbr_metallic_roughness.base_color_texture.texture,
+                  material.normal_texture.texture, material.emissive_texture.texture}) {
+                if (texture == nullptr || texture->image == nullptr ||
+                    texture->image->uri == nullptr) {
+                    continue;
+                }
+                // load_image's resolution; an escaping URI is its to report.
+                const std::filesystem::path rel =
+                    (model_path.parent_path() / std::filesystem::path(texture->image->uri))
+                        .lexically_normal()
+                        .lexically_relative(library);
+                if (!rel.empty() && *rel.begin() != ".." &&
+                    seen_paths.insert(rel.generic_string()).second) {
+                    paths.push_back(rel.generic_string());
+                }
+            }
+        }
+    }
+
+    std::vector<TextureCpu> textures(paths.size());
+    std::vector<char> decoded_ok(paths.size(), 0);
+    std::atomic<std::size_t> next{0};
+    const auto worker = [&](const std::function<void()>* progress) {
+        for (std::size_t i = next++; i < paths.size(); i = next++) {
+            decoded_ok[i] = decode_png(library / paths[i], textures[i]) ? 1 : 0;
+            if (progress != nullptr && *progress) {
+                (*progress)();
+            }
+        }
+    };
+    const std::size_t thread_count = std::min<std::size_t>(
+        std::max(1u, std::thread::hardware_concurrency()), paths.size());
+    std::vector<std::thread> threads;
+    for (std::size_t t = 1; t < thread_count; ++t) {
+        threads.emplace_back(worker, nullptr);
+    }
+    worker(&onProgress);
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    DecodedTextures decoded;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        if (decoded_ok[i] != 0) {
+            textures[i].sourceRelPath = paths[i];
+            decoded.emplace(paths[i], std::move(textures[i]));
+        }
+    }
+    return decoded;
+}
+
 // How one glb lands in the target scene: the world matrix baked into every mesh
 // it contributes, the index its materials start at, and whether it contributes
 // a rig record (`includeRig`) — and, if so, whether that record is the player's
@@ -356,13 +467,15 @@ struct GlbPlacement {
 // clips. Every contributed mesh carries `placement.model` and its rig index
 // (`placement.includeRig` ? the new record : -1); material indices shift by
 // `placement.materialOffset` (texture indices need no shift: images append to
-// the scene's shared texture list, so their index already is global).
+// the scene's shared texture list, or reuse the entry an earlier glb decoded
+// from the same library path, so their index already is global).
 // `have_bounds` is the caller's running "some vertex was seen" flag: the
 // scene's bounds are set from the first glb that has vertices and grown by each
-// later one, always in world space.
+// later one, always in world space. `decoded` (optional) holds pixels decoded
+// ahead of time; a PNG found there is moved into the scene, not decoded again.
 void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
                    const std::string& glbRelPath, const GlbPlacement& placement,
-                   bool& have_bounds) {
+                   bool& have_bounds, DecodedTextures* decoded = nullptr) {
     const std::filesystem::path library = std::filesystem::weakly_canonical(libraryDir);
     const std::filesystem::path model_path = library / glbRelPath;
     const std::filesystem::path model_dir = model_path.parent_path();
@@ -393,6 +506,14 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
     // two texture slots of a material) decode only once.
     std::unordered_map<cgltf_size, int> loaded_images;
 
+    // Library-relative path -> Scene::textures index, across every glb already in
+    // the scene: a PNG another glb decoded is reused, never decoded again (S7 task
+    // 11 — the shrine's ruins share their textures across dozens of glbs).
+    std::unordered_map<std::string, int> scene_textures;
+    for (std::size_t i = 0; i < scene.textures.size(); ++i) {
+        scene_textures.emplace(scene.textures[i].sourceRelPath, static_cast<int>(i));
+    }
+
     // Decodes one glTF image into RGBA8 and appends it to the scene. Returns -1,
     // without throwing, when the PNG is absent or undecodable: the converter
     // drops textures it cannot convert (e.g. BC6H/HDR), and such a material
@@ -415,26 +536,27 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
             return -1;
         }
 
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        StbPixels pixels;
-        pixels.data = stbi_load(resolved.string().c_str(), &width, &height, &channels, 4);
-        if (pixels.data == nullptr) {
-            std::fprintf(stderr, "sotc-viewer: skipping texture %s: %s\n",
-                         rel.generic_string().c_str(), stbi_failure_reason());
-            return -1;
+        const std::string key = rel.generic_string();
+        const auto shared = scene_textures.find(key);
+        if (shared != scene_textures.end()) {
+            return shared->second;
         }
 
         TextureCpu texture;
-        texture.width = width;
-        texture.height = height;
-        const std::size_t pixel_bytes =
-            static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
-        texture.rgba8.assign(pixels.data, pixels.data + pixel_bytes);
-        texture.sourceRelPath = rel.generic_string();
+        DecodedTextures::iterator ready;
+        if (decoded != nullptr && (ready = decoded->find(key)) != decoded->end()) {
+            texture = std::move(ready->second);
+            decoded->erase(ready);
+        } else if (!decode_png(resolved, texture)) {
+            std::fprintf(stderr, "sotc-viewer: skipping texture %s: %s\n", key.c_str(),
+                         stbi_failure_reason());
+            return -1;
+        }
+        texture.sourceRelPath = key;
         scene.textures.push_back(std::move(texture));
-        return static_cast<int>(scene.textures.size()) - 1;
+        const int index = static_cast<int>(scene.textures.size()) - 1;
+        scene_textures.emplace(scene.textures.back().sourceRelPath, index);
+        return index;
     };
 
     auto resolve_texture = [&](const cgltf_texture* texture) -> int {
@@ -562,6 +684,20 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
                 }
             }
 
+            // The cull box: the raw vertex bounds, before `model` applies.
+            if (!out.vertices.empty()) {
+                out.localMin = out.localMax =
+                    Vec3{out.vertices[0].px, out.vertices[0].py, out.vertices[0].pz};
+                for (const Vertex& vertex : out.vertices) {
+                    out.localMin = Vec3{std::min(out.localMin.x, vertex.px),
+                                        std::min(out.localMin.y, vertex.py),
+                                        std::min(out.localMin.z, vertex.pz)};
+                    out.localMax = Vec3{std::max(out.localMax.x, vertex.px),
+                                        std::max(out.localMax.y, vertex.py),
+                                        std::max(out.localMax.z, vertex.pz)};
+                }
+            }
+
             if (primitive.indices != nullptr) {
                 out.indices.resize(primitive.indices->count);
                 for (cgltf_size i = 0; i < primitive.indices->count; ++i) {
@@ -656,18 +792,39 @@ Scene load_scene(const std::filesystem::path& libraryDir, const std::string& glb
 }
 
 Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest& manifest,
-                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin) {
+                    const std::string& playerGlbRelPath, std::size_t* playerMeshBegin,
+                    const std::function<void()>& onProgress) {
     Scene scene;
     bool have_bounds = false;
 
+    // Every PNG the scene will use, decoded in parallel up front, in load order.
+    std::vector<std::string> glbs;
+    for (const ManifestInstance& instance : manifest.instances) {
+        glbs.push_back(instance.glbRelPath);
+    }
+    glbs.push_back(playerGlbRelPath);
+    for (const ManifestEntity& entity : manifest.entities) {
+        glbs.push_back(entity.placement.glbRelPath);
+    }
+    for (const ManifestPosed& posed : manifest.posed) {
+        glbs.push_back(posed.glb);
+    }
+    DecodedTextures decoded = decode_textures(libraryDir, glbs, onProgress);
+    const auto progress = [&onProgress] {
+        if (onProgress) {
+            onProgress();
+        }
+    };
+
     // Static instances: no rig record, meshes keep rig = -1.
     for (const ManifestInstance& instance : manifest.instances) {
+        progress();
         const GlbPlacement placement{
             .model = mat4_from_trs(instance.position, instance.rotation, instance.scale),
             .materialOffset = static_cast<int>(scene.materials.size()),
         };
         try {
-            load_glb_into(scene, libraryDir, instance.glbRelPath, placement, have_bounds);
+            load_glb_into(scene, libraryDir, instance.glbRelPath, placement, have_bounds, &decoded);
         } catch (const std::runtime_error& error) {
             // Name the manifest's own glb token: the resolved path alone is
             // harder to match back to the instance that placed it.
@@ -683,7 +840,8 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
         .includeRig = true,
         .dynamic = true,
     };
-    load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds);
+    progress();
+    load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds, &decoded);
 
     // The player's meshes start here (rig 0's meshBegin): everything before is
     // the manifest's instances, everything after is an entity's.
@@ -696,6 +854,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     // asks for a clip the model does not have is a load error, not a silent
     // rest pose.
     for (const ManifestEntity& entity : manifest.entities) {
+        progress();
         const GlbPlacement placement{
             .model = mat4_from_trs(entity.placement.position, entity.placement.rotation,
                                    entity.placement.scale),
@@ -703,7 +862,8 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             .includeRig = true,
         };
         try {
-            load_glb_into(scene, libraryDir, entity.placement.glbRelPath, placement, have_bounds);
+            load_glb_into(scene, libraryDir, entity.placement.glbRelPath, placement, have_bounds,
+                          &decoded);
         } catch (const std::runtime_error& error) {
             throw std::runtime_error("compose_scene: entity \"" + entity.placement.glbRelPath +
                                      "\": " + error.what());
@@ -726,6 +886,115 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             }
             throw std::runtime_error(message);
         }
+    }
+
+    // Posed props: load like an entity (so the glb's skeleton and clips are
+    // available), sample the named clip once, CPU-skin every vertex with the
+    // shader's weighted palette sum, then drop the rig — the meshes stay static
+    // (rig = -1) with the TRS in `model` and the cull box of the posed vertices.
+    // The load's bind-pose bounds are discarded and replaced by the posed ones.
+    for (const ManifestPosed& posed : manifest.posed) {
+        progress();
+        const Vec3 saved_min = scene.boundsMin;
+        const Vec3 saved_max = scene.boundsMax;
+        const bool saved_have = have_bounds;
+        const std::size_t mesh_begin = scene.meshes.size();
+        const GlbPlacement placement{
+            .model = mat4_from_trs(posed.position, posed.rotation, posed.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+            .includeRig = true,
+        };
+        try {
+            load_glb_into(scene, libraryDir, posed.glb, placement, have_bounds, &decoded);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error("compose_scene: posed \"" + posed.glb + "\": " + error.what());
+        }
+
+        const std::size_t rig_index = scene.rigs.size() - 1;
+        const AnimationCpu* clip = nullptr;
+        for (const AnimationCpu& candidate : scene.rigs[rig_index].animations) {
+            if (candidate.name == posed.clip) {
+                clip = &candidate;
+                break;
+            }
+        }
+        if (clip == nullptr) {
+            throw std::runtime_error("compose_scene: posed \"" + posed.glb + "\": clip \"" +
+                                     posed.clip + "\" not found");
+        }
+        const std::vector<Mat4> palette = animation_pose(
+            scene, rig_index, *clip, animation_clamp_time(posed.seconds, clip->duration));
+
+        scene.boundsMin = saved_min;
+        scene.boundsMax = saved_max;
+        have_bounds = saved_have;
+        for (std::size_t m = mesh_begin; m < scene.meshes.size(); ++m) {
+            MeshCpu& mesh = scene.meshes[m];
+            mesh.rig = -1;
+            for (Vertex& vertex : mesh.vertices) {
+                Vec3 point{0.0f, 0.0f, 0.0f};
+                Vec3 normal{0.0f, 0.0f, 0.0f};
+                float total_weight = 0.0f;
+                for (int i = 0; i < 4; ++i) {
+                    const float weight = vertex.w[i];
+                    if (weight == 0.0f || vertex.j[i] >= palette.size()) {
+                        continue;
+                    }
+                    const Mat4& skin = palette[vertex.j[i]];
+                    const Vec3 p = transform_point(skin, Vec3{vertex.px, vertex.py, vertex.pz});
+                    point = Vec3{point.x + weight * p.x, point.y + weight * p.y,
+                                 point.z + weight * p.z};
+                    // The palette is rigid-ish: its upper 3x3 turns the normal.
+                    const Vec3 n{skin.m[0] * vertex.nx + skin.m[4] * vertex.ny + skin.m[8] * vertex.nz,
+                                 skin.m[1] * vertex.nx + skin.m[5] * vertex.ny + skin.m[9] * vertex.nz,
+                                 skin.m[2] * vertex.nx + skin.m[6] * vertex.ny + skin.m[10] * vertex.nz};
+                    normal = Vec3{normal.x + weight * n.x, normal.y + weight * n.y,
+                                  normal.z + weight * n.z};
+                    total_weight += weight;
+                }
+                if (total_weight > 0.0f) {  // zero weights pass through, like the shader
+                    vertex.px = point.x;
+                    vertex.py = point.y;
+                    vertex.pz = point.z;
+                    const Vec3 unit = vec3_normalize(normal);
+                    vertex.nx = unit.x;
+                    vertex.ny = unit.y;
+                    vertex.nz = unit.z;
+                }
+                // The vertex is posed for good: a static mesh binds the player's live
+                // palette (slot 0), so any weight left here would re-skin it with
+                // Wander's joints every frame. Zero weights pass through the shader.
+                for (int i = 0; i < 4; ++i) {
+                    vertex.j[i] = 0;
+                    vertex.w[i] = 0.0f;
+                }
+            }
+            if (!mesh.vertices.empty()) {
+                mesh.localMin = mesh.localMax =
+                    Vec3{mesh.vertices[0].px, mesh.vertices[0].py, mesh.vertices[0].pz};
+            }
+            for (const Vertex& vertex : mesh.vertices) {
+                mesh.localMin = Vec3{std::min(mesh.localMin.x, vertex.px),
+                                     std::min(mesh.localMin.y, vertex.py),
+                                     std::min(mesh.localMin.z, vertex.pz)};
+                mesh.localMax = Vec3{std::max(mesh.localMax.x, vertex.px),
+                                     std::max(mesh.localMax.y, vertex.py),
+                                     std::max(mesh.localMax.z, vertex.pz)};
+                const Vec3 world = transform_point(mesh.model, Vec3{vertex.px, vertex.py, vertex.pz});
+                if (!have_bounds) {
+                    scene.boundsMin = scene.boundsMax = world;
+                    have_bounds = true;
+                } else {
+                    scene.boundsMin = Vec3{std::min(scene.boundsMin.x, world.x),
+                                           std::min(scene.boundsMin.y, world.y),
+                                           std::min(scene.boundsMin.z, world.z)};
+                    scene.boundsMax = Vec3{std::max(scene.boundsMax.x, world.x),
+                                           std::max(scene.boundsMax.y, world.y),
+                                           std::max(scene.boundsMax.z, world.z)};
+                }
+            }
+        }
+        scene.rigs.pop_back();  // static: no rig, no playback
     }
 
     if (!have_bounds) {

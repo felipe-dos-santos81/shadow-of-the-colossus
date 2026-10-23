@@ -678,3 +678,87 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     const Camera nan_valus = camera_death_pose(base, Vec3{nan, nan, nan}, player, 3.0f);
     CHECK(nan_valus.distance == doctest::Approx(base.distance));
 }
+
+// Frustum culling (S7 Task 3). The eye sits at the origin looking down -Z.
+namespace {
+Mat4 cull_view_proj() {
+    return mat4_mul(mat4_perspective(60.0f, 16.0f / 9.0f, 0.1f, 100.0f),
+                    mat4_look_at(Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, -1.0f},
+                                 Vec3{0.0f, 1.0f, 0.0f}));
+}
+Mat4 translation(float x, float y, float z) {
+    Mat4 out = mat4_identity();
+    out.m[12] = x;
+    out.m[13] = y;
+    out.m[14] = z;
+    return out;
+}
+}  // namespace
+
+TEST_CASE("test_renderer_cull: a box in front is kept") {
+    CHECK_FALSE(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, -11}, Vec3{1, 1, -9}));
+}
+
+TEST_CASE("test_renderer_cull: a box behind the eye is culled") {
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, 9}, Vec3{1, 1, 11}));
+}
+
+TEST_CASE("test_renderer_cull: a box straddling the near plane is kept") {
+    CHECK_FALSE(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, -5}, Vec3{1, 1, 5}));
+}
+
+TEST_CASE("test_renderer_cull: a box far to the side or beyond the far plane is culled") {
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{199, -1, -11}, Vec3{201, 1, -9}));
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{-1, 199, -11}, Vec3{1, 201, -9}));
+    CHECK(aabb_outside_frustum(cull_view_proj(), Vec3{-1, -1, -201}, Vec3{1, 1, -199}));
+}
+
+TEST_CASE("test_renderer_cull: the model matrix moves the box into view") {
+    const Vec3 mn{199, -1, -11};
+    const Vec3 mx{201, 1, -9};
+    const Mat4 viewProj = cull_view_proj();
+    CHECK(aabb_outside_frustum(mat4_mul(viewProj, mat4_identity()), mn, mx));
+    CHECK_FALSE(aabb_outside_frustum(mat4_mul(viewProj, translation(-200.0f, 0.0f, 0.0f)), mn, mx));
+}
+
+// The wake camera (S7 Task 9, design D9 — authored): two eased keys around the
+// spawn. At t = 0 the eye is 1.2 m up and 2.5 m in front of the spawn (along
+// the yaw), looking at Wander lying on the floor; at t = duration it is 1.8 m
+// up and 3.5 m behind, looking along the yaw (toward the altar) at his head.
+TEST_CASE("camera_wake_pose keys the wake: low in front, then behind toward the altar") {
+    const Vec3 spawn{2.0f, 9.0f, 1.0f};
+    const float yaw = 30.0f;
+    const float duration = 11.8f;
+    const Vec3 fwd{std::sin(yaw * kDegToRad), 0.0f, std::cos(yaw * kDegToRad)};
+    const auto check_vec = [](Vec3 got, Vec3 want) {
+        CHECK(got.x == doctest::Approx(want.x).epsilon(1e-4));
+        CHECK(got.y == doctest::Approx(want.y).epsilon(1e-4));
+        CHECK(got.z == doctest::Approx(want.z).epsilon(1e-4));
+    };
+
+    const Camera start = camera_wake_pose(spawn, yaw, 0.0f, duration);
+    check_vec(camera_eye(start),
+              Vec3{spawn.x + 2.5f * fwd.x, spawn.y + 1.2f, spawn.z + 2.5f * fwd.z});
+    check_vec(start.target, Vec3{spawn.x, spawn.y + kWakeLyingTargetHeight, spawn.z});
+
+    const Camera end = camera_wake_pose(spawn, yaw, duration, duration);
+    check_vec(camera_eye(end),
+              Vec3{spawn.x - 3.5f * fwd.x, spawn.y + 1.8f, spawn.z - 3.5f * fwd.z});
+    check_vec(end.target, Vec3{spawn.x, spawn.y + kFollowHeadHeight, spawn.z});
+    // Looking along the yaw: the look direction's heading is the spawn yaw.
+    CHECK(camera_look_yaw(end) == doctest::Approx(yaw));
+
+    const Camera mid = camera_wake_pose(spawn, yaw, 0.5f * duration, duration);
+    const Vec3 mid_eye = camera_eye(mid);
+    CHECK(std::isfinite(mid_eye.x));
+    CHECK(std::isfinite(mid_eye.y));
+    CHECK(std::isfinite(mid_eye.z));
+    CHECK(std::isfinite(mid.target.y));
+    CHECK(mid.distance > 0.5f);  // the eye never passes through the body
+
+    // Past the end it holds the end key; a broken clock answers the start key.
+    check_vec(camera_eye(camera_wake_pose(spawn, yaw, 99.0f, duration)), camera_eye(end));
+    check_vec(camera_eye(camera_wake_pose(spawn, yaw, std::numeric_limits<float>::quiet_NaN(),
+                                          duration)),
+              camera_eye(start));
+}

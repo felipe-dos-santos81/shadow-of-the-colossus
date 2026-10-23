@@ -106,7 +106,7 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
 void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& capsules,
                               const Heightmap& heightmap) {
     resolve_player_collision(player, capsules);
-    const float ground = heightmap_sample(heightmap, player.position);
+    const float ground = heightmap_floor(heightmap, player.position, kFloorStep);
     if (std::isfinite(ground)) {
         player.position.y = ground;
     }
