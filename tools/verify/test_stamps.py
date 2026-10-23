@@ -104,13 +104,31 @@ def main():
             got = changed()
             assert got == want, "%s: changed %s, expected %s" % (rel, sorted(got), sorted(want))
             write(root, rel, "v1 " + rel)
-            if not rel.endswith((".glb", ".wav", ".png")):   # size+mtime fingerprints: v1 again has a new mtime
+            if not rel.endswith((".glb", ".png")):   # size+mtime fingerprints: v1 again has a new mtime
                 assert changed() == set(), rel
             base = all_stamps(root, lib)
 
         for rel in UNCHANGED:
             write(root, rel, "v2 changed " + rel)
             assert changed() == set(), "%s must not be an input" % rel
+
+        # a re-decode rewrites the WAVs with the same bytes (new mtimes): content, not mtime
+        wav = os.path.join(lib, "audio/s5/valus_hurt.wav")
+        st = os.stat(wav)
+        os.utime(wav, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        write(root, "lib/audio/s5/valus_hurt.wav", "v1 lib/audio/s5/valus_hurt.wav")
+        assert changed() == set(), "a WAV rewritten with the same bytes is the same WAV"
+
+        # compose-encounter writes the composing worktree's path into `# source:`; only the path
+        # prefix is normalised: the source's sha (and the rest of the line) still counts
+        src = "# source: %s/out/re/stage/valus.manifest (sha256 %s, 30 instances)\ninstance a\n"
+        write(root, "out/re/stage/encounter.manifest", src % ("/wt-a", "1" * 64))
+        base = all_stamps(root, lib)
+        write(root, "out/re/stage/encounter.manifest", src % ("/Users/x/wt-b", "1" * 64))
+        assert changed() == set(), "the `# source:` worktree prefix is not an input"
+        write(root, "out/re/stage/encounter.manifest", src % ("/Users/x/wt-b", "2" * 64))
+        assert changed() == by("probes", "gpu") | AUDIO_SECTIONS, "the source's sha is an input"
+        base = all_stamps(root, lib)
 
         subprocess.run(git + ["update-index", "--cacheinfo",
                               "160000,%s,third_party/PSO2-Aqua-Library" % ("2" * 40)], check=True)

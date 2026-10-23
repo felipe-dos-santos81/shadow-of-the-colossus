@@ -157,10 +157,10 @@ accept: shrine-manifest plain-manifest road-manifest accept-s9 ## Run the curren
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
-verify: shrine-manifest plain-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
+verify: shrine-manifest plain-manifest road-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
 	./scripts/verify $(ARGS)
 
-verify-long: shrine-manifest plain-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
+verify-long: shrine-manifest plain-manifest road-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
 	./scripts/verify --long
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export

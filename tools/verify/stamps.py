@@ -9,6 +9,8 @@ import hashlib
 import os
 import subprocess
 
+from masks import _SOURCE   # the `# source:` worktree prefix, normalised as in the goldens
+
 GITLINK = "@gitlink"    # the PSO2-Aqua-Library submodule SHA recorded in the index
 LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, audio/, textures/vfx/ PNGs
 LIBPATH = "@libpath"    # the library's realpath only (where the audio decode writes)
@@ -43,7 +45,10 @@ def _sha(data):
 
 def _file_sha(path):
     with open(path, "rb") as f:
-        return _sha(f.read())
+        data = f.read()
+    if path.endswith(".manifest"):   # compose-encounter records the composing worktree's path
+        data = _SOURCE.sub(r"\1<REPO>/\2", data.decode()).encode()
+    return _sha(data)
 
 
 class Stamper:
@@ -93,10 +98,11 @@ class Stamper:
         real = os.path.realpath(self.lib)
         h = hashlib.sha256()
         for dirpath, dirs, files in os.walk(real):
-            # ponytail: the textures (8.9 GB) are skipped and the glbs and decoded WAVs are
-            # fingerprinted by size + mtime, not content (3 GB); a bake rewrites both the glb and its
-            # textures, so the glb's mtime moves, and a re-decode rewrites the WAVs even when the
-            # manifest is byte-identical. Hash content if a texture-only change ever needs catching.
+            # ponytail: the textures (8.9 GB) are skipped and the glbs are fingerprinted by size +
+            # mtime, not content (3 GB); a bake rewrites both the glb and its textures, so the glb's
+            # mtime moves. Hash content if a texture-only change ever needs catching. The decoded
+            # WAVs (36 files, 57 MB, 0.03 s) are hashed by content: every frozen decode rewrites
+            # them with the same bytes.
             # textures/vfx/ (a dozen files: S9's four sword PNGs among them) is walked; the rest of
             # textures/ is not.
             if dirpath == os.path.join(real, "textures"):
@@ -107,11 +113,12 @@ class Stamper:
             for name in sorted(files):
                 path = os.path.join(dirpath, name)
                 rel = os.path.relpath(path, real)
-                if (name.endswith(".glb") or (name.endswith(".wav") and rel.startswith("audio" + os.sep))
+                if (name.endswith(".glb")
                         or (name.endswith(".png") and rel.startswith(os.path.join("textures", "vfx", "")))):
                     st = os.stat(path)
                     h.update(("%s %d %d\n" % (rel, st.st_size, st.st_mtime_ns)).encode())
-                elif name.endswith(".clips.json") or rel == os.path.join("audio", "audio.manifest"):
+                elif (name.endswith(".clips.json") or rel == os.path.join("audio", "audio.manifest")
+                        or (name.endswith(".wav") and rel.startswith("audio" + os.sep))):
                     h.update(("%s %s\n" % (rel, _file_sha(path))).encode())
         return h.hexdigest()
 
