@@ -104,11 +104,9 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 	$(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" --under models --under characters \
 		--ext cmsh --jobs $(JOBS) $(if $(force),--force)
 
-# S9: run without LIB/SOTC_LIB only at S9's merge (until then, LIB=out/libviews/s9-road).
 audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-# S9: run without LIB/SOTC_LIB only at S9's merge (until then, LIB=out/libviews/s9-road).
 bake: publish ## Bake Mono's pose, Wander's 49 clips, Agro's 20 and the sword's atlases (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
@@ -177,7 +175,6 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-# S9: before S9's merge run it with LIB/SOTC_LIB at the view (out/libviews/s9-road).
 accept: shrine-manifest plain-manifest road-manifest accept-s9 ## Run the current milestone's acceptance (S9 → S8 → S7 → … → S3)
 
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9 (one at a time)
