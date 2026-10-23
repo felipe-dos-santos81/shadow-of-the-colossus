@@ -19,6 +19,7 @@
 #include "audio.h"
 #include "audio_events.h"
 #include "audio_map.h"
+#include "audio_seam.h"
 #include "math3d.h"
 
 namespace {
@@ -311,6 +312,26 @@ TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
         }, kValus);
     CHECK(rejected == Sfx::ValusReaction);
     CHECK(std::string(sfx_name(rejected)) == "valus_reaction");
+}
+
+TEST_CASE("the audio seam's music is the selected encounter's (S11 M-1)") {
+    const std::filesystem::path library = test_library();
+    // Valus's cues with a music clip the shipped manifest does not carry.
+    constexpr EncounterDesc kOtherMusic = [] {
+        EncounterDesc desc = kValus;
+        desc.cues.music = "other.music";
+        return desc;
+    }();
+
+    AudioSeam seam;
+    CHECK_FALSE(seam.load(library.string(), kOtherMusic, /*includeS6=*/false));
+    CHECK_FALSE(seam.enabled);
+
+    REQUIRE(seam.load(library.string(), kValus, /*includeS6=*/false));
+    seam.encounter = &kOtherMusic;  // start_music reads the seam's encounter
+    seam.start_music();
+    CHECK(seam.failed);
+    CHECK_FALSE(seam.musicStarted);
 }
 
 // --- S8 Task 8: the ride cue table -------------------------------------------

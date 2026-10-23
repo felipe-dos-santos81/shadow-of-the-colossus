@@ -6,11 +6,19 @@
 
 #include <doctest.h>
 
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <iterator>
+#include <string>
+#include <string_view>
 #include <type_traits>
+#include <vector>
 
+#include "audio_map.h"
+#include "camera.h"
+#include "death.h"
+#include "encounter_rt.h"
 #include "encounters/registry.h"
 #include "valus.h"
 
@@ -250,4 +258,327 @@ TEST_CASE("the encounter id selects the table; an unknown id has none") {
     CHECK(find_encounter("quadratus") == &encounters::kQuadratus);
     CHECK(find_encounter("") == nullptr);
     CHECK(find_encounter("Valus") == nullptr);
+}
+
+// --- Every runtime reader takes the selected table (S11 M-1) -----------------
+//
+// A non-Valus table whose every number differs from Valus's: each reader below
+// is fed it and must answer with its values, so a reader that still reads
+// Valus's constants fails here even though Valus's goldens cannot see it.
+
+namespace {
+
+inline constexpr std::array<WeakpointDesc, 3> kOtherWeakpoints{{
+    {"qa", "qa_react"},
+    {"qb", "qb_react"},
+    {"qc", "qc_react"},
+}};
+
+inline constexpr std::array<AttackDesc, 3> kOtherAttacks{{
+    {"other_stomp_l", "Q_FOOT_L", 2.0f, -1.0f, 1.0f, 3.0f, 7.0f, 0.2f, 0.3f, -1.0f, 11.0f, 5.0f,
+     false},
+    {"other_stomp_r", "Q_FOOT_R", 2.0f, -1.0f, 1.0f, 3.0f, 7.0f, 0.2f, 0.3f, -1.0f, 11.0f, 5.0f,
+     false},
+    {"other_club", "Q_CLUB", 20.0f, 0.9f, 1.5f, 0.0f, 9.0f, 1.0f, 1.2f, 0.8f, 21.0f, 0.0f, false},
+}};
+
+inline constexpr EncounterDesc kOther{
+    .id = "other",
+    .maxHealth = 50.0f,
+    .joints = {"Q_CHEST", "Q_FOOT_L", "Q_FOOT_R"},
+    .props = {},
+    .weakpoints = kOtherWeakpoints,
+    .bodyReactionClip = "other_body",
+    .bands = {},
+    .capsules = {},
+    .turnDegPerSec = 10.0f,
+    .attacks = kOtherAttacks,
+    .death = {"other_death", 5.333f, 1.0f, 2.0f, 9.0f, 1, 5.0f,
+              {1.0f, 2.0f, 4.0f, 9.0f, 7.0f, 2.0f, 3.0f, -10.0f, 4.0f, 5.0f, -20.0f, 30.0f, 1.0f,
+               15.0f, 5.0f, 60.0f}},
+    .cues = {{"other.telegraph", 0.3f, false},
+             {"other.impact", 0.3f, false},
+             {"other.telegraph", 0.3f, false},
+             {"other.impact", 0.3f, false},
+             {nullptr, 1.0f, false},
+             {"other.hurt", 0.3f, false},
+             {"other.death", 0.3f, false, true},
+             {nullptr, 1.0f, false},
+             {nullptr, 1.0f, false},
+             {nullptr, 1.0f, false},  // no club swing
+             "other.music",
+             0.25f},
+    .targetCam = {10.0f, 40.0f, 15.0f, 20.0f, 60.0f},
+};
+
+// The same table with two tendril roots (the root order needs a second slot).
+inline constexpr EncounterDesc kOtherTwoRoots = [] {
+    EncounterDesc desc = kOther;
+    desc.death.roots = 2;
+    return desc;
+}();
+
+// Only a left stomp: the club and the right stomp have no row.
+inline constexpr EncounterDesc kStompOnly = [] {
+    EncounterDesc desc = kOther;
+    desc.attacks = std::span<const AttackDesc>(kOtherAttacks.data(), 1);
+    return desc;
+}();
+
+ValusAttackInput attack_input(Vec3 player) {
+    ValusAttackInput input;
+    input.playerGrounded = true;
+    input.playerPos = player;
+    input.footL = Vec3{0.0f, 0.0f, 7.0f};
+    input.footR = Vec3{1000.0f, 0.0f, 1000.0f};
+    return input;  // the entity at the origin, facing +Z
+}
+
+DeathState death_at(float total, const EncounterDesc& desc) {
+    return step_death(step_death({}, 0.0f, true, desc), total, true, desc);
+}
+
+}  // namespace
+
+TEST_CASE("select_valus_attack reads the selected table's reach and facing") {
+    // 3 m from the left foot, 10 m in front: Valus stomps (4.5 m), the other
+    // table's 2 m stomp misses and its 20 m club (dot > 0.9) answers.
+    CHECK(select_valus_attack(attack_input({0.0f, 0.0f, 10.0f}), kValus) == ValusAttack::StompL);
+    CHECK(select_valus_attack(attack_input({0.0f, 0.0f, 10.0f}), kOther) == ValusAttack::Club);
+    // 16 m: past Valus's 14 m club.
+    CHECK(select_valus_attack(attack_input({0.0f, 0.0f, 16.0f}), kValus) == ValusAttack::None);
+    CHECK(select_valus_attack(attack_input({0.0f, 0.0f, 16.0f}), kOther) == ValusAttack::Club);
+    // A facing dot of 0.8: inside Valus's 0.2 gate, outside the other's 0.9.
+    CHECK(select_valus_attack(attack_input({6.0f, 0.0f, 8.0f}), kValus) == ValusAttack::Club);
+    CHECK(select_valus_attack(attack_input({6.0f, 0.0f, 8.0f}), kOther) == ValusAttack::None);
+    // No club row: never a club; the one stomp row still answers.
+    CHECK(select_valus_attack(attack_input({0.0f, 0.0f, 16.0f}), kStompOnly) == ValusAttack::None);
+    CHECK(select_valus_attack(attack_input({0.0f, 0.0f, 8.0f}), kStompOnly) == ValusAttack::StompL);
+}
+
+TEST_CASE("attack_impact_due, the cooldown and the row lookup read the selected table") {
+    CHECK(attack_impact_due(ValusAttack::StompL, 0.25f, false, kOther));
+    CHECK_FALSE(attack_impact_due(ValusAttack::StompL, 0.25f, false, kValus));
+    CHECK_FALSE(attack_impact_due(ValusAttack::StompR, 0.6f, false, kOther));
+    CHECK(attack_impact_due(ValusAttack::StompR, 0.6f, false, kValus));
+    CHECK(attack_impact_due(ValusAttack::Club, 1.1f, false, kOther));
+    CHECK_FALSE(attack_impact_due(ValusAttack::Club, 1.1f, false, kValus));
+    CHECK_FALSE(attack_impact_due(ValusAttack::Club, 1.1f, false, kStompOnly));
+
+    CHECK(valus_attack_cooldown_seconds(ValusAttack::StompR, kOther) == 7.0f);
+    CHECK(valus_attack_cooldown_seconds(ValusAttack::Club, kOther) == 9.0f);
+    CHECK(valus_attack_cooldown_seconds(ValusAttack::Club, kStompOnly) == 0.0f);
+
+    REQUIRE(valus_attack_desc(ValusAttack::StompL, kOther) != nullptr);
+    CHECK(same(valus_attack_desc(ValusAttack::StompL, kOther)->clip, "other_stomp_l"));
+    CHECK(valus_attack_desc(ValusAttack::Club, kStompOnly) == nullptr);
+}
+
+TEST_CASE("step_death and death_tendrils_active follow the selected death bundle") {
+    CHECK(death_at(0.0f, kOther).roots == 1);
+    CHECK(death_at(5.5f, kOther).phase == DeathPhase::Collapse);  // past 5.333 s
+    CHECK(death_at(5.5f, kValus).phase == DeathPhase::Motion);    // before 6.167 s
+    CHECK(death_at(8.5f, kOther).phase == DeathPhase::Collapse);  // before 9 s
+    CHECK(death_at(8.5f, kValus).phase == DeathPhase::Done);      // past 8 s
+    const DeathState done = death_at(20.0f, kOther);
+    CHECK(done.phase == DeathPhase::Done);
+    CHECK(done.total == 9.0f);
+
+    CHECK_FALSE(death_tendrils_active(death_at(0.5f, kOther), kOther));
+    CHECK(death_tendrils_active(death_at(0.5f, kValus), kValus));
+    CHECK(death_tendrils_active(death_at(1.5f, kOther), kOther));
+    CHECK_FALSE(death_tendrils_active(death_at(2.5f, kOther), kOther));
+    CHECK(death_tendrils_active(death_at(2.5f, kValus), kValus));
+}
+
+TEST_CASE("death_cue_due and death_camera_key read the selected death bundle") {
+    bool fired = false;
+    CHECK_FALSE(death_cue_due(death_at(0.5f, kOther), fired, kOther));  // the burst is at 1 s
+    CHECK_FALSE(fired);
+    CHECK(death_cue_due(death_at(1.0f, kOther), fired, kOther));
+    CHECK(fired);
+    bool valusFired = false;
+    CHECK(death_cue_due(death_at(0.5f, kValus), valusFired, kValus));
+
+    CHECK(std::string(death_camera_key(0.5f, kOther)) == "pull");
+    CHECK(std::string(death_camera_key(0.5f, kValus)) == "low");
+    CHECK(std::string(death_camera_key(2.5f, kOther)) == "wide");
+    CHECK(std::string(death_camera_key(2.5f, kValus)) == "low");
+    CHECK(std::string(death_camera_key(5.0f, kOther)) == "follow");
+    CHECK(std::string(death_camera_key(5.0f, kValus)) == "wide");
+}
+
+TEST_CASE("advance_death_frame clamps the death clip to the selected motion") {
+    Scene scene;
+    Playback playback;
+    playback.clips.push_back(AnimationCpu{"other_death", 10.0f, {}});
+    playback.index = 0;
+    DeathState death = death_at(0.0f, kOther);
+    advance_death_frame(death, 7.0f, playback, 0, CorpseAttachment{}, ClubAttachment{}, scene, 1,
+                        kOther);
+    CHECK(playback.time == 5.333f);  // Valus's clamp would be 6.166877
+    CHECK(death.phase == DeathPhase::Collapse);
+}
+
+TEST_CASE("camera_death_pose keys on the selected death camera") {
+    Camera base{};
+    base.distance = 5.0f;
+    const Vec3 entity{0.0f, 0.0f, 0.0f};
+    const Vec3 player{3.0f, 0.0f, 0.0f};
+    const Camera pull = camera_death_pose(base, entity, player, 1.0f, kOther);
+    CHECK(pull.distance == doctest::Approx(7.0f));
+    CHECK(pull.pitch == doctest::Approx(-10.0f));
+    CHECK(pull.target.y == doctest::Approx(3.0f));
+    const Camera low = camera_death_pose(base, entity, player, 2.0f, kOther);
+    CHECK(low.distance == doctest::Approx(5.0f));
+    CHECK(low.yaw == doctest::Approx(30.0f));
+    CHECK(low.pitch == doctest::Approx(-20.0f));
+    CHECK(low.target.y == doctest::Approx(4.0f));
+    const Camera wide = camera_death_pose(base, entity, player, 4.0f, kOther);
+    CHECK(wide.distance == doctest::Approx(15.0f));
+    CHECK(wide.yaw == doctest::Approx(60.0f));
+}
+
+TEST_CASE("the target camera reads the selected table's limits and defaults") {
+    Camera camera{};
+    CameraFollow follow;
+    CameraTarget target;
+    const Vec3 chest{0.0f, 5.0f, 0.0f};
+    camera_target_toggle(camera, follow, target, chest, kOther);
+    CHECK(camera.distance == doctest::Approx(15.0f));
+    CHECK(camera.pitch == doctest::Approx(20.0f));
+    camera_target_update(camera, target, chest, 0.0f, 10000.0f, 0.0f, kOther);
+    CHECK(camera.pitch == doctest::Approx(60.0f));
+    camera_target_update(camera, target, chest, 0.0f, 0.0f, -1000.0f, kOther);
+    CHECK(camera.distance == doctest::Approx(40.0f));
+    camera_target_update(camera, target, chest, 0.0f, 0.0f, 1000.0f, kOther);
+    CHECK(camera.distance == doctest::Approx(10.0f));
+
+    CameraTarget valus;
+    camera_target_enter(camera, follow, valus, chest, kValus);
+    CHECK(camera.distance == doctest::Approx(26.0f));
+    CHECK(camera.pitch == doctest::Approx(10.0f));
+}
+
+TEST_CASE("cue_for and missing_cue read the selected table's cues") {
+    REQUIRE(cue_for(Sfx::StompStart, kOther) != nullptr);
+    CHECK(same(cue_for(Sfx::StompStart, kOther)->clip, "other.telegraph"));
+    CHECK(same(cue_for(Sfx::ValusReaction, kOther)->clip, "other.hurt"));
+    CHECK(same(cue_for(Sfx::Strike, kOther)->clip, "player.swing"));  // the player's own row
+    CHECK(cue_for(Sfx::ClubSwing, kOther) == nullptr);
+    CHECK(cue_for(Sfx::ClubSwing, kValus) != nullptr);
+
+    const auto reject = [](const char* banned) {
+        return [banned](const char* clip) { return std::strcmp(clip, banned) != 0; };
+    };
+    CHECK(missing_cue(reject("other.hurt"), kOther) == Sfx::ValusReaction);
+    CHECK(missing_cue(reject("valus.hurt"), kOther) == Sfx::Count);
+    CHECK(missing_cue(reject("valus.hurt"), kValus) == Sfx::ValusReaction);
+}
+
+TEST_CASE("apply_valus_impact deals the selected attack row's damage") {
+    PlayerFrame frame;
+    Vec3 foot{0.5f, 0.0f, 0.0f};
+    frame.jointWorld = [&foot](std::string_view name, Vec3& out) {
+        if (name != "Q_FOOT_L") {
+            return false;
+        }
+        out = foot;
+        return true;
+    };
+    const CombatTuning tuning;
+    const PlayerState player;
+
+    PlayerCombat direct;
+    apply_valus_impact(direct, player, frame, tuning, ValusAttack::StompL, kOther, nullptr,
+                       nullptr);
+    CHECK(direct.health == doctest::Approx(100.0f - 11.0f));
+
+    foot = Vec3{2.0f, 0.0f, 0.0f};  // outside the 1 m hit, inside the 3 m wave
+    PlayerCombat wave;
+    apply_valus_impact(wave, player, frame, tuning, ValusAttack::StompL, kOther, nullptr,
+                       nullptr);
+    CHECK(wave.health == doctest::Approx(100.0f - 5.0f));
+}
+
+TEST_CASE("the reactions route over the selected table's N weakpoints") {
+    Playback playback;
+    for (const char* name : {"stand", "qa_react", "qb_react", "qc_react", "other_body",
+                             "other_death", "other_stomp_l", "other_stomp_r", "other_club"}) {
+        playback.clips.push_back(AnimationCpu{name, 1.0f, {}});
+    }
+    const EntityClips clips = resolve_entity_clips(playback, "stand", kOther);
+    CHECK(clips.reactions == std::vector<int>{1, 2, 3});
+    CHECK(clips.body == 4);
+    CHECK(clips.death == 5);
+    CHECK(clips.club == 8);
+
+    Encounter encounter;
+    encounter.desc = &kOther;
+    encounter.health = kOther.maxHealth;
+    StepEvents hit;
+    hit.damageDealt = 10;
+    apply_combat_events(encounter, playback, clips, hit, /*weakpoint=*/2, nullptr);
+    CHECK(playback.index == 3);  // the third shell's reaction: Valus has no weakpoint 2
+    CHECK(encounter.health == doctest::Approx(40.0f));
+
+    encounter.reactionClip = -1;
+    apply_combat_events(encounter, playback, clips, hit, /*weakpoint=*/-1, nullptr);
+    CHECK(playback.index == 4);  // off every shell: the body
+
+    hit.damageDealt = 100;
+    apply_combat_events(encounter, playback, clips, hit, /*weakpoint=*/2, nullptr);
+    CHECK(encounter.defeated);
+    CHECK(encounter.deathWeakpoint == 2);
+    CHECK(playback.index == 5);
+}
+
+TEST_CASE("build_effect_frame roots the hit shell first, then the others, up to death.roots") {
+    // Rig 1: one identity joint (the chest at the origin) and three one-vertex
+    // shells qa (+x), qb (+y), qc (+z).
+    Scene scene;
+    scene.rigs.emplace_back();
+    RigCpu rig;
+    rig.skin.joints.resize(1);
+    rig.skin.joints[0].name = "Q_CHEST";
+    rig.skin.joints[0].parent = -1;
+    rig.skin.joints[0].inverseBind = mat4_identity();
+    rig.meshBegin = 0;
+    rig.meshEnd = 3;
+    scene.rigs.push_back(rig);
+    const std::array<Vec3, 3> shells{{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}};
+    for (int i = 0; i < 3; ++i) {
+        MeshCpu mesh;
+        mesh.materialIndex = i;
+        mesh.rig = 1;
+        Vertex vertex{};
+        vertex.px = shells[static_cast<std::size_t>(i)].x;
+        vertex.py = shells[static_cast<std::size_t>(i)].y;
+        vertex.pz = shells[static_cast<std::size_t>(i)].z;
+        vertex.w[0] = 1.0f;
+        mesh.vertices.push_back(vertex);
+        scene.meshes.push_back(mesh);
+        MaterialCpu material{};
+        material.name = kOtherWeakpoints[static_cast<std::size_t>(i)].material;
+        scene.materials.push_back(material);
+    }
+    const std::vector<std::vector<Mat4>> palettes{{}, {mat4_identity()}};
+
+    Encounter encounter;
+    encounter.desc = &kOtherTwoRoots;
+    encounter.deathWeakpoint = 2;
+    const EffectFrame two =
+        build_effect_frame(scene, 1, palettes, encounter, death_at(1.5f, kOtherTwoRoots));
+    REQUIRE(two.active);
+    REQUIRE(two.rootCount == 2);
+    CHECK(two.roots[0].position.z == doctest::Approx(1.0f));  // qc, the hit shell
+    CHECK(two.roots[1].position.x == doctest::Approx(1.0f));  // qa, the first other
+
+    encounter.desc = &kOther;  // one root
+    const EffectFrame one =
+        build_effect_frame(scene, 1, palettes, encounter, death_at(1.5f, kOther));
+    CHECK(one.rootCount == 1);
+    CHECK(one.roots[0].position.z == doctest::Approx(1.0f));
+    // Outside the selected window there is no frame (Valus's 0.4-3.0 s would be).
+    CHECK_FALSE(build_effect_frame(scene, 1, palettes, encounter, death_at(2.5f, kOther)).active);
 }
