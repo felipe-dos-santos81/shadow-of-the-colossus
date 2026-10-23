@@ -65,10 +65,13 @@ void print_usage(FILE* out) {
                  "                    print s6-reset, exit\n"
                  "  --s6-stills DIR   with --s6-selftest: write the motion, camera,\n"
                  "                    tendrils and corpse stills to DIR\n"
-                 "  --stage arena|shrine  the first stage (default arena; the shrine\n"
-                 "                    starts with control; R returns to the arena)\n"
+                 "  --stage arena|shrine|plain  the first stage (default arena; the\n"
+                 "                    shrine and the plain start with control; R\n"
+                 "                    returns to the arena)\n"
                  "  --shrine-manifest PATH  the shrine's manifest (default\n"
                  "                    out/re/stage/shrine.manifest)\n"
+                 "  --plain-manifest PATH  the plain's manifest (default\n"
+                 "                    out/re/stage/plain.manifest)\n"
                  "  --no-return       keep S6's end state: no return to the shrine\n"
                  "  --s7-selftest     seed Valus dead, run the return to the shrine, the\n"
                  "                    wake and the shrine probes, R back and reload;\n"
@@ -160,7 +163,7 @@ int main(int argc, char** argv) {
                                  arg == "--s41-stills" || arg == "--s42-stills" ||
                                  arg == "--s6-stills" || arg == "--audio-mixdown" ||
                                  arg == "--stage" || arg == "--shrine-manifest" ||
-                                 arg == "--s7-stills";
+                                 arg == "--s7-stills" || arg == "--plain-manifest";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -216,15 +219,23 @@ int main(int argc, char** argv) {
         } else if (arg == "--audio-mixdown") {
             opts.audioMixdownPath = value;
         } else if (arg == "--stage") {
-            if (std::strcmp(value, "arena") != 0 && std::strcmp(value, "shrine") != 0) {
-                std::fprintf(stderr, "sotc-viewer: --stage expects arena or shrine, got: %s\n",
+            if (std::strcmp(value, "arena") == 0) {
+                opts.stage = StageId::Arena;
+            } else if (std::strcmp(value, "shrine") == 0) {
+                opts.stage = StageId::Shrine;
+            } else if (std::strcmp(value, "plain") == 0) {
+                opts.stage = StageId::Plain;
+            } else {
+                std::fprintf(stderr,
+                             "sotc-viewer: --stage expects arena, shrine or plain, got: %s\n",
                              value);
                 print_usage(stderr);
                 return 2;
             }
-            opts.stage = std::strcmp(value, "shrine") == 0 ? StageId::Shrine : StageId::Arena;
         } else if (arg == "--shrine-manifest") {
             opts.shrineManifestPath = value;
+        } else if (arg == "--plain-manifest") {
+            opts.plainManifestPath = value;
         } else if (arg == "--s7-stills") {
             opts.s7StillsPath = value;
         } else {
@@ -347,11 +358,11 @@ int main(int argc, char** argv) {
         print_usage(stderr);
         return 2;
     }
-    if (opts.s7E2e && (frozen_selftest || opts.s7Selftest || opts.stage == StageId::Shrine ||
+    if (opts.s7E2e && (frozen_selftest || opts.s7Selftest || opts.stage != StageId::Arena ||
                        opts.noReturn || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
         std::fprintf(stderr,
                      "sotc-viewer: --s7-e2e runs alone: no selftest, capture, --entity-time, "
-                     "--stage shrine or --no-return\n");
+                     "--stage shrine|plain or --no-return\n");
         print_usage(stderr);
         return 2;
     }
@@ -360,12 +371,13 @@ int main(int argc, char** argv) {
         print_usage(stderr);
         return 2;
     }
-    if (opts.stage == StageId::Shrine &&
+    if (opts.stage != StageId::Arena &&
         (opts.manifestPath.empty() || frozen_selftest || opts.s7Selftest ||
          !opts.screenshotPath.empty() || opts.entityTimeSet)) {
         std::fprintf(stderr,
-                     "sotc-viewer: --stage shrine is an interactive start: it needs --manifest "
-                     "(the arena R returns to) and no selftest or capture\n");
+                     "sotc-viewer: --stage %s is an interactive start: it needs --manifest "
+                     "(the arena R returns to) and no selftest or capture\n",
+                     opts.stage == StageId::Shrine ? "shrine" : "plain");
         print_usage(stderr);
         return 2;
     }

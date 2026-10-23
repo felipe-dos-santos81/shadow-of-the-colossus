@@ -102,6 +102,16 @@ bool posed_joint_world_position(const Scene& scene, std::size_t rigIndex,
                                 const std::vector<Mat4>& palette,
                                 const std::string& jointName, Vec3& out);
 
+// The world transform of the bone named exactly `boneName` in rig `rigIndex`
+// (S8: Agro's `OptBone_boy`, the rider's seat): that rig's mesh model *
+// palette[bone] * bindWorld[bone] — posed_joint_world_position's point as a
+// full matrix (its origin is that point), and club_model's product with the rig
+// named by index, never matched by palette size. Returns false — leaving `out`
+// untouched — when the rig or bone is absent or the palette is shorter than
+// the skin.
+bool rig_bone_world(const Scene& scene, std::size_t rigIndex, const std::vector<Mat4>& palette,
+                    const std::string& boneName, Mat4& out);
+
 // The model matrix for a prop authored in `swordJoint`'s bind frame (the club):
 // entityMeshModel * palette[swordJoint] * bindWorld[swordJoint]. The middle
 // factor is the joint's posed mesh-space matrix; the bind world turns it back

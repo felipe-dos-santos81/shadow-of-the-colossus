@@ -6,6 +6,11 @@
 #include <doctest.h>
 
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <regex>
+#include <set>
+#include <vector>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -301,4 +306,57 @@ TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
         });
     CHECK(rejected == Sfx::ValusReaction);
     CHECK(std::string(sfx_name(rejected)) == "valus_reaction");
+}
+
+// --- S8 Task 8: the ride cue table -------------------------------------------
+
+namespace {
+
+// Every `"event": "<name>"` of a curated map's `cues` (in file order).
+std::vector<std::string> map_events(const char* relPath) {
+    const std::filesystem::path path =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() / relPath;
+    std::ifstream in(path);
+    REQUIRE_MESSAGE(in.good(), "cannot read ", path.string());
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    text = text.substr(0, text.find("\"deferred\""));  // the `cues` rows only (cues come first)
+    const std::regex row("\"event\"\\s*:\\s*\"([^\"]+)\"");
+    std::vector<std::string> out;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), row);
+         it != std::sregex_iterator(); ++it) {
+        out.push_back((*it)[1].str());
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("S8: the ride cue table maps exactly the S8 events of s8_map.json") {
+    const std::vector<std::string> s8 = map_events("tools/re/audio/s8_map.json");
+    const std::vector<std::string> s6 = map_events("tools/re/audio/s6_map.json");
+    REQUIRE(s6.size() == 10);
+    REQUIRE(s8.size() == 34);
+    std::set<std::string> wanted(s8.begin(), s8.end());
+    for (const std::string& event : s6) {
+        wanted.erase(event);
+    }
+    REQUIRE(wanted.size() == 24);
+
+    std::set<std::string> mapped;
+    for (int i = 0; i < static_cast<int>(RideSfx::Count); ++i) {
+        const RideSfx id = static_cast<RideSfx>(i);
+        const RideCue& cue = ride_cue(id);
+        CAPTURE(ride_sfx_name(id));
+        REQUIRE(cue.variants >= 1);
+        CHECK(cue.gain > 0.0f);
+        for (int v = 0; v < cue.variants; ++v) {
+            CHECK(mapped.insert(ride_cue_clip(id, v)).second);
+        }
+        // A variant index wraps: a seeded pick can never name a missing row.
+        CHECK(ride_cue_clip(id, cue.variants) == ride_cue_clip(id, 0));
+    }
+    CHECK(mapped == wanted);
+    CHECK(ride_cue_clip(RideSfx::HoofTrot, 0) == "agro.hoof_trot");
+    CHECK(ride_cue_clip(RideSfx::HoofGallop, 4) == "agro.hoof_gallop.4");
+    CHECK(std::string(ride_sfx_name(RideSfx::StopHorse)) == "stop_horse");
 }

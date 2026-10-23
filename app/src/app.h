@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "door.h"
 #include "transition.h"
 #include "valus.h"
 
@@ -71,8 +72,9 @@ inline void reset_encounter(Encounter& encounter) {
     encounter.entityYawDeg = encounter.entityBaseYawDeg;
 }
 
-// The stages run_app can compose (S7 D6): the --manifest arena, or the shrine.
-enum class StageId { Arena, Shrine };
+// The stages run_app can compose (S7 D6, S8 D2): the --manifest arena, the
+// shrine, or the plain in front of it.
+enum class StageId { Arena, Shrine, Plain };
 
 // One viewer run's parameters, filled by the argument parser in main.cpp.
 struct AppOptions {
@@ -171,6 +173,9 @@ struct AppOptions {
     StageId stage = StageId::Arena;
     bool noReturn = false;
     std::string shrineManifestPath = "out/re/stage/shrine.manifest";
+    // S8 (D2): --stage plain starts on the plain (Agro, riding, the shrine's
+    // door); --plain-manifest is the plain's composed manifest.
+    std::string plainManifestPath = "out/re/stage/plain.manifest";
     // --s7-selftest: the S7 acceptance timeline (design §8.6). In the arena,
     // seed Valus dead (death Done, the corpse shown), run the return machine
     // at fixed 1/60 s steps (an R during the first FadeOut, then again to
@@ -211,6 +216,10 @@ struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
 // shrine, 2 the arena after R) and its frame count across stages.
 struct StageCarry {
     ReturnState ret{};
+    // S8 (D14): the door machine crosses the stage switch (FadeOut in one
+    // stage, Load at the switch, FadeIn in the next); `door.target` is the
+    // destination StageId while it runs.
+    DoorState door{};
     int s7Step = 0;
     std::size_t shrineMeshes = 0;
     int e2eStep = 0;
