@@ -17,9 +17,9 @@ the walls and the floor feel solid are the user's eye and hands (§11).
 
 | | |
 |---|---|
-| Date | 2026-10-22 local (−03); the recorded run is stamped `2026-10-23T00:35:31Z`–`00:43:32Z` (8 min 1 s), re-measured after the load fix (`dd14055`, `6b54c08`, `a32e276`); §1–§9's numbers are that run's. The log now holds the Task 13 run, `2026-10-23T00:56:12Z`–`01:04:28Z` (PASS, with `--s7-e2e`; §3b quotes it — its own loads were 1.66/1.64 s and its shrine frame 9.102 ms) |
+| Date | 2026-10-22 local (−03); the recorded run is stamped `2026-10-23T00:35:31Z`–`00:43:32Z` (8 min 1 s), re-measured after the load fix (`dd14055`, `6b54c08`, `a32e276`); §1–§9's numbers are that run's. §3b quotes the Task 13 run, `2026-10-23T00:56:12Z`–`01:04:28Z` (PASS, with `--s7-e2e`; its own loads were 1.66/1.64 s and its shrine frame 9.102 ms). The log now holds the final-fix run, `2026-10-23T01:12:21Z`–`01:20:34Z` (PASS; selftest loads arena 606.6/561.8 ms, shrine 1,850.3/1,737.9 ms; e2e shrine load 1,744.1 ms; shrine frame 8.427 ms; the suites as §1/§8 quote) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; 1280×720 points → 2560×1440 px captures |
-| Repo / branch | `sotc-native`, branch `s7-shrine`; the code base is `ee1fe08` (the return, wired and proven) |
+| Repo / branch | `sotc-native`, branch `s7-shrine`; the code head the current log measured is `a477415` (the return, the load fix, `--s7-e2e` and the final-fix wave, R16) |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
 | Library (gitignored) | `SOTC_LIB=<repo>/out/library` (shared; Wander re-baked with 17 clips, Mono baked with 1) |
 | Arena compose (scratch) | `out/s7/arena-compose.manifest`, sha256 `088e621894ecd38312526bdac11916fb355a645ecef4d0bace91e53b2440c1d0` (the pinned S3 value; `valus.manifest` and `encounter.manifest` untouched) |
@@ -34,13 +34,16 @@ the walls and the floor feel solid are the user's eye and hands (§11).
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game
 export SOTC_LIB=<repo>/out/library
-caffeinate -dimsu ./scripts/s7-acceptance.sh   # exit 0; everything below is from
-                                                # out/s7-acceptance-run.log
+caffeinate -dimsu ./scripts/s7-acceptance.sh   # exit 0
 ```
 
+The figures below are from the recorded runs' logs, except the ones the logs do not print: the
+11.669 s wake and the clips' frame rates (§3, read from the baked `wander.glb`), and the 24–27 s
+pre-fix shrine load history (§4, from the earlier runs).
+
 - **Builds.** `dotnet build BpConvert.sln`, `dotnet publish src/BpConvert.Cli`, app `cmake` Release.
-- **Suites.** `dotnet test` **146 passed, 0 failed** (49 s); `ctest` **2/2** (unit 6.51 s,
-  windowed 0.17 s).
+- **Suites.** `dotnet test` **146 passed, 0 failed** (49 s); `ctest` **2/2** (unit 6.68 s,
+  windowed 0.16 s; the final-fix run's log).
 - **The frozen S6 acceptance** ran unchanged and printed its own `PASS —` (the unchanged S4.2 render
   path at **8.75 ms/frame**, marginal, ~114.3 fps); it took 6 min 44 s with its nested chain. Its
   own s6 outputs are not re-asserted.
@@ -219,7 +222,8 @@ approximation; the hall floor measures 8.999).
 ## 6 · Performance and status
 
 - `s7-perf frames=240 frame_ms=12.492 drawn=170 culled=3393` — the 240-frame play view at the spawn
-  in the shrine: **12.492 ms/frame** (≤ 16.7), **170 meshes drawn, 3,393 culled** of 3,563.
+  in the shrine: **12.492 ms/frame** (≤ 16.7), **170 meshes drawn, 3,393 culled** of 3,563. Run noise: two re-runs
+  gave 8.413 and 8.398 ms, and the final-fix run 8.427 ms (same 170/3,393).
 - `s7-status stage=shrine phase=Free lock=0`.
 - `s7-reset stage=arena phase=Idle death=Idle valus=100 player=100` twice (`R` mid-fade, `R` from the
   shrine), both exact.
@@ -245,8 +249,8 @@ not 0.5).
 ## 8 · The suites
 
 `dotnet test tests/BpConvert.Tests`: **146 passed, 0 failed, 0 skipped** (49 s).
-`ctest --test-dir app/build`: **2/2 passed** (`unit_tests` 11.64 s, `windowed_selftest` 0.19 s;
-11.84 s total). The unit suite carries the S7 cases added by Tasks 2–9 (heightmap floor/wall mask, frustum
+`ctest --test-dir app/build`: **2/2 passed** (`unit_tests` 6.68 s, `windowed_selftest` 0.16 s;
+6.84 s total — the final-fix run's log). The unit suite carries the S7 cases added by Tasks 2–9 (heightmap floor/wall mask, frustum
 culling, the transition machine, `posed` manifest records, `camera_wake_pose`).
 
 ## 9 · Authored values and rulings
@@ -277,10 +281,16 @@ the wake clips and their pelvis heights, the spawn position (`cathedral_int.sgpr
   scenes (shrine 151, arena 87); the shared textures are the same PNG bytes.
 - **R15** — with the load at 1.79–1.90 s, the shrine load ceiling tightens from 60 s to 15 s
   (`ms ≤ 15000`).
-- **R12** — `kHeightmapLayers` 64, not 8.
+- **R12** — `kHeightmapLayers` 64, not 8 (a node that would hold more drops its lowest layers and
+  warns once per build on stderr).
 - **R13** — `fade.png` at fade 0.6 and the probes follow the floor walked from the spawn.
 - **R1** — the app parses no JSON: the timings and probes are `constexpr` in `shrine_points.h`, and
   this script cross-checks them against `shrine_placements.json`.
+- **R16** — interactive play checks the return's inputs once at startup: with no shrine manifest or
+  without the wake clips in `wander.glb` it warns once on stderr (naming `make shrine-manifest`,
+  `make bake` and `--no-return`) and plays with the return disabled (the audio pattern).
+  `--s7-selftest` and `--s7-e2e` stay fatal; `--stage shrine` with a missing shrine manifest stays
+  exit 2 and names `make shrine-manifest`.
 
 ## 10 · Known limitations
 
@@ -302,8 +312,8 @@ the wake clips and their pelvis heights, the spawn position (`cathedral_int.sgpr
 - The interactive loop is driven end to end by `--s7-e2e` (§3b), but with a scripted input and a
   fixed step: the physical key press, the gamepad, the three-strike fight and wall-clock frame
   times are still the walk's.
-- Interactive play without the wake clips in `wander.glb` exits with an error; `--no-return` avoids
-  the return.
+- Interactive play without the shrine manifest or the wake clips in `wander.glb` warns once and plays
+  without the return (R16); `make shrine-manifest` and `make bake` restore it.
 
 ## 11 · The user's walk — PENDING
 
@@ -328,8 +338,8 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 | 5 | the idols | look along the hall | sixteen idols; the first is broken | ☐ |
 | 6 | the shrine reads as the game's | walk the hall | it reads as the game's shrine of worship | ☐ |
 | 7 | ground: steps and stairs | walk to the altar steps and up/down the stairs | the floor under the feet at every point: no falling through, no standing on the roof | ☐ |
-| 8 | walls, pillars, altar, idols | walk into each | Wander stops or slides; never passes through, never drops to the exterior ground | ☐ |
-| 9 | `R` returns | press `R` in the shrine (and mid-fade in the arena) | the arena in its opening state (Valus alive, the corpse gone, the player whole) | ☐ |
+| 8 | walls, pillars, altar, idols | walk into each; check the side ramps beside/behind the altar (x ±12–19, z 21→45) do not lead off the building | Wander stops or slides; never passes through, never drops to the exterior ground | ☐ |
+| 9 | `R` returns | press `R` in the shrine (and mid-fade in the arena) | the arena in its opening state (Valus alive, the corpse gone, the player whole); `R` from the shrine cuts straight to the arena, without a fade (expected; the walk notes it) | ☐ |
 | 10 | the return repeats | defeat Valus again after `R` | the whole return plays again | ☐ |
 | 11 | no clipping, windowed, cursor | move the mouse over the window; watch the title | a 1280×720 window, the cursor free, the fps in the ≥ 60 class | ☐ |
 
@@ -357,6 +367,6 @@ filled and passes; nothing in §1–§10 claims it.
 
 - Design: `docs/superpowers/specs/2026-10-22-s7-return-to-the-shrine-design.md` (§2 goals, §8 the
   design, §9 the builder's calls, §11 the walk).
-- Plan: `docs/superpowers/plans/2026-10-22-s7-return-to-the-shrine.md`; rulings R1–R13 in
+- Plan: `docs/superpowers/plans/2026-10-22-s7-return-to-the-shrine.md`; rulings R1–R16 in
   `.superpowers/sdd/2026-10-22-s7-return-to-the-shrine/progress.md`.
 - RE gates: `docs/notes/s7-recon.md`; data: `tools/re/s7/shrine_placements.json`.

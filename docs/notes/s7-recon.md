@@ -4,7 +4,7 @@
 |---|---|---|
 | **R1** idol placement | **PASS** (data, not code) | 16 positions + yaws + model refs from `cathedral_int.cgpr`; slot 1 broken = `Broke` + `skirt` records |
 | **R2** post-defeat flow | **FALLBACK** | order and timings stay the design defaults (`hold 2.0 / fade-out 1.0 / fade-in 1.5 s`, white), `source: authored` |
-| **R3** wake / spawn / probes | **PASS** (wake, spawn position) + authored (spawn yaw, Mono, probes) | wake = `player_a_home_boss01_cut04` + `cut05` (15.456 s); spawn = the `cathedral_int.sgpr` start in the glbs' frame |
+| **R3** wake / spawn / probes | **PASS** (wake, spawn position) + authored (spawn yaw, Mono, probes) | wake = `player_a_home_boss01_cut04` + `cut05` (15.456 s — corrected to 11.669 s in §5); spawn = the `cathedral_int.sgpr` start in the glbs' frame |
 
 The output is `tools/re/s7/shrine_placements.json`, composed from the shipped data by
 `tools/re/s7/idols.py place`. Static RE only; read-only on the game tree, the library and
