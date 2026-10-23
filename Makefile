@@ -167,7 +167,7 @@ road-manifest: ## Compose out/re/stage/road.manifest from the stage data
 arena02-manifest: ## Compose out/re/stage/arena_02.manifest (Quadratus's arena) from the stage data
 	@test -f $(ARENA02) || python3 tools/re/stage/probe.py compose --stage arena_02 --library "$(LIB)" --out $(ARENA02)
 
-probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road manifests)
+probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road + arena_02 manifests)
 	python3 tools/re/anb/probe.py check-skb
 	python3 tools/re/stage/probe.py check-cwks
 	python3 tools/re/stage/probe.py check-manifest --library "$(LIB)"
@@ -175,6 +175,7 @@ probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + pla
 	python3 tools/re/stage/probe.py check-manifest --stage shrine --library "$(LIB)" $(SHRINE)
 	python3 tools/re/stage/probe.py check-manifest --stage plain --library "$(LIB)" $(PLAIN)
 	python3 tools/re/stage/probe.py check-manifest --stage road --library "$(LIB)" $(ROAD)
+	python3 tools/re/stage/probe.py check-manifest --stage arena_02 --library "$(LIB)" $(ARENA02)
 
 census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
