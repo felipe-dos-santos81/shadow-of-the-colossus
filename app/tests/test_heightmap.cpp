@@ -493,3 +493,91 @@ TEST_CASE("an unlayered build leaves layers and blocked empty") {
     CHECK(hm.layers.empty());
     CHECK(hm.blocked.empty());
 }
+
+// ---- S8: the hole-refusing ground ------------------------------------------
+
+namespace {
+
+// Platforms along x (z 0..4) with holes between them: A y=0, B +0.8, D +1.2,
+// E -2.0, F -1.4.
+Heightmap hole_ground(bool refuse) {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 4, 0, 4, 0.0f);
+    add_floor(tris, 6, 10, 0, 4, 0.8f);
+    add_floor(tris, 12, 16, 0, 4, 1.2f);
+    add_floor(tris, 18, 22, 0, 4, -2.0f);
+    add_floor(tris, 24, 28, 0, 4, -1.4f);
+    Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    hm.refuseHoles = refuse;
+    return hm;
+}
+
+}  // namespace
+
+TEST_CASE("an unflagged unlayered map still walks anywhere, holes and cliffs included") {
+    const Heightmap hm = hole_ground(false);
+    CHECK(heightmap_walkable(hm, {2, 0, 2}, {5, 0, 2}));    // onto a hole
+    CHECK(heightmap_walkable(hm, {2, 0, 2}, {20, 0, 2}));   // a 2 m drop
+    CHECK(heightmap_walkable(hm, {2, 0, 2}, {14, 0, 2}));   // a 1.2 m rise
+}
+
+TEST_CASE("refuseHoles refuses a node with no ground, a 2 m drop and a 1.2 m rise") {
+    const Heightmap hm = hole_ground(true);
+    CHECK_FALSE(heightmap_walkable(hm, {2, 0, 2}, {5, 0, 2}));    // the hole
+    CHECK_FALSE(heightmap_walkable(hm, {2, 0, 2}, {20, 0, 2}));   // down 2.0 > kHoleDropMax
+    CHECK_FALSE(heightmap_walkable(hm, {2, 0, 2}, {14, 0, 2}));   // up 1.2 > kHoleRiseMax
+}
+
+TEST_CASE("refuseHoles allows a 0.8 m rise and a 1.4 m drop, and a body in a hole may leave") {
+    const Heightmap hm = hole_ground(true);
+    CHECK(heightmap_walkable(hm, {2, 0, 2}, {8, 0, 2}));      // up 0.8
+    CHECK(heightmap_walkable(hm, {2, 0, 2}, {26, 0, 2}));     // down 1.4
+    CHECK(heightmap_walkable(hm, {2, 0, 2}, {3, 0, 2}));      // flat
+    CHECK(heightmap_walkable(hm, {5, 0, 2}, {2, 0, 2}));      // out of a hole
+    CHECK(kHoleDropMax == 1.5f);
+    CHECK(kHoleRiseMax == 1.0f);
+}
+
+TEST_CASE("refuseHoles refuses a cliff between adjacent nodes at any step size") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 3, 0, 4, 0.0f);
+    add_floor(tris, 4, 7, 0, 4, 5.0f);  // nodes 3 and 4 are both valid, 5 m apart
+    Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    hm.refuseHoles = true;
+    CHECK_FALSE(heightmap_walkable(hm, {3.45f, 0, 2}, {3.55f, 0, 2}));  // up the cliff
+    CHECK_FALSE(heightmap_walkable(hm, {3.55f, 5, 2}, {3.45f, 5, 2}));  // off it
+    CHECK(heightmap_walkable(hm, {3.0f, 0, 2}, {3.4f, 0, 2}));          // inside one node
+    CHECK(heightmap_walkable(hm, {4.0f, 5, 2}, {4.4f, 5, 2}));
+}
+
+TEST_CASE("refuseHoles lets a 0.8 m step-up across a node boundary walk in 0.1 m steps") {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 3, 0, 4, 0.0f);
+    add_floor(tris, 4, 7, 0, 4, 0.8f);
+    Heightmap hm = build_heightmap(scene_from_triangles(tris), 1.0f);
+    hm.refuseHoles = true;
+    for (int n = 0; n < 40; ++n) {
+        const float x = 2.0f + 0.1f * static_cast<float>(n);
+        CHECK(heightmap_walkable(hm, {x, 0, 2}, {x + 0.1f, 0, 2}));
+    }
+}
+
+TEST_CASE("a backdrop mesh above a floor changes no ground sample") {
+    // Mesh 0 is the floor at y = 3; mesh 1 is a static backdrop quad at y = 9
+    // over the same cell (ground = false). Only the floor may become ground.
+    Scene scene = scene_from_triangles({{0, 3, 0}, {10, 3, 0}, {0, 3, 10}});
+    MeshCpu backdrop;
+    backdrop.vertices = {vertex_at({0, 9, 0}), vertex_at({10, 9, 0}), vertex_at({0, 9, 10})};
+    backdrop.indices = {0, 1, 2};
+    backdrop.ground = false;
+    scene.meshes.push_back(std::move(backdrop));
+
+    const Heightmap hm = build_heightmap(scene, 1.0f);
+    CHECK(heightmap_sample(hm, {0.5f, 0, 0.5f}) == doctest::Approx(3.0f));
+    CHECK(heightmap_sample(hm, {2.0f, 0, 2.0f}) == doctest::Approx(3.0f));
+
+    // A scene whose only static mesh is a backdrop has no ground to build.
+    Scene only = scene_from_triangles({{0, 9, 0}, {10, 9, 0}, {0, 9, 10}});
+    only.meshes[0].ground = false;
+    CHECK_THROWS_AS(build_heightmap(only, 1.0f), std::runtime_error);
+}

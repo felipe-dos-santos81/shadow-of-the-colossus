@@ -538,6 +538,44 @@ TEST_CASE("agro carries its baked kick clip") {
     CHECK(!player_rig(scene).animations[0].channels.empty());
 }
 
+namespace {
+// The 19 riding gaits/transitions, in the order the S8 bake appends them (Agro: after the kick).
+constexpr const char* kRideStems[19] = {
+    "stand1", "walk_start", "walk", "walk_stop", "run_n_start", "run_n", "run_n_stop",
+    "run_n_from_walk", "run_start", "run", "run_from_run_n", "run_stop1", "run_stop2",
+    "run_stop3", "back_start", "back", "back_stop", "neigh", "neigh_end"};
+}
+
+TEST_CASE("S8: agro carries the kick at 0 then the 19 riding clips, by name") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/agro/_cmn/agro.glb");
+    const auto& clips = player_rig(scene).animations;
+    REQUIRE(clips.size() == 20);
+    CHECK(clips[0].name == "horse_a_add_horse_kick");
+    for (int i = 0; i < 19; ++i) {
+        CHECK(clips[1 + i].name == std::string("horse_a_uma_") + kRideStems[i]);
+        CHECK(!clips[1 + i].channels.empty());
+    }
+}
+
+TEST_CASE("S8: wander carries the 26 ride clips at 17..42, after the wake cuts") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    const auto& clips = player_rig(scene).animations;
+    check_wander_s2s6_clips(clips);
+    REQUIRE(clips.size() == 43);
+    CHECK(clips[15].name == "player_a_home_boss01_cut04");
+    CHECK(clips[16].name == "player_a_home_boss01_cut05");
+    for (int i = 0; i < 19; ++i) {
+        const std::string stem = i == 0 ? "stand1_player" : kRideStems[i];
+        CHECK(clips[17 + i].name == "player_a_uma_" + stem);
+    }
+    const char* tail[7] = {"player_a_uma_stand_ride_l", "player_a_uma_stand_ride_r",
+                           "player_a_uma_stand_getoff_l_start", "player_a_uma_stand_getoff_r_start",
+                           "player_a_uma_stand_getoff_fall", "player_a_whistle",
+                           "player_a_whistle_near"};
+    for (int i = 0; i < 7; ++i) CHECK(clips[36 + i].name == tail[i]);
+    for (int i = 17; i < 43; ++i) CHECK(!clips[i].channels.empty());
+}
+
 TEST_CASE("S7: wander carries the wake clips after its S2-S6 set, mono her death loop") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     const auto& clips = player_rig(scene).animations;
@@ -1514,4 +1552,68 @@ TEST_CASE("compose_scene reports progress before each glb it loads") {
     // Two instances + the player, plus at most one per PNG this thread decoded.
     CHECK(calls >= 3);
     CHECK(calls <= 4);
+}
+
+TEST_CASE("compose_scene loads a horse as its own rig after the entities") {
+    TempFixtureDir dir;
+    const std::string agro = "models/shadow/characters/agro/_cmn/agro.glb";
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\n" +
+                 colossus_entity_line() + "horse " + agro + " 5 0 0 0 0 0 1 1 1 1\n");
+
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+
+    // Rigs: the player, the entity, then the horse.
+    REQUIRE(scene.rigs.size() == 3);
+    CHECK(scene.horseRig == 2);
+    const RigCpu& horse = scene.rigs[2];
+    CHECK_FALSE(horse.dynamic);
+    REQUIRE(horse.animations.size() >= 1);
+    CHECK(horse.animations[0].name == "horse_a_add_horse_kick");
+    REQUIRE(horse.meshEnd > horse.meshBegin);
+    for (std::size_t m = horse.meshBegin; m < horse.meshEnd; ++m) {
+        CHECK(scene.meshes[m].rig == 2);
+        CHECK(scene.meshes[m].ground);
+    }
+
+    // The same manifest without a horse has none, and the entity keeps rig 1.
+    const SceneManifest plain = parsed_manifest(
+        dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\n" +
+                 colossus_entity_line());
+    const Scene without = compose_scene(test_library(), plain, kWanderGlb);
+    CHECK(without.horseRig == -1);
+    CHECK(without.rigs.size() == 2);
+    for (const MeshCpu& mesh : without.meshes) {
+        CHECK(mesh.ground);
+    }
+}
+
+TEST_CASE("compose_scene loads a backdrop as static, non-ground meshes outside the bounds") {
+    TempFixtureDir dir;
+    const Scene base = compose_scene(
+        test_library(),
+        parsed_manifest(dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\n"),
+        kWanderGlb);
+
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\nbackdrop " + kPlankGlb +
+                 " 300 0.071 -300 0 0 0 1 1 1 1\n");
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+
+    // Load order: the instance, the player (12), then the backdrop's one mesh.
+    REQUIRE(scene.meshes.size() == base.meshes.size() + 1);
+    CHECK(scene.horseRig == -1);
+    CHECK(scene.rigs.size() == 1);
+    const MeshCpu& backdrop = scene.meshes.back();
+    CHECK(backdrop.rig == -1);
+    CHECK_FALSE(backdrop.ground);
+    CHECK(backdrop.model.m[12] == doctest::Approx(300.0f));
+    CHECK(backdrop.model.m[14] == doctest::Approx(-300.0f));
+    // The backdrop's far corner does not stretch the scene (and so the heightmap) bounds.
+    CHECK(scene.boundsMin.x == doctest::Approx(base.boundsMin.x));
+    CHECK(scene.boundsMax.x == doctest::Approx(base.boundsMax.x));
+    CHECK(scene.boundsMin.z == doctest::Approx(base.boundsMin.z));
+    CHECK(scene.boundsMax.z == doctest::Approx(base.boundsMax.z));
+    // Everything else stays ground.
+    CHECK(scene.meshes.front().ground);
 }

@@ -362,3 +362,59 @@ TEST_CASE("a malformed posed line fails with its line number") {
     CHECK(manifest_error(neg_path).starts_with(neg_path.string() + ":1:"));
     CHECK(manifest_error(neg_path).find("seconds") != std::string::npos);
 }
+
+TEST_CASE("backdrop and horse lines parse their placement into their own lists") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parse_manifest(write_manifest(
+        dir, "instance models/a.glb 0 0 0 0 0 0 1 1 1 1\n"
+             "backdrop models/b.glb 300 0.071 -300 0 0.5 0 0.866 2 2 2\n"
+             "horse models/agro.glb 1 2 3 0 0 0 1 1 1 1\n"));
+    REQUIRE(manifest.instances.size() == 1);
+    REQUIRE(manifest.backdrops.size() == 1);
+    CHECK(manifest.backdrops[0].glbRelPath == "models/b.glb");
+    CHECK(manifest.backdrops[0].position.x == doctest::Approx(300.0f));
+    CHECK(manifest.backdrops[0].position.z == doctest::Approx(-300.0f));
+    CHECK(manifest.backdrops[0].rotation.w == doctest::Approx(0.866f));
+    CHECK(manifest.backdrops[0].scale.y == doctest::Approx(2.0f));
+    REQUIRE(manifest.horses.size() == 1);
+    CHECK(manifest.horses[0].placement.glbRelPath == "models/agro.glb");
+    CHECK(manifest.horses[0].placement.position.z == doctest::Approx(3.0f));
+    CHECK(manifest.entities.empty());
+}
+
+TEST_CASE("a malformed backdrop or horse line is refused with its line number") {
+    TempFixtureDir dir;
+    for (const std::string directive : {"backdrop", "horse"}) {
+        CAPTURE(directive);
+        const std::vector<std::string> tokens = {directive, "models/x.glb", "0", "0", "0", "0",
+                                                 "0",       "0",            "1", "1", "1", "1"};
+        REQUIRE(tokens.size() == 12);
+        const std::filesystem::path ok = write_manifest(dir, join_tokens(tokens) + "\n");
+        CHECK_NOTHROW(parse_manifest(ok));
+
+        // 11 and 13 tokens are refused naming the directive.
+        std::vector<std::string> shorter(tokens.begin(), tokens.end() - 1);
+        const std::filesystem::path short_path =
+            write_manifest(dir, "# h\n" + join_tokens(shorter) + "\n");
+        CHECK(manifest_error(short_path).starts_with(short_path.string() + ":2:"));
+        CHECK(manifest_error(short_path).find(directive) != std::string::npos);
+        std::vector<std::string> longer = tokens;
+        longer.push_back("clip");
+        CHECK(manifest_error(write_manifest(dir, join_tokens(longer) + "\n")).find(directive) !=
+              std::string::npos);
+
+        // A non-finite number in any numeric slot.
+        for (const std::string& bad : {std::string("nan"), std::string("inf"), std::string("1.5x")}) {
+            for (const int slot : {2, 5, 11}) {
+                std::vector<std::string> t = tokens;
+                t[static_cast<std::size_t>(slot)] = bad;
+                const std::filesystem::path path =
+                    write_manifest(dir, "# h\n" + join_tokens(t) + "\n");
+                CAPTURE(bad);
+                CAPTURE(slot);
+                CHECK(manifest_error(path).starts_with(path.string() + ":2:"));
+                CHECK(manifest_error(path).find("'" + bad + "'") != std::string::npos);
+            }
+        }
+    }
+}

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <initializer_list>
 #include <limits>
@@ -1592,4 +1593,86 @@ TEST_CASE("club_model resolves the rig that produced the palette") {
     CHECK(is_identity(club_model(scene, {}, 2, mat4_identity()), 1e-6f));
     CHECK(is_identity(club_model(scene, {mat4_identity()}, 0, mat4_identity()), 1e-6f));
     CHECK(is_identity(club_model(scene, entityPalette, 3, mat4_identity()), 1e-6f));
+}
+
+// S8 W1: the pose split. animation_pose is the wrapper over
+// pose_palette(animation_local_pose(...)), so the two must agree to the bit.
+namespace {
+
+bool palettes_bitwise_equal(const std::vector<Mat4>& a, const std::vector<Mat4>& b) {
+    return a.size() == b.size() &&
+           std::memcmp(a.data(), b.data(), a.size() * sizeof(Mat4)) == 0;
+}
+
+void check_split_equals_pose(const Scene& scene, std::size_t rig, const AnimationCpu& clip) {
+    const float times[5] = {0.0f, 0.25f * clip.duration, 0.5f * clip.duration,
+                            0.9f * clip.duration, clip.duration};
+    for (float time : times) {
+        CAPTURE(clip.name);
+        CAPTURE(time);
+        const LocalPose local = animation_local_pose(scene, rig, clip, time);
+        CHECK(palettes_bitwise_equal(pose_palette(scene, rig, local),
+                                     animation_pose(scene, rig, clip, time)));
+    }
+}
+
+}  // namespace
+
+TEST_CASE("local pose -> palette equals animation_pose over the fixtures") {
+    const Scene turn = turn_fixture_scene();
+    check_split_equals_pose(turn, 0, turn_clip(0));
+    check_split_equals_pose(turn, 0, turn_clip(1));
+    check_split_equals_pose(turn, 0, AnimationCpu{});
+    const Scene two = scene_with_two_rigs(3, 3);
+    check_split_equals_pose(two, 1, turn_clip_on("t", 1));
+    check_split_equals_pose(two, 1, turn_clip_on("foreign", 7));  // joint outside the skin
+    CHECK(pose_palette(two, 5, animation_local_pose(two, 5, AnimationCpu{}, 0.0f)).empty());
+}
+
+TEST_CASE("local pose -> palette equals animation_pose over wander's real clips") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    const RigCpu& rig = player_rig(scene);
+    REQUIRE(rig.animations.size() >= 15);
+    for (const AnimationCpu& clip : rig.animations) {
+        check_split_equals_pose(scene, scene.playerRig, clip);
+    }
+}
+
+TEST_CASE("an unkeyed joint keeps its rest local values") {
+    const Scene scene = turn_fixture_scene();
+    const LocalPose local = animation_local_pose(scene, 0, turn_clip(0), 1.0f);
+    REQUIRE(local.t.size() == 2);
+    CHECK(local.t[1].y == doctest::Approx(1.0f));
+    CHECK(local.r[1].w == doctest::Approx(1.0f));
+    CHECK(local.s[1].x == doctest::Approx(1.0f));
+    CHECK(local.r[0].z == doctest::Approx(std::sin(kPi / 4.0f)));  // the keyed joint
+}
+
+TEST_CASE("blend_poses endpoints and the halfway slerp") {
+    const Scene scene = turn_fixture_scene();
+    const LocalPose a = animation_local_pose(scene, 0, turn_clip(0), 0.0f);  // 0 degrees
+    const LocalPose b = animation_local_pose(scene, 0, turn_clip(0), 1.0f);  // 90 degrees Z
+    const LocalPose at0 = blend_poses(a, b, 0.0f);
+    const LocalPose at1 = blend_poses(a, b, 1.0f);
+    for (std::size_t i = 0; i < 2; ++i) {
+        CHECK(at0.r[i].z == doctest::Approx(a.r[i].z).epsilon(1e-6));
+        CHECK(at0.r[i].w == doctest::Approx(a.r[i].w).epsilon(1e-6));
+        CHECK(at0.t[i].y == a.t[i].y);
+        CHECK(at1.r[i].z == doctest::Approx(b.r[i].z).epsilon(1e-6));
+        CHECK(at1.r[i].w == doctest::Approx(b.r[i].w).epsilon(1e-6));
+        CHECK(at1.t[i].y == b.t[i].y);
+    }
+    const LocalPose half = blend_poses(a, b, 0.5f);
+    CHECK(half.r[0].z == doctest::Approx(std::sin(kPi / 8.0f)).epsilon(1e-4));  // 45 degrees
+    CHECK(half.r[0].w == doctest::Approx(std::cos(kPi / 8.0f)).epsilon(1e-4));
+
+    LocalPose ta = a, tb = a;
+    ta.t[0] = {0.0f, 0.0f, 0.0f};
+    tb.t[0] = {2.0f, 4.0f, 6.0f};
+    ta.s[0] = {1.0f, 1.0f, 1.0f};
+    tb.s[0] = {3.0f, 3.0f, 3.0f};
+    const LocalPose mid = blend_poses(ta, tb, 0.5f);
+    CHECK(mid.t[0].y == doctest::Approx(2.0f));
+    CHECK(mid.s[0].x == doctest::Approx(2.0f));
+    CHECK(kClipBlendSeconds == doctest::Approx(0.25f));
 }

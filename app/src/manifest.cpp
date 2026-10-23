@@ -109,15 +109,21 @@ SceneManifest parse_manifest(const std::filesystem::path& path) {
         }
 
         const std::string& directive = tokens[0];
-        if (directive == "instance") {
+        if (directive == "instance" || directive == "backdrop" || directive == "horse") {
             if (tokens.size() != 12) {
-                fail(path, line_number, "instance expects 12 tokens (glb path + 10 numbers), got " +
+                fail(path, line_number, directive + " expects 12 tokens (glb path + 10 numbers), got " +
                                             std::to_string(tokens.size()));
             }
-            ManifestInstance instance{};
-            instance.glbRelPath = tokens[1];
-            parse_placement_tokens(path, line_number, tokens, 2, "instance", instance);
-            manifest.instances.push_back(std::move(instance));
+            ManifestInstance placement{};
+            placement.glbRelPath = tokens[1];
+            parse_placement_tokens(path, line_number, tokens, 2, directive, placement);
+            if (directive == "instance") {
+                manifest.instances.push_back(std::move(placement));
+            } else if (directive == "backdrop") {
+                manifest.backdrops.push_back(std::move(placement));
+            } else {
+                manifest.horses.push_back(ManifestHorse{std::move(placement)});
+            }
         } else if (directive == "entity") {
             if (tokens.size() != 13) {
                 fail(path, line_number,

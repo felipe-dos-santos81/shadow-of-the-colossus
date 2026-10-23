@@ -20,6 +20,8 @@ line. The directives, verbatim:
 instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
 posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
+backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 spawn <px> <py> <pz> <yawDeg>
 ```
 
@@ -45,10 +47,18 @@ spawn <px> <py> <pz> <yawDeg>
   posed vertices. A missing glb or a clip the glb lacks is a load error naming the path
   (and the clip). Posed props are appended after the entities, so rig and mesh ranges
   of the player and entities are unchanged.
+- `backdrop` — the S8 addition: an `instance` that is drawn but never ground. Static
+  meshes (`rig = -1`) with `MeshCpu::ground = false`; `build_heightmap` skips them, and they
+  stay out of the scene bounds (the heightmap grid is sized by those), so a distant
+  backdrop cannot stretch the walkable map. Loaded after the entities.
+- `horse` — the S8 addition: Agro. Placement as an `instance`'s, no clip. Like an `entity` it
+  keeps its skeleton and clips as its own rig (index after the player and any entities,
+  `Scene::horseRig`; `-1` when the manifest has none), but it is never an encounter entity —
+  the app drives it. A model that cannot be loaded is a load error naming the path.
 - `spawn` — where the player starts: position and facing yaw in degrees. Optional; without
   it `hasSpawn` is false and the app falls back to the scene bounds' centre.
 
-Token counts are exact (12 for `instance`, 13 for `entity`, 14 for `posed`, 5 for `spawn`), and unknown
+Token counts are exact (12 for `instance`, `backdrop` and `horse`, 13 for `entity`, 14 for `posed`, 5 for `spawn`), and unknown
 directives fail loudly. A malformed line throws `std::runtime_error` formatted
 `<file>:<line>: <reason>`.
 
@@ -81,6 +91,26 @@ instance models/shadow/levels/cathedral/_cmn/cathedral_interior.glb 0 0 0 0 0 0 
 instance models/shadow/objects/actors/statues/_cmn/mammoth_statue.glb -14.159 9.5917 -3.0661 0 0.70715 0 0.707064 1 1 1
 posed models/shadow/characters/mono/_cmn/mono.glb 0 11.4023 23 0 0 0 1 1 1 1 girl_a_death_loop 0
 spawn 0 8.998 1 0
+```
+
+## Example (the plain, S8)
+
+`out/re/stage/plain.manifest` (gitignored; `probe.py compose --stage plain`) carries the 7
+`levels/home` `instance` lines in workspace pool-list order (the world frame, identity
+transforms; `home_ground_high` dropped with the proxies), 27 `backdrop` lines (shrine-set glbs
+at the shrine-to-world offset `300 0.071 -300`, identity rotation, scale 1), one `horse` line
+(Agro: position and yaw from `tools/re/s8/placements.json`, the yaw as the glTF-order
+quaternion) and the `spawn`. Pins in `STAGES["plain"]`: 7 instances, 27 backdrops, 3541 meshes
+and 1,916,318 vertices over the 7 + 27 + 1 glbs, sha256
+`3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d`. The probe parses `backdrop`
+and `horse` only for the plain stage (the arena and shrine manifests stay strict);
+`probe.py check-manifest --stage plain` asserts it.
+
+```text
+instance models/shadow/levels/home/_cmn/home_ground.glb 0 0 0 0 0 0 1 1 1 1
+backdrop models/shadow/levels/cathedral/_cmn/cathedral_ext_front.glb 300 0.071 -300 0 0 0 1 1 1 1
+horse models/shadow/characters/agro/_cmn/agro.glb 301 -7.361 -203 0 1 0 0 1 1 1
+spawn 301 -7.14 -210 0
 ```
 
 ## Output path

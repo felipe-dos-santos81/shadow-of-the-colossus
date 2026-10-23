@@ -24,6 +24,13 @@ struct ManifestEntity {
     std::string clip;
 };
 
+// One placed horse (Agro): a placement like an entity's, no clip. The composer
+// keeps its skeleton and clips as its own rig (`Scene::horseRig`) but it is
+// never an encounter entity; the app drives it.
+struct ManifestHorse {
+    ManifestInstance placement;
+};
+
 // One placed, posed static prop: a skinned glb sampled once at `seconds` of
 // `clip` (clamped into the clip, like a pinned clock) and CPU-skinned at compose
 // time into static meshes — no rig, no playback. Mono's lying pose is one.
@@ -44,6 +51,9 @@ struct SceneManifest {
     std::vector<ManifestInstance> instances;
     std::vector<ManifestEntity> entities;
     std::vector<ManifestPosed> posed;
+    // Drawn but never ground (`MeshCpu::ground` false, outside the scene bounds).
+    std::vector<ManifestInstance> backdrops;
+    std::vector<ManifestHorse> horses;
     Vec3 spawnPosition;
     float spawnYawDeg;
     bool hasSpawn;
@@ -55,6 +65,8 @@ struct SceneManifest {
 //   instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 //   entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
 //   posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
+//   backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+//   horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 //   spawn <px> <py> <pz> <yawDeg>
 // Every number must be a strict, full-string finite float: the whole token has
 // to parse and be finite ("nan", "inf", "1.5x" and "1e999" are refused). The
