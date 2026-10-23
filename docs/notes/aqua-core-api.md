@@ -547,8 +547,18 @@ matName → sibling .cmdl .GetCMATMaterialMap()[matName]  →  $/…/x.cmat  →
 
 * **Sibling `.cmdl` selection** (the brief's pinned cases are `obj_plank_01.cmsh` →
   `obj_plank_01_52f8cc91.cmdl` and `wander.cmsh` → `wander.cmdl`): exact stem first, then a stem
-  extension (`<stem>_…`, the game's unique-id suffix), deterministically the first candidate in
-  ordinal path order when several match. Measured over the tree (22,012 `*.cmsh` under `models/`):
+  extension (`<stem>_…`, the game's unique-id suffix). Among several extensions, one whose suffix
+  after `<stem>_` is **exactly 8 hex digits** wins (the mesh's own unique-id cmdl); otherwise the
+  first candidate in ordinal path order. *Why (S9, 2026-10-23):* plain first-match let a longer-named
+  neighbour's cmdl win — `arena_01_entrance_skirt.cmsh` took `arena_01_entrance_skirt_02_6cb02344.cmdl`
+  (skirt_02's, maps one of its four materials) over its own `arena_01_entrance_skirt_ec63e197.cmdl`
+  (maps all four), so three materials fell back to the viewer's white 1×1 (the S9 "white slab").
+  The hex preference changes **10** picks over the tree (the entrance skirt, `arena_02_gbskirt`,
+  `arena_02_landbridge`, `arena_11_skirts`, `hall_09_skirts`, `hall_15_water`, `level_02`,
+  `level_10`, plus `hall_16_skirts` and `cathedral_ext_fur`, which re-convert byte-identical: same map)
+  and loses none; a strict hex-only rule would lose 18 `_group` owners (`lion_a_statue_broke` →
+  `lion_a_statue_broke_group.cmdl`, `hall_08_water` → `hall_08_water_group_38bd1fbf.cmdl`, …), hence
+  the first-match fallback. Pinned by `SiblingCmdlTests`. Measured over the tree (22,012 `*.cmsh` under `models/`):
   **5,610 exact + 1,292 extension-only = 6,902 (31 %)**; of those, 97.9 % / 97.6 % have *all* their
   `matName`s present in the chosen cmdl's map. The remaining 15,110 are UDIM/LOD tiles whose owner
   cmdl references *them* (20,005 have such a referencing cmdl) — that search is **not** implemented

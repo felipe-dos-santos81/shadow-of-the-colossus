@@ -343,26 +343,30 @@ public sealed class AquaModelAdapter
     /// <summary>
     /// The sibling <c>.cmdl</c> that owns <paramref name="cmshPath"/>: the exact stem first
     /// (<c>wander.cmsh</c> → <c>wander.cmdl</c>), then a stem extension (<c>obj_plank_01.cmsh</c> →
-    /// <c>obj_plank_01_52f8cc91.cmdl</c>; the game's unique-id suffix), deterministically the first
-    /// by ordinal path order. Covers 6,902 of 22,012 tree meshes; see the adapter notes for the rest.
+    /// <c>obj_plank_01_52f8cc91.cmdl</c>; the game's unique-id suffix). Among stem extensions a suffix of
+    /// exactly 8 hex digits wins (the mesh's own cmdl, not a longer-named neighbour's such as
+    /// <c>_skirt_02_6cb02344</c>), else the first by ordinal path order (the <c>_group</c> owners).
+    /// Covers 6,902 of 22,012 tree meshes; see the adapter notes (§10.1) for the rest.
     /// </summary>
-    private static string? FindSiblingCmdl(string cmshPath)
+    internal static string? FindSiblingCmdl(string cmshPath)
     {
         var directory = Path.GetDirectoryName(cmshPath);
         if (directory is null || !Directory.Exists(directory)) return null;
 
         var stem = Path.GetFileNameWithoutExtension(cmshPath);
-        string? extensionMatch = null;
+        string? extensionMatch = null, hexMatch = null;
         foreach (var candidate in Directory.EnumerateFiles(directory).OrderBy(path => path, StringComparer.Ordinal))
         {
             if (!Path.GetExtension(candidate).Equals(".cmdl", StringComparison.OrdinalIgnoreCase)) continue;
 
             var candidateStem = Path.GetFileNameWithoutExtension(candidate);
             if (string.Equals(candidateStem, stem, StringComparison.OrdinalIgnoreCase)) return candidate;
-            if (extensionMatch is null && candidateStem.StartsWith(stem + "_", StringComparison.OrdinalIgnoreCase))
-                extensionMatch = candidate;
+            if (!candidateStem.StartsWith(stem + "_", StringComparison.OrdinalIgnoreCase)) continue;
+            extensionMatch ??= candidate;
+            var suffix = candidateStem[(stem.Length + 1)..];
+            if (hexMatch is null && suffix.Length == 8 && suffix.All(char.IsAsciiHexDigit)) hexMatch = candidate;
         }
-        return extensionMatch;
+        return hexMatch ?? extensionMatch;
     }
 
     /// <summary>
