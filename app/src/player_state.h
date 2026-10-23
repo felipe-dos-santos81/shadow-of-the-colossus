@@ -87,6 +87,20 @@ struct PlayerCombat {
 // strike then deals no damage. The app binds it to posed_weakpoint_proxy.
 using WeakpointProxyLookup = std::function<bool(int weakpoint, Vec3& center, float& radius)>;
 
+// S11 shake-off (design D9): what the entity does this frame against an attached
+// climber (Quadratus's refuse_* clips; the strength is the encounter's data).
+// Both default to nothing, so a frame without a shake steps exactly as before.
+// While attached (Grabbing/Climbing/Striking, grab held), `staminaDrain` (/s,
+// ignored unless finite and positive) adds to the mode's own rate — reaching
+// zero is the usual grip break — and `forceRelease` throws the climber off at
+// once: a grip break with the catch window, before any climb or strike this
+// step, so a strike released on that step deals nothing. On the ground or in
+// the air it does nothing.
+struct ShakeOff {
+    float staminaDrain = 0.0f;
+    bool forceRelease = false;
+};
+
 struct PlayerFrame {
     const Scene* scene = nullptr;
     const Heightmap* heightmap = nullptr;
@@ -95,6 +109,7 @@ struct PlayerFrame {
     std::size_t entityRig = 0;
     float cameraYawDeg = 0.0f;
     std::vector<Capsule> entityCapsules;
+    ShakeOff shake;
 };
 
 // The pinned S4.1 constants. Ruling R6 replaces the plan's `strikeSeconds` /

@@ -1634,3 +1634,147 @@ TEST_CASE("player_mode_name names every mode for the status line") {
     CHECK(std::string(player_mode_name(PlayerMode::Hurt)) == "hurt");
     CHECK(std::string(player_mode_name(PlayerMode::Dead)) == "dead");
 }
+
+// --- S11 shake-off (design D9) ----------------------------------------------
+// An entity action against an attached climber: an extra stamina drain, or a
+// forced release. Quadratus's refuse_* clips will drive it; the strength is
+// authored data, so these tests use their own numbers.
+
+namespace {
+
+// Grabs the foot band and returns the attached state.
+void grab_foot(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame) {
+    PlayerInput input{};
+    input.grab = true;
+    player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    REQUIRE(combat.mode == PlayerMode::Grabbing);
+}
+
+// Hangs for `frames` steps under `shake` and returns the stamina left.
+float hang_stamina(ShakeOff shake, int frames) {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = foot_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    grab_foot(player, combat, frame);
+    frame.shake = shake;
+    PlayerInput input{};
+    input.grab = true;
+    for (int i = 0; i < frames; ++i) {
+        player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    }
+    CHECK(combat.mode == PlayerMode::Grabbing);
+    return combat.stamina;
+}
+
+}  // namespace
+
+TEST_CASE("a frame's shake-off is inert by default") {
+    const PlayerFrame frame{};
+    CHECK(frame.shake.staminaDrain == 0.0f);
+    CHECK_FALSE(frame.shake.forceRelease);
+}
+
+TEST_CASE("a shake-off drains stamina on top of the hang rate while attached") {
+    const float calm = hang_stamina(ShakeOff{}, 60);
+    CHECK(calm == doctest::Approx(97.5f));
+    CHECK(hang_stamina(ShakeOff{30.0f, false}, 60) == doctest::Approx(calm - 30.0f));
+
+    // A non-finite or negative drain is ignored, bit for bit.
+    CHECK(hang_stamina(ShakeOff{std::numeric_limits<float>::quiet_NaN(), false}, 60) == calm);
+    CHECK(hang_stamina(ShakeOff{-50.0f, false}, 60) == calm);
+}
+
+TEST_CASE("a shake-off drain to zero breaks the grip with a catch window") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = foot_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    grab_foot(player, combat, frame);
+    combat.stamina = 1.0f;
+    frame.shake.staminaDrain = 1000.0f;
+    PlayerInput input{};
+    input.grab = true;
+    const CombatTuning tuning{};
+
+    StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
+
+    CHECK(e.gripBroke);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.stamina == 0.0f);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
+}
+
+TEST_CASE("a forced release throws the climber off as a grip break") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame frame = foot_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    grab_foot(player, combat, frame);
+    const float stamina = combat.stamina;
+    frame.shake.forceRelease = true;
+    PlayerInput input{};
+    input.grab = true;
+    const CombatTuning tuning{};
+
+    StepEvents e = player_step(player, combat, input, frame, tuning, kStep);
+
+    CHECK(e.gripBroke);
+    CHECK(e.damageDealt == 0);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
+    CHECK(combat.stamina == stamina);  // thrown, not drained
+}
+
+TEST_CASE("a forced release mid-charge cancels the strike") {
+    bool joints_ok = true;
+    Heightmap high = flat_heightmap(10.0f, 8.0f);
+    PlayerState player{};
+    player.position = Vec3{0.0f, 8.0f, 0.0f};
+    PlayerCombat combat{};
+    PlayerInput input{};
+    input.grab = true;
+    const CombatTuning tuning{};
+    player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+    REQUIRE(combat.band == ClimbBandId::Head);
+    input.strike = true;
+    for (int i = 0; i < 60; ++i) {
+        player_step(player, combat, input, head_frame(high, joints_ok), tuning, kStep);
+    }
+    REQUIRE(combat.mode == PlayerMode::Striking);
+
+    // The release lands on the same step the entity throws him: no swing.
+    PlayerFrame shaking = head_frame(high, joints_ok);
+    shaking.shake.forceRelease = true;
+    input.strike = false;
+    StepEvents e = player_step(player, combat, input, shaking, tuning, kStep);
+
+    CHECK(e.gripBroke);
+    CHECK(e.damageDealt == 0);
+    CHECK_FALSE(e.struck);
+    CHECK_FALSE(combat.strikeHit);
+    CHECK(combat.mode == PlayerMode::Falling);
+}
+
+TEST_CASE("a shake-off does nothing to a player who is not attached") {
+    Heightmap ground = flat_heightmap();
+    PlayerFrame calm = foot_frame(ground);
+    PlayerFrame shaking = foot_frame(ground);
+    shaking.shake = ShakeOff{1000.0f, true};
+    PlayerInput input{};  // no grab: stays on the ground
+
+    PlayerState a{};
+    PlayerCombat ca{};
+    ca.stamina = 50.0f;
+    PlayerState b{};
+    PlayerCombat cb{};
+    cb.stamina = 50.0f;
+    for (int i = 0; i < 30; ++i) {
+        player_step(a, ca, input, calm, CombatTuning{}, kStep);
+        StepEvents e = player_step(b, cb, input, shaking, CombatTuning{}, kStep);
+        CHECK_FALSE(e.gripBroke);
+    }
+    CHECK(cb.mode == PlayerMode::Grounded);
+    CHECK(cb.stamina == ca.stamina);
+}
