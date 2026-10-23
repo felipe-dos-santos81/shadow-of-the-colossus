@@ -2506,11 +2506,14 @@ int run_app(const AppOptions& opts) {
             float stage_spawn_yaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
             // S8 (D14): a stage entered through a door starts at that door's
             // arrival spawn (on its floor), not at the stage's start.
-            const bool door_arrival = carry.door.phase == DoorPhase::Load &&
-                                      carry.door.target == static_cast<int>(here);
+            // The arrival is the kDoors row recorded at entry (R16); any other
+            // start resets the machine (a door entered on the frame R ended the
+            // last stage must not lock this one).
+            carry.door = door_stage_start(carry.door, here);
+            const DoorRow* const arrival = arriving_door(carry.door, here);
+            const bool door_arrival = arrival != nullptr;
             if (door_arrival) {
-                const ride_points::Door& door = here == StageId::Plain ? ride_points::kDoorShrine
-                                                                       : ride_points::kDoorPlain;
+                const ride_points::Door& door = *arrival->door;
                 stage_spawn = Vec3{door.arrive[0], door.arrive[1], door.arrive[2]};
                 stage_spawn_yaw = door.arriveYawDeg;
             }
@@ -4945,10 +4948,7 @@ int run_app(const AppOptions& opts) {
             Vec3 mountFootWorld{};
             Vec3 mountFoot{};
             // Last frame's held ride keys: the presses are their edges.
-            struct RideKeys {
-                bool kick = false, rein = false, mount = false, whistle = false;
-                float steer = 0.0f;
-            } rideKeysBefore;
+            RideKeys rideKeysBefore;
             const auto horse_model = [&]() {
                 const float half = 0.5f * horseYaw * kDegToRad;
                 return mat4_from_trs(horsePos, Quat{0.0f, std::sin(half), 0.0f, std::cos(half)},
@@ -4962,20 +4962,12 @@ int run_app(const AppOptions& opts) {
             // One plain frame, after this frame's update_all_poses: the presses,
             // the whistle, the ride and Agro's machines, her travel over the
             // ground, both rigs' blended poses, the rider on the saddle, and the
-            // cues. `locked` (a door fade) eats every press.
+            // cues. `locked` (a door fade) eats every press; a key held through
+            // it is not a fresh press when it ends (ride_presses).
             const auto plain_step = [&](float dt, RideKeys keys, bool locked,
                                         std::vector<std::vector<Mat4>>& palettes) {
-                if (locked) {
-                    keys = RideKeys{};
-                }
-                RideInput in;
-                in.kickPressed = keys.kick && !rideKeysBefore.kick;
-                in.reinPressed = keys.rein && !rideKeysBefore.rein;
-                in.reinHeld = keys.rein;
-                in.mountPressed = keys.mount && !rideKeysBefore.mount && whistleClip < 0;
-                in.whistlePressed = keys.whistle && !rideKeysBefore.whistle;
-                in.steerX = keys.steer;
-                rideKeysBefore = keys;
+                RideInput in = ride_presses(keys, rideKeysBefore, locked);
+                in.mountPressed = in.mountPressed && whistleClip < 0;
                 // R11: a refused ridden move holds the rein (the stop chain runs).
                 in = blocked_rein(in, ride, rideBlocked);
 
@@ -7140,12 +7132,10 @@ int run_app(const AppOptions& opts) {
             if (opts.s8E2e) {
                 if (here == StageId::Shrine && carry.s8Step == 0 && !door_arrival) {
                     // The start: --stage shrine, in Free.
-                } else if (here == StageId::Plain && carry.s8Step == 0 && door_arrival &&
-                           carry.door.target == static_cast<int>(StageId::Plain)) {
+                } else if (here == StageId::Plain && carry.s8Step == 0 && door_arrival) {
                     std::printf("s8e2e-door from=shrine to=plain\n");
                     carry.s8Step = 1;
-                } else if (here == StageId::Shrine && carry.s8Step == 1 && door_arrival &&
-                           carry.door.target == static_cast<int>(StageId::Shrine)) {
+                } else if (here == StageId::Shrine && carry.s8Step == 1 && door_arrival) {
                     std::printf("s8e2e-door from=plain to=shrine\n");
                     carry.s8Step = 2;
                 } else if (here == StageId::Arena && carry.s8Step == 2 && !door_arrival) {
@@ -7876,21 +7866,17 @@ int run_app(const AppOptions& opts) {
                     // plain's shrine steps — fire on entry, on foot, through the
                     // door machine; its Load ends the iteration for the other
                     // stage (this frame still draws, faded).
-                    if (s8_wired && (here == StageId::Shrine || here == StageId::Plain)) {
-                        const ride_points::Door& door = here == StageId::Shrine
-                                                            ? ride_points::kDoorShrine
-                                                            : ride_points::kDoorPlain;
-                        const bool entered =
-                            !riding && !inputLocked &&
-                            box_entered(positionBefore, player.position,
-                                        Vec3{door.min[0], door.min[1], door.min[2]},
-                                        Vec3{door.max[0], door.max[1], door.max[2]});
-                        const int target = static_cast<int>(
-                            here == StageId::Shrine ? StageId::Plain : StageId::Shrine);
+                    // R16: only while the stage still runs (R or Escape this frame
+                    // ended it), from the kDoors rows of this stage.
+                    if (s8_wired) {
+                        const int row = running && !riding && !inputLocked
+                                            ? door_entered_row(here, positionBefore,
+                                                               player.position)
+                                            : -1;
                         const DoorState doorBefore = carry.door;
-                        carry.door = step_door(carry.door, dt, entered, target, /*loadDone=*/false);
+                        carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);
                         if (running && door_wants_load(doorBefore, carry.door)) {
-                            request = StageRequest{false, static_cast<StageId>(carry.door.target)};
+                            request = StageRequest{false, kDoors[carry.door.row].to};
                             running = false;
                         }
                     }

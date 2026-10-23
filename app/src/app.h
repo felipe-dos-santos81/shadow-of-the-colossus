@@ -3,6 +3,7 @@
 #include <string>
 
 #include "door.h"
+#include "ride_points.h"
 #include "transition.h"
 #include "valus.h"
 
@@ -226,6 +227,50 @@ inline bool entity_target_key_allowed(bool followMode, bool entityChestResolved)
     return followMode && entityChestResolved;
 }
 
+// The doors (S8 D14, ruling R16): one row per door — the stage its box is in, the
+// box and the arrival spawn (`ride_points::Door`, the arrival is on `to`'s floor),
+// and the stage it leads to. Entry iterates the rows of the current stage; the
+// arrival is the row recorded at entry (DoorState::row).
+struct DoorRow {
+    StageId from;
+    const ride_points::Door* door;
+    StageId to;
+};
+inline constexpr DoorRow kDoors[] = {
+    {StageId::Shrine, &ride_points::kDoorShrine, StageId::Plain},  // the shrine's front exit
+    {StageId::Plain, &ride_points::kDoorPlain, StageId::Shrine},   // the plain's shrine steps
+};
+inline constexpr int kDoorCount = static_cast<int>(sizeof(kDoors) / sizeof(kDoors[0]));
+
+// The row of a door on `here` whose box the step prev -> now entered (box_entered),
+// or -1. The first row in table order wins.
+inline int door_entered_row(StageId here, Vec3 prev, Vec3 now) {
+    for (int i = 0; i < kDoorCount; ++i) {
+        const ride_points::Door& d = *kDoors[i].door;
+        if (kDoors[i].from == here &&
+            box_entered(prev, now, Vec3{d.min[0], d.min[1], d.min[2]},
+                        Vec3{d.max[0], d.max[1], d.max[2]})) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// The row a stage starting at `here` arrives through: the machine waits in Load
+// with a valid row whose destination is `here`; otherwise nullptr.
+inline const DoorRow* arriving_door(const DoorState& s, StageId here) {
+    if (s.phase != DoorPhase::Load || s.row < 0 || s.row >= kDoorCount) return nullptr;
+    const DoorRow& r = kDoors[s.row];
+    return r.to == here ? &r : nullptr;
+}
+
+// The door machine as a stage starts (R16): a door arrival keeps it; any other
+// start (R, the return, the first stage) resets it, so a door entered on the frame
+// that ended the last stage can never leave the next one locked.
+inline DoorState door_stage_start(const DoorState& s, StageId here) {
+    return arriving_door(s, here) ? s : reset_door();
+}
+
 // The stage loop (S7 D6): run_app composes one stage per iteration; the
 // iteration ends with a request — quit, or release the scene and load `next`.
 struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
@@ -236,8 +281,8 @@ struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
 struct StageCarry {
     ReturnState ret{};
     // S8 (D14): the door machine crosses the stage switch (FadeOut in one
-    // stage, Load at the switch, FadeIn in the next); `door.target` is the
-    // destination StageId while it runs.
+    // stage, Load at the switch, FadeIn in the next); `door.row` is the entered
+    // kDoors row while it runs.
     DoorState door{};
     int s7Step = 0;
     std::size_t shrineMeshes = 0;
