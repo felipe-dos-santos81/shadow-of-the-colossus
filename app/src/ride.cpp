@@ -377,6 +377,20 @@ Vec3 dismount_offset(Side side) {
     return Vec3{x - seated.x, 0.0f, last[1] - seated.z};
 }
 
+RideInput ride_presses(const RideKeys& keys, RideKeys& before, bool locked) {
+    RideInput in;
+    if (!locked) {
+        in.kickPressed = keys.kick && !before.kick;
+        in.reinPressed = keys.rein && !before.rein;
+        in.reinHeld = keys.rein;
+        in.mountPressed = keys.mount && !before.mount;
+        in.whistlePressed = keys.whistle && !before.whistle;
+        in.steerX = keys.steer;
+    }
+    before = keys;
+    return in;
+}
+
 RideInput blocked_rein(RideInput in, const RideState& s, bool blocked) {
     if (blocked && s.phase == RidePhase::Riding && moving_gait(s.gait)) in.reinHeld = true;
     return in;

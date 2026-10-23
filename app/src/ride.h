@@ -155,6 +155,19 @@ Vec3 rider_offset(const RideState& s);
 // `side` ends: the last `stand_getoff_fall` frame, mirrored on the right.
 Vec3 dismount_offset(Side side);
 
+// The held ride keys of one frame (the app reads them from the keyboard/gamepad).
+struct RideKeys {
+    bool kick = false, rein = false, mount = false, whistle = false;
+    float steer = 0.0f;
+};
+
+// This frame's RideInput from the held keys: a press is a key down now and up in
+// `before` (last frame's keys), reinHeld/steerX are the held values. A `locked`
+// frame (a door fade) presses and holds nothing, but `before` still records the
+// real keys, so a key held through the lock is not a fresh press when it ends.
+// The app adds its own conditions (the whistle clip gates the mount press).
+RideInput ride_presses(const RideKeys& keys, RideKeys& before, bool locked);
+
 // Ruling R11: a move the ground refused (no ground, a cliff, a wall — the app's
 // heightmap_walkable) reads as a held rein while Agro is ridden in a moving gait
 // (Walk/Trot/Gallop), so the stop chain runs instead of a gallop in place. It never

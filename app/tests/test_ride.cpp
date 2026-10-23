@@ -780,3 +780,47 @@ TEST_CASE("R12: the mount's offset lerps from the on-foot spot to rider_offset o
     CHECK(mount_offset(g, foot).x == 0.0f);
     CHECK(mount_offset(g, foot).z == 0.0f);
 }
+
+TEST_CASE("ride_presses: edges, held values, and a key held through a lock is not a press") {
+    RideKeys before;
+    RideKeys k;
+    k.kick = true;
+    k.rein = true;
+    k.steer = 0.5f;
+    RideInput in = ride_presses(k, before, false);
+    CHECK(in.kickPressed);
+    CHECK(in.reinPressed);
+    CHECK(in.reinHeld);
+    CHECK(in.steerX == 0.5f);
+    CHECK_FALSE(in.mountPressed);
+    CHECK_FALSE(in.whistlePressed);
+    // Still held: no new press, still held.
+    in = ride_presses(k, before, false);
+    CHECK_FALSE(in.kickPressed);
+    CHECK_FALSE(in.reinPressed);
+    CHECK(in.reinHeld);
+
+    // A press during a lock does nothing, and the key still held when the lock
+    // ends is not a fresh press (R17).
+    RideKeys b2;
+    RideKeys m;
+    m.mount = true;
+    m.whistle = true;
+    m.rein = true;
+    in = ride_presses(m, b2, true);
+    CHECK_FALSE(in.mountPressed);
+    CHECK_FALSE(in.whistlePressed);
+    CHECK_FALSE(in.reinPressed);
+    CHECK_FALSE(in.reinHeld);
+    in = ride_presses(m, b2, true);
+    CHECK_FALSE(in.mountPressed);
+    in = ride_presses(m, b2, false);  // the lock ends with E still down
+    CHECK_FALSE(in.mountPressed);
+    CHECK_FALSE(in.whistlePressed);
+    CHECK_FALSE(in.reinPressed);
+    CHECK(in.reinHeld);
+    // Released and pressed again after the lock: a press.
+    in = ride_presses(RideKeys{}, b2, false);
+    in = ride_presses(m, b2, false);
+    CHECK(in.mountPressed);
+}
