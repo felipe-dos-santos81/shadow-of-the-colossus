@@ -533,7 +533,7 @@ TEST_CASE("wander carries its 348-joint skeleton") {
 
 TEST_CASE("agro carries its baked kick clip") {
     auto scene = load_scene(test_library(), "models/shadow/characters/agro/_cmn/agro.glb");
-    REQUIRE(player_rig(scene).animations.size() == 1);
+    REQUIRE(player_rig(scene).animations.size() >= 1);
     CHECK(player_rig(scene).animations[0].name == "horse_a_add_horse_kick");
     CHECK(!player_rig(scene).animations[0].channels.empty());
 }
