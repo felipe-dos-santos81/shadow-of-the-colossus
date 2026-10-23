@@ -49,7 +49,7 @@ Modes
                              records, string pool; extracts the pool path list
                              matching SUBSTR (default: the stage's match)
   check-cwks                 pinned assertions for the workspace file (exit 0/1)
-  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|shrine|plain]
+  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|arena_02|shrine|plain]
                              emit the stage's scene manifest (the W1↔W2 format):
                              arena_01: the level sets' non-*_collision* glbs,
                              identity transforms, the labeled spawn pick;
@@ -57,7 +57,10 @@ Modes
                              + spawn (tools/re/s7/shrine_placements.json)
                              plain: the levels/home set + shrine-set backdrops
                              + the horse + spawn (tools/re/s8/placements.json)
-  check-manifest [<file>] --library <dir> [--stage arena_01|shrine|plain]
+                             arena_02: the levels/arena_02 set + the csml bridge
+                             placements + `encounter quadratus` + Quadratus + spawn
+                             (S11; default --out out/re/stage/arena_02.manifest)
+  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|shrine|plain]
                              pinned assertions for the stage's manifest (exit 0/1);
                              no --stage means arena_01
   compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
@@ -236,6 +239,59 @@ STAGES["plain"] = {
         "home_occluder", "home_shadowblocker", "home_cliff_shadow_lod", "home_ground_high",
     ),
 }
+# arena_02 (S11, Quadratus): `levels/arena_02` in the world frame — the 67 glb files minus the shrine's
+# rules (28 hash stubs, 4 *_collision*, 3 _lod*, the `_low` dup = 31 kept), minus the occluders, the
+# shadow blocker and the two demo (cutscene) blockers (invisible: occluder*/shadow_caster/defaultSG
+# materials) and the intact boss door (the pre-boot `Boss_mammoth_door_Whole` state: S11 starts after
+# the boot cutscene with Quadratus outside, i.e. the `Broke` state, whose pieces are the animated
+# c02_boss_door_break actor, not a level glb) = 23 kept, in cwks order.  19 of them are world-frame
+# (identity lines); the 4 local-frame bridge glbs are written once per placement that
+# scripts/shadow/world/arena_02/_cmn/arena_02_shared.csml carries (`placed`: its instance index, the
+# glb, the translation and the yaw from the instance's 48-byte transform; every rotation is a pure
+# +Y 0/180 with unit scale — measured 2026-10-23, the .cmdl ref's hash suffix dropped as for the
+# shrine idols).  Then `encounter quadratus`, the entity (the recon's builder pick) and the spawn
+# (misc/playerstartpositions.txt:3 x/z), both y re-sampled on the composed ground, the yaws
+# builder-chosen to face each other.  The pins are measured on the compose (2026-10-23).
+STAGES["arena_02"] = {
+    "cwks_match": "levels/arena_02/",
+    "count": 405,
+    "cwks_sha256": "6921592238ffaf549522041b69b3d207bb6f7f9dc3905181af46130d71e18c83",
+    "sets": ("models/shadow/levels/arena_02",),
+    "order": "cwks",
+    "files": 67,                  # glb files in the set, before the exclusions
+    "instances": 19,              # world-frame (identity) lines
+    "placed": (                   # (csml instance, glb, translation, yaw deg)
+        (11, "models/shadow/levels/arena_02/_cmn/arena_02_bridge_support.glb", (299.9968, -102.623, -919.6202), 0.0),
+        (12, "models/shadow/levels/arena_02/_cmn/arena_02_bridge_support.glb", (299.9968, -102.8196, -837.3278), 180.0),
+        (13, "models/shadow/levels/arena_02/_cmn/arena_02_bridge_support.glb", (299.9968, -102.8196, -754.7803), 0.0),
+        (14, "models/shadow/levels/arena_02/_cmn/arena_02_bridge_support.glb", (299.9968, -102.8196, -672.489), 180.0),
+        (15, "models/shadow/levels/arena_02/_cmn/arena_02_bridge_support.glb", (299.9968, -102.8196, -589.2833), 0.0),
+        (16, "models/shadow/levels/arena_02/_cmn/arena_02_bridge_sunk.glb", (299.9968, -103.2679, -1002.949), 0.0),
+        (17, "models/shadow/levels/arena_02/_cmn/bridge_support1.glb", (299.9968, -102.8196, -589.2833), 0.0),
+        (18, "models/shadow/levels/arena_02/_cmn/bridge_support.glb", (299.9968, -102.8196, -589.2833), 0.0),
+        (19, "models/shadow/levels/arena_02/_cmn/bridge_support.glb", (299.9968, -102.8196, -672.489), 180.0),
+        (20, "models/shadow/levels/arena_02/_cmn/bridge_support1.glb", (299.9968, -102.8196, -672.489), 180.0),
+        (21, "models/shadow/levels/arena_02/_cmn/bridge_support.glb", (299.9968, -102.8196, -754.7803), 0.0),
+        (22, "models/shadow/levels/arena_02/_cmn/bridge_support.glb", (299.9968, -102.8196, -837.3278), 180.0),
+        (23, "models/shadow/levels/arena_02/_cmn/bridge_support.glb", (299.9968, -102.623, -919.6202), 0.0),
+    ),
+    "meshes": (187, 489757),      # (primitives, vertices) over the 32 instance lines' glbs
+    "sha256": "e665de4716bfb1cbfddfd8be1d66bcca30424526d7d2c16bc572cfa83e566520",
+    "encounter": "quadratus",
+    "entity_glb": "models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.glb",
+    "entity_clip": "boss_a_stand",
+    "entity_xz": (240.0, -925.0),   # builder pick, 23.9 m in front of the cave door (recon §1)
+    "spawn_xz": (273.0, -842.0),    # misc/playerstartpositions.txt:3 (273 -97 -842)
+    "grounds": (-96.741, -98.308),  # (entity, spawn) ground samples, metres (arena_02_groundbttm)
+    "exclude_stub": STAGES["shrine"]["exclude_stub"],
+    "exclude_lod": STAGES["shrine"]["exclude_lod"],
+    "exclude_names": STAGES["shrine"]["exclude_names"] + (
+        "arena02_groundbttm_occluder", "arena02_groundtop_occluder", "arena02_occluder",
+        "arena02_shadowblocker", "arena_02_bridge_occluder", "arena_02_demoblocker",
+        "arena_02_demoblocker_02", "arena_02_minotaur_door",
+    ),
+}
+ARENA_02_OUT = "out/re/stage/arena_02.manifest"
 ARENA = STAGES["arena_01"]
 COLLISION_MARK = "_collision"
 MANIFEST_OUT = "out/re/stage/valus.manifest"
@@ -1004,7 +1060,7 @@ def manifest_float(token, path, line, field):
     return value
 
 
-def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None):
+def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None, encounter=None):
     """Parse the W1↔W2 schema; return (instances, spawns, entities) where
     instances = [(glbRelPath, [10 floats])], spawns = [[4 floats]] and entities
     = [(glbRelPath, [10 floats], clipName)].  A `posed` line (S7) is accepted
@@ -1012,8 +1068,9 @@ def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None):
     (glbRelPath, [10 floats], clipName, seconds); otherwise it is an unknown
     directive, as for the arena; `backdrop` and `horse` (S8, both shaped as an
     `instance`) work the same way, filling their lists with (glbRelPath,
-    [10 floats]).  Raises ManifestError shaped
-    `<path>:<line>: <reason>` (the app's message shape)."""
+    [10 floats]).  `encounter <id>` (S11) likewise needs an `encounter` list,
+    which gets the id (at most one line; absent means valus).  Raises ManifestError
+    shaped `<path>:<line>: <reason>` (the app's message shape)."""
     instances = []
     spawns = []
     entities = []
@@ -1069,6 +1126,14 @@ def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None):
                 for i, token in enumerate(tokens[1:])
             ]
             spawns.append(values)
+        elif tokens[0] == "encounter" and encounter is not None:
+            if len(tokens) != 2:
+                raise ManifestError(
+                    "%s:%d: encounter expects 2 tokens (encounter + id), got %d" % (path, number, len(tokens))
+                )
+            if encounter:
+                raise ManifestError("%s:%d: encounter given twice" % (path, number))
+            encounter.append(tokens[1])
         else:
             raise ManifestError("%s:%d: unknown directive %r" % (path, number, tokens[0]))
     return instances, spawns, entities
@@ -1487,6 +1552,10 @@ def cmd_compose(args):
     library = os.path.abspath(args.library)
     if not os.path.isdir(library):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
+    if args.out is None:
+        args.out = ARENA_02_OUT if args.stage == "arena_02" else MANIFEST_OUT
+    if args.stage == "arena_02":
+        return compose_arena_02(args, library)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
     plain = args.stage == "plain"
@@ -1661,10 +1730,13 @@ def cmd_check_manifest(args):
     library = os.path.abspath(args.library)
     if not os.path.isdir(library):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
+    if args.file is None:
+        args.file = ARENA_02_OUT if args.stage == "arena_02" else MANIFEST_OUT
     path = os.path.abspath(args.file)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
     plain = args.stage == "plain"
+    arena_02 = args.stage == "arena_02"
     checks = []
 
     def add(name, kind, expected, measured, ok):
@@ -1684,13 +1756,17 @@ def cmd_check_manifest(args):
             raise ManifestError("%s: not UTF-8 text (%s)" % (path, exc))
         posed = [] if args.stage == "shrine" else None
         backdrop, horse = ([], []) if plain else (None, None)
-        instances, spawns, _entities = parse_manifest_text(text, path, posed, backdrop, horse)
+        encounter = [] if arena_02 else None
+        instances, spawns, entities = parse_manifest_text(text, path, posed, backdrop, horse, encounter)
         error = None
     except ManifestError as exc:
         instances, spawns, error = None, None, str(exc)
 
     if error is not None:
         fail_all(error)
+    elif arena_02:
+        for name, kind, expected, measured, ok in arena_02_checks(library, text, instances, spawns, entities, encounter):
+            add(name, kind, expected, measured, ok)
     elif plain:
         for name, kind, expected, measured, ok in plain_checks(library, text, instances, spawns, backdrop, horse):
             add(name, kind, expected, measured, ok)
@@ -2030,6 +2106,226 @@ def plain_checks(library, text, instances, spawns, backdrop, horse):
     return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
 
 
+# ------------------------------------------------------------ arena_02 (S11)
+
+
+IDENTITY_VALUES = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+
+
+def arena_02_lines(library):
+    """The arena_02 instance lines as (glbRelPath, [10 floats]): the world-frame kept
+    glbs (identity, cwks order), then one line per `placed` row (translation, the yaw as
+    `yaw_quaternion`, scale 1).  Dies when a placed glb is not among the kept set or the
+    world-frame count is off its pin."""
+    stage = STAGES["arena_02"]
+    _, kept, excluded = shrine_sets(library, "arena_02")[0]
+    if len(kept) + len(excluded) != stage["files"]:
+        die("arena_02 set is %d glb files, expected %d" % (len(kept) + len(excluded), stage["files"]))
+    placed = [(glb, list(t) + list(yaw_quaternion(yaw)) + [1.0, 1.0, 1.0]) for _, glb, t, yaw in stage["placed"]]
+    local = {glb for glb, _ in placed}
+    if not local <= set(kept):
+        die("arena_02 placed glb(s) not in the kept set: %s" % ", ".join(sorted(local - set(kept))))
+    world = [rel for rel in kept if rel not in local]
+    if len(world) != stage["instances"]:
+        die("arena_02 world-frame set is %d glbs, expected %d" % (len(world), stage["instances"]))
+    return [(rel, list(IDENTITY_VALUES)) for rel in world] + placed
+
+
+def composed_ground(library, lines, x, z):
+    """The highest surface any instance line puts over the column (x, z), as (y, glbRelPath),
+    or (None, None): each glb is sampled in its own frame (the lines are a translation plus a
+    +Y yaw at unit scale; a glb whose bounds miss the local column is skipped)."""
+    best = (None, None)
+    bounds = {}
+    for rel, values in lines:
+        if values[7:10] != [1.0, 1.0, 1.0]:
+            die("composed_ground: %s is scaled (%s)" % (rel, fmt_values(values[7:10])))
+        yaw = math.radians(yaw_from_quaternion(values))
+        dx, dz = x - values[0], z - values[2]
+        lx = dx * math.cos(yaw) - dz * math.sin(yaw)
+        lz = dx * math.sin(yaw) + dz * math.cos(yaw)
+        path = os.path.join(library, rel)
+        if rel not in bounds:
+            bounds[rel] = glb_bounds(path)
+        lo, hi = bounds[rel]
+        if not (lo[0] <= lx <= hi[0] and lo[2] <= lz <= hi[2]):
+            continue
+        y = glb_ground_height(path, lx, lz)
+        if y is not None and (best[0] is None or y + values[1] > best[0]):
+            best = (y + values[1], rel)
+    return best
+
+
+def arena_02_header(world, placed, entity_y, entity_yaw, spawn_y, spawn_yaw):
+    stage = STAGES["arena_02"]
+    q = yaw_quaternion(entity_yaw)
+    return [
+        "# arena_02 — S11 Quadratus, generated by tools/re/stage/probe.py compose --stage arena_02",
+        "# instances: the %d world-frame glbs kept of %s/ (%d glb files; hash stubs, _lod*,"
+        % (world, stage["sets"][0], stage["files"]),
+        "#   *_collision*, the _low dup, the occluders, the shadow blocker, the two demo blockers and",
+        "#   the intact boss door dropped), workspace pool-list order, identity transforms; then the",
+        "#   %d bridge pieces at the placements of arena_02_shared.csml (the 4 local-frame glbs;" % placed,
+        "#   +Y yaw 0/180, scale 1).",
+        "# encounter=%s placement=builder-pick entity=%s clip=%s"
+        % (stage["encounter"], stage["entity_glb"], stage["entity_clip"]),
+        "#   (%s, %s), ground %s m on the composed instances, yaw %.6f deg (q %.6f %.6f %.6f %.6f),"
+        % (fmt_manifest_float(stage["entity_xz"][0]), fmt_manifest_float(stage["entity_xz"][1]),
+           fmt_ground(entity_y), entity_yaw, q[0], q[1], q[2], q[3]),
+        "#   facing the spawn.  Builder pick, not data: no shipped spawn record (the S11 Quadratus recon §1).",
+        "# spawn=data-position+builder-yaw position (%s, %s), ground %s m, yaw %.6f deg;"
+        % (fmt_manifest_float(stage["spawn_xz"][0]), fmt_manifest_float(stage["spawn_xz"][1]),
+           fmt_ground(spawn_y), spawn_yaw),
+        "#   x/z from misc/playerstartpositions.txt:3 (`273 -97 -842`), y re-sampled on the composed",
+        "#   instances, yaw builder-chosen to face the entity.",
+    ]
+
+
+def compose_arena_02(args, library):
+    stage = STAGES["arena_02"]
+    lines = arena_02_lines(library)
+    (entity_y, entity_on), (spawn_y, spawn_on) = (
+        composed_ground(library, lines, *stage["entity_xz"]),
+        composed_ground(library, lines, *stage["spawn_xz"]),
+    )
+    if entity_y is None or spawn_y is None:
+        die("arena_02: no composed ground under the %s" % ("entity" if entity_y is None else "spawn"))
+    entity_yaw = yaw_between(stage["entity_xz"], stage["spawn_xz"])
+    spawn_yaw = yaw_between(stage["spawn_xz"], stage["entity_xz"])
+    _, qy, _, qw = yaw_quaternion(entity_yaw)
+    header = arena_02_header(stage["instances"], len(stage["placed"]), entity_y, entity_yaw, spawn_y, spawn_yaw)
+    text = "\n".join(
+        header
+        + ["instance %s %s" % (rel, fmt_values(values)) for rel, values in lines]
+        + [
+            "encounter %s" % stage["encounter"],
+            "entity %s %s %s %s 0 %.6f 0 %.6f 1 1 1 %s"
+            % (stage["entity_glb"], fmt_manifest_float(stage["entity_xz"][0]), fmt_ground(entity_y),
+               fmt_manifest_float(stage["entity_xz"][1]), qy, qw, stage["entity_clip"]),
+            "spawn %s %s %s %.6f"
+            % (fmt_manifest_float(stage["spawn_xz"][0]), fmt_ground(spawn_y),
+               fmt_manifest_float(stage["spawn_xz"][1]), spawn_yaw),
+        ]
+    ) + "\n"
+
+    encounter = []
+    parsed = parse_manifest_text(text, args.out, encounter=encounter)
+    if (len(parsed[0]), len(parsed[1]), len(parsed[2]), encounter) != (len(lines), 1, 1, [stage["encounter"]]):
+        die("composed arena_02 manifest does not round-trip")
+    totals = manifest_counts(library, [rel for rel, _ in lines])
+    if stage["meshes"] is not None and totals != stage["meshes"]:
+        die("arena_02 mesh/vertex totals %s != the pin %s" % (totals, stage["meshes"]))
+
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w") as fh:
+        fh.write(text)
+    print("compose: library %s" % library)
+    print("compose: %d world-frame + %d placed instance lines; totals %d meshes, %d vertices"
+          % (stage["instances"], len(stage["placed"]), totals[0], totals[1]))
+    print("compose: entity ground %s (%s) yaw %.6f; spawn ground %s (%s) yaw %.6f"
+          % (fmt_ground(entity_y), entity_on.rsplit("/", 1)[-1], entity_yaw,
+             fmt_ground(spawn_y), spawn_on.rsplit("/", 1)[-1], spawn_yaw))
+    print("compose: wrote %s (sha256 %s)" % (out, hashlib.sha256(text.encode("utf-8")).hexdigest()))
+    return 0
+
+
+def arena_02_check_spec():
+    """(name, kind, expected) per arena_02 row — used verbatim when the manifest is
+    unparsable, and as the row order of `arena_02_checks`."""
+    stage = STAGES["arena_02"]
+    grounds = stage["grounds"] or (float("nan"), float("nan"))
+    return [
+        ("manifest parses (W1↔W2 schema + entity + the encounter opt-in)", "structure", "ok"),
+        ("world-frame lines == the library's kept set, cwks order, identity", "structure",
+         "exact, ordered (%d)" % stage["instances"]),
+        ("placed lines == the arena_02_shared.csml bridge placements", "structure",
+         "exact (%d)" % len(stage["placed"])),
+        ("every glbRelPath exists under the library", "structure", "all"),
+        ("no excluded name among the instances", "structure", "0 excluded"),
+        ("exactly one encounter line", "structure", stage["encounter"]),
+        ("exactly one entity (glb, x/z, clip)", "structure",
+         "%s (%s, %s) %s" % (stage["entity_glb"].rsplit("/", 1)[-1], fmt_manifest_float(stage["entity_xz"][0]),
+                             fmt_manifest_float(stage["entity_xz"][1]), stage["entity_clip"])),
+        ("entity y == the composed ground (%.3f)" % grounds[0], "measured", "±0.001"),
+        ("entity faces the spawn (quaternion yaw)", "measured", "±0.01 deg"),
+        ("exactly one spawn at the x/z pin", "structure",
+         "(%s, %s)" % tuple(fmt_manifest_float(v) for v in stage["spawn_xz"])),
+        ("spawn y == the composed ground (%.3f)" % grounds[1], "measured", "±0.001"),
+        ("spawn faces the entity (yaw)", "measured", "±0.01 deg"),
+        ("mesh/vertex totals over the instance lines' glbs", "measured",
+         "%d meshes, %d vertices" % tuple(stage["meshes"] or (0, 0))),
+        ("manifest sha256", "measured", stage["sha256"]),
+    ]
+
+
+def arena_02_checks(library, text, instances, spawns, entities, encounter):
+    """The arena_02 rows, measured: [(name, kind, expected, measured, ok)] in
+    `arena_02_check_spec` order."""
+    stage = STAGES["arena_02"]
+    spec = arena_02_check_spec()
+    want = arena_02_lines(library)
+    n = stage["instances"]
+    world_ok = [rel for rel, _ in instances[:n]] == [rel for rel, _ in want[:n]] and all(
+        v == IDENTITY_VALUES for _, v in instances[:n])
+    got = [(rel, fmt_values(v)) for rel, v in instances[n:]]
+    exp = [(rel, fmt_values(v)) for rel, v in want[n:]]
+    results = [("ok", True),
+               ("ordered (%d)" % n if world_ok else "differs", world_ok),
+               ("exact (%d)" % len(got) if got == exp else "differs (%d lines, %d wanted)" % (len(got), len(exp)),
+                got == exp)]
+
+    every = [rel for rel, _ in instances] + [e[0] for e in entities]
+    missing = sorted({r for r in every if not os.path.isfile(os.path.join(library, r))})
+    results.append(("%d/%d" % (len(every) - len([r for r in every if r in missing]), len(every))
+                    + (" missing: %s" % ", ".join(missing[:3]) if missing else ""), not missing))
+    bad = [rel for rel, _ in instances if shrine_excluded(rel, "arena_02")]
+    results.append(("%d excluded" % len(bad) + (": %s" % ", ".join(bad[:3]) if bad else ""), not bad))
+    results.append((" ".join(encounter) or "absent (valus)", encounter == [stage["encounter"]]))
+
+    entity = entities[0] if len(entities) == 1 else None
+    entity_ok = entity is not None and (
+        entity[0], entity[1][0], entity[1][2], entity[2]
+    ) == (stage["entity_glb"], stage["entity_xz"][0], stage["entity_xz"][1], stage["entity_clip"])
+    results.append(("exact" if entity_ok else "%d entity line(s), differs" % len(entities), entity_ok))
+    spawn = spawns[0] if len(spawns) == 1 else None
+    entity_y, _ = composed_ground(library, want, *stage["entity_xz"])
+    spawn_y, _ = composed_ground(library, want, *stage["spawn_xz"])
+    pins = stage["grounds"] or (float("nan"), float("nan"))
+
+    def ground_row(line_y, sampled, pin):
+        if line_y is None or sampled is None:
+            return ("unmeasurable", False)
+        ok = abs(line_y - sampled) <= 0.001 and abs(sampled - pin) <= 0.001
+        return ("line %.3f, sampled %.3f" % (line_y, sampled), ok)
+
+    def yaw_row(measured, source, target):
+        want_yaw = yaw_between(source, target)
+        delta = (measured - want_yaw + 180.0) % 360.0 - 180.0
+        return ("%.6f (want %.6f)" % (measured, want_yaw), abs(delta) <= 0.01)
+
+    results.append(ground_row(entity[1][1] if entity_ok else None, entity_y, pins[0]))
+    try:
+        results.append(yaw_row(yaw_from_quaternion(entity[1]), stage["entity_xz"], stage["spawn_xz"])
+                       if entity_ok else ("no entity", False))
+    except ManifestError as exc:
+        results.append((str(exc), False))
+    spawn_ok = spawn is not None and (spawn[0], spawn[2]) == stage["spawn_xz"]
+    results.append(("(%s, %s)" % (fmt_manifest_float(spawn[0]), fmt_manifest_float(spawn[2])) if spawn
+                    else "%d spawn line(s)" % len(spawns), spawn_ok))
+    results.append(ground_row(spawn[1] if spawn_ok else None, spawn_y, pins[1]))
+    results.append(yaw_row(spawn[3], stage["spawn_xz"], stage["entity_xz"]) if spawn_ok else ("no spawn", False))
+
+    if missing:
+        results.append(("unmeasurable: missing glbs", False))
+    else:
+        totals = manifest_counts(library, [rel for rel, _ in instances])
+        results.append(("%d meshes, %d vertices" % totals, totals == tuple(stage["meshes"] or ())))
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    results.append((sha, sha == stage["sha256"]))
+    return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
+
+
 def check_manifest_spec(name):
     stage = STAGES[name]
     count = stage["instances"]
@@ -2039,6 +2335,8 @@ def check_manifest_spec(name):
     ]
     if name == "plain":
         return plain_check_spec()
+    if name == "arena_02":
+        return arena_02_check_spec()
     if name != "arena_01":
         return shrine_check_spec()
     (key0, _, ev0), (key1, _, ev1) = stage["bounds_evidence"]
@@ -2682,7 +2980,8 @@ def main(argv=None):
         "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
     )
     p_compose.add_argument(
-        "--out", default=MANIFEST_OUT, metavar="FILE", help="manifest output (default %s)" % MANIFEST_OUT
+        "--out", default=None, metavar="FILE",
+        help="manifest output (default %s; %s for arena_02)" % (MANIFEST_OUT, ARENA_02_OUT)
     )
     p_compose.add_argument(
         "--paths",
@@ -2698,8 +2997,8 @@ def main(argv=None):
     p_check_manifest = sub.add_parser(
         "check-manifest", help="pinned assertions for the arena manifest"
     )
-    p_check_manifest.add_argument("file", nargs="?", default=MANIFEST_OUT,
-                                  help="manifest (default %s)" % MANIFEST_OUT)
+    p_check_manifest.add_argument("file", nargs="?", default=None,
+                                  help="manifest (default %s; %s for arena_02)" % (MANIFEST_OUT, ARENA_02_OUT))
     p_check_manifest.add_argument(
         "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
     )

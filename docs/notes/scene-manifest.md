@@ -23,6 +23,7 @@ posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> 
 backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 spawn <px> <py> <pz> <yawDeg>
+encounter <id>
 ```
 
 - `instance` — one placed model. `<glbRelPath>` is a single token, relative to the
@@ -57,8 +58,12 @@ spawn <px> <py> <pz> <yawDeg>
   the app drives it. A model that cannot be loaded is a load error naming the path.
 - `spawn` — where the player starts: position and facing yaw in degrees. Optional; without
   it `hasSpawn` is false and the app falls back to the scene bounds' centre.
+- `encounter` — the S11 addition: which colossus the manifest's entity is (`valus`,
+  `quadratus`). Read only when the caller opts in (`parse_manifest(path, true)`; the probe's
+  `parse_manifest_text(..., encounter=[])`); otherwise it is an unknown directive, as before
+  S11. At most one line; absent means `valus` (`SceneManifest::encounter`).
 
-Token counts are exact (12 for `instance`, `backdrop` and `horse`, 13 for `entity`, 14 for `posed`, 5 for `spawn`), and unknown
+Token counts are exact (12 for `instance`, `backdrop` and `horse`, 13 for `entity`, 14 for `posed`, 5 for `spawn`, 2 for `encounter`), and unknown
 directives fail loudly. A malformed line throws `std::runtime_error` formatted
 `<file>:<line>: <reason>`.
 
@@ -112,6 +117,60 @@ backdrop models/shadow/levels/cathedral/_cmn/cathedral_ext_front.glb 300 0.071 -
 horse models/shadow/characters/agro/_cmn/agro.glb 301 -7.361 -203 0 1 0 0 1 1 1
 spawn 301 -7.14 -210 0
 ```
+
+## Example (arena_02, S11 — Quadratus)
+
+`out/re/stage/arena_02.manifest` (gitignored; `probe.py compose --stage arena_02`, checked by
+`probe.py check-manifest --stage arena_02`) is the stage *and* its encounter in one file — the
+arena_01 `compose-encounter` stays hard-coded to Valus. The set is `models/shadow/levels/arena_02/`:
+
+| glb files | dropped | why |
+|---|---|---|
+| 67 | 28 hash-suffix stubs | 72-byte reference containers (the shrine rule) |
+| | 4 `*_collision*`, 3 `_lod*`, `arena_02_ruin_path_walls_low` | collision geometry; lower details of a kept glb |
+| | `arena02_groundbttm_occluder`, `arena02_groundtop_occluder`, `arena02_occluder`, `arena_02_bridge_occluder` | invisible occlusion proxies (`occluder*` materials) |
+| | `arena02_shadowblocker` | a shadow caster (`shadow_caster_2sided`) |
+| | `arena_02_demoblocker`, `arena_02_demoblocker_02` | cutscene ("demo") blockers, `defaultSG`; one spans the whole arena up to y 55.9 |
+| | `arena_02_minotaur_door` | the intact boss door is the pre-boot `Boss_mammoth_door_Whole` state; S11 starts after the boot with Quadratus outside (the `Broke` state, whose pieces are the animated `c02_boss_door_break` actor, not a level glb). The doorframe stays. |
+
+That leaves 23: 19 world-frame glbs (identity lines, workspace pool-list order) and the 4
+local-frame bridge glbs (`arena_02_bridge_support`, `arena_02_bridge_sunk`, `bridge_support`,
+`bridge_support1`, all |x| ≤ 7). These are **placed from data**: `scripts/shadow/world/arena_02/_cmn/arena_02_shared.csml`
+carries 13 instances of them (indices 11–23; the instance is a 48-byte transform — three basis
+rows, then the translation — followed by a `0xbb46d388` subobject holding the `.cmdl` ref, whose
+8-hex suffix is dropped as for the shrine idols). Every one is a pure +Y yaw of 0° or 180° at unit
+scale along the bridge line x 299.9968, z −1002.9…−589.3 (`STAGES["arena_02"]["placed"]`). Then
+`encounter quadratus`, the entity (`colossus_02_bull_a.glb`, clip `boss_a_stand`, the recon's
+builder pick (240, −925), yaw 21.682292° facing the spawn) and the spawn (x/z from
+`misc/playerstartpositions.txt:3`, yaw −158.317708° facing the entity). Both y values are sampled
+on the composed instance lines (the highest surface over the column, each glb in its own frame):
+−96.741 and −98.308, both on `arena_02_groundbttm`. The header holds no absolute path.
+
+Pins (`STAGES["arena_02"]`): 67 files, 19 world-frame + 13 placed instance lines, 187 meshes and
+489,757 vertices over the 32 instance lines' glbs, grounds (−96.741, −98.308), sha256
+`e665de4716bfb1cbfddfd8be1d66bcca30424526d7d2c16bc572cfa83e566520`.
+
+```text
+instance models/shadow/levels/arena_02/_cmn/arena_02_groundbttm.glb 0 0 0 0 0 0 1 1 1 1
+instance models/shadow/levels/arena_02/_cmn/arena_02_bridge_support.glb 299.9968 -102.8196 -837.3278 0 1 0 0 1 1 1
+encounter quadratus
+entity models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.glb 240 -96.741 -925 0 0.188087 0 0.982152 1 1 1 boss_a_stand
+spawn 273 -98.308 -842 -158.317708
+```
+
+**arena_02 is layered** (measured 2026-10-23 with the app's own `build_heightmap` at 1 m, a
+scratch harness): walking the layered map from the spawn with the player's rules reaches
+278,599 nodes, and on 18,090 of them (6.5 %) the unlayered max-Y sits more than 1 m above the
+feet (18,084 more than 3 m; worst 101.5 m). The roofs are the plateau's overhanging lips
+(`arena_02_groundtop`, `arena_02`), the rock land-bridge (`arena_02_landbridge` + skirt, x ≈ 157–182,
+z −782…−529), the stone bridge deck (the placed `arena_02_bridge_support`, ≈ 95 m overhead) and the
+cave ramp (`arena_02_ground_ramp`, `arena_02_ruin_path_walls`, x 213–250, z −942…−912 — inside
+Quadratus's yawed footprint). The spawn and entity columns and the straight line between them are
+clean (unlayered − layered = 0.000 m there). So arena_02 needs `layered = true`; the deepest node
+holds 51 floor layers and none reaches the cap, so `kHeightmapLayers` = 64 needs no change. The
+layered map is large: 1111 × 1151 nodes, 409 MB of layers + wall flags — the scene bounds reach
+z 0.1 because the player glb's rest pose at the origin is merged into them (the level alone spans
+z −1150…−463).
 
 ## Output path
 
