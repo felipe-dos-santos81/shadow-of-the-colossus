@@ -26,6 +26,7 @@
 #include "road_points.h"
 #include "run_flags.h"
 #include "scene.h"
+#include "stage_ctx.h"
 #include "shrine_points.h"
 #include "sword.h"
 #include "transition.h"
@@ -52,35 +53,6 @@
 #include <vector>
 
 namespace {
-
-// RAII owner of the SDL shell: window, GPU device, and SDL itself.
-struct Shell {
-    SDL_Window* win = nullptr;
-    SDL_GPUDevice* device = nullptr;
-    bool window_claimed = false;
-
-    ~Shell() {
-        if (device != nullptr) {
-            if (window_claimed) {
-                SDL_ReleaseWindowFromGPUDevice(device, win);
-            }
-            SDL_DestroyGPUDevice(device);
-        }
-        if (win != nullptr) {
-            SDL_DestroyWindow(win);
-        }
-        SDL_Quit();
-    }
-};
-
-// --- Manifest mode (S3 W1.4) ------------------------------------------------
-
-constexpr float kHeightmapCellSize = 1.0f;        // metres between ground samples
-constexpr float kFixedFrameSeconds = 1.0f / 60.0f;  // the s3-selftest's fixed step
-// The player state machine clamps a frame to this; Valus's attack clock and yaw
-// use the same ceiling so one long frame cannot skip an impact window.
-constexpr float kMaxCombatStepSeconds = 0.05f;
-constexpr int kSelftestFrames = 240;                // 4 simulated seconds
 
 // --- S4 encounter self-test (Task 6) ---------------------------------------
 
@@ -154,19 +126,6 @@ constexpr float kS7E2eFloorTolerance = 0.05f;  // the feet vs heightmap_floor at
 
 // --- S8: the plain, Agro and riding (design D10-D15) --------------------------
 // Authored values (source: authored) are labelled; the clip names are data.
-constexpr std::array<float, 3> kDoorFadeColour{0.0f, 0.0f, 0.0f};  // authored: the door fades black
-constexpr const char* kAgroStandClip = "horse_a_uma_stand1";
-constexpr const char* kRiderBone = "OptBone_boy";  // Agro's saddle seat (design §6)
-constexpr const char* kWhistleClip = "player_a_whistle";
-constexpr const char* kWhistleNearClip = "player_a_whistle_near";
-constexpr float kWhistleNearRange = 15.0f;          // D12, authored: `_near` within 15 m
-constexpr float kRideCameraNear = 6.0f;             // D13, authored: Stand/Walk/Back
-constexpr float kRideCameraTrot = 7.0f;             // D13, authored
-constexpr float kRideCameraGallop = 9.0f;           // D13, authored
-constexpr float kRideHeadLift = 1.2f;               // D13, authored: over kFollowHeadHeight
-constexpr float kRideCameraEase = 8.0f;             // s^-1, the follow camera's own rate
-constexpr float kApproachTurnDegPerSecond = 90.0f;  // D12, authored: Agro turning to the player
-constexpr float kStickPressThreshold = 0.5f;        // authored: a stick "press" (kick/rein)
 // --s8-selftest (Task 9): the script's budgets, tolerances and scaffolding
 // (authored: the probe points are placements.json's).
 constexpr float kS8MaxWhistleSeconds = 30.0f;  // the ~60 m approach, neigh and neigh_end
@@ -359,636 +318,68 @@ int run_app(const AppOptions& opts) {
         // The S5 audio engine lives for the run; each stage decides what it loads.
         AudioSeam audio;
 
-        // The stage loop (S7 D6): the window, the device, the renderer and the
-        // audio engine outlive every stage; each iteration composes one stage,
-        // runs it and ends with a StageRequest. The frozen selftests still
-        // return from inside the iteration and never request a switch; the
-        // return to the shrine (interactive play, --s7-selftest) and R from the
-        // shrine do. `carry` is what crosses (design D6).
+        RunState run{opts, shell, renderer, audio};
         // --s8-selftest starts on the plain (D17); --s8-e2e passes --stage shrine.
         // --s9-selftest starts on the plain too (the road).
-        StageId stage = (opts.s8Selftest || opts.s9Selftest) ? StageId::Plain : opts.stage;
-        StageCarry carry;
-        if (stage != StageId::Arena) {
+        run.stage = (opts.s8Selftest || opts.s9Selftest) ? StageId::Plain : opts.stage;
+        if (run.stage != StageId::Arena) {
             // --stage shrine|plain starts with control (D11): the return is over.
-            carry.ret.phase = ReturnPhase::Free;
+            run.carry.ret.phase = ReturnPhase::Free;
         }
-        bool first_stage = true;
-        // R16: cleared (once, with one warning) when interactive play finds the
-        // shrine manifest or the wake clips missing; the run then plays on
-        // without the return, as --no-return would.
-        bool return_available = true;
-        // S9: the sword pass's textures upload once per run (the renderer keeps
-        // them across stages); a failure warns once and the raise draws no light.
-        bool sword_fx_ready = false;
-        bool sword_fx_warned = false;
-        // --s9-selftest: Agro's pose where its script left her (after the
-        // dismount at kAgroStairs) — the reference the road's reload is checked
-        // against, independent of the production carry.horse store.
-        std::optional<HorsePose> s9AgroLeft;
+        StageId& stage = run.stage;
+        StageCarry& carry = run.carry;
+        bool& sword_fx_ready = run.sword_fx_ready;
+        std::optional<HorsePose>& s9AgroLeft = run.s9AgroLeft;
         for (;;) {
-            // The stage's manifest: --manifest for the arena, the shrine's own
-            // composed manifest for the shrine.
-            // S8 (D2): the stage loop switches on StageId (no shrine-vs-rest
-            // booleans: a third stage must never run as the arena).
-            const StageId here = stage;
-            const char* const stage_name = here == StageId::Shrine  ? "shrine"
-                                           : here == StageId::Plain ? "plain"
-                                                                    : "arena";
-            if (!first_stage) {
-                audio.new_stage();
+            StageCtx ctx(run);
+            if (const std::optional<int> exitCode = stage_setup(run, ctx)) {
+                return *exitCode;
             }
-            first_stage = false;
-            const Uint64 stage_load_start = SDL_GetTicksNS();
-
-            // Scene: a single glb (--model alone) or a composed manifest scene
-            // (--manifest, with --model as the player's glb). `Scene scene{}` keeps
-            // zeroed bounds for a model-less run, so camera_frame stays finite even
-            // when there is nothing to draw.
-            Scene scene{};
-            // The entity prop: loaded only in a composed scene with an entity (see
-            // load_club); identity/unloaded everywhere else.
-            ClubAttachment club{};
-            // The S6 corpse prop and the tendril pass's readiness: both are loaded
-            // only when the death is wired (see below).
-            CorpseAttachment corpse{};
-            bool effects_ready = false;
-            SceneManifest manifest{};          // empty when --manifest is absent
-            Heightmap heightmap{};             // an empty heightmap = no ground
-            // S9 (D6): the road's backdrop ray grid (the non-ground statics), and
-            // the sword's static mesh range — both empty off the road.
-            Heightmap raygrid{};
-            std::size_t swordMeshBegin = 0, swordMeshEnd = 0;
-            const bool follow_mode = !opts.manifestPath.empty();
-            // S10: the run-mode flags (run_flags.h); the scene's own flags
-            // (scene_flags) come after the manifest and playbacks load.
-            const RunFlags flags = run_flags(opts, here, follow_mode, return_available);
-            // S6: whether this run wires the death sequence (the interactive game
-            // and the --s6-selftest). The frozen scripted timelines (s3/s4/s41/
-            // s42/s5), the pinned captures and the plain screenshot runs must not
-            // load the corpse or the effect textures: their outputs and pixel
-            // stats are the regression.
-            const bool death_wired = flags.deathWired;
-            // S7: interactive play steps the return machine (unless --no-return,
-            // D13), and so does --s7-selftest. No frozen selftest (--selftest,
-            // --s3 ... --s6-selftest) or capture ever does: S4.1's selftest
-            // defeats Valus for real, and its output is the regression.
-            const bool interactive_run = flags.interactiveRun;
-            // S9: interactive play (not the frozen --s7-e2e/--s8-e2e) and the S9
-            // runs load the road, step the corridor and arena doors and carry
-            // Agro's pose; no frozen run ever does.
-            const bool s9_wired = flags.s9Wired;
-            // S8 (D2) / S9 (D2): the Plain stage is the road when S9-wired.
-            const bool road = flags.road;
-            // S9's corridor/arena door rows only into Valus's arena (door_row_count).
-            const int door_rows =
-                door_row_count(s9_wired && follow_mode, opts.manifestPath);
-            const std::string& stage_manifest_path =
-                here == StageId::Shrine  ? opts.shrineManifestPath
-                : road                   ? opts.roadManifestPath
-                : here == StageId::Plain ? opts.plainManifestPath
-                                         : opts.manifestPath;
-            bool return_wired = flags.returnWired;
-            if (follow_mode) {
-                // The manifest is user data: a malformed line is a usage error
-                // (exit 2) carrying the file and line, never a crash.
-                try {
-                    manifest = parse_manifest(stage_manifest_path);
-                } catch (const std::exception& error) {
-                    std::fprintf(stderr, "sotc-viewer: %s%s\n", error.what(),
-                             here == StageId::Shrine
-                                 ? " (compose it with `make shrine-manifest`)"
-                             : road ? " (compose it with `make road-manifest`)"
-                             : here == StageId::Plain
-                                 ? " (compose it with `python3 tools/re/stage/probe.py compose "
-                                   "--stage plain`)"
-                                 : "");
-                    return 2;
-                }
-                if (opts.entityTimeSet && manifest.entities.empty()) {
-                    std::fprintf(stderr, "sotc-viewer: --entity-time: the manifest has no entity\n");
-                    return 2;
-                }
-                if (opts.cameraTarget == "entity" && manifest.entities.empty()) {
-                    std::fprintf(stderr,
-                                 "sotc-viewer: --camera-target entity: the manifest has no entity\n");
-                    return 2;
-                }
-                // The load runs on this thread: keep the window answering the
-                // system meanwhile (no "not responding" during the shrine load).
-                // Only the S7 runs pump — the frozen timelines load as before.
-                const bool pump_load = flags.pumpLoad;
-                scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath, nullptr,
-                                      pump_load ? std::function<void()>([] { SDL_PumpEvents(); })
-                                                : std::function<void()>());
-
-                // The ground is built from the scene's static meshes only: the
-                // player's own body and the placed entities must never rasterize
-                // into the ground they stand on. A scene with no ground at all (no
-                // static meshes) leaves the heightmap empty — ground=none, no
-                // clamp. This runs before the club is appended: the club is static
-                // geometry (rig = -1) but it is held in the air, not terrain, and
-                // must never raise the heightmap under Valus.
-                try {
-                    // The shrine is a building (floors, a roof, walls): its
-                    // ground is layered (design D4/D12); the arena's is not.
-                    heightmap = build_heightmap(scene, kHeightmapCellSize,
-                                                /*layered=*/here == StageId::Shrine);
-                    // S8 (D3): the plain's plateau ends in cliffs; its map
-                    // refuses holes, cliffs and walls of rock.
-                    heightmap.refuseHoles = here == StageId::Plain;
-                    // S9 (D6): the beam and shade rays also march the backdrops
-                    // (the cliffs the ground map leaves out), built once here.
-                    if (road) {
-                        raygrid = build_backdrop_grid(scene, kHeightmapCellSize);
-                    }
-                } catch (const std::exception& error) {
-                    std::fprintf(stderr, "sotc-viewer: no ground: %s\n", error.what());
-                }
-                // S9: the sword, after both grids (a static mesh with ground = true:
-                // appended earlier it would rasterize into them) and before
-                // upload(). It is a hand prop, not scene extent: the bounds keep
-                // the stage's own.
-                if (road) {
-                    const Vec3 boundsMin = scene.boundsMin, boundsMax = scene.boundsMax;
-                    swordMeshBegin = append_static_model(scene, opts.libraryDir, kSwordGlb);
-                    swordMeshEnd = scene.meshes.size();
-                    scene.boundsMin = boundsMin;
-                    scene.boundsMax = boundsMax;
-                }
-
-                // S4.2: the club, in a manifest scene that has an entity. The
-                // renderer uploads its mesh list exactly once, so the append must
-                // precede upload().
-                if (!manifest.entities.empty()) {
-                    club = load_club(scene, opts.libraryDir, scene.playerRig + 1,
-                                     manifest.entities[0].placement.glbRelPath);
-                }
-                // S6: the corpse, hidden until Collapse. Also a static append, so it
-                // must precede upload() too; a scene the death cannot reach never
-                // loads it (the frozen timelines' mesh counts stay untouched).
-                if (death_wired && !manifest.entities.empty()) {
-                    corpse = load_corpse(scene, opts.libraryDir, scene.playerRig + 1);
-                }
-                renderer.upload(scene);
-                print_scene_line(scene);
-                // S9 (D7): the sword's light — fatal where the light is the proof.
-                if (road && !sword_fx_ready && !sword_fx_warned) {
-                    std::string why = "the sword pass was not created";
-                    try {
-                        sword_fx_ready = renderer.upload_sword_textures(
-                            load_sword_textures(opts.libraryDir, road_points::kSwordTextures));
-                    } catch (const std::exception& error) {
-                        why = error.what();
-                    }
-                    if (!sword_fx_ready) {
-                        if (opts.s9Selftest || opts.s9E2e) {
-                            std::fprintf(stderr, "sotc-viewer: --s9-%s: %s\n",
-                                         opts.s9Selftest ? "selftest" : "e2e", why.c_str());
-                            return 1;
-                        }
-                        std::fprintf(stderr, "sotc-viewer: the sword's light is unavailable: %s\n",
-                                     why.c_str());
-                        sword_fx_warned = true;
-                    }
-                }
-                // S6: the tendril pass's four shipped textures (design §8.2). The
-                // S6 selftest cannot prove the burst without them, so a load
-                // failure there is fatal; the interactive game degrades to a death
-                // without tendrils with one warning (never throws — Task 4's
-                // contract).
-                if (death_wired && !manifest.entities.empty()) {
-                    try {
-                        effects_ready =
-                            renderer.upload_effect_textures(load_effect_textures(opts.libraryDir));
-                    } catch (const std::exception& error) {
-                        if (opts.s6Selftest) {
-                            std::fprintf(stderr, "sotc-viewer: --s6-selftest: %s\n", error.what());
-                            return 1;
-                        }
-                        std::fprintf(stderr, "sotc-viewer: the tendril effect is unavailable: %s\n",
-                                     error.what());
-                    }
-                }
-                if (opts.s7Selftest || interactive_run) {
-                    const double load_ms =
-                        static_cast<double>(SDL_GetTicksNS() - stage_load_start) / 1e6;
-                    std::printf("s7-load stage=%s instances=%zu meshes=%zu ms=%.1f\n",
-                                stage_name, manifest.instances.size(),
-                                scene.meshes.size(), load_ms);
-                    if (opts.s7E2e) {
-                        std::printf("s7e2e-load stage=%s meshes=%zu ms=%.1f\n",
-                                    stage_name, scene.meshes.size(), load_ms);
-                    }
-                }
-                if (opts.s9Selftest && road && carry.s9Step == 0) {
-                    std::printf("s9-load stage=plain manifest=road instances=%zu backdrops=%zu "
-                                "meshes=%zu raygrid=%dx%d ms=%.1f\n",
-                                manifest.instances.size(), manifest.backdrops.size(),
-                                scene.meshes.size(), raygrid.width, raygrid.height,
-                                static_cast<double>(SDL_GetTicksNS() - stage_load_start) / 1e6);
-                }
-                if (opts.s8Selftest && here == StageId::Plain) {
-                    std::printf("s8-load stage=plain instances=%zu meshes=%zu ms=%.1f\n",
-                                manifest.instances.size(), scene.meshes.size(),
-                                static_cast<double>(SDL_GetTicksNS() - stage_load_start) / 1e6);
-                }
-            } else if (!opts.modelRelPath.empty()) {
-                scene = load_scene(opts.libraryDir, opts.modelRelPath);
-                renderer.upload(scene);
-                print_scene_line(scene);
-            }
-
-            // The player's rig record: its mesh range is what apply_player_transform
-            // moves and what the ground lift is measured from (the entities' own
-            // rigs follow in their tasks).
-            const RigCpu& player_rig_record = player_rig(scene);
-
-            // The real camera: framed on the scene bounds at load (and again on F).
-            Camera camera{};
-            camera_frame(camera, scene.boundsMin, scene.boundsMax);
-
-            // The player and its follow camera (manifest mode only): spawn at the
-            // manifest's spawn or the bounds centre, with the camera snapped behind
-            // the player (a huge dt makes camera_follow's first blend factor
-            // exactly 1 in float arithmetic; later frames smooth).
-            // The shrine's spawn stands on the floor under it (the layered
-            // ground's floor, not the column's roof); the arena's is the
-            // manifest's own, unchanged.
-            Vec3 stage_spawn = spawn_position(manifest, scene);
-            float stage_spawn_yaw = manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f;
-            // S8 (D14): a stage entered through a door starts at that door's
-            // arrival spawn (on its floor), not at the stage's start.
-            // The arrival is the kDoors row recorded at entry (R16); any other
-            // start resets the machine (a door entered on the frame R ended the
-            // last stage must not lock this one).
-            carry.door = door_stage_start(carry.door, here);
-            const DoorRow* const arrival = arriving_door(carry.door, here);
-            const bool door_arrival = arrival != nullptr;
-            // S9 (D3): the arena entered from the road's corridor is a fresh
-            // encounter: the return machine starts over, so Valus's death returns
-            // to the shrine even when the loop began there (ret at Free).
-            if (arrival != nullptr && arrival->from == StageId::Plain && here == StageId::Arena) {
-                carry.ret = reset_return();
-            }
-            if (door_arrival) {
-                const ride_points::Door& door = *arrival->door;
-                stage_spawn = Vec3{door.arrive[0], door.arrive[1], door.arrive[2]};
-                stage_spawn_yaw = door.arriveYawDeg;
-            }
-            if (here == StageId::Shrine || door_arrival) {
-                const float floor = heightmap_floor(heightmap, stage_spawn, kFloorStep);
-                if (std::isfinite(floor)) {
-                    stage_spawn.y = floor;
-                }
-            }
-            PlayerState player{stage_spawn, stage_spawn_yaw};
-            // The combat state machine and the encounter's own state (R5) live for
-            // the whole run; the climb camera is entered/left by the mode.
-            PlayerCombat combat{};
-            Encounter encounter{};
-            // One tuning table for every step path — the scripted timelines and the
-            // interactive loop — and for the HUD's health fractions.
-            const CombatTuning tuning{};
-            // One HUD view of the run for every set_hud site (design §7.7). The
-            // overlay belongs to an encounter, so a manifest with no entity draws
-            // none; Valus's bar is zero-width until the first landed hit, so its
-            // appearance is itself the feedback that he can be hurt.
-            const auto hud_state = [&](bool visible) {
-                const float playerHealth =
-                    tuning.maxHealth > 0.0f ? combat.health / tuning.maxHealth : 0.0f;
-                const float valusHealth = encounter.health < kEncounterMaxHealth
-                                              ? encounter.health / kEncounterMaxHealth
-                                              : 0.0f;
-                HudState hud{visible && !manifest.entities.empty(), combat.stamina / 100.0f,
-                             valusHealth, playerHealth};
-                // S7: the return's full-window fade (0 = nothing drawn — every
-                // run that never steps the machine).
-                hud.fade = carry.ret.fade;
-                hud.fadeColour = kShrineFadeColour;
-                // S8 (D14): the door's fade is the larger of the two, black.
-                if (carry.door.fade > hud.fade) {
-                    hud.fade = carry.door.fade;
-                    hud.fadeColour = kDoorFadeColour;
-                }
-                return hud;
-            };
-            CameraClimb climbCamera{};
-            CameraFollow follow;
-            if (follow_mode) {
-                camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
-                              /*moving=*/false, /*dtSeconds=*/10.0f);
-            }
-            // Entity target framing (T): the orbit point is refreshed from the
-            // entity's posed chest every frame. The state is inert until entered.
-            CameraTarget targetCamera;
-            Vec3 entityChest{};
-            bool haveEntityChest = false;
-
-            // Playback: one per rig (S4). The player's slot keeps the S2 meaning —
-            // the model's real clips first, the procedural wave only as the
-            // fallback for a skinned model that carries none; --anim picks a clip
-            // by name or index, and --anim-time pins the time and starts paused
-            // (deterministic captures). Each entity's rig loops the exact clip its
-            // manifest line named (compose_scene already refused a load whose model
-            // does not carry it); --entity-time pins that clock, clamped into the
-            // clip. A scene with no rig at all (a model-less run) keeps one slot for
-            // the player path, which stays silent.
-            const std::size_t playerRig = scene.rigs.empty() ? 0 : scene.playerRig;
-            // S4.0: one entity, right after the player. S8 (D17): no entity, no
-            // index — a stage without one (the plain's rig 1 is Agro) has none.
-            const std::size_t entityRig = manifest.entities.empty()
-                                              ? std::numeric_limits<std::size_t>::max()
-                                              : scene.playerRig + 1;
-            std::vector<Playback> playbacks(std::max<std::size_t>(scene.rigs.size(), 1));
-            Playback& playback = playbacks[playerRig];
-            build_playback(scene, playerRig, playback);
-            if (!opts.animClip.empty()) {
-                const int index = resolve_clip(playback.clips, opts.animClip);
-                if (index < 0) {
-                    std::fprintf(stderr, "sotc-viewer: --anim %s: no such clip", opts.animClip.c_str());
-                    if (playback.clips.empty()) {
-                        std::fprintf(stderr, " (the model has no animation clips)\n");
-                    } else {
-                        std::fprintf(stderr, "; available clips:");
-                        for (size_t i = 0; i < playback.clips.size(); ++i) {
-                            std::fprintf(stderr, " %zu=%s", i, playback.clips[i].name.c_str());
-                        }
-                        std::fprintf(stderr, "\n");
-                    }
-                    return 2;
-                }
-                playback.index = index;
-            }
-            if (opts.animTimeSet) {
-                playback.time = opts.animTime;
-                playback.playing = false;
-            }
-            // The entities follow the player in rig order (compose_scene's pinned
-            // order: instances, player, entities). Each names its clip exactly.
-            for (std::size_t entity = 0; entity < manifest.entities.size(); ++entity) {
-                const std::size_t rigIndex = entity + 1;
-                if (rigIndex >= playbacks.size()) {
-                    break;  // compose_scene pairs every entity with a rig
-                }
-                Playback& entity_playback = playbacks[rigIndex];
-                build_playback(scene, rigIndex, entity_playback);
-                if (const int index = clip_index_named(entity_playback, manifest.entities[entity].clip);
-                    index >= 0) {
-                    entity_playback.index = index;
-                }
-                if (opts.entityTimeSet && entity_playback.index >= 0) {
-                    const AnimationCpu& named =
-                        entity_playback.clips[static_cast<std::size_t>(entity_playback.index)];
-                    entity_playback.time = animation_clamp_time(opts.entityTime, named.duration);
-                    entity_playback.playing = false;
-                    entity_playback.pinned = true;  // the capture samples this exact time
-                }
-            }
-            // --s4-selftest pins the entity at t = 0 (the idle's first frame): the
-            // walk's collision proxy and the status bbox must sample one known pose.
-            if (opts.s4Selftest) {
-                if (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
-                    entityRig >= playbacks.size()) {
-                    std::fprintf(stderr,
-                                 "sotc-viewer: --s4-selftest: the manifest has no entity\n");
-                    return 2;
-                }
-                Playback& entity_playback = playbacks[entityRig];
-                if (entity_playback.index < 0) {
-                    std::fprintf(stderr,
-                                 "sotc-viewer: --s4-selftest: the entity has no clip to pin\n");
-                    return 2;
-                }
-                entity_playback.time = 0.0f;
-                entity_playback.playing = false;
-                entity_playback.pinned = true;
-            }
-            // S8 (D4): Agro's rig (never an encounter entity) idles on stand1;
-            // on the plain the ride wiring poses her from here on.
-            const std::size_t horseRig = scene.horseRig >= 0
-                                             ? static_cast<std::size_t>(scene.horseRig)
-                                             : std::numeric_limits<std::size_t>::max();
-            if (horseRig < playbacks.size()) {
-                build_playback(scene, horseRig, playbacks[horseRig]);
-                playbacks[horseRig].index = clip_index_named(playbacks[horseRig], kAgroStandClip);
-                playbacks[horseRig].playing = true;
-            }
-            for (std::size_t rigIndex = 0; rigIndex < playbacks.size(); ++rigIndex) {
-                print_anim_status(scene, rigIndex, playbacks[rigIndex]);
-            }
-
-            // S4.1: a manifest with an entity is an encounter. Every clip the climb
-            // and fight name must exist before the run starts — a missing one is a
-            // load error naming the glb and the clip, never a silent fallback to the
-            // first clip. (S3's arena has no entity and needs none of them.)
-            PlayerClips playerClips{};
-            EntityClips entityClips{};
-            if (follow_mode && !manifest.entities.empty()) {
-                playerClips = resolve_player_clips(playback);
-                if (!require_named_clip(playback, opts.modelRelPath, kGripLoopClip) ||
-                    !require_named_clip(playback, opts.modelRelPath, kGripMoveClip) ||
-                    !require_named_clip(playback, opts.modelRelPath, kGripAttackClip) ||
-                    !require_named_clip(playback, opts.modelRelPath, kFallClip) ||
-                    !require_named_clip(playback, opts.modelRelPath, kHeavyHurtClip) ||
-                    !require_named_clip(playback, opts.modelRelPath, kHeavyHurtEndClip) ||
-                    !require_named_clip(playback, opts.modelRelPath, kPlayerDeathClip)) {
-                    return 2;
-                }
-                if (entityRig < playbacks.size()) {
-                    entityClips = resolve_entity_clips(playbacks[entityRig],
-                                                       manifest.entities[0].clip);
-                    const std::string& entityModel = manifest.entities[0].placement.glbRelPath;
-                    if (!require_named_clip(playbacks[entityRig], entityModel,
-                                            manifest.entities[0].clip.c_str()) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kHeadReactionClip) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kArmReactionClip) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kBodyReactionClip) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kDeathClip) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kStompLeftClip) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kStompRightClip) ||
-                        !require_named_clip(playbacks[entityRig], entityModel, kClubSwingClip)) {
-                        return 2;
-                    }
-                }
-            }
-
-            // S7: the return's timings. Hold, fade out and fade in are the
-            // shrine's authored flow; Wake is the two baked wake clips played
-            // back to back (ruling R5), so their loaded durations are the truth.
-            // --s7-selftest and --s7-e2e refuse a player glb without them;
-            // interactive play (R16) warns once and plays on without the return.
-            ReturnTimings returnTimings{kShrineHoldSeconds, kShrineFadeOutSeconds,
-                                        kShrineFadeInSeconds, 0.0f};
-            int wakeFirst = -1;
-            int wakeSecond = -1;
-            float wakeFirstSeconds = 0.0f;
-            if (return_wired && !opts.s7Selftest && !opts.s7E2e) {
-                std::error_code ec;
-                const std::string warning = return_unavailable_warning(
-                    opts.shrineManifestPath,
-                    std::filesystem::is_regular_file(opts.shrineManifestPath, ec),
-                    opts.modelRelPath,
-                    clip_index_named(playback, kWakeClipFirst) >= 0 &&
-                        clip_index_named(playback, kWakeClipSecond) >= 0);
-                if (!warning.empty()) {
-                    std::fputs(warning.c_str(), stderr);
-                    return_available = false;
-                    return_wired = false;
-                }
-            }
-            if (return_wired) {
-                if (!require_named_clip(playback, opts.modelRelPath, kWakeClipFirst) ||
-                    !require_named_clip(playback, opts.modelRelPath, kWakeClipSecond)) {
-                    return 2;
-                }
-                wakeFirst = clip_index_named(playback, kWakeClipFirst);
-                wakeSecond = clip_index_named(playback, kWakeClipSecond);
-                wakeFirstSeconds = playback.clips[static_cast<std::size_t>(wakeFirst)].duration;
-                returnTimings.wake =
-                    wakeFirstSeconds + playback.clips[static_cast<std::size_t>(wakeSecond)].duration;
-            }
-
-            // --- S5 audio (Task 5) ------------------------------------------------
-            // One engine for the run. The curated manifest loads when the encounter
-            // composes — the interactive fight and --s5-selftest. The scripted
-            // S3/S4/S4.1/S4.2 timelines and the pinned captures stay silent: they do
-            // not even open the manifest, so their `s4-*`/`s41-*`/`s42-*` values
-            // cannot move.
-            if (opts.s5Selftest && opts.audioMixdownPath.empty()) {
-                std::fprintf(stderr, "sotc-viewer: --s5-selftest needs --audio-mixdown PATH\n");
-                return 2;
-            }
-            if (opts.s5Selftest && (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
-                                    entityRig >= playbacks.size())) {
-                std::fprintf(stderr,
-                             "sotc-viewer: --s5-selftest: the manifest has no entity\n");
-                return 2;
-            }
-            if (opts.s6Selftest && (manifest.entities.empty() || entityRig >= scene.rigs.size() ||
-                                    entityRig >= playbacks.size())) {
-                std::fprintf(stderr,
-                             "sotc-viewer: --s6-selftest: the manifest has no entity\n");
-                return 2;
-            }
-            // S8 (D15): the plain wants its sound too (no entity there).
-            const bool audio_wanted =
-                scene_flags(opts, here, follow_mode, !manifest.entities.empty(),
-                            entityRig < playbacks.size())
-                    .audioWanted;
-            if (audio_wanted) {
-                // The S5 slice is the load gate for --s5-selftest and interactive
-                // play: both must load the frozen eight-entry manifest beside the
-                // S6 cue table. The S6 slice's own gate (--s6-selftest) passes
-                // includeS6 = true and requires the death and club-swing rows too.
-                if (!audio.load(opts.libraryDir, /*includeS6=*/opts.s6Selftest)) {
-                    // The engine (or the cue gate) already printed the reason. A
-                    // missing curated clip is fatal when the sound is the artifact;
-                    // interactive play degrades to silence with that one warning.
-                    if (flags.audioStrict) {
-                        return 1;
-                    }
-                }
-                audio.log = flags.audioStrict;
-                if (opts.s6Selftest) {
-                    audio.logPrefix = "s6-event";
-                    // The S6 slice's rows are mandatory in this run: a missing one
-                    // at play time is the fatal error it has always been.
-                    audio.requireS6 = true;
-                }
-            }
-            if (flags.audioStrict && !audio.enabled) {
-                std::fprintf(stderr, "sotc-viewer: %s: audio is not loaded\n",
-                             opts.s6Selftest ? "--s6-selftest" : "--s5-selftest");
-                return 1;
-            }
-
-            // Single-model framing is on the pose, after --anim/--anim-time resolved
-            // the start state: the clip's root series carries the ground height, so
-            // the bind-pose bounds framed at load would leave the subject out of
-            // frame. Manifest mode keeps its follow camera and bind-bounds framing.
-            if (!follow_mode) {
-                frame_single_model(camera, scene, playback);
-            }
-
-            // A clip pinned on the command line keeps manual control; otherwise the
-            // player's controller state selects the loop (stand/walk/run) each
-            // frame. --anim-time pins a deterministic capture, so it counts as
-            // manual too: a selection must not reset its time.
-            const bool manual_clip = !opts.animClip.empty() || opts.animTimeSet;
-
-            // Ruling R8's autonomous fight (turn, stomp, club) runs in free
-            // interactive play. The scripted S3/S4/S4.1 acceptance timelines pin the
-            // entity and own every step — a stomp would race their assertions — and
-            // --entity-time pins the clip for a capture, so behavior is off there.
-            // Task 9's s42 timeline opts in with its own fixed steps.
-            const bool valus_behavior =
-                scene_flags(opts, here, follow_mode, !manifest.entities.empty(),
-                            entityRig < playbacks.size())
-                    .valusBehavior;
-
-            // The composed scene's initial placement: every entity's grounding lift
-            // lands on its model transform once, and the player's transform follows
-            // its controller every frame. A single-model load has no entity rig, so
-            // nothing moves here.
-            apply_entity_lifts(scene, playbacks);
-
-            // Ruling R8: capture the encounter entity's manifest transform and
-            // recompose its mesh models from `entityYawDeg` (the manifest yaw for
-            // now). The lift is the same rig-local grounding offset apply_entity_lifts
-            // just applied, measured for the stand clip the entity opens on. All
-            // later frames rebuild the same product with the slewed yaw, so the body
-            // turns and the club (which reads the live model) follows.
-            if (follow_mode && !manifest.entities.empty() && entityRig < scene.rigs.size()) {
-                const ManifestEntity& entity = manifest.entities.front();
-                encounter.entityPosition = entity.placement.position;
-                encounter.entityScale = entity.placement.scale;
-                encounter.entityBaseYawDeg = entity_yaw_deg(entity.placement.rotation);
-                encounter.entityYawDeg = encounter.entityBaseYawDeg;
-                encounter.entityLift = 0.0f;
-                if (entityClips.stand >= 0 &&
-                    static_cast<std::size_t>(entityClips.stand) <
-                        playbacks[entityRig].clips.size()) {
-                    encounter.entityLift = effective_rig_lift(
-                        scene, entityRig,
-                        playbacks[entityRig]
-                            .clips[static_cast<std::size_t>(entityClips.stand)]);
-                }
-                encounter.entityTransformSet = true;
-                update_entity_transform(scene, encounter, entityRig);
-            }
-
-            // The target-framing capture starts here: sample the entity's chest at
-            // the initial playback time (before the first frame advances it) so the
-            // very first camera update already frames the subject.
-            if (follow_mode && entityRig < scene.rigs.size() && entityRig < playbacks.size() &&
-                playbacks[entityRig].index >= 0) {
-                const Playback& entity_playback = playbacks[entityRig];
-                const AnimationCpu& clip =
-                    entity_playback.clips[static_cast<std::size_t>(entity_playback.index)];
-                const std::vector<Mat4> palette = animation_pose(
-                    scene, entityRig, clip, playback_time(entity_playback, clip.duration));
-                haveEntityChest = entity_chest_position(scene, entityRig, palette, entityChest);
-            }
-            if (opts.cameraTarget == "entity") {
-                if (!haveEntityChest) {
-                    std::fprintf(stderr,
-                                 "sotc-viewer: --camera-target entity: no Bone_MUNE in the entity\n");
-                    return 2;
-                }
-                camera_target_enter(camera, follow, targetCamera, entityChest);
-            }
-
-            // The initial player transform (also the one --selftest renders with):
-            // the first clip already is the active one.
-            if (follow_mode) {
-                apply_player_transform(scene, player_rig_record, player,
-                                       active_player_lift(scene, playback, player_rig_record));
-                // No HUD here: a plain --screenshot capture (the S3/S4 acceptance
-                // stills) shows the scene alone. The paths that want the overlay —
-                // the interactive loop and the --s41-stills renders — feed
-                // hud_state() themselves immediately before rendering.
-            }
+            // The stage's state under the names the paths below were written with.
+            const StageId& here = ctx.here;
+            const char* const stage_name = ctx.stage_name;
+            Scene& scene = ctx.scene;
+            ClubAttachment& club = ctx.club;
+            CorpseAttachment& corpse = ctx.corpse;
+            bool& effects_ready = ctx.effects_ready;
+            SceneManifest& manifest = ctx.manifest;
+            Heightmap& heightmap = ctx.heightmap;
+            const bool& follow_mode = ctx.follow_mode;
+            const RunFlags& flags = ctx.flags;
+            const bool& death_wired = ctx.death_wired;
+            const bool& road = ctx.road;
+            bool& return_wired = ctx.return_wired;
+            const RigCpu& player_rig_record = *ctx.playerRigRecord;
+            Camera& camera = ctx.camera;
+            Vec3& stage_spawn = ctx.stage_spawn;
+            float& stage_spawn_yaw = ctx.stage_spawn_yaw;
+            const DoorRow* const arrival = ctx.arrival;
+            const bool& door_arrival = ctx.door_arrival;
+            PlayerState& player = ctx.player;
+            PlayerCombat& combat = ctx.combat;
+            Encounter& encounter = ctx.encounter;
+            const CombatTuning& tuning = ctx.tuning;
+            CameraClimb& climbCamera = ctx.climbCamera;
+            CameraFollow& follow = ctx.follow;
+            CameraTarget& targetCamera = ctx.targetCamera;
+            Vec3& entityChest = ctx.entityChest;
+            bool& haveEntityChest = ctx.haveEntityChest;
+            const std::size_t& playerRig = ctx.playerRig;
+            const std::size_t& entityRig = ctx.entityRig;
+            std::vector<Playback>& playbacks = ctx.playbacks;
+            Playback& playback = *ctx.playbackPtr;
+            const std::size_t& horseRig = ctx.horseRig;
+            PlayerClips& playerClips = ctx.playerClips;
+            EntityClips& entityClips = ctx.entityClips;
+            ReturnTimings& returnTimings = ctx.returnTimings;
+            float& wakeFirstSeconds = ctx.wakeFirstSeconds;
+            const bool& manual_clip = ctx.manual_clip;
+            const bool& valus_behavior = ctx.valus_behavior;
+            const bool& s8_wired = ctx.s8_wired;
+            bool& plain_ride = ctx.plain_ride;
+            PlainRide& pr = ctx.pr;
+            SwordState& sword = ctx.sword;
+            bool& sword_wired = ctx.sword_wired;
 
             if (opts.s41Selftest) {
                 // The deterministic S4.1 acceptance timeline: S4's approach, a real
@@ -1095,7 +486,7 @@ int run_app(const AppOptions& opts) {
                                      includeClub ? club : ClubAttachment{});
                     apply_player_transform(scene, player_rig_record, player,
                                            active_player_lift(scene, playback, player_rig_record));
-                    renderer.set_hud(hud_state(hudVisible));
+                    renderer.set_hud(ctx.hud_state(hudVisible));
                     renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                           /*acquire_swapchain=*/true);
                     write_screenshot(renderer, shell.win, path);
@@ -1762,7 +1153,7 @@ int run_app(const AppOptions& opts) {
                     update_all_poses(renderer, scene, playbacks, 0.0f, club);
                 apply_player_transform(scene, player_rig_record, player,
                                        active_player_lift(scene, playback, player_rig_record));
-                renderer.set_hud(hud_state(/*visible=*/true));
+                renderer.set_hud(ctx.hud_state(/*visible=*/true));
                 // The defeat still pulls the follow camera out to its 12 m wheel
                 // ceiling so the landed player and the fallen body share the
                 // frame; the arm's-length follow view points into the corpse. The
@@ -1833,7 +1224,7 @@ int run_app(const AppOptions& opts) {
                     // The HUD control: the same frame with the overlay hidden.
                     capture_control("defeat-nohud", control_path("defeat-nohud"),
                                     /*hudVisible=*/false);
-                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.set_hud(ctx.hud_state(/*visible=*/true));
                 }
                 print_status_line(opts, shell.win);
                 std::printf("s41-status grab=%s climb=%.2f strikes=%d entity_health=%d mode=%s "
@@ -2127,7 +1518,7 @@ int run_app(const AppOptions& opts) {
                         update_all_poses(renderer, scene, playbacks, 0.0f, club);
                         apply_player_transform(scene, player_rig_record, player,
                                                active_player_lift(scene, playback, player_rig_record));
-                        renderer.set_hud(hud_state(/*visible=*/true));
+                        renderer.set_hud(ctx.hud_state(/*visible=*/true));
                         renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                               /*acquire_swapchain=*/true);
                         write_screenshot(renderer, shell.win, path);
@@ -3017,624 +2408,6 @@ int run_app(const AppOptions& opts) {
                 return 0;
             }
 
-            // --- S8: the plain — Agro, the whistle, riding (design D4-D15) -------
-            // Stepped only in interactive play (not --s7-e2e): no frozen selftest,
-            // --s7-selftest or --s7-e2e ever meets the doors or the ride (D17).
-            const bool s8_wired = flags.s8Wired;
-            bool plain_ride = s8_wired && here == StageId::Plain && horseRig < playbacks.size() &&
-                              !manifest.horses.empty();
-            if (plain_ride &&
-                (clip_index_named(playbacks[horseRig], kAgroStandClip) < 0 ||
-                 clip_index_named(playback, "player_a_uma_stand1_player") < 0 ||
-                 clip_index_named(playback, kWhistleClip) < 0 ||
-                 clip_index_named(playback, kWhistleNearClip) < 0)) {
-                // The S8 bake is missing (the shared library predates it): Agro
-                // stands, the plain plays on foot.
-                std::fprintf(stderr,
-                             "sotc-viewer: the plain: the library lacks the S8 ride clips (re-run "
-                             "`make bake`); riding is off\n");
-                plain_ride = false;
-            }
-            // The plain's ride state (S8 R17): everything plain_step carries from frame
-            // to frame, as one value (a fresh one per stage).
-            struct PlainRide {
-                RideState ride = reset_ride();
-                AgroState agro{};
-                Vec3 horsePos{};
-                float horseYaw = 0.0f;
-                Vec3 horseScale{1.0f, 1.0f, 1.0f};
-                RigBlend horseBlend;
-                RigBlend riderBlend;
-                std::string hoofClip;
-                float hoofTime = 0.0f;
-                int whistleClip = -1;  // the player's whistle one-shot, -1 = none
-                float whistleSeconds = 0.0f;
-                bool agroProgressed = true;
-                // R11: the ground refused last frame's ridden move (fed back as a rein).
-                bool rideBlocked = false;
-                // R12: the mount's start — the player's on-foot spot, resolved into the
-                // seat's frame on the first mounted pose (then mount_offset lerps it).
-                bool mountFootPending = false;
-                Vec3 mountFootWorld{};
-                Vec3 mountFoot{};
-                // Last frame's held ride keys: the presses are their edges.
-                RideKeys rideKeysBefore;
-            } pr;
-            if (!manifest.horses.empty()) {
-                const ManifestInstance& placed = manifest.horses.front().placement;
-                pr.horsePos = placed.position;
-                pr.horseYaw = entity_yaw_deg(placed.rotation);
-                pr.horseScale = placed.scale;
-                // S9 (D4): on the road, Agro waits where the player left her.
-                if (road && carry.horse) {
-                    pr.horsePos = carry.horse->pos;
-                    pr.horseYaw = carry.horse->yawDeg;
-                }
-                const float floor = heightmap_floor(heightmap, pr.horsePos, kFloorStep);
-                if (std::isfinite(floor)) {
-                    pr.horsePos.y = floor;
-                }
-            }
-            // S9 (D5/D6): the raised sword — on the road only, with its six clips
-            // and its bone; any of them missing leaves it lowered (one line).
-            SwordState sword = reset_sword();
-            bool sword_wired = road && swordMeshEnd > swordMeshBegin;
-            if (sword_wired) {
-                for (const SwordClips* c : {&kSwordFoot, &kSwordMounted}) {
-                    for (const char* name : {c->start, c->loop, c->end}) {
-                        sword_wired = sword_wired && clip_index_named(playback, name) >= 0;
-                    }
-                }
-                if (!sword_wired) {
-                    std::fprintf(stderr,
-                                 "sotc-viewer: the road: the library lacks the raise clips "
-                                 "(re-run `make bake` into the view); the sword stays lowered\n");
-                } else if (playerRig >= scene.rigs.size() ||
-                           joint_index_named(scene.rigs[playerRig], kSwordBone) < 0) {
-                    std::fprintf(stderr, "sotc-viewer: the road: the player rig has no %s; the "
-                                         "sword stays lowered\n", kSwordBone);
-                    sword_wired = false;
-                }
-            }
-            bool swordSearchLatch = false;  // the search cue's lock edge (once per lock)
-            const auto horse_model = [&]() {
-                const float half = 0.5f * pr.horseYaw * kDegToRad;
-                return mat4_from_trs(pr.horsePos, Quat{0.0f, std::sin(half), 0.0f, std::cos(half)},
-                                     pr.horseScale);
-            };
-            const auto horse_distance = [&]() {
-                const float dx = player.position.x - pr.horsePos.x;
-                const float dz = player.position.z - pr.horsePos.z;
-                return std::sqrt(dx * dx + dz * dz);
-            };
-            // One plain frame, after this frame's update_all_poses: the presses,
-            // the whistle, the ride and Agro's machines, her travel over the
-            // ground, both rigs' blended poses, the rider on the saddle, and the
-            // cues. `locked` (a door fade) eats every press; a key held through
-            // it is not a fresh press when it ends (ride_presses).
-            const auto plain_step = [&](float dt, RideKeys keys, bool locked,
-                                        std::vector<std::vector<Mat4>>& palettes) {
-                RideInput in = ride_presses(keys, pr.rideKeysBefore, locked);
-                in.mountPressed = in.mountPressed && pr.whistleClip < 0;
-                // S9: while the sword is up, kicks, the mount/dismount and the
-                // whistle are ignored (release C to ride); `before` still tracks
-                // the real keys, so a key held through the raise is no press.
-                if (sword.phase != SwordPhase::Lowered) {
-                    in.kickPressed = in.mountPressed = in.whistlePressed = false;
-                }
-                // R11: a refused ridden move holds the rein (the stop chain runs).
-                in = blocked_rein(in, pr.ride, pr.rideBlocked);
-
-                // The whistle (D12): Wander's one-shot (`_near` within 15 m), on foot.
-                bool whistled = false;
-                if (pr.ride.phase == RidePhase::OnFoot && pr.whistleClip < 0 && in.whistlePressed) {
-                    pr.whistleClip = clip_index_named(playback, horse_distance() <= kWhistleNearRange
-                                                                 ? kWhistleNearClip
-                                                                 : kWhistleClip);
-                    pr.whistleSeconds = 0.0f;
-                    whistled = true;
-                    audio.play_ride(RideSfx::Whistle, player.position);
-                } else if (pr.whistleClip >= 0) {
-                    pr.whistleSeconds += dt;
-                }
-                if (pr.whistleClip >= 0) {
-                    const AnimationCpu& whistle =
-                        playback.clips[static_cast<std::size_t>(pr.whistleClip)];
-                    if (pr.whistleSeconds >= whistle.duration) {
-                        pr.whistleClip = -1;  // the mode's clip takes over next frame
-                        playback.pinned = false;
-                        playback.playing = true;
-                    } else {
-                        playback.index = pr.whistleClip;
-                        playback.time = pr.whistleSeconds;
-                        playback.pinned = true;
-                        playback.playing = false;
-                    }
-                }
-
-                // The ride machine (D5, D9-D11): the player in Agro's frame, and
-                // whether each side's landing has walkable ground.
-                RideContext ctx;
-                ctx.playerInHorse = to_body_frame(player.position, pr.horsePos, pr.horseYaw);
-                const auto landing_walkable = [&](Side side) {
-                    Vec3 land = from_body_frame(dismount_offset(side), pr.horsePos, pr.horseYaw);
-                    land.y = pr.horsePos.y;
-                    return heightmap_in_bounds(heightmap, land) &&
-                           heightmap_walkable(heightmap, pr.horsePos, land);
-                };
-                ctx.leftWalkable = landing_walkable(Side::Left);
-                ctx.rightWalkable = landing_walkable(Side::Right);
-                if (pr.ride.phase == RidePhase::OnFoot) {
-                    pr.ride.yawDeg = pr.horseYaw;  // the machine reads her heading at the mount
-                }
-                const RideState before = pr.ride;
-                pr.ride = step_ride(pr.ride, dt, in, ctx);
-                const auto counted_kicks = [](const RideState& s) {
-                    return std::count_if(s.kicks.begin(), s.kicks.end(),
-                                         [](float k) { return k >= 0.0f; });
-                };
-                if (before.phase == RidePhase::OnFoot && pr.ride.phase == RidePhase::Mounting) {
-                    // The mount (D11): Agro's own machine is reset; the rider's
-                    // blend starts from the pose shown on foot.
-                    pr.agro = AgroState{};
-                    pr.whistleClip = -1;
-                    if (playback.index >= 0) {
-                        const AnimationCpu& shown =
-                            playback.clips[static_cast<std::size_t>(playback.index)];
-                        pr.riderBlend.shown = animation_local_pose(
-                            scene, playerRig, shown, playback_time(playback, shown.duration));
-                    }
-                    pr.riderBlend.clip.clear();
-                    pr.mountFootPending = true;  // R12
-                    pr.mountFootWorld = player.position;
-                    audio.play_ride(RideSfx::Mount, pr.horsePos);
-                }
-                if (in.kickPressed && (counted_kicks(pr.ride) > counted_kicks(before) ||
-                                       pr.ride.kickCooldown > before.kickCooldown)) {
-                    audio.play_ride(RideSfx::Kick, pr.horsePos);
-                }
-                if (pr.ride.kickRefused) {
-                    audio.play_ride(RideSfx::Neigh, pr.horsePos);  // the binary's refusal neigh
-                }
-                if (pr.ride.horseClip != before.horseClip &&
-                    (pr.ride.horseClip == "horse_a_uma_run_stop1" ||
-                     pr.ride.horseClip == "horse_a_uma_run_n_stop" ||
-                     pr.ride.horseClip == "horse_a_uma_walk_stop")) {
-                    audio.play_ride(RideSfx::StopHorse, pr.horsePos);  // the "whoa"
-                }
-
-                // Agro's heading and speed: the rider's machine while ridden, her
-                // own whistle approach on foot (turning to the player, D12).
-                const float distanceBefore = horse_distance();
-                float speed = 0.0f;
-                if (pr.ride.phase == RidePhase::OnFoot) {
-                    const AgroPhase was = pr.agro.phase;
-                    pr.agro = step_agro(pr.agro, dt, whistled, distanceBefore, pr.agroProgressed);
-                    if (before.phase == RidePhase::Dismounting) {
-                        // Off the saddle: her idle carries on from the ride's clock.
-                        pr.agro.clip = kAgroStandClip;
-                        pr.agro.clipTime = before.clipTime + dt;
-                    }
-                    if (pr.agro.warp) {
-                        // The binary's stuck recovery: kWarpBehind behind the player,
-                        // only onto ground (a hole is never sampled).
-                        Vec3 target = player.position;
-                        const Vec3 f = yaw_forward(player.yawDeg);
-                        target.x -= f.x * kWarpBehind;
-                        target.z -= f.z * kWarpBehind;
-                        if (heightmap_in_bounds(heightmap, target) &&
-                            heightmap_walkable(heightmap, target, target)) {
-                            const float floor = heightmap_floor(heightmap, target, kFloorStep);
-                            if (std::isfinite(floor)) {
-                                pr.horsePos = Vec3{target.x, floor, target.z};
-                            }
-                        }
-                    }
-                    if (was != AgroPhase::Neigh && pr.agro.phase == AgroPhase::Neigh) {
-                        audio.play_ride(RideSfx::Neigh, pr.horsePos);
-                    }
-                    float facing = 1.0f;
-                    if (pr.agro.phase == AgroPhase::Approach) {
-                        const float want = std::atan2(player.position.x - pr.horsePos.x,
-                                                      player.position.z - pr.horsePos.z) /
-                                           kDegToRad;
-                        float err = std::remainder(want - pr.horseYaw, 360.0f);
-                        const float turn = kApproachTurnDegPerSecond * dt;
-                        pr.horseYaw = std::remainder(pr.horseYaw + std::clamp(err, -turn, turn), 360.0f);
-                        err = std::remainder(want - pr.horseYaw, 360.0f);
-                        // She runs only once she faces him (no orbiting him).
-                        facing = std::max(0.0f, std::cos(err * kDegToRad));
-                    }
-                    speed = horse_clip_speed(pr.agro.clip, pr.agro.clipTime) * facing;
-                } else {
-                    pr.horseYaw = pr.ride.yawDeg;
-                    speed = pr.ride.speed;
-                }
-                bool refused = false;
-                if (speed != 0.0f && dt > 0.0f) {
-                    const Vec3 f = yaw_forward(pr.horseYaw);
-                    Vec3 next{pr.horsePos.x + f.x * speed * dt, pr.horsePos.y,
-                              pr.horsePos.z + f.z * speed * dt};
-                    // The player's walkability (D3): no hole, no cliff, no wall.
-                    if (heightmap_in_bounds(heightmap, next) &&
-                        heightmap_walkable(heightmap, pr.horsePos, next)) {
-                        const float floor = heightmap_floor(heightmap, next, kFloorStep);
-                        if (std::isfinite(floor)) {
-                            next.y = floor;
-                        }
-                        pr.horsePos = next;
-                    } else {
-                        refused = true;
-                    }
-                }
-                pr.rideBlocked = refused && pr.ride.phase == RidePhase::Riding;
-                pr.agroProgressed = horse_distance() < distanceBefore - 1e-4f;
-
-                // Agro's rig: placed, posed with the blend, hooves on touchdown.
-                // Every Agro clip carries the root series (its ground height), so
-                // her model takes no lift.
-                const RigCpu& horseRecord = scene.rigs[horseRig];
-                set_rig_model(scene, horseRecord, horse_model());
-                const bool onFoot = pr.ride.phase == RidePhase::OnFoot;
-                const std::string& horseClip = onFoot ? pr.agro.clip : pr.ride.horseClip;
-                const float horseTime = onFoot ? pr.agro.clipTime : pr.ride.clipTime;
-                const float horseBlendFrom = onFoot ? pr.agro.blendFrom : pr.ride.blendFrom;
-                RideSfx hoof = RideSfx::HoofWalk;
-                const float* fractions = footfall_fractions(horseClip, hoof);
-                const int horseClipIndex = clip_index_named(playbacks[horseRig], horseClip);
-                if (fractions != nullptr && horseClipIndex >= 0) {
-                    const AnimationCpu& gaitClip =
-                        playbacks[horseRig].clips[static_cast<std::size_t>(horseClipIndex)];
-                    const float prev = horseClip == pr.hoofClip ? pr.hoofTime : -1e-4f;
-                    for (int n = footfalls_crossed(fractions, gaitClip.duration, prev, horseTime);
-                         n > 0; --n) {
-                        audio.play_ride(hoof, pr.horsePos);
-                    }
-                }
-                pr.hoofClip = horseClip;
-                pr.hoofTime = horseTime;
-                std::vector<Mat4> horsePalette =
-                    blended_palette(scene, horseRig, playbacks[horseRig], pr.horseBlend, horseClip,
-                                    horseTime, horseBlendFrom);
-                if (!horsePalette.empty()) {
-                    renderer.upload_pose(horseRig, horsePalette);
-                    palettes[horseRig] = std::move(horsePalette);
-                }
-
-                if (before.phase == RidePhase::Dismounting && onFoot) {
-                    // On foot at the dismount's end (D11): the last getoff_fall
-                    // frame, over the seat, on the ground.
-                    Mat4 seat{};
-                    Vec3 land = from_body_frame(dismount_offset(pr.ride.side), pr.horsePos, pr.horseYaw);
-                    if (rig_bone_world(scene, horseRig, palettes[horseRig], kRiderBone, seat)) {
-                        const Mat4 at = mat4_mul(seat, translation_of(dismount_offset(pr.ride.side)));
-                        land = Vec3{at.m[12], at.m[13], at.m[14]};
-                    }
-                    const float floor = heightmap_floor(heightmap, land, kFloorStep);
-                    land.y = std::isfinite(floor) ? floor : pr.horsePos.y;
-                    player = PlayerState{land, pr.horseYaw};
-                    playback.pinned = false;
-                    playback.playing = true;
-                    playback.time = 0.0f;
-                    follow.distance = CameraFollow{}.distance;
-                }
-
-                // The rider (D8): the paired clip at the ride's clock, placed on
-                // OptBone_boy's world matrix times the seat-relative offset.
-                if (!onFoot) {
-                    // S9: a sword raised in the saddle overrides the rider's clip
-                    // (kSwordMounted at Stand), blended in over its first 0.25 s.
-                    const bool swordRider = sword.phase != SwordPhase::Lowered && sword.mounted;
-                    const std::string riderClip = swordRider ? sword.clip : pr.ride.riderClip;
-                    const float riderTime = swordRider ? sword.clipTime : pr.ride.clipTime;
-                    const float riderBlendFrom =
-                        !swordRider ? pr.ride.blendFrom
-                        : sword.phase != SwordPhase::Raised && sword.clipTime < kClipBlendSeconds
-                            ? sword.clipTime
-                            : -1.0f;
-                    std::vector<Mat4> riderPalette =
-                        blended_palette(scene, playerRig, playback, pr.riderBlend, riderClip,
-                                        riderTime, riderBlendFrom);
-                    if (!riderPalette.empty()) {
-                        renderer.upload_pose(playerRig, riderPalette);
-                        palettes[playerRig] = std::move(riderPalette);
-                    }
-                    if (const int riderIndex = clip_index_named(playback, riderClip);
-                        riderIndex >= 0) {
-                        playback.index = riderIndex;  // the status and the clip owner
-                        playback.time = riderTime;
-                        playback.pinned = true;
-                        playback.playing = false;
-                    }
-                    Mat4 seat{};
-                    if (rig_bone_world(scene, horseRig, palettes[horseRig], kRiderBone, seat)) {
-                        if (pr.mountFootPending) {
-                            // R12: where he stood, in the seat's frame (y from the clip).
-                            pr.mountFoot = point_in_frame(seat, pr.mountFootWorld);
-                            pr.mountFoot.y = 0.0f;
-                            pr.mountFootPending = false;
-                        }
-                        const Vec3 offset = mount_offset(pr.ride, pr.mountFoot);
-                        set_rig_model(scene, player_rig_record,
-                                      mat4_mul(seat, translation_of(offset)));
-                    }
-                    player.position = pr.horsePos;  // the listener, the camera, R
-                    player.yawDeg = pr.horseYaw;
-                }
-
-                // The riding camera (D13): the distance per gait (eased by the
-                // follow camera), the head point raised while mounted, eased.
-                follow.distance = onFoot ? follow.distance
-                                  : pr.ride.gait == Gait::Gallop ? kRideCameraGallop
-                                  : pr.ride.gait == Gait::Trot   ? kRideCameraTrot
-                                                              : kRideCameraNear;
-                const float headTarget = kFollowHeadHeight + (onFoot ? 0.0f : kRideHeadLift);
-                const float ease = 1.0f - std::exp(-kRideCameraEase * std::max(dt, 0.0f));
-                follow.headHeight += (headTarget - follow.headHeight) * ease;
-            };
-            if (plain_ride) {
-                set_rig_model(scene, scene.rigs[horseRig], horse_model());
-            }
-
-            // The one soft reset (design §7.5 and S6): the player's and Valus's
-            // opening state, the death machine back to Idle, the corpse hidden and
-            // the live body shown, the cameras back to the follow pose. The
-            // interactive `R` handler and the S6 selftest **both call this**, so
-            // the acceptance proves the reset the player actually presses
-            // (anti-goal A2) instead of a copy of it. `cameraBaseSet` is the
-            // interactive path's cinematic-camera latch (the selftest has no such
-            // latch and passes nullptr).
-            const auto soft_reset_encounter = [&](DeathState& deathState, bool& cueFired,
-                                                  bool* cameraBaseSet) {
-                reset_player_combat(player, combat, spawn_position(manifest, scene),
-                                    manifest.hasSpawn ? manifest.spawnYawDeg : 0.0f, tuning);
-                reset_encounter(encounter);
-                audio.reset();  // R stops every voice, music too
-                deathState = reset_death();
-                cueFired = false;
-                if (cameraBaseSet != nullptr) {
-                    *cameraBaseSet = false;
-                }
-                apply_death_visibility(scene, corpse, club, entityRig, /*corpseVisible=*/false);
-                if (entityRig < playbacks.size() && entityClips.stand >= 0) {
-                    Playback& entityPlayback = playbacks[entityRig];
-                    entityPlayback.index = entityClips.stand;
-                    entityPlayback.time = 0.0f;
-                    entityPlayback.pinned = false;
-                    entityPlayback.playing = true;
-                }
-                climbCamera.active = false;
-                targetCamera = CameraTarget{};
-                follow = CameraFollow{};
-                // R8: snap the body back to the manifest's opening yaw (the state
-                // was restored; the model is composed from it).
-                update_entity_transform(scene, encounter, entityRig);
-                camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
-                              /*moving=*/false, /*dtSeconds=*/10.0f);
-                if (!manual_clip) {
-                    playback.pinned = false;
-                    playback.playing = true;
-                }
-                playback.time = 0.0f;
-            };
-
-            // --- S7: R, the wake, and the return's presentation ------------------
-            // `R` anywhere (design D11): the return machine goes back to Idle;
-            // in the arena it is the S6 soft reset above, and from the shrine
-            // (or anywhere but the arena) it reloads the arena — the new
-            // iteration is the opening state. Returns true when the caller must
-            // end the iteration with a request for the arena.
-            const auto press_reset = [&](DeathState& deathState, bool& cueFired,
-                                         bool* cameraBaseSet) {
-                carry.ret = reset_return();
-                // S8: R from mid-door, mounted or anywhere off the arena leaves
-                // both machines idle and the rider detached (the arena reloads).
-                carry.door = reset_door();
-                pr.ride = reset_ride();
-                carry.horse.reset();  // S9 (D4): R forgets where Agro was left
-                // S9: R lowers the sword at once and ends its shimmer.
-                sword = reset_sword();
-                swordSearchLatch = false;
-                audio.stop_sword();
-                if (here != StageId::Arena) {
-                    return true;
-                }
-                soft_reset_encounter(deathState, cueFired, cameraBaseSet);
-                return false;
-            };
-            // S9 (D5-D7): one sword frame — the sword in the hand, its beam, the
-            // shade and the lock, the machine, the cues and the light — after the
-            // rig's model is final for this frame (on foot or in the saddle). The
-            // interactive loop and --s9-selftest both call it; `fx` is this frame's
-            // light (active only while the sword is up and the pass is ready).
-            const auto sword_frame = [&](float dt, bool held, bool inputLocked,
-                                         const std::vector<std::vector<Mat4>>& palettes,
-                                         SwordFxFrame& fx) {
-                SwordProbe probe;
-                Mat4 bone = mat4_identity();
-                probe.tip = player.position;
-                if (rig_bone_world(scene, playerRig, palettes[playerRig], kSwordBone, bone)) {
-                    bone = mat4_mul(bone, sword_grip(sword.raise));
-                    for (std::size_t i = swordMeshBegin; i < swordMeshEnd; ++i) {
-                        scene.meshes[i].model = bone;
-                    }
-                    const float* t = road_points::kSwordTip;
-                    probe.tip = Vec3{bone.m[0] * t[0] + bone.m[4] * t[1] + bone.m[8] * t[2] + bone.m[12],
-                                     bone.m[1] * t[0] + bone.m[5] * t[1] + bone.m[9] * t[2] + bone.m[13],
-                                     bone.m[2] * t[0] + bone.m[6] * t[1] + bone.m[10] * t[2] + bone.m[14]};
-                }
-                const Vec3 tip = probe.tip;
-                if (sword.raise > 0.0f) {
-                    const float look = camera_look_yaw(camera) * kDegToRad;
-                    const float shift = kSwordShoulderM * sword.raise;
-                    camera.target.x += std::cos(look) * shift;  // left = (cos, 0, -sin)
-                    camera.target.z -= std::sin(look) * shift;
-                }
-                const Vec3 eye = camera_eye(camera);
-                const Vec3 aim = vec3_normalize(Vec3{camera.target.x - eye.x,
-                                                     camera.target.y - eye.y,
-                                                     camera.target.z - eye.z});
-                const SwordBeam beam = sword_beam(tip, aim, valus_chest(), sword.raise);
-                probe.beam = beam;
-                // Every march: a unit dir, step <= cellSize/2, ground and
-                // backdrops combined with fmin (NaN = no hit; B4).
-                constexpr float kStep = 0.5f;
-                const auto march = [&](Vec3 dir, float length) {
-                    return std::fmin(ray_march(heightmap, tip, dir, length, kStep),
-                                     ray_march(raygrid, tip, dir, length, kStep));
-                };
-                const bool sunlit = std::isnan(march(kSunDir, kShadeRayMetres));
-                probe.sunlit = sunlit;
-                // The locked ray only while lit: a dark, lowered or shaded
-                // beam passes NaN (the spark gate is raise > 0).
-                const float hitMetres =
-                    beam.locked && sunlit && sword_intensity(sword) > 0.0f
-                        ? march(beam.axis, beam.rayLength)
-                        : std::numeric_limits<float>::quiet_NaN();
-                probe.hit = hitMetres;
-                // allowed: on foot (not whistling), or riding at Stand — and
-                // a raise keeps the mount it was latched with, so a dismount
-                // (or a gait) while raised lowers it.
-                const bool footOk =
-                    !plain_ride || (pr.ride.phase == RidePhase::OnFoot && pr.whistleClip < 0);
-                const bool standOk = plain_ride && pr.ride.phase == RidePhase::Riding &&
-                                     pr.ride.gait == Gait::Stand;
-                SwordInput swordIn;
-                swordIn.held = held && !inputLocked;
-                swordIn.mounted = standOk;
-                swordIn.allowed = sword.phase == SwordPhase::Lowered ? footOk || standOk
-                                  : sword.mounted                   ? standOk
-                                                                    : footOk;
-                const SwordState swordBefore = sword;
-                sword = step_sword(sword, dt, swordIn, beam, sunlit, hitMetres);
-                const bool up = sword.phase != SwordPhase::Lowered;
-                if (swordBefore.phase == SwordPhase::Lowered && up) {
-                    audio.play_sword(SwordSfx::Shimmer, tip);
-                }
-                if (swordBefore.phase != SwordPhase::Lowering &&
-                    sword.phase == SwordPhase::Lowering) {
-                    audio.stop_sword();
-                }
-                // Once per lock while rising or raised and lit; the latch
-                // clears only past 2 kLockK (no jitter at the edge, no
-                // replay while lowering).
-                const bool lockLit = (sword.phase == SwordPhase::Raising ||
-                                      sword.phase == SwordPhase::Raised) &&
-                                     beam.locked && sunlit && sword_intensity(sword) > 0.0f;
-                if (lockLit && !swordSearchLatch) {
-                    audio.play_sword(SwordSfx::Search, tip);
-                    swordSearchLatch = true;
-                } else if (beam.k > 2.0f * kLockK) {
-                    swordSearchLatch = false;
-                }
-                if (swordBefore.phase != SwordPhase::Lowered && !up && !swordBefore.mounted) {
-                    playback.pinned = false;  // the mode's clip takes over next frame
-                    playback.playing = true;
-                }
-                fx = SwordFxFrame{};
-                if (up && sword_fx_ready) {
-                    fx.active = true;
-                    fx.tip = tip;
-                    fx.lines = beam.lines;
-                    fx.length =
-                        std::isfinite(hitMetres) ? hitMetres : beam.rayLength;  // clipped at a lock
-                    fx.width = sword.width;
-                    fx.alpha = sword_intensity(sword);
-                    fx.hit = std::isfinite(hitMetres);
-                    fx.hitPoint = Vec3{tip.x + beam.axis.x * hitMetres,
-                                       tip.y + beam.axis.y * hitMetres,
-                                       tip.z + beam.axis.z * hitMetres};
-                    fx.atlasCols = road_points::kSwordAtlasGrid[0];
-                    fx.atlasRows = road_points::kSwordAtlasGrid[1];
-                }
-                return probe;
-            };
-            // S8 (D14): the doors — the shrine's front exit and the plain's shrine
-            // steps, S9's corridor and arena doors — fire on entry, on foot, through
-            // the door machine; true when its Load must end the iteration for the
-            // other stage (this frame still draws, faded). R16: an entry only while
-            // the stage still runs (`live`: R or Escape this frame ended it), from
-            // the kDoors rows of this stage. The interactive loop and --s9-selftest
-            // both call it.
-            const auto door_frame = [&](float dt, Vec3 positionBefore, bool riding,
-                                        bool inputLocked, bool live) {
-                // S9: the corridor and arena rows only when S9-wired into
-                // Valus's arena (door_rows).
-                // S9 (Task 7 review): no door while the return runs (its
-                // 2 s Hold leaves the input unlocked).
-                const bool returnSettled = carry.ret.phase == ReturnPhase::Idle ||
-                                           carry.ret.phase == ReturnPhase::Free;
-                const int row = live && !riding && !inputLocked && returnSettled
-                                    ? door_entered_row(here, positionBefore, player.position,
-                                                       door_rows)
-                                    : -1;
-                const DoorState doorBefore = carry.door;
-                carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);
-                if (!live || !door_wants_load(doorBefore, carry.door)) {
-                    return false;
-                }
-                // S9 (D4, a labelled deviation: either door): leaving the road,
-                // Agro stays where she is now.
-                if (road && plain_ride) {
-                    carry.horse = HorsePose{pr.horsePos, pr.horseYaw};
-                }
-                return true;
-            };
-            // The wake (D9, ruling R5): FadeIn shows its first frame, Wake plays
-            // cut04 then cut05 once, pinned to the machine's clock, in place at
-            // the spawn. The clips carry no root series (the pelvis sits at the
-            // model origin), so the body is lifted by the pose's own pelvis
-            // height: the lowest of the recon's body joints is planted on the
-            // floor every frame — the measure `wake.pelvis_m` was taken with
-            // (0.10 m lying -> 0.72 m standing; --s7-selftest checks it).
-            const auto waking = [&]() {
-                return return_wired && here == StageId::Shrine &&
-                       (carry.ret.phase == ReturnPhase::FadeIn ||
-                        carry.ret.phase == ReturnPhase::Wake);
-            };
-            const auto wake_clock = [&]() {
-                return carry.ret.phase == ReturnPhase::Wake ? carry.ret.t : 0.0f;
-            };
-            const auto pose_wake = [&]() {
-                const float t = wake_clock();
-                const bool first = t < wakeFirstSeconds;
-                playback.index = first ? wakeFirst : wakeSecond;
-                playback.time = first ? t : t - wakeFirstSeconds;
-                playback.pinned = true;
-                playback.playing = false;
-            };
-            // Leaving the wake: the clip clock runs again and the mode's clip
-            // (the stand loop) takes over on the next update_combat_clips.
-            const auto leave_wake = [&]() {
-                if (wakeFirst >= 0 && (playback.index == wakeFirst || playback.index == wakeSecond)) {
-                    playback.pinned = false;
-                    playback.playing = true;
-                }
-            };
-            const auto wake_plant_lift = [&]() {
-                const AnimationCpu& clip = playback.clips[static_cast<std::size_t>(playback.index)];
-                const std::vector<Mat4> pose = animation_pose(
-                    scene, playerRig, clip, playback_time(playback, clip.duration));
-                // World joints through the rig's current model; its rotation is
-                // about +Y only, so subtracting its translation's y leaves the
-                // joint's height above the model origin.
-                const float originY = player_rig_record.meshBegin < scene.meshes.size()
-                                          ? scene.meshes[player_rig_record.meshBegin].model.m[13]
-                                          : 0.0f;
-                float lowest = std::numeric_limits<float>::infinity();
-                for (const char* name : kWakeBodyJoints) {
-                    Vec3 world{};
-                    if (posed_joint_world_position(scene, playerRig, pose, name, world)) {
-                        lowest = std::min(lowest, world.y - originY);
-                    }
-                }
-                return std::isfinite(lowest) ? -lowest : kWakePelvisLying;
-            };
-            const auto player_lift = [&]() {
-                return waking() ? wake_plant_lift()
-                                : active_player_lift(scene, playback, player_rig_record);
-            };
-
             if (opts.s7Selftest) {
                 // The S7 acceptance timeline (design §8.6): fixed 1/60 s steps,
                 // no window input, one stage per iteration (s7Step: 0 the arena
@@ -3653,8 +2426,8 @@ int run_app(const AppOptions& opts) {
                 };
                 const auto render_stage_frame = [&]() {
                     update_all_poses(renderer, scene, playbacks, 0.0f, club);
-                    apply_player_transform(scene, player_rig_record, player, player_lift());
-                    renderer.set_hud(hud_state(/*visible=*/true));
+                    apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
+                    renderer.set_hud(ctx.hud_state(/*visible=*/true));
                     renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                           /*acquire_swapchain=*/true);
                 };
@@ -3737,7 +2510,7 @@ int run_app(const AppOptions& opts) {
                             // own path), then the seed again.
                             capture("fade");
                             resetDone = true;
-                            if (press_reset(death, deathCueFired, nullptr)) {
+                            if (ctx.press_reset(death, deathCueFired, nullptr)) {
                                 return fail("R in the arena asked for a stage switch");
                             }
                             if (!print_reset()) {
@@ -3776,17 +2549,17 @@ int run_app(const AppOptions& opts) {
                         if (ret.phase == ReturnPhase::Free) {
                             break;
                         }
-                        pose_wake();
-                        camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, wake_clock(),
+                        ctx.pose_wake();
+                        camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, ctx.wake_clock(),
                                                   returnTimings.wake);
                         // The plant against the recon's pelvis heights: lying at
                         // the wake's start, kneeling at the cut boundary.
                         if (ret.phase == ReturnPhase::FadeIn) {
-                            plantLying = player_lift();
+                            plantLying = ctx.player_lift();
                         } else if (plantKneeling < 0.0f && ret.t >= wakeFirstSeconds) {
-                            plantKneeling = player_lift();
+                            plantKneeling = ctx.player_lift();
                         }
-                        plantStanding = player_lift();  // the last Wake frame's
+                        plantStanding = ctx.player_lift();  // the last Wake frame's
                         if (!wakeStill && ret.phase == ReturnPhase::Wake &&
                             ret.t + kS7Eps >= kS7WakeStillFraction * returnTimings.wake) {
                             capture("wake");
@@ -3811,7 +2584,7 @@ int run_app(const AppOptions& opts) {
                                       kWakePelvisKneeling, kWakePelvisStanding);
                         return fail(message);
                     }
-                    leave_wake();
+                    ctx.leave_wake();
                     update_combat_clips(playback, scene, combat, PlayerInput{}, manual_clip);
 
                     // --- 3. The ground: the floor under the feet, not the roof ---
@@ -3957,7 +2730,7 @@ int run_app(const AppOptions& opts) {
                                 return_phase_name(ret.phase), ret.inputLocked ? 1 : 0);
 
                     // --- 8. R: back to the arena ---------------------------------
-                    if (!press_reset(death, deathCueFired, nullptr)) {
+                    if (!ctx.press_reset(death, deathCueFired, nullptr)) {
                         return fail("R in the shrine did not ask for the arena");
                     }
                     carry.s7Step = 2;
@@ -4048,7 +2821,7 @@ int run_app(const AppOptions& opts) {
                     }
                     palettes = update_all_poses(renderer, scene, playbacks, dt, club);
                     const std::string before = horse_clip();
-                    plain_step(dt, keys, /*locked=*/false, palettes);
+                    ctx.plain_step(dt, keys, /*locked=*/false, palettes);
                     if (horse_clip() != before) {
                         seen.push_back(horse_clip());
                     }
@@ -4061,7 +2834,7 @@ int run_app(const AppOptions& opts) {
                         const PlayerFrame f = player_frame_of(scene, entityRig, palettes, heightmap,
                                                               camera_look_yaw(camera));
                         player_step(player, combat, input, f, tuning, dt);
-                        apply_player_transform(scene, player_rig_record, player, player_lift());
+                        apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
                     }
                     audio.update(dt, player.position, camera_look_yaw(camera));
                 };
@@ -4107,7 +2880,7 @@ int run_app(const AppOptions& opts) {
                 };
                 const auto place_player = [&](Vec3 p, float yawDeg) {
                     player = PlayerState{p, yawDeg};
-                    apply_player_transform(scene, player_rig_record, player, player_lift());
+                    apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
                     snap_camera();
                 };
                 // Agro moved by hand (scaffolding): her heading is the ride's too.
@@ -4115,14 +2888,14 @@ int run_app(const AppOptions& opts) {
                     pr.horsePos = p;
                     pr.horseYaw = yawDeg;
                     pr.ride.yawDeg = yawDeg;
-                    set_rig_model(scene, scene.rigs[horseRig], horse_model());
+                    set_rig_model(scene, scene.rigs[horseRig], ctx.horse_model());
                     snap_camera();
                 };
                 const auto heading_to = [](float fromX, float fromZ, float toX, float toZ) {
                     return std::atan2(toX - fromX, toZ - fromZ) / kDegToRad;
                 };
                 const auto render = [&]() {
-                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.set_hud(ctx.hud_state(/*visible=*/true));
                     renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                           /*acquire_swapchain=*/true);
                 };
@@ -4160,7 +2933,7 @@ int run_app(const AppOptions& opts) {
                              heading_to(rp::kProbeWhistleFrom[0], rp::kProbeWhistleFrom[1],
                                         pr.horsePos.x, pr.horsePos.z));
                 frame(RideKeys{});
-                const float whistleDistance = horse_distance();
+                const float whistleDistance = ctx.horse_distance();
                 press(whistle);
                 if (pr.whistleClip < 0 || pr.agro.phase != AgroPhase::Approach) {
                     return fail("the whistle did not call Agro");
@@ -4170,7 +2943,7 @@ int run_app(const AppOptions& opts) {
                 if (!frames_until(kS8MaxWhistleSeconds, RideKeys{}, [&]() {
                         neighed = neighed || pr.agro.phase == AgroPhase::Neigh;
                         if (!whistleStill && pr.agro.phase == AgroPhase::Approach &&
-                            horse_distance() <= 0.5f * whistleDistance) {
+                            ctx.horse_distance() <= 0.5f * whistleDistance) {
                             capture("whistle");
                             whistleStill = true;
                         }
@@ -4178,7 +2951,7 @@ int run_app(const AppOptions& opts) {
                     })) {
                     return fail("Agro did not arrive and neigh");
                 }
-                const float arrived = horse_distance();
+                const float arrived = ctx.horse_distance();
                 std::printf("s8-whistle dist=%.2f arrived=%.2f neigh=%d\n", whistleDistance,
                             arrived, neighed ? 1 : 0);
                 if (!(arrived <= kS8ArriveMax)) {
@@ -4470,7 +3243,7 @@ int run_app(const AppOptions& opts) {
                 }
                 DeathState death = reset_death();
                 bool deathCueFired = false;
-                if (!press_reset(death, deathCueFired, nullptr)) {
+                if (!ctx.press_reset(death, deathCueFired, nullptr)) {
                     return fail("R on the plain did not ask for the arena");
                 }
                 carry.s8Step = 1;
@@ -4567,7 +3340,7 @@ int run_app(const AppOptions& opts) {
                     }
                     palettes = update_all_poses(renderer, scene, playbacks, dt, club);
                     if (plain_ride) {
-                        plain_step(dt, keys, locked, palettes);
+                        ctx.plain_step(dt, keys, locked, palettes);
                     }
                     const bool riding = plain_ride && pr.ride.phase != RidePhase::OnFoot;
                     const bool moving = input.forward || input.back || input.left || input.right;
@@ -4583,15 +3356,15 @@ int run_app(const AppOptions& opts) {
                             scene, entityRig, palettes, heightmap,
                             std::isnan(basisYaw) ? camera_look_yaw(camera) : basisYaw);
                         player_step(player, combat, input, f, tuning, dt);
-                        apply_player_transform(scene, player_rig_record, player, player_lift());
+                        apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
                     }
                     fx = SwordFxFrame{};
                     if (sword_wired) {
-                        probe = sword_frame(dt, held, locked, palettes, fx);
+                        probe = ctx.sword_frame(dt, held, locked, palettes, fx);
                     }
                     // The doors: the production step (the horse store included);
                     // after the Load the stage is over (the script switches it).
-                    if (!doorLoad && door_frame(dt, before, riding, locked, /*live=*/true)) {
+                    if (!doorLoad && ctx.door_frame(dt, before, riding, locked, /*live=*/true)) {
                         doorLoad = true;
                     }
                     audio.update(dt, player.position, camera_look_yaw(camera));
@@ -4626,18 +3399,18 @@ int run_app(const AppOptions& opts) {
                 };
                 const auto place_player = [&](Vec3 p, float yawDeg) {
                     player = PlayerState{p, yawDeg};
-                    apply_player_transform(scene, player_rig_record, player, player_lift());
+                    apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
                     snap_camera();
                 };
                 const auto place_horse = [&](Vec3 p, float yawDeg) {
                     pr.horsePos = p;
                     pr.horseYaw = yawDeg;
                     pr.ride.yawDeg = yawDeg;
-                    set_rig_model(scene, scene.rigs[horseRig], horse_model());
+                    set_rig_model(scene, scene.rigs[horseRig], ctx.horse_model());
                     snap_camera();
                 };
                 const auto render = [&]() {
-                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.set_hud(ctx.hud_state(/*visible=*/true));
                     renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                           /*acquire_swapchain=*/true, nullptr,
                                           fx.active ? &fx : nullptr);
@@ -4791,7 +3564,7 @@ int run_app(const AppOptions& opts) {
                     }
                     DeathState death = reset_death();
                     bool deathCueFired = false;
-                    if (!press_reset(death, deathCueFired, nullptr)) {
+                    if (!ctx.press_reset(death, deathCueFired, nullptr)) {
                         return fail("R on the road did not ask for the arena");
                     }
                     if (audio.engine.is_playing(shimmerClip)) {
@@ -5158,7 +3931,7 @@ int run_app(const AppOptions& opts) {
                                            active_player_lift(scene, playback, player_rig_record));
                     const EffectFrame frame =
                         build_effect_frame(scene, entityRig, palettes, encounter, death);
-                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.set_hud(ctx.hud_state(/*visible=*/true));
                     renderer.render_frame(scene, camera_view_proj(camera, shell.win),
                                           /*acquire_swapchain=*/true,
                                           (withEffect && frame.active) ? &frame : nullptr);
@@ -5334,7 +4107,7 @@ int run_app(const AppOptions& opts) {
                 // --- 4. The R soft reset (the interactive handler's own helper) --
                 // The *same* helper the interactive `R` key calls, so the proof and
                 // the behaviour cannot drift apart (anti-goal A2).
-                soft_reset_encounter(death, deathCueFired, /*cameraBaseSet=*/nullptr);
+                ctx.soft_reset_encounter(death, deathCueFired, /*cameraBaseSet=*/nullptr);
                 // The reset must restore the actual draw gate, not just the flags:
                 // the live entity and its club visible, the corpse hidden.
                 const bool entityRestored =
@@ -5848,7 +4621,7 @@ int run_app(const AppOptions& opts) {
             // shrine R reloads the arena. --s7-e2e's scripted R calls this too.
             const auto press_r_key = [&]() {
                 if (follow_mode) {
-                    if (press_reset(death, deathCueFired, &deathCameraSet)) {
+                    if (ctx.press_reset(death, deathCueFired, &deathCameraSet)) {
                         request = StageRequest{false, StageId::Arena};
                         running = false;
                     }
@@ -6302,7 +5075,7 @@ int run_app(const AppOptions& opts) {
                                     s8e.neighed = s8e.neighed || pr.agro.phase == AgroPhase::Neigh;
                                     if (s8e.neighed && pr.agro.phase == AgroPhase::Idle &&
                                         pr.whistleClip < 0) {
-                                        if (!(horse_distance() <= kS8ArriveMax)) {
+                                        if (!(ctx.horse_distance() <= kS8ArriveMax)) {
                                             return s8e_fail("Agro stopped farther than 3.5 m");
                                         }
                                         next_phase();
@@ -6963,9 +5736,9 @@ int run_app(const AppOptions& opts) {
                         maybe_club_swing(encounter, audio_on ? &frameSfx : nullptr);
                     }
                     // S7: while waking the wake clips own the player's clip.
-                    const bool wakeFrame = waking();
+                    const bool wakeFrame = ctx.waking();
                     if (wakeFrame) {
-                        pose_wake();
+                        ctx.pose_wake();
                         if (opts.s7E2e && carry.ret.phase == ReturnPhase::Wake &&
                             playback.index != e2e.wakeClip) {
                             e2e.wakeClip = playback.index;
@@ -6973,10 +5746,10 @@ int run_app(const AppOptions& opts) {
                             std::printf("s7e2e-wake clip=%s t=%.3f\n",
                                         playback.clips[static_cast<std::size_t>(playback.index)]
                                             .name.c_str(),
-                                        wake_clock());
+                                        ctx.wake_clock());
                         }
                     } else if (!rideOwnsBody) {
-                        leave_wake();
+                        ctx.leave_wake();
                         if (swordFoot) {
                             // The sword's clip at the machine's clock (last frame's step).
                             playback.index = clip_index_named(playback, sword.clip);
@@ -6989,7 +5762,7 @@ int run_app(const AppOptions& opts) {
                     }
                     palettes = update_all_poses(renderer, scene, playbacks, dt, club);
                     if (plain_ride) {
-                        plain_step(dt, rideKeys, inputLocked, palettes);
+                        ctx.plain_step(dt, rideKeys, inputLocked, palettes);
                     }
                     const bool riding = plain_ride && pr.ride.phase != RidePhase::OnFoot;
                     // The follow camera's subject: Agro while mounted (D13).
@@ -7099,7 +5872,7 @@ int run_app(const AppOptions& opts) {
                     }
 
                     if (!riding) {
-                        apply_player_transform(scene, player_rig_record, player, player_lift());
+                        apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
                     }
                     // S9 (D5-D7): the sword in the hand, its beam, the shade and the
                     // lock, the machine, the cues and the light — after the rig's
@@ -7113,7 +5886,7 @@ int run_app(const AppOptions& opts) {
                                                                       chest.z - s9e.probe.tip.z}));
                     }
                     if (sword_wired) {
-                        s9e.probe = sword_frame(dt, swordHeld, inputLocked, palettes, swordFrame);
+                        s9e.probe = ctx.sword_frame(dt, swordHeld, inputLocked, palettes, swordFrame);
                         if (swordFrame.active) {
                             swordFramePtr = &swordFrame;
                         }
@@ -7124,12 +5897,12 @@ int run_app(const AppOptions& opts) {
                     // stage (this frame still draws, faded).
                     // R16: only while the stage still runs (R or Escape this frame
                     // ended it), from the kDoors rows of this stage.
-                    if (s8_wired && door_frame(dt, positionBefore, riding, inputLocked, running)) {
+                    if (s8_wired && ctx.door_frame(dt, positionBefore, riding, inputLocked, running)) {
                         request = StageRequest{false, kDoors[carry.door.row].to};
                         running = false;
                     }
                     if (wakeFrame) {
-                        camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, wake_clock(),
+                        camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, ctx.wake_clock(),
                                                   returnTimings.wake);
                     }
                     if (audio_on) {
@@ -7170,7 +5943,7 @@ int run_app(const AppOptions& opts) {
                             effectFramePtr = &effectFrame;
                         }
                     }
-                    renderer.set_hud(hud_state(/*visible=*/true));
+                    renderer.set_hud(ctx.hud_state(/*visible=*/true));
                 } else {
                     update_all_poses(renderer, scene, playbacks, dt, club);
                 }
