@@ -26,3 +26,36 @@ also ~55 % slower under contention. The runner keeps `--jobs` default 1 (perf-ga
 
 `scripts/verify` after the change: all nine milestones PASS, 261 s wall (cold stamps; width 1 is the
 unchanged default, so no golden moved and the time is the same as before).
+
+## Task 6 — the app.cpp split
+
+Behaviour-preserving, steps a–d (15 `refactor(app):` commits on `s10-split`); every step's
+`make verify` re-ran all nine milestones' GPU sections and matched the goldens (PASS), and step e's
+`make verify-long` is recorded below.
+
+Before: `app/src/app.cpp` **9,275** lines (`run_app` alone ~6,940). After (24 files, 10,654 lines; the
+growth is declarations, includes and the per-function reference preambles that keep the moved bodies
+textually unchanged):
+
+| file | lines | holds |
+|---|---|---|
+| `app.cpp` | 151 | `run_app`: option checks, the SDL shell, the stage loop |
+| `stage_ctx.h` / `.cpp` | 331 / 579 | `Shell`, `RunState` (per run), `PlainRide`, `FrameState`, `StageCtx` (per stage) and its methods (`hud_state`, `soft_reset_encounter`, `press_reset`, the wake lambdas, `plain_step`, `sword_frame`, `door_frame`, …), shared constants |
+| `stage_setup.cpp` | 661 | `stage_setup`: the stage's composition (`std::optional<int>` exit code) |
+| `selftests.h` | 108 | `SelftestResult`, the selftest declarations, `run_selftests` (the original order) |
+| `selftest_s1.cpp` | 103 | the plain `--selftest`, the `--screenshot` capture |
+| `selftest_s3.cpp` / `_s4` / `_s6` / `_s7` | 102 / 379 / 503 / 414 | one selftest each (s4: `s4_pin_entity` + `run_s4`) |
+| `selftest_s41.cpp` / `_s42` | 908 / 1,235 | s41; s42 with s5 woven in |
+| `selftest_s8.cpp` / `_s9` | 552 / 562 | the S8/S9 timelines |
+| `interactive.h` / `.cpp` | 51 / 1,594 | `FrameInput`, `FrameResult`, `frame_step`, `run_interactive` (the loop + the s7/s8/s9 e2e scripts) |
+| `encounter_rt.h` / `.cpp` | 592 / 1,085 | the stateless runtime helpers (+ `camera_sword_shoulder`) |
+| `capture.h` / `.cpp` | 109 / 192 | view-proj, s1-status, screenshots/stills, screen boxes |
+| `audio_seam.h` / `.cpp` | 96 / 240 | `AudioSeam` |
+| `gamepad_input.h` / `.cpp` | 40 / 67 | `GamepadInput` |
+
+Step e: `make verify-long` → `verify: long s9 PASS (784 s, scripts/s9-acceptance.sh)` (the whole frozen
+chain s9 → … → s3 on the split tree; 13 m 05 s wall). Shared frames: `frame_step` is the interactive
+frame only — the S8/S9 selftests' `frame` lambdas and S4.2's `step_frame` differ from it (no death/return
+machines or player-sfx drain, the S9 look before the player step, a basis-yaw override, no sword facing
+turn), so they stay their own; the S9 shoulder shift is one function (`camera_sword_shoulder`) both the
+loop and `--s9-selftest` call just before `sword_frame`.
