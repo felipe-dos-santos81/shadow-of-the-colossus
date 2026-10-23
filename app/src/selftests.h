@@ -32,3 +32,4 @@ SelftestResult run_s3(StageCtx& ctx, RunState& run);
 SelftestResult s4_pin_entity(StageCtx& ctx);
 SelftestResult run_s4(StageCtx& ctx, RunState& run);
 SelftestResult run_s6(StageCtx& ctx, RunState& run);
+SelftestResult run_s7(StageCtx& ctx, RunState& run);

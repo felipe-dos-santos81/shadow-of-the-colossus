@@ -82,6 +82,8 @@ constexpr int kS4StopFrames = 5;             // consecutive frames below the eps
 constexpr float kS4StopEpsilon = 1e-3f;      // metres of horizontal travel per frame
 constexpr float kS4GroundTolerance = 1e-3f;  // the player's feet vs the heightmap sample
 
+constexpr float kS7Eps = 1e-4f;
+
 // What crosses the stages of one run (design §13.9): the process's window,
 // device, renderer and audio engine, the stage to compose next, the carry
 // (StageCarry, app.h) and the per-run latches.
