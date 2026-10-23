@@ -182,7 +182,8 @@ bool mesh_range_visible(const Scene& scene, std::size_t begin, std::size_t end);
 // dirtmound are shown at the entity's current transform; before and after the
 // death window the live body is shown and the corpse hidden. Every other mesh
 // (the level, the player) is untouched, so an R reset restores the opening
-// frame exactly.
+// frame exactly. Without a loaded corpse (an encounter with no Corpse prop) the
+// live body stays drawn: it holds the death clip's last frame instead.
 void apply_death_visibility(Scene& scene, const CorpseAttachment& corpse,
                             const ClubAttachment& club, std::size_t entityRig,
                             bool corpseVisible);

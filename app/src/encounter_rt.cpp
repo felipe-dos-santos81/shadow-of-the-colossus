@@ -198,6 +198,9 @@ bool mesh_range_visible(const Scene& scene, std::size_t begin, std::size_t end) 
 void apply_death_visibility(Scene& scene, const CorpseAttachment& corpse,
                             const ClubAttachment& club, std::size_t entityRig,
                             bool corpseVisible) {
+    // S11 (§13.13): an encounter with no corpse prop (Quadratus) keeps its live
+    // body, holding the death clip's last frame: nothing replaces it.
+    corpseVisible = corpseVisible && corpse.loaded;
     if (entityRig < scene.rigs.size()) {
         const RigCpu& rig = scene.rigs[entityRig];
         set_mesh_range_visible(scene, rig.meshBegin, rig.meshEnd, !corpseVisible);

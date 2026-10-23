@@ -617,3 +617,22 @@ TEST_CASE("maybe_club_swing never whooshes a club row whose swing time is -1") {
     maybe_club_swing(encounter, &sfx);
     CHECK(encounter.attackSwinged);
 }
+
+TEST_CASE("apply_death_visibility keeps the live body when no corpse replaces it") {
+    Scene scene;
+    scene.rigs.resize(2);
+    scene.rigs[1].meshBegin = 0;
+    scene.rigs[1].meshEnd = 1;
+    scene.meshes.resize(2);  // the live body, then a stand-in corpse mesh
+    scene.meshes[1].visible = false;
+    apply_death_visibility(scene, CorpseAttachment{}, ClubAttachment{}, 1, true);
+    CHECK(scene.meshes[0].visible);  // Quadratus: no Corpse prop, he holds his last frame
+
+    const CorpseAttachment corpse{true, 1, 2};
+    apply_death_visibility(scene, corpse, ClubAttachment{}, 1, true);
+    CHECK_FALSE(scene.meshes[0].visible);  // Valus: the corpse replaces the body
+    CHECK(scene.meshes[1].visible);
+    apply_death_visibility(scene, corpse, ClubAttachment{}, 1, false);
+    CHECK(scene.meshes[0].visible);
+    CHECK_FALSE(scene.meshes[1].visible);
+}
