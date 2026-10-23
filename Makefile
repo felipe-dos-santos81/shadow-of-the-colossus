@@ -19,9 +19,19 @@ VIEWER    = $(AWAKE) app/build/sotc-viewer --library "$(LIB)" \
             --model models/shadow/characters/wander/_cmn/wander.glb
 ENCOUNTER = out/re/stage/encounter.manifest
 SHRINE    = out/re/stage/shrine.manifest
+# The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, then
+# the two S7 wake cuts (docs/notes/s7-recon.md §6). The order is the clip index.
+WANDER_CLIPS = player_a_stand player_a_walk player_a_run player_a_grip_stand_crouch \
+               player_a_grip_loop player_a_grip_move_f1 player_a_grip_move_f2 \
+               player_a_grip_float_u_hi_attack player_a_atk1 player_a_damage_m_fly2 \
+               player_a_fall_damage_to_death player_a_damage_h_fly1 player_a_damage_h_fly_end \
+               player_a_fall_damage_start player_a_fall_damage_end \
+               player_a_home_boss01_cut04 player_a_home_boss01_cut05
+comma := ,
+space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        run shrine viewer shrine-manifest probe-check accept clean
+        bake run shrine viewer shrine-manifest probe-check accept clean
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -44,6 +54,12 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 audio: publish ## Decode the curated audio slice (the S6 map, 10 cues)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s6_map.json --force
 
+bake: publish ## Bake the animation clips: Mono's pose and Wander's 17 clips (rewrites both glbs)
+	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
+		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
+	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
+		--under models/shadow/characters/wander/_cmn/wander.cmsh --force --clips $(subst $(space),$(comma),$(strip $(WANDER_CLIPS)))
+
 inspect: publish ## Inspect one source container (f=models/.../wander.cmsh)
 	$(CLI) inspect "$(GAME_ROOT)/$(f)"
 
@@ -58,7 +74,7 @@ app: ## Configure and build the viewer (Release)
 app-test: app ## Run the viewer's unit and windowed tests
 	ctest --test-dir app/build --output-on-failure
 
-run: app ## Play the Valus encounter (defeat him to return to the shrine)
+run: app shrine-manifest ## Play the Valus encounter (defeat him to return to the shrine)
 	@test -f $(ENCOUNTER) || { echo "missing $(ENCOUNTER): run make accept-s4"; exit 1; }
 	$(VIEWER) --manifest $(ENCOUNTER)
 
@@ -80,7 +96,7 @@ probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine manif
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: accept-s7 ## Run the current milestone's acceptance (S7 → S6 → … → S3)
+accept: shrine-manifest accept-s7 ## Run the current milestone's acceptance (S7 → S6 → … → S3)
 
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s7 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh

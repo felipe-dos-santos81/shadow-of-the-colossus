@@ -87,7 +87,9 @@ acceptances concurrently.
 ## Build and test
 
 `make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make accept`, `make
-accept-s6`, …). The underlying commands:
+accept-s6`, …). `make bake` rebakes Mono's pose and Wander's 17 clips (the 15 S2–S6 clips, then the
+two S7 wake cuts) into the shared library with `--force`; `make run`/`make accept` compose the shrine
+manifest first. The underlying commands:
 
 ```bash
 dotnet build BpConvert.sln

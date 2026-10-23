@@ -15,12 +15,17 @@ controls and the working rules.
 brew install sdl3 sdl3_ttf          # plus .NET 10, cmake, python3
 make help                           # every target
 make convert                        # the asset library into out/library (resumable, ~33 min)
+make bake                           # bake the clips: Mono's pose, Wander's 17 (S2–S6 + the S7 wake)
 make audio                          # the curated audio slice
 make accept-s4                      # composes and gates the encounter manifest
 make run                            # play the Valus encounter
 make shrine                         # start in the Shrine of Worship
 make accept                         # the S7 acceptance (runs S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
+
+`make run`, `make shrine` and `make accept` compose the shrine manifest (`make shrine-manifest`)
+when it is missing. Without it, or without the wake clips from `make bake`, `make run` warns once and
+plays without the return to the shrine (`--no-return` does the same on purpose).
 
 The game data is read from `../SOTC-extract/extracted/game/` (`GAME_ROOT=` overrides it) and is never
 modified. Converted assets live in the gitignored `out/` tree.
