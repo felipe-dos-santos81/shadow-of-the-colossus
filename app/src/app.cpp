@@ -20,6 +20,7 @@
 #include "ride.h"
 #include "ride_points.h"
 #include "road_points.h"
+#include "run_flags.h"
 #include "scene.h"
 #include "shrine_points.h"
 #include "sword.h"
@@ -2488,32 +2489,29 @@ int run_app(const AppOptions& opts) {
             Heightmap raygrid{};
             std::size_t swordMeshBegin = 0, swordMeshEnd = 0;
             const bool follow_mode = !opts.manifestPath.empty();
+            // S10: the run-mode flags (run_flags.h). The manifest is not loaded
+            // yet: audioWanted and valusBehavior read the scene, so they come
+            // from their own calls below, never from this one.
+            const RunFlags flags =
+                run_flags(opts, here, follow_mode, /*hasEntity=*/false,
+                          /*entityRigValid=*/false, return_available);
             // S6: whether this run wires the death sequence (the interactive game
             // and the --s6-selftest). The frozen scripted timelines (s3/s4/s41/
             // s42/s5), the pinned captures and the plain screenshot runs must not
             // load the corpse or the effect textures: their outputs and pixel
             // stats are the regression.
-            const bool death_wired =
-                opts.s6Selftest ||
-                (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
-                 !opts.s42Selftest && !opts.s5Selftest && !opts.s8Selftest &&
-                 !opts.s9Selftest && !opts.entityTimeSet && opts.screenshotPath.empty());
+            const bool death_wired = flags.deathWired;
             // S7: interactive play steps the return machine (unless --no-return,
             // D13), and so does --s7-selftest. No frozen selftest (--selftest,
             // --s3 ... --s6-selftest) or capture ever does: S4.1's selftest
             // defeats Valus for real, and its output is the regression.
-            const bool interactive_run =
-                !opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
-                !opts.s42Selftest && !opts.s5Selftest && !opts.s6Selftest && !opts.s7Selftest &&
-                !opts.s8Selftest && !opts.s9Selftest && !opts.entityTimeSet &&
-                opts.screenshotPath.empty();
+            const bool interactive_run = flags.interactiveRun;
             // S9: interactive play (not the frozen --s7-e2e/--s8-e2e) and the S9
             // runs load the road, step the corridor and arena doors and carry
             // Agro's pose; no frozen run ever does.
-            const bool s9_wired = (interactive_run && !opts.s7E2e && !opts.s8E2e) ||
-                                  opts.s9Selftest || opts.s9E2e;
+            const bool s9_wired = flags.s9Wired;
             // S8 (D2) / S9 (D2): the Plain stage is the road when S9-wired.
-            const bool road = s9_wired && here == StageId::Plain;
+            const bool road = flags.road;
             // S9's corridor/arena door rows only into Valus's arena (door_row_count).
             const int door_rows =
                 door_row_count(s9_wired && follow_mode, opts.manifestPath);
@@ -2522,8 +2520,7 @@ int run_app(const AppOptions& opts) {
                 : road                   ? opts.roadManifestPath
                 : here == StageId::Plain ? opts.plainManifestPath
                                          : opts.manifestPath;
-            bool return_wired = follow_mode && return_available &&
-                                (opts.s7Selftest || (interactive_run && !opts.noReturn));
+            bool return_wired = flags.returnWired;
             if (follow_mode) {
                 // The manifest is user data: a malformed line is a usage error
                 // (exit 2) carrying the file and line, never a crash.
@@ -2552,8 +2549,7 @@ int run_app(const AppOptions& opts) {
                 // The load runs on this thread: keep the window answering the
                 // system meanwhile (no "not responding" during the shrine load).
                 // Only the S7 runs pump — the frozen timelines load as before.
-                const bool pump_load =
-                    opts.s7Selftest || opts.s8Selftest || opts.s9Selftest || interactive_run;
+                const bool pump_load = flags.pumpLoad;
                 scene = compose_scene(opts.libraryDir, manifest, opts.modelRelPath, nullptr,
                                       pump_load ? std::function<void()>([] { SDL_PumpEvents(); })
                                                 : std::function<void()>());
@@ -2949,10 +2945,9 @@ int run_app(const AppOptions& opts) {
             }
             // S8 (D15): the plain wants its sound too (no entity there).
             const bool audio_wanted =
-                follow_mode && (!manifest.entities.empty() || here == StageId::Plain) &&
-                (opts.s5Selftest || opts.s6Selftest ||
-                 (!opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
-                  !opts.s42Selftest && !opts.entityTimeSet));
+                run_flags(opts, here, follow_mode, !manifest.entities.empty(),
+                          /*entityRigValid=*/false, return_available)
+                    .audioWanted;
             if (audio_wanted) {
                 // The S5 slice is the load gate for --s5-selftest and interactive
                 // play: both must load the frozen eight-entry manifest beside the
@@ -2999,11 +2994,10 @@ int run_app(const AppOptions& opts) {
             // entity and own every step — a stomp would race their assertions — and
             // --entity-time pins the clip for a capture, so behavior is off there.
             // Task 9's s42 timeline opts in with its own fixed steps.
-            const bool valus_behavior = follow_mode && !manifest.entities.empty() &&
-                                        entityRig < playbacks.size() && !opts.s3Selftest &&
-                                        !opts.s4Selftest && !opts.s41Selftest &&
-                                        !opts.s42Selftest && !opts.s5Selftest &&
-                                        !opts.entityTimeSet;
+            const bool valus_behavior =
+                run_flags(opts, here, follow_mode, !manifest.entities.empty(),
+                          entityRig < playbacks.size(), return_available)
+                    .valusBehavior;
 
             // The composed scene's initial placement: every entity's grounding lift
             // lands on its model transform once, and the player's transform follows
@@ -5098,8 +5092,7 @@ int run_app(const AppOptions& opts) {
             // --- S8: the plain — Agro, the whistle, riding (design D4-D15) -------
             // Stepped only in interactive play (not --s7-e2e): no frozen selftest,
             // --s7-selftest or --s7-e2e ever meets the doors or the ride (D17).
-            const bool s8_wired =
-                (interactive_run && !opts.s7E2e) || opts.s8Selftest || opts.s9Selftest;
+            const bool s8_wired = flags.s8Wired;
             bool plain_ride = s8_wired && here == StageId::Plain && horseRig < playbacks.size() &&
                               !manifest.horses.empty();
             if (plain_ride &&

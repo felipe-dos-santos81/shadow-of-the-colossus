@@ -1,4 +1,5 @@
 #include "app.h"
+#include "run_flags.h"
 
 #include <SDL3/SDL.h>
 
@@ -379,9 +380,9 @@ int main(int argc, char** argv) {
     // S7: the selftest needs the arena encounter and the player glb, runs
     // alone and starts in the arena; the shrine stage needs the arena's
     // --manifest too (R returns there) and is an interactive start.
-    const bool frozen_selftest = opts.selftest || opts.s3Selftest || opts.s4Selftest ||
-                                 opts.s41Selftest || opts.s42Selftest || opts.s5Selftest ||
-                                 opts.s6Selftest || opts.s8Selftest || opts.s9Selftest;
+    // (frozenSelftest reads opts alone; the scene facts are placeholders.)
+    const bool frozen_selftest =
+        run_flags(opts, opts.stage, !opts.manifestPath.empty(), false, false, true).frozenSelftest;
     if (opts.s7Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s7-selftest needs --manifest\n");
         print_usage(stderr);
