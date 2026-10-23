@@ -762,3 +762,39 @@ TEST_CASE("camera_wake_pose keys the wake: low in front, then behind toward the 
                                           duration)),
               camera_eye(start));
 }
+
+// --- S8 Task 8: the follow camera's head height ------------------------------
+
+TEST_CASE("camera_follow's default headHeight is kFollowHeadHeight: today's output") {
+    CHECK(CameraFollow{}.headHeight == kFollowHeadHeight);
+    CHECK(kFollowHeadHeight == 1.4f);
+    const Vec3 player{3.0f, -7.0f, 12.0f};
+    Camera a{};
+    Camera b{};
+    CameraFollow fa;
+    CameraFollow fb;
+    fb.headHeight = kFollowHeadHeight;
+    for (int frame = 0; frame < 30; ++frame) {
+        camera_follow(a, fa, player, 30.0f, 2.0f, -1.0f, 0.0f, frame < 10, 1.0f / 60.0f);
+        camera_follow(b, fb, player, 30.0f, 2.0f, -1.0f, 0.0f, frame < 10, 1.0f / 60.0f);
+    }
+    // The head point is set exactly, 1.4 m above the player (the pre-S8 rule).
+    CHECK(a.target.x == player.x);
+    CHECK(a.target.y == player.y + 1.4f);
+    CHECK(a.target.z == player.z);
+    CHECK(a.yaw == b.yaw);
+    CHECK(a.pitch == b.pitch);
+    CHECK(a.distance == b.distance);
+    CHECK(a.target.y == b.target.y);
+
+    // A mounted head height (S8 D13) moves only the target's height.
+    Camera c{};
+    CameraFollow fc;
+    fc.headHeight = kFollowHeadHeight + 1.2f;
+    for (int frame = 0; frame < 30; ++frame) {
+        camera_follow(c, fc, player, 30.0f, 2.0f, -1.0f, 0.0f, frame < 10, 1.0f / 60.0f);
+    }
+    CHECK(c.target.y == doctest::Approx(player.y + 2.6f));
+    CHECK(c.yaw == a.yaw);
+    CHECK(c.distance == a.distance);
+}

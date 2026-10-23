@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
+#include <string>
 
 #include "audio_events.h"
 
@@ -143,4 +145,71 @@ Sfx missing_cue(const HasClip& has_clip, bool includeS6 = false) {
         }
     }
     return Sfx::Count;
+}
+
+// --- S8: the ride cue table (design D15) --------------------------------------
+//
+// The S8 sounds are not `Sfx` (that list stays as pinned): the plain plays them
+// from its own table. Each cue is the base event of `tools/re/audio/s8_map.json`;
+// a cue with alternatives is one manifest row per variant (`<event>.<n>`, rows
+// carrying `variant_of`), and the app picks the variant per trigger with a
+// seeded RNG. The rows are audition picks (`method: audition`, low/medium
+// confidence); the gains are authored (source: authored).
+enum class RideSfx {
+    HoofWalk, HoofTrot, HoofGallop, Neigh, Whistle, Mount, Kick, StopHorse, Count
+};
+
+struct RideCue {
+    const char* event;  // the base event; a single-variant cue is the manifest name itself
+    int variants;       // 1 = no `.<n>` suffix
+    float gain;         // authored
+};
+
+namespace audio_map_detail {
+
+inline constexpr RideCue kRideCues[] = {
+    {"agro.hoof_walk", 10, 0.45f},    // HoofWalk: one per walk touchdown
+    {"agro.hoof_trot", 1, 0.50f},     // HoofTrot
+    {"agro.hoof_gallop", 5, 0.60f},   // HoofGallop
+    {"agro.neigh", 1, 0.70f},         // Neigh: the whistle's arrival, a refused kick
+    {"player.whistle", 3, 0.70f},     // Whistle
+    {"agro.mount", 1, 0.60f},         // Mount
+    {"player.kick", 1, 0.70f},        // Kick: the "hyah" of a counted kick
+    {"player.stop_horse", 2, 0.70f},  // StopHorse: the "whoa" as a stop begins
+};
+
+static_assert(sizeof(kRideCues) / sizeof(kRideCues[0]) == static_cast<std::size_t>(RideSfx::Count),
+              "the ride cue table must cover every RideSfx");
+
+}  // namespace audio_map_detail
+
+inline const RideCue& ride_cue(RideSfx id) {
+    const std::size_t index =
+        std::min(static_cast<std::size_t>(id), static_cast<std::size_t>(RideSfx::Count) - 1);
+    return audio_map_detail::kRideCues[index];
+}
+
+// The manifest name of `variant` (wrapped into the cue's variant count).
+inline std::string ride_cue_clip(RideSfx id, int variant) {
+    const RideCue& cue = ride_cue(id);
+    if (cue.variants <= 1) {
+        return cue.event;
+    }
+    const int v = ((variant % cue.variants) + cue.variants) % cue.variants;
+    return std::string(cue.event) + "." + std::to_string(v);
+}
+
+inline const char* ride_sfx_name(RideSfx id) {
+    switch (id) {
+        case RideSfx::HoofWalk: return "hoof_walk";
+        case RideSfx::HoofTrot: return "hoof_trot";
+        case RideSfx::HoofGallop: return "hoof_gallop";
+        case RideSfx::Neigh: return "neigh";
+        case RideSfx::Whistle: return "whistle";
+        case RideSfx::Mount: return "mount";
+        case RideSfx::Kick: return "kick";
+        case RideSfx::StopHorse: return "stop_horse";
+        case RideSfx::Count: break;
+    }
+    return "unknown";
 }

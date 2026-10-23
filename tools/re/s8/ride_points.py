@@ -3,8 +3,9 @@
 
   python3 -I tools/re/s8/ride_points.py [placements.json] [ride_points.h]
 
-Transcribes `speeds`, `root_z`, `rider_root_xz`, `root_fps` and `footfalls` verbatim
-(ruling R2), so the header is reproducible from the gate's output. Stdlib only.
+Transcribes `speeds`, `root_z`, `rider_root_xz`, `root_fps`, `footfalls` and the two
+doors (`door_shrine`, `door_plain`: boxes and arrival spawns) verbatim (ruling R2), so
+the header is reproducible from the gate's output. Stdlib only.
 """
 
 import json
@@ -91,6 +92,23 @@ def render(d):
     for g in ("walk", "trot", "gallop"):
         w("inline constexpr float kFootfall%s[4] = {%s};" % (
             g.capitalize(), ", ".join(f(v) for v in ff[g])))
+    w("")
+    ds, dp = d["door_shrine"], d["door_plain"]
+    w("// The doors (design D14; source: %s): trigger boxes that fire on entry, each with" % ds["source"])
+    w("// the arrival spawn on the other stage. `door_shrine` is in the shrine's frame and")
+    w("// arrives on the plain (world frame); `door_plain` is in the world frame and arrives")
+    w("// in the shrine's frame.")
+    w("struct Door {")
+    w("    float min[3], max[3];")
+    w("    float arrive[3];")
+    w("    float arriveYawDeg;")
+    w("};")
+    w("")
+    for name, door, arrive in (("kDoorShrine", ds, ds["arrive_plain"]),
+                               ("kDoorPlain", dp, dp["arrive_shrine"])):
+        w("inline constexpr Door %s{{%s}, {%s}, {%s}, %s};" % (
+            name, ", ".join(f(v) for v in door["min"]), ", ".join(f(v) for v in door["max"]),
+            ", ".join(f(v) for v in arrive["p"]), f(arrive["yaw_deg"])))
     w("")
     w("}  // namespace ride_points")
     return "\n".join(out) + "\n"

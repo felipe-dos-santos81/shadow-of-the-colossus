@@ -22,6 +22,7 @@
 #include "math3d.h"
 #include "player.h"
 #include "player_state.h"
+#include "ride_points.h"
 
 TEST_CASE("quat_to_mat4 rotates a point 90 degrees about Z") {
     const Quat q = {0.0f, 0.0f, std::sin(kPi / 4.0f), std::cos(kPi / 4.0f)};
@@ -1675,4 +1676,68 @@ TEST_CASE("blend_poses endpoints and the halfway slerp") {
     CHECK(mid.t[0].y == doctest::Approx(2.0f));
     CHECK(mid.s[0].x == doctest::Approx(2.0f));
     CHECK(kClipBlendSeconds == doctest::Approx(0.25f));
+}
+
+// --- S8 Task 8: a rig's bone in world space (the rider's seat) ----------------
+
+TEST_CASE("rig_bone_world is the mesh model * palette * bindWorld of the named bone") {
+    Scene scene = turn_fixture_scene_with_bind_world();
+    MeshCpu placed;
+    placed.model = mat4_from_trs(Vec3{10.0f, 2.0f, -3.0f},
+                                 Quat{0.0f, std::sin(kPi / 4.0f), 0.0f, std::cos(kPi / 4.0f)},
+                                 Vec3{1.0f, 1.0f, 1.0f});  // 90 degrees about Y
+    scene.meshes.push_back(placed);
+    scene.rigs[0].meshBegin = 0;
+    scene.rigs[0].meshEnd = 1;
+    const std::vector<Mat4> palette = animation_pose(scene, 0, turn_clip(0), 1.0f);
+    REQUIRE(palette.size() == 2);
+
+    Mat4 world{};
+    REQUIRE(rig_bone_world(scene, 0, palette, "JointB", world));
+    const Mat4 expected = mat4_mul(mat4_mul(placed.model, palette[1]),
+                                   scene.rigs[0].skin.joints[1].bindWorld);
+    for (int k = 0; k < 16; ++k) {
+        CAPTURE(k);
+        CHECK(world.m[k] == doctest::Approx(expected.m[k]).epsilon(1e-5));
+    }
+    // Its origin is the posed joint the position query reports.
+    Vec3 joint_position{};
+    REQUIRE(posed_joint_world_position(scene, 0, palette, "JointB", joint_position));
+    const Vec3 origin = transform_point(world, Vec3{0.0f, 0.0f, 0.0f});
+    CHECK(origin.x == doctest::Approx(joint_position.x).epsilon(1e-5));
+    CHECK(origin.y == doctest::Approx(joint_position.y).epsilon(1e-5));
+    CHECK(origin.z == doctest::Approx(joint_position.z).epsilon(1e-5));
+
+    // An absent bone or a short palette leaves `out` untouched.
+    Mat4 untouched = mat4_identity();
+    CHECK_FALSE(rig_bone_world(scene, 0, palette, "OptBone_boy", untouched));
+    CHECK_FALSE(rig_bone_world(scene, 0, std::vector<Mat4>(1), "JointB", untouched));
+    CHECK_FALSE(rig_bone_world(scene, 7, palette, "JointB", untouched));
+    CHECK(is_identity(untouched, 0.0f));
+}
+
+TEST_CASE("S8: the baked ride clips last (frames - 1) / fps of ride_points' tables") {
+    // Task 5's check: the machine switches clips on the tables' durations, the
+    // rigs play the baked ones — a mismatch would cut a clip short or hold it.
+    const Scene agro = load_scene(test_library(), "models/shadow/characters/agro/_cmn/agro.glb");
+    const Scene wander =
+        load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    const auto duration_of = [](const Scene& scene, const char* name) {
+        for (const AnimationCpu& clip : player_rig(scene).animations) {
+            if (clip.name == name) {
+                return clip.duration;
+            }
+        }
+        return -1.0f;
+    };
+    for (const ride_points::RootZ& table : ride_points::kRootZ) {
+        CAPTURE(table.clip);
+        CHECK(duration_of(agro, table.clip) ==
+              doctest::Approx((table.frames - 1) / table.fps).epsilon(1e-4));
+    }
+    for (const ride_points::RiderXZ& table : ride_points::kRiderXZ) {
+        CAPTURE(table.clip);
+        CHECK(duration_of(wander, table.clip) ==
+              doctest::Approx((table.frames - 1) / table.fps).epsilon(1e-4));
+    }
 }

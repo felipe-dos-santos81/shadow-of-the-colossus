@@ -68,6 +68,10 @@ struct CameraFollow {
     float pitchOffsetDeg = 0.0f;
     float distance = 4.5f;
     float followBlend = 0.0f;  // internal: the last call's smoothing factor
+    // S8 (D13): the head point's height above `playerPos`. The default is
+    // kFollowHeadHeight (declared below), so every pre-S8 caller is unchanged;
+    // the plain raises it while riding (eased by the app).
+    float headHeight = 1.4f;
 };
 
 void camera_follow(Camera&, CameraFollow&, Vec3 playerPos, float playerYawDeg,
@@ -211,6 +215,7 @@ void camera_climb_exit(Camera&, CameraClimb&);
 // The follow camera's head point above the player (camera_follow's target);
 // camera_death_pose re-anchors its return key on the same point.
 inline constexpr float kFollowHeadHeight = 1.4f;
+static_assert(CameraFollow{}.headHeight == kFollowHeadHeight, "the follow default is unchanged");
 
 inline constexpr float kDeathPullSeconds = 0.4f;   // the pull-back key
 inline constexpr float kDeathLowSeconds = 3.0f;    // the low-angle key
