@@ -119,8 +119,10 @@ not in S8. `--stage plain` starts there; `--s8-selftest` and `--s8-e2e` prove it
 
 S9 (interactive play): the plain is the **road** — the arena's entrance stairs and corridor are walkable,
 the corridor's dead end is a door into Valus's arena and the arena has one back, and Agro waits where she
-was left. Wander holds `wander_sword.glb` in his right hand (`OptBone_sword` with an authored Rx(+90°)
-grip: the bone's +Y is the blade). Holding `C` raises it; in sunlight its eight-line fan opens around the
+was left. Wander holds `wander_sword.glb` in his right hand on `OptBone_sword` with the data's identity
+attachment (the blade along the bone's −Z); the bake lacks the game's additive hoist layer, so a
+rotation of 90° × raise about the bone's X stands in for it (authored), and the camera shifts 0.9 m ×
+raise to his left so the beam leaves the tip right of centre. Holding `C` raises it; in sunlight its eight-line fan opens around the
 camera's look and narrows as the look nears Valus's chest, locking within ≈ 11.5° (`k < 0.01`) — a locked
 beam is clipped where its ray first meets the ground or a backdrop (150 m at most) and sparks there. In
 shade (a 300 m march toward the sun meets terrain) the light fades out. The shimmer loops while the sword

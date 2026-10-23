@@ -234,15 +234,25 @@ constexpr const char* kClubSocketJoint = "OptBone_sword";
 // below. The beam leaves road_points::kSwordTip.
 constexpr const char* kSwordGlb = "models/shadow/characters/wander/_cmn/wander_sword.glb";
 constexpr const char* kSwordBone = "OptBone_sword";
-// The grip (S9 Task 8, source: authored from the stills): the glb's blade runs
-// along its -Z, but the bone's blade axis is its +Y — +Y is vertical (0.99) in
-// player_a_hoist_sword_loop and hangs down (-0.98) in player_a_stand, while the
-// bone's -Z lies flat across the head in the raise. The grip is Rx(+90 deg),
-// the inverse of a Z-up -> Y-up swap: glb (x, y, z) -> bone (x, -z, y). The
-// sword's model is bone * grip; road_points::kSwordTip is a point of the glb.
-const Mat4 kSwordGrip = mat4_from_trs(Vec3{0.0f, 0.0f, 0.0f},
-                                      Quat{0.70710678f, 0.0f, 0.0f, 0.70710678f},
-                                      Vec3{1.0f, 1.0f, 1.0f});
+// The grip. The data attaches the glb with identity (its blade along the bone's
+// -Z, like wander_swordcase.glb and Valus's club; wander_sword.cgpr's 3x3 is
+// identity) and no clip animates OptBone_sword. The game's hoist pose comes from
+// an additive layer the bake does not carry (D8), so the raised blade lies flat
+// across the head. The stand-in for that missing layer (source: authored, from
+// the stills): a rotation about the bone's X by 90 deg * raise — identity while
+// Lowered, Rx(+90) when Raised, where the bone's +Y is vertical (0.99) and the
+// blade points up. The sword's model is bone * grip; kSwordTip is a glb point.
+Mat4 sword_grip(float raise) {
+    const float half = 0.5f * 90.0f * kDegToRad * std::clamp(raise, 0.0f, 1.0f);
+    return mat4_from_trs(Vec3{0.0f, 0.0f, 0.0f}, Quat{std::sin(half), 0.0f, 0.0f, std::cos(half)},
+                         Vec3{1.0f, 1.0f, 1.0f});
+}
+// The raised camera's sideways shift (source: authored, from the stills): the
+// follow target moves this far to Wander's left (away from the right-hand blade)
+// times the raise, so a beam along the look leaves the tip right of centre and
+// runs into the centre instead of hiding behind his head. The look direction, the
+// aim and the movement basis are unchanged; camera_follow resets the target.
+constexpr float kSwordShoulderM = 0.9f;
 
 // The corpse swap's assets (S6, design D5/§8.3): the already-converted dead
 // body (6 meshes, the six `_dead` materials with the veins veil) and the
@@ -8074,7 +8084,7 @@ int run_app(const AppOptions& opts) {
                         Mat4 bone = mat4_identity();
                         Vec3 tip = player.position;
                         if (rig_bone_world(scene, playerRig, palettes[playerRig], kSwordBone, bone)) {
-                            bone = mat4_mul(bone, kSwordGrip);
+                            bone = mat4_mul(bone, sword_grip(sword.raise));
                             for (std::size_t i = swordMeshBegin; i < swordMeshEnd; ++i) {
                                 scene.meshes[i].model = bone;
                             }
@@ -8082,6 +8092,12 @@ int run_app(const AppOptions& opts) {
                             tip = Vec3{bone.m[0] * t[0] + bone.m[4] * t[1] + bone.m[8] * t[2] + bone.m[12],
                                        bone.m[1] * t[0] + bone.m[5] * t[1] + bone.m[9] * t[2] + bone.m[13],
                                        bone.m[2] * t[0] + bone.m[6] * t[1] + bone.m[10] * t[2] + bone.m[14]};
+                        }
+                        if (sword.raise > 0.0f) {
+                            const float look = camera_look_yaw(camera) * kDegToRad;
+                            const float shift = kSwordShoulderM * sword.raise;
+                            camera.target.x += std::cos(look) * shift;  // left = (cos, 0, -sin)
+                            camera.target.z -= std::sin(look) * shift;
                         }
                         const Vec3 eye = camera_eye(camera);
                         const Vec3 aim = vec3_normalize(Vec3{camera.target.x - eye.x,
@@ -8128,11 +8144,18 @@ int run_app(const AppOptions& opts) {
                             sword.phase == SwordPhase::Lowering) {
                             audio.stop_sword();
                         }
-                        const bool lockLit = up && beam.locked && sunlit;
+                        // Once per lock while rising or raised and lit; the latch
+                        // clears only past 2 kLockK (no jitter at the edge, no
+                        // replay while lowering).
+                        const bool lockLit = (sword.phase == SwordPhase::Raising ||
+                                              sword.phase == SwordPhase::Raised) &&
+                                             beam.locked && sunlit && sword_intensity(sword) > 0.0f;
                         if (lockLit && !swordSearchLatch) {
                             audio.play_sword(SwordSfx::Search, tip);
+                            swordSearchLatch = true;
+                        } else if (beam.k > 2.0f * kLockK) {
+                            swordSearchLatch = false;
                         }
-                        swordSearchLatch = lockLit;
                         if (swordBefore.phase != SwordPhase::Lowered && !up && !swordBefore.mounted) {
                             playback.pinned = false;  // the mode's clip takes over next frame
                             playback.playing = true;
