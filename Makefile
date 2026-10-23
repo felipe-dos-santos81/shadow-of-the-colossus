@@ -115,6 +115,10 @@ probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine manif
 	python3 tools/re/stage/probe.py check-encounter --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-manifest --stage shrine --library "$(LIB)" $(SHRINE)
 
+census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
+	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
+.PHONY: census
+
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
 accept: shrine-manifest accept-s7 ## Run the current milestone's acceptance (S7 → S6 → … → S3)
