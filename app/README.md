@@ -5,8 +5,9 @@ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
 original containers.
 
-**Status (milestone S6): the fall — Valus's death sequence, the black tendrils, the corpse and the
-cinematic camera (user walk pending).**
+**Status (milestone S7): the return to the shrine — after Valus's death the screen fades to white, the
+shrine loads, Wander wakes in front of the altar and takes control; `R` goes back to the arena (user walk
+pending). S6 (the fall) is below it, unchanged.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -76,6 +77,19 @@ built from the game's own assets — the `death_tentacle_veins` mask and the thr
 particle simulator is **not** ported, so the motion is authored, not the game's
 own curves; the shipped type-36 death-camera clips are undecoded and are not
 played either. `--s6-selftest` runs the whole sequence deterministically.
+
+**The return to the shrine (S7).** In interactive play, once the death sequence reaches `Done` (8.0 s)
+a transition machine (`app/src/transition.h`) holds on the corpse (2.0 s, control kept), fades to white
+(1.0 s, input locked), loads the shrine, fades in (1.5 s) and plays Wander's wake — the baked
+`player_a_home_boss01_cut04` + `cut05` clips, in place, 11.669 s — under an authored two-key camera, then
+returns the follow camera and the control. The hold, fade and fade colour are **authored** (the binary
+holds no timings). The shrine is `out/re/stage/shrine.manifest` (the cathedral glbs, 17 statue instances —
+16 idols, slot 1 the broken one plus its skirt — and a posed Mono on the altar, spawn from the
+`cathedral_int` start); its ground is a layered heightmap (the floor under the feet, not the roof) with a
+coarse 1 m wall mask, and off-screen meshes are culled. The shrine is silent. `R` in the shrine returns to
+the arena in its opening state; `R` during the transition resets the arena and re-arms it. `--stage shrine`
+starts there directly; `--no-return` keeps S6's end state (the corpse and the control, no return) for the
+S6 walk. `--s7-selftest` runs the whole thing deterministically.
 
 The encounter has its own voice. The library's converted audio slice is loaded at start
 (a missing manifest or one without a curated cue prints one error naming the manifest or the
@@ -150,6 +164,11 @@ is required. Escape or the close button quits.
 | `--audio-mixdown PATH` | with `--s5-selftest`, the 48 kHz float stereo WAV the mixer's disk sink writes — the headless acceptance capture; needs `--s5-selftest` |
 | `--s6-selftest` | compose the encounter `--manifest` and run the S6 death timeline through fixed 1/60 s steps with no window input: a club swing (so the whoosh fires on the production path), a scripted lethal event through the production `apply_combat_events`, the death phase machine to `Done` (the motion, the tendril burst, the collapse into the corpse, the cinematic camera), the `s6-perf` line and the R soft reset; prints the `s6-phase`, `s6-event`, `s6-perf`, `s6-death`, `s6-status` and `s6-reset` lines (13 in all) and exits 1 on a failed invariant (a missing cue clip, a dead colossus that is still collidable, a half-restored reset); needs `--manifest` (with an entity) and `--model`; cannot be combined with another selftest |
 | `--s6-stills DIR` | with `--s6-selftest`, write `motion.png` (0.200 s), `camera.png` (0.400 s, the pull-back key), `tendrils.png` (1.200 s, the burst) and `corpse.png` (6.200 s, the corpse wide) into `DIR`, plus `tendrils-control.png` — the burst's frame with the effect pass suppressed, the control the pixel guard differences against; `DIR` must exist (the acceptance script creates it) |
+| `--stage arena\|shrine` | the first stage (default `arena`); `shrine` starts there with control, using `--shrine-manifest`; an interactive start only (needs `--manifest` for the player's frame) |
+| `--shrine-manifest PATH` | the shrine's scene manifest (default `out/re/stage/shrine.manifest`, composed by `tools/re/stage/probe.py compose --stage shrine`) |
+| `--no-return` | interactive play keeps S6's end state: no hold/fade/shrine after the death sequence |
+| `--s7-selftest` | seed Valus dead and run the return (hold, fade, shrine load, wake, `Free`), the shrine's ground/wall/idol/Mono probes and a 240-frame perf run, then `R` back to the arena and a second shrine load; prints the `s7-phase`/`s7-load`/`s7-ground`/`s7-wall`/`s7-idols`/`s7-mono`/`s7-perf`/`s7-status`/`s7-reset` lines (25 in all); needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest |
+| `--s7-stills DIR` | with `--s7-selftest`, write `fade.png` (the arena at fade 0.6), `wake.png`, `altar.png`, `idols.png` and `hall.png` into `DIR` |
 
 ## Manifests
 

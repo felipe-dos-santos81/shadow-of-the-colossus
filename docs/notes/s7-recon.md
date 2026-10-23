@@ -209,6 +209,10 @@ every surface in the column:
   equivalent foot plant, or the lying body sits wherever the model origin is placed. The same holds for Mono's `posed` sample (pelvis at the origin → `mono.p` already adds it).
 - `cut04`'s rate is 10.261 fps (11.987 s for 124 frames); the S7 `Wake` phase should use the baked
   duration (15.456 s for both cuts).
+  **Correction (Task 10, ruling R5 amended):** 15.456 s was computed at the `.anb`'s 10.26 fps; the baked clips
+  in `wander.glb` play cut04 124 f @ 15.059 fps + cut05 54 f @ 15.139 fps (≈11.80 s by frame count), and the
+  Wake phase is the sum of the clips' sampler maxima as the app loads them: 8.168 + 3.501 = 11.669 s
+  (the clips drive it; `docs/notes/s7-results.md`).
 - Measured idol heights: `mino_a_statue` 10.87, `mammoth_statue` 10.83, `knight_statue` 10.68 m;
   the hall ceiling over the centre line is ≈ 37.5 m.
 
