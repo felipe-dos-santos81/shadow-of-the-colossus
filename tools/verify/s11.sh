@@ -50,7 +50,12 @@ refused "--s11-stills without --s11-selftest" "${base_args[@]}" --s11-stills "$s
 refused "--s11-selftest with --s11-e2e" "${base_args[@]}" --s11-selftest --s11-e2e
 refused "--s11-e2e with --stage shrine" "${base_args[@]}" --stage shrine --s11-e2e
 refused "--s11-selftest without --manifest" --library "$lib" --model "$player" --s11-selftest
-refused "--s11-selftest with --stage plain" "${base_args[@]}" --stage plain --s11-selftest
+# --stage with the selftest meets main.cpp's general rule first (--s11-selftest is a frozen-style
+# selftest: --stage is an interactive start), so its message names --stage, not --s11-*.
+stage_rc=0
+stage_err="$(caffeinate -dimsu "$viewer" "${base_args[@]}" --stage plain --s11-selftest 2>&1)" || stage_rc=$?
+[[ "$stage_rc" = "2" ]] && grep -q -- '--stage plain is an interactive start' <<<"$stage_err" ||
+  fail "--s11-selftest with --stage plain: exit $stage_rc (expected the usage refusal, exit 2): $stage_err"
 
 stamp "s11-selftest + stills: $arena02_manifest"
 if ! selftest_out="$(caffeinate -dimsu "$viewer" "${base_args[@]}" --s11-selftest \

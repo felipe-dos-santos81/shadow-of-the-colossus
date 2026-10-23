@@ -549,11 +549,10 @@ int main(int argc, char** argv) {
         (opts.selftest || opts.s3Selftest || opts.s4Selftest || opts.s41Selftest ||
          opts.s42Selftest || opts.s5Selftest || opts.s6Selftest || opts.s7Selftest ||
          opts.s7E2e || opts.s8Selftest || opts.s8E2e || opts.s9Selftest || opts.s9E2e ||
-         opts.s11E2e || !opts.screenshotPath.empty() || opts.entityTimeSet ||
-         opts.stage != StageId::Arena)) {
+         opts.s11E2e || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
         std::fprintf(stderr,
                      "sotc-viewer: --s11-selftest cannot be combined with another selftest, "
-                     "e2e, capture or --stage\n");
+                     "e2e or capture\n");
         return 2;
     }
     if (opts.s11E2e && (frozen_selftest || opts.s7Selftest || opts.s7E2e || opts.s8E2e ||
