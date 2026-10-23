@@ -238,3 +238,79 @@ ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
     }
     return best;
 }
+
+namespace {
+
+float unit_or_zero(float v) { return std::isfinite(v) ? std::clamp(v, -1.0f, 1.0f) : 0.0f; }
+
+float max_across(const ClimbBand& band) { return band.radius * kSurfaceWalkMaxAngleDeg * kDegToRad; }
+
+}  // namespace
+
+bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,
+                        Vec3 up, Vec3& point, Vec3& normal) {
+    if (!std::isfinite(t) || !std::isfinite(across) || !is_finite(up) ||
+        !std::isfinite(band.radius) || !(band.radius > 0.0f)) {
+        return false;
+    }
+    Vec3 a{};
+    Vec3 b{};
+    if (!climb_band_segment(band, lookup, a, b)) {
+        return false;
+    }
+    const Vec3 ab = sub(b, a);
+    const Vec3 forward = scale(ab, 1.0f / length(ab));
+    const Vec3 top_raw = sub(up, scale(forward, vec3_dot(up, forward)));
+    const float top_length = length(top_raw);
+    if (!std::isfinite(top_length) || top_length <= kAxisEpsilon) {
+        return false;  // the band runs along `up`: it has no top to stand on
+    }
+    const Vec3 top = scale(top_raw, 1.0f / top_length);
+    const Vec3 right = vec3_cross(forward, top);
+
+    const float limit = max_across(band);
+    const float angle = std::clamp(across, -limit, limit) / band.radius;
+    const Vec3 n = add(scale(top, std::cos(angle)), scale(right, std::sin(angle)));
+    const Vec3 axis = add(a, scale(ab, std::clamp(t, 0.0f, 1.0f)));
+    const Vec3 candidate = add(axis, scale(n, band.radius));
+    if (!is_finite(candidate) || !is_finite(n)) {
+        return false;
+    }
+    point = candidate;
+    normal = n;
+    return true;
+}
+
+bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float along,
+                       float lateral, float speed, float dt, float& t, float& across) {
+    if (!std::isfinite(band.radius) || !(band.radius > 0.0f)) {
+        return false;
+    }
+    Vec3 a{};
+    Vec3 b{};
+    if (!climb_band_segment(band, lookup, a, b)) {
+        return false;
+    }
+    const float step = speed * dt;
+    if (!std::isfinite(step) || !(dt > 0.0f)) {
+        return true;
+    }
+    const float next_t = t + unit_or_zero(along) * step / length(sub(b, a));
+    const float limit = max_across(band);
+    const float next_across = across + unit_or_zero(lateral) * step;
+    if (std::isfinite(next_t)) {
+        t = std::clamp(next_t, 0.0f, 1.0f);
+    }
+    if (std::isfinite(next_across) && std::isfinite(limit)) {
+        across = std::clamp(next_across, -limit, limit);
+    }
+    return true;
+}
+
+bool climb_attach_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,
+                        Vec3 hint, Vec3& point, Vec3& normal) {
+    if (band.horizontal) {
+        return surface_walk_point(band, lookup, t, across, Vec3{0.0f, 1.0f, 0.0f}, point, normal);
+    }
+    return climb_surface_point(band, lookup, t, hint, point, normal);
+}

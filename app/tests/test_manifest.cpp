@@ -418,3 +418,43 @@ TEST_CASE("a malformed backdrop or horse line is refused with its line number") 
         }
     }
 }
+
+TEST_CASE("an encounter line is parsed only when the caller opts in; absent means valus") {
+    TempFixtureDir dir;
+    const std::string body = "instance models/a.glb 0 0 0 0 0 0 1 1 1 1\n";
+
+    // Absent: valus, opted in or not.
+    const std::filesystem::path plain = write_manifest(dir, body);
+    CHECK(parse_manifest(plain).encounter == "valus");
+    CHECK(parse_manifest(plain, true).encounter == "valus");
+
+    // Opted in: the id is carried verbatim.
+    const std::filesystem::path named = write_manifest(dir, body + "encounter quadratus  # S11\n");
+    const SceneManifest manifest = parse_manifest(named, true);
+    CHECK(manifest.encounter == "quadratus");
+    CHECK(manifest.instances.size() == 1);
+
+    // Not opted in: still an unknown directive, naming the line.
+    const std::string message = manifest_error(named);
+    CHECK(message.starts_with(named.string() + ":2:"));
+    CHECK(message.find("unknown directive 'encounter'") != std::string::npos);
+}
+
+TEST_CASE("a malformed or repeated encounter line is refused with its line number") {
+    TempFixtureDir dir;
+    for (const std::string line : {std::string("encounter"), std::string("encounter quadratus extra")}) {
+        CAPTURE(line);
+        const std::filesystem::path path = write_manifest(dir, "# h\n" + line + "\n");
+        try {
+            parse_manifest(path, true);
+            FAIL("no throw");
+        } catch (const std::runtime_error& error) {
+            const std::string message = error.what();
+            CHECK(message.starts_with(path.string() + ":2:"));
+            CHECK(message.find("encounter expects 2 tokens") != std::string::npos);
+        }
+    }
+    const std::filesystem::path twice = write_manifest(dir, "encounter valus\nencounter quadratus\n");
+    CHECK_THROWS_WITH_AS(parse_manifest(twice, true), (twice.string() + ":2: encounter given twice").c_str(),
+                         std::runtime_error);
+}

@@ -81,7 +81,7 @@ void parse_placement_tokens(const std::filesystem::path& path, int line,
 
 }  // namespace
 
-SceneManifest parse_manifest(const std::filesystem::path& path) {
+SceneManifest parse_manifest(const std::filesystem::path& path, bool acceptEncounter) {
     // A missing path and a directory both open-or-not ambiguously: reading a
     // directory succeeds and yields no lines, so guard on the file type first
     // and never return an empty manifest for one.
@@ -99,6 +99,7 @@ SceneManifest parse_manifest(const std::filesystem::path& path) {
     manifest.spawnYawDeg = 0.0f;
     manifest.hasSpawn = false;
 
+    bool has_encounter = false;
     std::string line;
     int line_number = 0;
     while (std::getline(in, line)) {
@@ -172,6 +173,16 @@ SceneManifest parse_manifest(const std::filesystem::path& path) {
             manifest.spawnPosition = Vec3{values[0], values[1], values[2]};
             manifest.spawnYawDeg = values[3];
             manifest.hasSpawn = true;
+        } else if (directive == "encounter" && acceptEncounter) {
+            if (tokens.size() != 2) {
+                fail(path, line_number,
+                     "encounter expects 2 tokens (encounter + id), got " + std::to_string(tokens.size()));
+            }
+            if (has_encounter) {
+                fail(path, line_number, "encounter given twice");
+            }
+            manifest.encounter = tokens[1];
+            has_encounter = true;
         } else {
             fail(path, line_number, "unknown directive '" + directive + "'");
         }

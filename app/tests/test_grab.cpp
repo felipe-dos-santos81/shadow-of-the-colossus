@@ -305,3 +305,179 @@ TEST_CASE("weakpoint ids map to their shell material names") {
     CHECK(weakpoint_material_name(2) == nullptr);
     CHECK(weakpoint_material_name(-1) == nullptr);
 }
+
+// --- S11 surface walk (design D9) -------------------------------------------
+// A horizontal band is walked on its top instead of hung from: the feet sit on
+// the surface at an arc offset `across` around the band's axis from its top.
+
+namespace {
+
+// A horizontal band along +Z at y 10 (A at z 0, B at z 10), radius 2.
+ClimbBand back_band() {
+    ClimbBand band{"A", "B", 2.0f, ClimbBandId::Count, ClimbBandId::Count, -1};
+    band.horizontal = true;
+    return band;
+}
+
+const JointLookup kBackJoints =
+    lookup_of({{"A", Vec3{0.0f, 10.0f, 0.0f}}, {"B", Vec3{0.0f, 10.0f, 10.0f}}});
+
+}  // namespace
+
+TEST_CASE("a surface walk stands on the band's top, normal from its frame") {
+    const ClimbBand band = back_band();
+    Vec3 point{};
+    Vec3 normal{};
+    REQUIRE(surface_walk_point(band, kBackJoints, 0.5f, 0.0f, Vec3{0, 1, 0}, point, normal));
+    CHECK(point.x == doctest::Approx(0.0f));
+    CHECK(point.y == doctest::Approx(12.0f));  // the radius above the axis, no capsule offset
+    CHECK(point.z == doctest::Approx(5.0f));
+    CHECK(normal.x == doctest::Approx(0.0f));
+    CHECK(normal.y == doctest::Approx(1.0f));
+    CHECK(normal.z == doctest::Approx(0.0f));
+
+    // Positive `across` is the right of a walker facing A -> B: +Z forward,
+    // right = forward x up = -X (player.h). 30 degrees of arc at radius 2.
+    const float arc30 = 2.0f * kPi / 6.0f;
+    REQUIRE(surface_walk_point(band, kBackJoints, 0.5f, arc30, Vec3{0, 1, 0}, point, normal));
+    CHECK(point.x == doctest::Approx(-1.0f));
+    CHECK(point.y == doctest::Approx(10.0f + std::sqrt(3.0f)));
+    CHECK(normal.x == doctest::Approx(-0.5f));
+    CHECK(normal.y == doctest::Approx(std::sqrt(3.0f) / 2.0f));
+
+    // The arc is clamped to the walkable top (kSurfaceWalkMaxAngleDeg).
+    Vec3 clamped{};
+    REQUIRE(surface_walk_point(band, kBackJoints, 0.5f, -100.0f, Vec3{0, 1, 0}, clamped, normal));
+    CHECK(std::acos(normal.y) / kDegToRad == doctest::Approx(kSurfaceWalkMaxAngleDeg));
+    CHECK(clamped.x > 0.0f);
+}
+
+TEST_CASE("a sloped band's top normal is perpendicular to the bone axis") {
+    // The rear kneel tilts the back: A drops 5 m.
+    const JointLookup kneel =
+        lookup_of({{"A", Vec3{0.0f, 5.0f, 0.0f}}, {"B", Vec3{0.0f, 10.0f, 10.0f}}});
+    Vec3 point{};
+    Vec3 normal{};
+    REQUIRE(surface_walk_point(back_band(), kneel, 0.0f, 0.0f, Vec3{0, 1, 0}, point, normal));
+    const Vec3 axis = vec3_normalize(Vec3{0.0f, 5.0f, 10.0f});
+    CHECK(vec3_dot(normal, axis) == doctest::Approx(0.0f).epsilon(1e-6));
+    CHECK(normal.y > 0.8f);
+    CHECK(normal.z < 0.0f);  // leaning back from the rise
+    CHECK(point.y == doctest::Approx(5.0f + 2.0f * normal.y));
+}
+
+TEST_CASE("a surface walk rejects a vertical band, missing joints and bad input") {
+    Vec3 point{7, 7, 7};
+    Vec3 normal{7, 7, 7};
+    const JointLookup upright =
+        lookup_of({{"A", Vec3{0.0f, 0.0f, 0.0f}}, {"B", Vec3{0.0f, 10.0f, 0.0f}}});
+    CHECK_FALSE(surface_walk_point(back_band(), upright, 0.5f, 0.0f, Vec3{0, 1, 0}, point, normal));
+    const JointLookup missing = [](std::string_view, Vec3&) { return false; };
+    CHECK_FALSE(surface_walk_point(back_band(), missing, 0.5f, 0.0f, Vec3{0, 1, 0}, point, normal));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(surface_walk_point(back_band(), kBackJoints, nan, 0.0f, Vec3{0, 1, 0}, point, normal));
+    CHECK_FALSE(surface_walk_point(back_band(), kBackJoints, 0.5f, nan, Vec3{0, 1, 0}, point, normal));
+    CHECK_FALSE(surface_walk_point(back_band(), kBackJoints, 0.5f, 0.0f, Vec3{0, 0, 0}, point, normal));
+    ClimbBand thin = back_band();
+    thin.radius = 0.0f;
+    CHECK_FALSE(surface_walk_point(thin, kBackJoints, 0.5f, 0.0f, Vec3{0, 1, 0}, point, normal));
+    CHECK(point.x == 7.0f);  // nothing written
+    CHECK(normal.x == 7.0f);
+}
+
+TEST_CASE("a surface walk step moves along and across the band") {
+    const ClimbBand band = back_band();
+    float t = 0.5f;
+    float across = 0.0f;
+    // Along: 2 m/s for 1 s over a 10 m band is 0.2 of t.
+    REQUIRE(surface_walk_step(band, kBackJoints, 1.0f, 0.0f, 2.0f, 1.0f, t, across));
+    CHECK(t == doctest::Approx(0.7f));
+    CHECK(across == 0.0f);
+    REQUIRE(surface_walk_step(band, kBackJoints, -1.0f, 0.0f, 2.0f, 0.5f, t, across));
+    CHECK(t == doctest::Approx(0.6f));
+    // Across: metres of arc, clamped to the walkable top.
+    REQUIRE(surface_walk_step(band, kBackJoints, 0.0f, 1.0f, 2.0f, 0.25f, t, across));
+    CHECK(across == doctest::Approx(0.5f));
+    REQUIRE(surface_walk_step(band, kBackJoints, 0.0f, -1.0f, 2.0f, 10.0f, t, across));
+    CHECK(across == doctest::Approx(-2.0f * kSurfaceWalkMaxAngleDeg * kDegToRad));
+    // The band's ends clamp t; the chain hand-over is the caller's.
+    REQUIRE(surface_walk_step(band, kBackJoints, 1.0f, 0.0f, 2.0f, 100.0f, t, across));
+    CHECK(t == 1.0f);
+
+    // A non-finite or negative dt is no move; an unresolved band is false.
+    const float before_t = t;
+    const float before_across = across;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK(surface_walk_step(band, kBackJoints, -1.0f, 1.0f, 2.0f, nan, t, across));
+    CHECK(surface_walk_step(band, kBackJoints, -1.0f, 1.0f, 2.0f, -1.0f, t, across));
+    CHECK(surface_walk_step(band, kBackJoints, nan, nan, 2.0f, 1.0f, t, across));
+    CHECK(t == before_t);
+    CHECK(across == before_across);
+    const JointLookup missing = [](std::string_view, Vec3&) { return false; };
+    CHECK_FALSE(surface_walk_step(band, missing, 1.0f, 0.0f, 2.0f, 1.0f, t, across));
+}
+
+TEST_CASE("climb_attach_point walks a horizontal band's top") {
+    Vec3 point{};
+    Vec3 normal{};
+    Vec3 expected_point{};
+    Vec3 expected_normal{};
+    REQUIRE(climb_attach_point(back_band(), kBackJoints, 0.25f, 0.5f, Vec3{9, 0, 0}, point,
+                               normal));
+    REQUIRE(surface_walk_point(back_band(), kBackJoints, 0.25f, 0.5f, Vec3{0, 1, 0},
+                               expected_point, expected_normal));
+    CHECK(point.x == expected_point.x);
+    CHECK(point.y == expected_point.y);
+    CHECK(point.z == expected_point.z);
+    CHECK(normal.y == expected_normal.y);
+}
+
+TEST_CASE("Valus's bands are all non-horizontal and attach exactly as before") {
+    // A Valus-shaped skeleton: every bone the table names, at distinct points.
+    const JointLookup valus = lookup_of({{"Bone_TUMASAKI_L", Vec3{-1.0f, 0.0f, 0.5f}},
+                                         {"Bone_TOE_L", Vec3{-1.1f, 1.8f, 0.4f}},
+                                         {"Bone_MOMO_L", Vec3{-1.3f, 5.0f, 0.2f}},
+                                         {"Bone_KOSI", Vec3{0.0f, 7.5f, 0.0f}},
+                                         {"Bone_HARA", Vec3{0.0f, 7.5f, 0.0f}},  // shared, as in the rig
+                                         {"Bone_MUNE", Vec3{0.1f, 11.0f, 0.6f}},
+                                         {"Bone_KUBI", Vec3{0.1f, 13.5f, 1.0f}},
+                                         {"Bone_KAO", Vec3{0.1f, 15.2f, 1.6f}},
+                                         {"Bone_KATA_R", Vec3{2.5f, 11.5f, 0.3f}},
+                                         {"Bone_UDE_R", Vec3{4.0f, 9.0f, 0.9f}}});
+    const float ts[] = {-0.5f, 0.0f, 0.3f, 0.5f, 1.0f, 1.5f};
+    const Vec3 hints[] = {{5.0f, 3.0f, 0.0f}, {-4.0f, 9.0f, 2.0f}, {0.1f, 11.0f, 0.6f},
+                          {0.0f, 0.0f, -6.0f}};
+    for (int i = 0; i < static_cast<int>(ClimbBandId::Count); ++i) {
+        const ClimbBand& band = climb_band(static_cast<ClimbBandId>(i));
+        CAPTURE(i);
+        CHECK_FALSE(band.horizontal);
+        for (float t : ts) {
+            for (Vec3 hint : hints) {
+                Vec3 p0{}, n0{}, p1{}, n1{};
+                const bool ok0 = climb_surface_point(band, valus, t, hint, p0, n0);
+                const bool ok1 = climb_attach_point(band, valus, t, 3.0f, hint, p1, n1);
+                CHECK(ok0 == ok1);
+                CHECK(p0.x == p1.x);
+                CHECK(p0.y == p1.y);
+                CHECK(p0.z == p1.z);
+                CHECK(n0.x == n1.x);
+                CHECK(n0.y == n1.y);
+                CHECK(n0.z == n1.z);
+            }
+        }
+    }
+    CHECK_FALSE(climb_band(ClimbBandId::Count).horizontal);
+}
+
+TEST_CASE("a surface walk step rejects a non-positive or NaN radius") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (float radius : {-2.0f, 0.0f, nan}) {
+        ClimbBand band = back_band();
+        band.radius = radius;
+        float t = 0.5f;
+        float across = 0.25f;
+        CHECK_FALSE(surface_walk_step(band, kBackJoints, 1.0f, 1.0f, 1.0f, 0.1f, t, across));
+        CHECK(t == 0.5f);
+        CHECK(across == 0.25f);
+    }
+}
