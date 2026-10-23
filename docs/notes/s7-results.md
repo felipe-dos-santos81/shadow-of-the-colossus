@@ -10,13 +10,14 @@ interactive game.
 `scripts/s7-acceptance.sh` runs green end to end (exit 0): both builds, both suites, the **frozen
 S6 acceptance first** (which runs S5 → S4.2 → S4.1 → S4 → S3), the arena compose against its
 pinned hash, the shrine compose byte-identical to the manifest, the four probe checks, the
-deterministic `s7-*` timeline (25 lines) parsed field by field, the JSON cross-check, and five
-2560×1440 stills. Whether the shrine reads as the game's, whether the wake feels right and whether
+deterministic `s7-*` timeline (25 lines) parsed field by field, the **end-to-end run** (`--s7-e2e`,
+§3b: the interactive loop from one lethal hit to the shrine and `R` back, 20 `s7e2e-*` lines), the
+JSON cross-check, and five 2560×1440 stills. Whether the shrine reads as the game's, whether the wake feels right and whether
 the walls and the floor feel solid are the user's eye and hands (§11).
 
 | | |
 |---|---|
-| Date | 2026-10-22 local (−03); the recorded run is stamped `2026-10-23T00:35:31Z`–`00:43:32Z` (8 min 1 s), re-measured after the load fix (`dd14055`, `6b54c08`, `a32e276`) |
+| Date | 2026-10-22 local (−03); the recorded run is stamped `2026-10-23T00:35:31Z`–`00:43:32Z` (8 min 1 s), re-measured after the load fix (`dd14055`, `6b54c08`, `a32e276`); §1–§9's numbers are that run's. The log now holds the Task 13 run, `2026-10-23T00:56:12Z`–`01:04:28Z` (PASS, with `--s7-e2e`; §3b quotes it — its own loads were 1.66/1.64 s and its shrine frame 9.102 ms) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; 1280×720 points → 2560×1440 px captures |
 | Repo / branch | `sotc-native`, branch `s7-shrine`; the code base is `ee1fe08` (the return, wired and proven) |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
@@ -115,6 +116,59 @@ app loads them — `player_a_home_boss01_cut04` 8.168 s + `cut05` 3.501 s (124 f
 the `.anb`'s 10.26 fps and is corrected there. The clips carry no root series, so the app plants the
 pose's lowest body joint on the floor: the selftest measured the lift against the recon's pelvis
 heights (lying 0.10 m, kneeling 0.55 m at the cut04 → cut05 boundary, standing 0.72 m) within 0.05 m.
+
+## 3b · The end-to-end run (`--s7-e2e`, Task 13)
+
+Until Task 13 no run had chained a real defeat → the S6 death → the fade → the shrine load → the
+wake → the control returning in one process: `--s7-selftest` seeds the death at `Done`, and the only
+interactive check started with `--stage shrine`. `--s7-e2e` drives the **interactive** frame loop
+itself — the real `StageRequest` switch, the real stage-loop iteration, the real audio — with two
+substitutions at one seam: `dt` is a fixed 1/60 s and the input is a script (empty every frame,
+except a held `W` while the return should lock it, which the lock must eat). After 1.0 s in the
+arena one lethal hit (`damageDealt = 100`) is merged into the frame's `player_step` events and goes
+through the production `apply_combat_events` call; 1.0 s into `Free` the script calls the `R` key's
+own handler; 1.0 s into the reloaded arena it checks the opening state and exits 0. From the
+recorded run (`out/s7/s7-e2e.txt`):
+
+```text
+s7e2e-load stage=arena meshes=142 ms=556.0
+s7e2e-death phase=Idle total=0.000
+s7e2e-return phase=Idle t=0.000 fade=0.000 lock=0
+s7e2e-death phase=Motion total=0.000
+s7e2e-input frame=61 locked=1
+s7e2e-death phase=Collapse total=6.183
+s7e2e-death phase=Done total=8.000
+s7e2e-return phase=Hold t=0.000 fade=0.000 lock=0
+s7e2e-return phase=FadeOut t=0.017 fade=0.017 lock=1
+s7e2e-return phase=Load t=0.000 fade=1.000 lock=1
+s7e2e-load stage=shrine meshes=3563 ms=1699.0
+s7e2e-return phase=FadeIn t=0.000 fade=1.000 lock=1
+s7e2e-return phase=Wake t=0.017 fade=0.000 lock=1
+s7e2e-wake clip=player_a_home_boss01_cut04 t=0.017
+s7e2e-wake clip=player_a_home_boss01_cut05 t=8.183
+s7e2e-return phase=Free t=0.000 fade=0.000 lock=0
+s7e2e-input frame=1514 locked=0
+s7e2e-status stage=shrine phase=Free lock=0 player_y=8.998 floor=8.998
+s7e2e-load stage=arena meshes=142 ms=548.0
+s7e2e-reset stage=arena valus=100 player=100 death=Idle return=Idle
+```
+
+- The hit lands on frame 60 (t = 1.0 s); the death machine starts on the next frame (frame 61, the
+  first locked one), reaches `Collapse` at 6.183 s (the first 1/60 s step past 6.166877 s) and `Done`
+  at 8.000 s. `Hold` is unlocked (control kept), `FadeOut` locks.
+- `Load` ends the arena iteration with the shrine request; the shrine iteration is entered in `Load`
+  (checked) and its first frame steps to `FadeIn`. Each wake clip starts in `Wake`: cut04 at 0.017 s,
+  cut05 at 8.183 s (cut04's duration crossed). Input stays locked from `FadeOut` through `Wake` (the
+  scripted `W` is eaten every frame) and unlocks on the `Free` frame (global frame 1514).
+- After 1 s of `Free` the feet stand on the floor: `player_y` 8.998 = `heightmap_floor` 8.998.
+- The run fails (exit 1, naming the step) on a stage that exceeds 3600 frames, a lethal hit that does
+  not defeat Valus, the shrine loaded outside `Load`, an unlocked frame in `FadeOut`…`Wake`, a lock at
+  `Free`, fewer than two wake clips, feet more than 0.05 m off the floor, or an R that does not
+  restore the arena's opening state. The acceptance pins the orders, the 20-line count, the three
+  loads (arena, shrine, arena; shrine ≤ 15 s), the clips, the input pair, the status, the reset and
+  the `s1-status` window line.
+- **Join defects found: none.** The arena→shrine request, the wake start, the lock span and the
+  floor at `Free` were all correct as shipped.
 
 ## 4 · The stage loads (four, equal shrine scenes)
 
@@ -245,9 +299,9 @@ the wake clips and their pelvis heights, the spawn position (`cathedral_int.sgpr
   floor, then the standing clip takes over; the walk (§11, item 3) judges it.
 - The ground probe follows the floor but ignores walls, so its label overstates the walk's physics;
   the wall probe is the wall evidence.
-- The interactive path (the key press, the real defeat, the gamepad) is not driven by an automated
-  run; the selftest drives the same helpers (`step_return`, `press_reset`, `release_scene`) the
-  interactive loop calls.
+- The interactive loop is driven end to end by `--s7-e2e` (§3b), but with a scripted input and a
+  fixed step: the physical key press, the gamepad, the three-strike fight and wall-clock frame
+  times are still the walk's.
 - Interactive play without the wake clips in `wander.glb` exits with an error; `--no-return` avoids
   the return.
 
@@ -294,6 +348,7 @@ filled and passes; nothing in §1–§10 claims it.
 - `out/s7-s6-regression.log` — the frozen S6 acceptance's full output, ending `PASS —`.
 - `out/s7/s7-selftest.txt` — the captured `--s7-selftest` output (the 25 `s7-*` lines).
 - `out/s7/s7-loads.txt` — the four load lines.
+- `out/s7/s7-e2e.txt` — the captured `--s7-e2e` output (the 20 `s7e2e-*` lines).
 - `out/s7/arena-compose.manifest`, `out/s7/shrine-compose.manifest` — the scratch re-composes.
 - `out/s7/stills/` — `fade.png`, `wake.png`, `altar.png`, `idols.png`, `hall.png`.
 - `out/re/stage/shrine.manifest` — the shrine scene.

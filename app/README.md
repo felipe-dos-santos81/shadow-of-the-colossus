@@ -89,7 +89,8 @@ holds no timings). The shrine is `out/re/stage/shrine.manifest` (the cathedral g
 coarse 1 m wall mask, and off-screen meshes are culled. The shrine is silent. `R` in the shrine returns to
 the arena in its opening state; `R` during the transition resets the arena and re-arms it. `--stage shrine`
 starts there directly; `--no-return` keeps S6's end state (the corpse and the control, no return) for the
-S6 walk. `--s7-selftest` runs the whole thing deterministically.
+S6 walk. `--s7-selftest` runs the whole thing deterministically; `--s7-e2e` drives the interactive loop
+itself (fixed 1/60 s, scripted input) from one lethal hit through the shrine and `R` back.
 
 The encounter has its own voice. The library's converted audio slice is loaded at start
 (a missing manifest or one without a curated cue prints one error naming the manifest or the
@@ -168,6 +169,7 @@ is required. Escape or the close button quits.
 | `--shrine-manifest PATH` | the shrine's scene manifest (default `out/re/stage/shrine.manifest`, composed by `tools/re/stage/probe.py compose --stage shrine`) |
 | `--no-return` | interactive play keeps S6's end state: no hold/fade/shrine after the death sequence |
 | `--s7-selftest` | seed Valus dead and run the return (hold, fade, shrine load, wake, `Free`), the shrine's ground/wall/idol/Mono probes and a 240-frame perf run, then `R` back to the arena and a second shrine load; prints the `s7-phase`/`s7-load`/`s7-ground`/`s7-wall`/`s7-idols`/`s7-mono`/`s7-perf`/`s7-status`/`s7-reset` lines (25 in all); needs `--manifest` (the encounter) and `--model`; cannot be combined with another selftest |
+| `--s7-e2e` | the end-to-end proof: the **interactive** loop at a fixed 1/60 s with scripted input (keyboard and gamepad ignored) — one lethal hit through the production combat path after 1 s, then the death, the return, the real stage switch, the wake and `Free`; `R` (the key's handler) 1 s into `Free`, exit 0 1 s into the reloaded arena; prints the `s7e2e-death`/`-return`/`-load`/`-input`/`-wake`/`-status`/`-reset` lines (20) and `s1-status`; needs `--manifest` and `--model`; runs alone (no selftest, capture, `--stage shrine` or `--no-return`) |
 | `--s7-stills DIR` | with `--s7-selftest`, write `fade.png` (the arena at fade 0.6), `wake.png`, `altar.png`, `idols.png` and `hall.png` into `DIR` |
 
 ## Manifests

@@ -17,7 +17,9 @@ mask; off-screen meshes are culled. The timings, Mono's placement, the spawn yaw
 camera and the fade still are **authored** (R2 found no timings in the binary); the idol positions and
 the wake clips are data (R1/R3 PASS). The shrine is silent. `--no-return` keeps S6's end state for the
 S6 walk. The proof is `--s7-selftest --s7-stills out/s7/stills` (25 `s7-*` lines + five 2560×1440
-stills); the acceptance script is `scripts/s7-acceptance.sh` (it runs the frozen S6 chain first), and
+stills); `--s7-e2e` chains a real lethal hit → the S6 death → the fade → the shrine load → the wake →
+the control returning → `R` in one process through the interactive loop (20 `s7e2e-*` lines); the
+acceptance script is `scripts/s7-acceptance.sh` (it runs the frozen S6 chain first), and
 the recorded numbers are in `docs/notes/s7-results.md`. Known gaps: Dormin's voice and light, the
 statue break animation, the cutscene cameras, the bridge and garden walk, the coarse wall mask. The shrine
 loads in 1.79–1.90 s (the arena 0.65 s) and the window pumps events during a load. The user's walk is still the user's to fill in.
@@ -142,6 +144,10 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --manifest out/re/stage/encounter.manifest \
   --model models/shadow/characters/wander/_cmn/wander.glb \
   --s7-selftest --s7-stills out/s7/stills    # the S7 return timeline + the stills
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s7-e2e                                   # the interactive loop, scripted: hit -> shrine -> R
 ```
 
 ## Acceptance
