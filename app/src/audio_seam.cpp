@@ -25,7 +25,8 @@ bool AudioSeam::load(const std::string& libraryDir, const EncounterDesc& desc,
     // The music is not an `Sfx`, so `missing_cue` cannot see it; the score
     // is as mandatory as the fight cues (D5), so gate it here — a manifest
     // without it fails at load, not as "a cue clip was missing at play time".
-    if (!engine.has(desc.cues.music)) {
+    // A null music name is a deliberately silent fight (S11 D10): no gate.
+    if (desc.cues.music != nullptr && !engine.has(desc.cues.music)) {
         std::fprintf(
             stderr,
             "sotc-viewer: audio: music cue names clip '%s', which %s does not load\n",
@@ -166,6 +167,9 @@ void AudioSeam::start_music() {
         return;
     }
     const CueDesc& cues = encounter->cues;
+    if (cues.music == nullptr) {
+        return;  // a silent fight (S11 D10): no music, no failure
+    }
     if (!engine.has(cues.music)) {
         failed = true;
         return;

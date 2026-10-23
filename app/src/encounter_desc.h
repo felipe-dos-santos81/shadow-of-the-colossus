@@ -145,7 +145,8 @@ struct DeathDesc {
     DeathCameraDesc camera;
 };
 
-// One audio cue: a manifest clip name (null = a deliberately silent event).
+// One audio cue: a manifest clip name (null = a deliberately silent event:
+// `cue_for` answers nullptr, nothing is looked up or gated).
 struct SoundCue {
     const char* clip;  // manifest name, never null for a mapped cue
     float gain;        // fractional voice gain (HurtHeavy is a 1.25 boost)
@@ -165,7 +166,7 @@ struct CueDesc {
     SoundCue footLeft;
     SoundCue footRight;
     SoundCue clubSwing;
-    const char* music;
+    const char* music;  // null = a silent fight (no music, no load gate)
     float musicGain;
 };
 
