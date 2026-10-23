@@ -104,3 +104,17 @@ float heightmap_floor(const Heightmap& heightmap, Vec3 p, float step);
 // when the target has no floor at all while the source does. Always true on a
 // map with `maxLayers == 0`.
 bool heightmap_walkable(const Heightmap& heightmap, Vec3 from, Vec3 to);
+
+// S9: the raw node under `p` — the nearest node's height, NaN when `p` is outside the bounds
+// (or non-finite), the grid is empty, or the node is empty. Never clamps, never fills.
+float heightmap_node(const Heightmap& heightmap, Vec3 p);
+
+// The first t in [step, maxLen] (in steps of `step`) where heightmap_node(origin + dir t) is
+// above that point's y; NaN = no hit (a hole, the outside of the bounds, an empty map, or a bad
+// step are all no hit). Callers combine two ray results with std::fmin.
+float ray_march(const Heightmap& heightmap, Vec3 origin, Vec3 dir, float maxLen, float step);
+
+// An unlayered grid over the static meshes with MeshCpu::ground == false (the backdrops) only,
+// bounds = theirs; an empty Heightmap (width 0) when the scene has none. The scene's own bounds
+// and ground map are untouched. Throws like build_heightmap on a bad `cellSize`.
+Heightmap build_backdrop_grid(const Scene& scene, float cellSize);
