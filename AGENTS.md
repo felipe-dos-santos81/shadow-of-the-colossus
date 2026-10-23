@@ -168,7 +168,8 @@ adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git wor
 `make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make plain`, `make
 accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 49 clips (the 15 S2–S6 clips,
 the two S7 wake cuts, the 26 S8 ride clips, then the six S9 raise clips at 43…48), Agro's 20 (the S4.2
-kick at index 0, then the 19 riding clips) and the sword's light atlases into `$SOTC_LIB` (the view, when
+kick at index 0, then the 19 riding clips), the sword's light atlases and Quadratus's 58 `boss_a_*` clips
+(byte-sorted; S11, `make bake-quadratus`) into `$SOTC_LIB` (the view, when
 exported) with `--force`; `make audio` decodes the S9 map (36 entries); `make run`/`make accept` compose
 the shrine, plain and road manifests first. The underlying commands:
 

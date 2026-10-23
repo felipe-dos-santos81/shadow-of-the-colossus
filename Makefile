@@ -107,7 +107,7 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-bake: publish ## Bake Mono's pose, Wander's 49 clips, Agro's 20 and the sword's atlases (rewrites the glbs)
+bake: publish bake-quadratus ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases and Quadratus's 58 (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
@@ -117,8 +117,8 @@ bake: publish ## Bake Mono's pose, Wander's 49 clips, Agro's 20 and the sword's 
 	$(foreach t,$(SWORD_TEXTURES),$(AWAKE) $(CLI) texture --in "$(GAME_ROOT)/textures/$(t).cptx" \
 		--out "$(LIB)/textures/$(t).png" &&) true
 
-# S11: bakes into the branch's view only (export SOTC_LIB=out/libviews/s11-quadratus); not part of `bake`.
-bake-quadratus: publish ## Bake Quadratus (colossus_02_bull_a) with his 58 clips (rewrites his glb; use a library view)
+# S11: part of `bake` since the promotion to the base library (ruling A16).
+bake-quadratus: publish ## Bake Quadratus (colossus_02_bull_a) with his 58 clips (rewrites his glb)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.cmsh --force --clips $(subst $(space),$(comma),$(strip $(QUADRATUS_CLIPS)))
 
