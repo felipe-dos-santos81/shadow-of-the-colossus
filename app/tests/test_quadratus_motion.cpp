@@ -172,6 +172,65 @@ TEST_CASE("quadratus turn yaw: _l is +yaw (left), _r is -yaw, at the clip end") 
     CHECK(std::fabs(quadratus_root_delta("boss_a_turn_l", 0.0f, 10.0f).z) < 0.01f);
 }
 
+TEST_CASE("quadratus turn heading: the yaw turned so far, 0 at the start, the turn yaw at the end") {
+    for (const char* clip : {"boss_a_turn_l", "boss_a_turn_r", "boss_a_walk_turn_l", "boss_a_walk_turn_r"}) {
+        CAPTURE(clip);
+        CHECK(quadratus_turn_heading_deg(clip, 0.0f) == 0.0f);
+        CHECK(quadratus_turn_heading_deg(clip, -1.0f) == 0.0f);
+        CHECK(quadratus_turn_heading_deg(clip, 10.0f) == doctest::Approx(quadratus_turn_yaw_deg(clip)));
+    }
+    // The measured mid frames (generator: frame 17 of 36, 16 of 33).
+    CHECK(quadratus_turn_heading_deg("boss_a_turn_l", 17.0f / 15.0f) == doctest::Approx(17.94f));
+    CHECK(quadratus_turn_heading_deg("boss_a_turn_r", 17.0f / 15.0f) == doctest::Approx(-15.64f));
+    CHECK(quadratus_turn_heading_deg("boss_a_walk_turn_r", 16.0f / 15.0f) == doctest::Approx(-21.15f));
+    CHECK(quadratus_turn_heading_deg("boss_a_walk", 1.0f) == 0.0f);
+    CHECK(quadratus_turn_heading_deg("boss_a_turn_l", std::numeric_limits<float>::quiet_NaN()) == 0.0f);
+}
+
+TEST_CASE("quadratus root header: the library glb still poses the generated tables") {
+    // The header is measured from one bake (its sha256 is in the header); a re-bake
+    // that moved his clips must fail here, not as a puzzling golden diff.
+    const Quadratus& q = quadratus();
+    const RigCpu& rig = q.scene.rigs.at(0);
+    const auto clip = [&](std::string_view name) -> const AnimationCpu& {
+        for (const AnimationCpu& a : rig.animations) {
+            if (a.name == name) return a;
+        }
+        throw std::runtime_error("his glb lacks a clip");
+    };
+    const auto at = [&](const AnimationCpu& a, const char* bone, int frame) {
+        Mat4 m{};
+        const std::vector<Mat4> palette = animation_pose(q.scene, 0, a, static_cast<float>(frame) / 15.0f);
+        REQUIRE(rig_bone_world(q.scene, 0, palette, bone, m));
+        return Vec3{m.m[12], m.m[13], m.m[14]};
+    };
+    // The walk's root y (relative to frame 0) is the glb's own root track.
+    for (const quadratus_root::RootSeries& r : quadratus_root::kRoots) {
+        if (std::string_view(r.clip) != "boss_a_walk") continue;
+        const AnimationCpu& walk = clip(r.clip);
+        const float y0 = at(walk, "Bone_root", 0).y;
+        for (int f = 0; f < r.frames; f += 4) {
+            CAPTURE(f);
+            CHECK(std::fabs(at(walk, "Bone_root", f).y - y0 - r.xyz[f][1]) < 0.002f);
+        }
+    }
+    // The turns' body-axis heading (rear hips' mid -> shoulders' mid) per frame.
+    const auto heading = [&](const AnimationCpu& a, int frame) {
+        const Vec3 l = at(a, "Bone_MOMO_L", frame), r = at(a, "Bone_MOMO_R", frame);
+        const Vec3 fl = at(a, "Bone_JOWAN_L", frame), fr = at(a, "Bone_JOWAN_R", frame);
+        return std::atan2((fl.x + fr.x - l.x - r.x) * 0.5f, (fl.z + fr.z - l.z - r.z) * 0.5f) / kDegToRad;
+    };
+    for (const quadratus_root::TurnHeading& h : quadratus_root::kTurnHeading) {
+        CAPTURE(h.clip);
+        const AnimationCpu& turn = clip(h.clip);
+        const float h0 = heading(turn, 0);
+        for (int f = 0; f < h.frames; ++f) {
+            CAPTURE(f);
+            CHECK(std::fabs(std::remainder(heading(turn, f) - h0 - h.deg[f], 360.0f)) < 0.05f);
+        }
+    }
+}
+
 TEST_CASE("quadratus hoof soles: read from his glb, rest = clips.md's stand sole minima") {
     const Quadratus& q = quadratus();
     const float rest[4] = {0.007f, -0.034f, 0.072f, 0.024f};

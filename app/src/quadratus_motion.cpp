@@ -70,6 +70,21 @@ float quadratus_turn_yaw_deg(std::string_view clip) {
     return 0.0f;
 }
 
+float quadratus_turn_heading_deg(std::string_view clip, float t) {
+    for (const qr::TurnHeading& h : qr::kTurnHeading) {
+        if (clip == h.clip) {
+            if (!std::isfinite(t) || h.frames < 2) {
+                return 0.0f;
+            }
+            const int last = h.frames - 1;
+            const float u = std::clamp(t * h.fps, 0.0f, static_cast<float>(last));
+            const int i = std::min(static_cast<int>(u), last - 1);
+            return h.deg[i] + (h.deg[i + 1] - h.deg[i]) * (u - static_cast<float>(i));
+        }
+    }
+    return 0.0f;
+}
+
 bool quadratus_hoof_soles(const Scene& scene, std::size_t rigIndex, HoofSoles& out) {
     constexpr const char* kToe[] = {"Bone_TOE_L", "Bone_TOE_R", "Bone_B_TOE_L", "Bone_B_TOE_R"};
     constexpr const char* kMaterial[] = {"colossus_02_hoof_weakpoint_fl", "colossus_02_hoof_weakpoint_fr",

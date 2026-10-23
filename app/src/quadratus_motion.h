@@ -36,6 +36,13 @@ bool quadratus_has_root(std::string_view clip);
 // this at the clip end. 0 for every other clip.
 float quadratus_turn_yaw_deg(std::string_view clip);
 
+// The yaw (deg, + = left) a turn clip's bones have turned by clip time `t`: the
+// measured body-axis heading relative to frame 0 (quadratus_root::kTurnHeading),
+// linear between frames, clamped to [0, length] — at the length it is
+// quadratus_turn_yaw_deg. A turn cut short adds this, not its full yaw. 0 for every
+// other clip and for a non-finite `t`.
+float quadratus_turn_heading_deg(std::string_view clip, float t);
+
 // The four hooves, fl, fr, rl, rr (the left hooves are +x).
 enum class Hoof { FrontLeft, FrontRight, RearLeft, RearRight };
 
