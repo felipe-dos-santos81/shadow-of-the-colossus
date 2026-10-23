@@ -1778,3 +1778,38 @@ TEST_CASE("a shake-off does nothing to a player who is not attached") {
     CHECK(cb.mode == PlayerMode::Grounded);
     CHECK(cb.stamina == ca.stamina);
 }
+
+// S11 Task 7 fix I-1: the climb camera seeds from the frame's band table (the
+// encounter's), not Valus's. A two-band table on joints Valus's rig does not
+// have: with Valus's table the band would not resolve (zero normal, the yaw
+// kept); with the frame's it resolves and the yaw turns outward.
+TEST_CASE("update_climb_camera resolves the band in the frame's table, not Valus's") {
+    static constexpr ClimbBand kBands[] = {
+        {"Q_A", "Q_B", 1.0f, 1, ClimbBandId::None, -1},
+        {"Q_B", "Q_C", 1.0f, ClimbBandId::None, 0, -1},
+    };
+    PlayerFrame frame;
+    frame.bands = kBands;
+    frame.jointWorld = [](std::string_view name, Vec3& out) {
+        if (name == "Q_A") { out = Vec3{0.0f, 0.0f, 0.0f}; return true; }
+        if (name == "Q_B") { out = Vec3{0.0f, 4.0f, 0.0f}; return true; }
+        if (name == "Q_C") { out = Vec3{0.0f, 8.0f, 0.0f}; return true; }
+        return false;
+    };
+    PlayerCombat combat;
+    combat.mode = PlayerMode::Grabbing;
+    combat.band = 1;
+    combat.bandT = 0.5f;
+    PlayerState player{Vec3{3.0f, 6.0f, 0.0f}, 0.0f};  // +X of the band's axis
+
+    Camera camera{Vec3{}, 6.0f, 123.0f, 10.0f};
+    CameraClimb climb;
+    update_climb_camera(camera, climb, player, combat, frame, 0.0f, 0.0f, 0.0f,
+                        /*recenter=*/false, 1.0f / 60.0f);
+
+    Camera expected{Vec3{}, 6.0f, 123.0f, 10.0f};
+    CameraClimb expectedClimb;
+    camera_climb_enter(expected, expectedClimb, player.position, Vec3{1.0f, 0.0f, 0.0f});
+    CHECK(camera.yaw == doctest::Approx(expected.yaw));
+    CHECK(camera.yaw != doctest::Approx(123.0f));
+}

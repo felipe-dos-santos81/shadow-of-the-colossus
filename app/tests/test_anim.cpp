@@ -1178,7 +1178,8 @@ TEST_CASE("Valus' posed palette drives the capsule proxy and each leg pushes the
     const std::vector<Mat4> palette = animation_pose(scene, 1, clip, 0.0f);
     REQUIRE(palette.size() == 238);
 
-    const std::vector<Capsule> capsules = entity_collision_capsules(scene, 1, palette);
+    const std::vector<Capsule> capsules =
+        entity_collision_capsules(scene, 1, palette, encounters::kValus.capsules);
     REQUIRE(capsules.size() == 8);  // three per leg + two torso segments
 
     // The collision input *is* the palette's bone world positions: the first

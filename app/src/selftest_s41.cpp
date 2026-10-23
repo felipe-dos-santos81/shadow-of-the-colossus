@@ -100,7 +100,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
             update_all_poses(renderer, scene, playbacks, stepSeconds, club);
         const PlayerFrame frame =
             player_frame_of(scene, entityRig, palettes, heightmap,
-                            camera_look_yaw(camera));
+                            camera_look_yaw(camera), ctx.enc());
         const int weakpoint = combat.weakpoint;  // detach() clears it
         const StepEvents events =
             player_step(player, combat, input, frame, tuning, stepSeconds);
@@ -227,7 +227,8 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
             update_locomotion(playback, scene, input, /*manualClip=*/false);
             const std::vector<std::vector<Mat4>> palettes =
                 update_all_poses(renderer, scene, playbacks, stepSeconds, club);
-            resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
+            resolve_player_collision(player, entity_capsules(scene, palettes, ctx.enc()),
+                                     heightmap);
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
                           0.0f, /*moving=*/true, stepSeconds);
             const float dx = player.position.x - previous.x;
@@ -269,7 +270,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
         throw std::runtime_error("s41-selftest: the entity rig has no pose");
     }
     const std::vector<Capsule> capsules =
-        entity_collision_capsules(scene, entityRig, palettes[entityRig]);
+        entity_collision_capsules(scene, entityRig, palettes[entityRig], ctx.enc().capsules);
     if (capsules.empty()) {
         throw std::runtime_error(
             "s41-selftest: the entity rig has no collision capsules");
@@ -306,7 +307,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     // the player on the body; the grab range check below is the gate.
     palettes = update_all_poses(renderer, scene, playbacks, 0.0f, club);
     PlayerFrame footFrame =
-        player_frame_of(scene, entityRig, palettes, heightmap, aimYaw);
+        player_frame_of(scene, entityRig, palettes, heightmap, aimYaw, ctx.enc());
     const ClimbBandId approachBand =
         nearest_climb_band(footFrame.jointWorld, player.position, 1000.0f);
     Vec3 footPoint{};
@@ -329,7 +330,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     // --- 2. Grab -----------------------------------------------------
     palettes = update_all_poses(renderer, scene, playbacks, 0.0f, club);
     PlayerFrame reachFrame =
-        player_frame_of(scene, entityRig, palettes, heightmap, footYaw);
+        player_frame_of(scene, entityRig, palettes, heightmap, footYaw, ctx.enc());
     if (nearest_climb_band(reachFrame.jointWorld, player.position, tuning.grabRange) ==
         ClimbBandId::None) {
         throw std::runtime_error(
@@ -412,7 +413,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
         const std::vector<std::vector<Mat4>> now =
             update_all_poses(renderer, scene, playbacks, 0.0f, club);
         const PlayerFrame frame =
-            player_frame_of(scene, entityRig, now, heightmap, 0.0f);
+            player_frame_of(scene, entityRig, now, heightmap, 0.0f, ctx.enc());
         Vec3 hint = player.position;
         if (!manifest.entities.empty()) {
             const Vec3 entity_pos = manifest.entities.front().placement.position;
@@ -653,7 +654,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     // re-climb.
     palettes = update_all_poses(renderer, scene, playbacks, 0.0f, club);
     PlayerFrame landingFrame =
-        player_frame_of(scene, entityRig, palettes, heightmap, 0.0f);
+        player_frame_of(scene, entityRig, palettes, heightmap, 0.0f, ctx.enc());
     const ClimbBandId returnBand =
         nearest_climb_band(landingFrame.jointWorld, player.position, 1000.0f);
     Vec3 returnPoint{};
@@ -677,7 +678,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
         const std::vector<std::vector<Mat4>> now =
             update_all_poses(renderer, scene, playbacks, 0.0f, club);
         const PlayerFrame frame =
-            player_frame_of(scene, entityRig, now, heightmap, 0.0f);
+            player_frame_of(scene, entityRig, now, heightmap, 0.0f, ctx.enc());
         const ClimbBandId nearest =
             nearest_climb_band(frame.jointWorld, player.position, 1000.0f);
         throw std::runtime_error(

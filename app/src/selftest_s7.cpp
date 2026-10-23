@@ -289,7 +289,7 @@ SelftestResult run_s7(StageCtx& ctx, RunState& run) {
             forward.forward = true;
             for (int frame = 0; frame < kS7MaxWallFrames; ++frame) {
                 const PlayerFrame wallFrame =
-                    player_frame_of(scene, entityRig, palettes, heightmap, walkYaw);
+                    player_frame_of(scene, entityRig, palettes, heightmap, walkYaw, ctx.enc());
                 player_step(player, combat, forward, wallFrame, tuning, stepSeconds);
                 const float along = ((player.position.x - from.x) * dx +
                                      (player.position.z - from.z) * dz) /

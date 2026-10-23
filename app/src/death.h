@@ -1,6 +1,6 @@
 #pragma once
 
-#include "encounters/valus.h"
+#include "encounters/valus_desc.h"
 
 // Valus's death sequence (S6 Task 2, design §8.1, ruling D3): a pure,
 // headless-testable phase machine, so the sequence's clock, input lock and

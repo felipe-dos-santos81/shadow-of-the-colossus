@@ -272,7 +272,8 @@ inline int door_row_count(bool s9Wired, const std::filesystem::path& arenaManife
         return kS8DoorCount;
     }
     try {
-        return parse_manifest(arenaManifest, /*acceptEncounter=*/true).encounter == "valus"
+        return parse_manifest(arenaManifest, /*acceptEncounter=*/true).encounter ==
+                       encounters::kValus.id
                    ? kDoorCount
                    : kS8DoorCount;
     } catch (const std::exception&) {

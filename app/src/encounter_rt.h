@@ -336,14 +336,14 @@ void update_entity_transform(Scene& scene, const Encounter& encounter,
 // (`desc.joints.chest`; Valus's Bone_MUNE).
 bool entity_chest_position(const Scene& scene, std::size_t rigIndex,
                            const std::vector<Mat4>& palette, Vec3& out,
-                           const EncounterDesc& desc = encounters::kValus);
+                           const EncounterDesc& desc);
 
 // Every entity rig's collision proxy for this frame (S4.0 has one entity; the
 // loop keeps the composed order general). The player's rig is skipped: its
 // capsule is the controller's own, pinned by collision.h.
 std::vector<Capsule> entity_capsules(const Scene& scene,
                                      const std::vector<std::vector<Mat4>>& palettes,
-                                     const EncounterDesc& desc = encounters::kValus);
+                                     const EncounterDesc& desc);
 
 // Applies the controller's locomotion choice unless a clip was pinned on the
 // command line (--anim or --anim-time): a hard switch — the chosen clip
@@ -419,17 +419,7 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
 PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                             const std::vector<std::vector<Mat4>>& palettes,
                             const Heightmap& heightmap, float cameraYawDeg,
-                            bool entityLive = true,
-                            const EncounterDesc& desc = encounters::kValus);
-
-// Enters the climb orbit on the first attached frame (or on F, `recenter`),
-// seeded outward along the band's surface normal; every later attached frame
-// just keeps the orbit on the attach point. The player position *is* the
-// attach point (the state machine wrote the band surface into it). A band that
-// cannot be resolved enters with a zero normal, which keeps the current yaw.
-void update_climb_camera(Camera& camera, CameraClimb& climb, const PlayerState& player,
-                         const PlayerCombat& combat, const PlayerFrame& frame, float dragDx,
-                         float dragDy, float wheelDelta, bool recenter, float dtSeconds);
+                            const EncounterDesc& desc, bool entityLive = true);
 
 // Starts one entity one-shot clip (a reaction or the death): pinned so it can
 // never loop, with its clock owned by encounter.reactionSeconds (the pose
@@ -450,8 +440,7 @@ int valus_attack_clip(ValusAttack attack, const EntityClips& clips);
 
 // The posed joint the attack's damage is measured from: the attacking foot for
 // a stomp, the club's tip for the swing (design §7.4) — the attack row's.
-const char* valus_attack_damage_joint(ValusAttack attack,
-                                      const EncounterDesc& desc = encounters::kValus);
+const char* valus_attack_damage_joint(ValusAttack attack, const EncounterDesc& desc);
 
 // Cuts an in-progress attack short. The cooldown it would have started is
 // parked in pendingCooldownSeconds: design §7.4 starts it after the reaction,
@@ -491,9 +480,8 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
 // given, receives the hurt/death report flags for the same hit.
 void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
                         const PlayerFrame& frame, const CombatTuning& tuning,
-                        ValusAttack attack, SfxQueue* sfx = nullptr,
-                        StepEvents* events = nullptr,
-                        const EncounterDesc& desc = encounters::kValus);
+                        ValusAttack attack, const EncounterDesc& desc,
+                        SfxQueue* sfx = nullptr, StepEvents* events = nullptr);
 
 // The per-frame attack decision input: the posed feet from the last palette
 // (posed_joint_world_position reads the live mesh model, so a yaw step taken

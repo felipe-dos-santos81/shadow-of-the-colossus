@@ -286,8 +286,8 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     // carries no live entity: nothing to walk into, climb or strike.
     const PlayerFrame frame =
         player_frame_of(scene, entityRig, palettes, heightmap,
-                        camera_look_yaw(camera),
-                        /*entityLive=*/!death_corpse_visible(death), ctx.enc());
+                        camera_look_yaw(camera), ctx.enc(),
+                        /*entityLive=*/!death_corpse_visible(death));
     const int weakpoint = combat.weakpoint;  // detach() clears it
     const Vec3 positionBefore = player.position;
     // S8 (D8): no player_step while mounted — the ride places him.
@@ -318,9 +318,9 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         attack_impact_due(encounter.attack, encounter.attackSeconds,
                           encounter.attackHit)) {
         encounter.attackHit = true;
-        apply_valus_impact(combat, player, frame, tuning, encounter.attack,
+        apply_valus_impact(combat, player, frame, tuning, encounter.attack, ctx.enc(),
                            audio_on ? &frameSfx : nullptr,
-                           audio_on ? &events : nullptr, ctx.enc());
+                           audio_on ? &events : nullptr);
     }
 
     if (mode_is_attached(combat.mode)) {

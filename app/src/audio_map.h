@@ -5,7 +5,7 @@
 #include <string>
 
 #include "audio_events.h"
-#include "encounters/valus.h"
+#include "encounters/valus_desc.h"
 
 // The S5 cue table: the curated `Sfx` -> shipped manifest clip mapping (design
 // §7.3/§7.4, ruling R15). The table is deliberately narrow — the attribution

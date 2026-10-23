@@ -131,7 +131,7 @@ SelftestResult run_s4(StageCtx& ctx, RunState& run) {
         animation_pose(scene, entityRig, entity_clip, entity_time);
 
     const std::vector<Capsule> capsules =
-        entity_collision_capsules(scene, entityRig, entity_palette);
+        entity_collision_capsules(scene, entityRig, entity_palette, ctx.enc().capsules);
     if (capsules.empty()) {
         std::fprintf(stderr,
                      "sotc-viewer: s4-selftest: the entity rig has no collision capsules\n");

@@ -69,7 +69,7 @@ SelftestResult run_screenshot(StageCtx& ctx, RunState& run) {
                 update_all_poses(renderer, scene, playbacks, dt, club);
             if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
                 haveEntityChest = entity_chest_position(scene, entityRig,
-                                                       palettes[entityRig], entityChest);
+                                                       palettes[entityRig], entityChest, ctx.enc());
             }
             if (targetCamera.active) {
                 if (haveEntityChest) {
@@ -87,7 +87,8 @@ SelftestResult run_screenshot(StageCtx& ctx, RunState& run) {
             player_update(player, still, dt, heightmap, camera_look_yaw(camera));
             // The collision hook: after player_update, before the
             // player transform the frame is drawn with.
-            resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
+            resolve_player_collision(player, entity_capsules(scene, palettes, ctx.enc()),
+                                     heightmap);
             apply_player_transform(scene, player_rig_record, player,
                                    active_player_lift(scene, playback,
                                                       player_rig_record));

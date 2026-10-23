@@ -168,7 +168,7 @@ SelftestResult run_s9(StageCtx& ctx, RunState& run) {
         if (!riding) {
             const PlayerFrame f = player_frame_of(
                 scene, entityRig, palettes, heightmap,
-                std::isnan(basisYaw) ? camera_look_yaw(camera) : basisYaw);
+                std::isnan(basisYaw) ? camera_look_yaw(camera) : basisYaw, ctx.enc());
             player_step(player, combat, input, f, tuning, dt);
             apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
         }

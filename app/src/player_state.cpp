@@ -582,3 +582,20 @@ void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPo
     combat.heavyHit = false;
     combat.pendingDeath = false;
 }
+
+void update_climb_camera(Camera& camera, CameraClimb& climb, const PlayerState& player,
+                         const PlayerCombat& combat, const PlayerFrame& frame, float dragDx,
+                         float dragDy, float wheelDelta, bool recenter, float dtSeconds) {
+    if (climb.active && !recenter) {
+        camera_climb_update(camera, climb, player.position, dragDx, dragDy, wheelDelta,
+                            dtSeconds);
+        return;
+    }
+    Vec3 point{};
+    Vec3 normal{};
+    if (!climb_surface_point(climb_band(frame.bands, combat.band), frame.jointWorld, combat.bandT,
+                             player.position, point, normal)) {
+        normal = Vec3{};
+    }
+    camera_climb_enter(camera, climb, player.position, normal);
+}

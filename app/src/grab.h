@@ -4,7 +4,7 @@
 #include <span>
 #include <string_view>
 
-#include "encounters/valus.h"
+#include "encounters/valus_desc.h"
 #include "math3d.h"
 
 // Climbing bands for the colossus grab (S4.1 Task 2; S11 Task 7 moved the band
@@ -13,8 +13,11 @@
 // A band is one capsule-shaped strip of the body between two posed skeleton
 // joints; its `up`/`down`/`branch` links and its `weakpoint` are indices into
 // the encounter's tables, -1 (`ClimbBandId::None`) for none. The functions
-// below take the encounter's band table; the overloads without one read
-// Valus's (`encounters::kValus.bands`), which every pre-S11 caller meant.
+// below take the encounter's band table. The overloads without one read
+// Valus's (`encounters::kValus.bands`) and are for Valus only — the unit tests
+// and the frozen selftests. Runtime code passes the encounter's table
+// (`PlayerFrame::bands`, `EncounterDesc`); an int id converts silently, so the
+// type will not catch a Valus overload called on another colossus.
 
 // The band record for `id` in `bands`. An out-of-range id (None included)
 // answers a stable empty band rather than indexing out of bounds.

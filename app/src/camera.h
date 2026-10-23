@@ -1,6 +1,6 @@
 #pragma once
 
-#include "encounters/valus.h"
+#include "encounters/valus_desc.h"
 #include "math3d.h"
 
 // Orbit camera: the eye sits `distance` from `target` at the given yaw and

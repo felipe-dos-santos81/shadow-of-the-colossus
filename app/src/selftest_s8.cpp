@@ -131,7 +131,7 @@ SelftestResult run_s8(StageCtx& ctx, RunState& run) {
                       riding ? pr.ride.speed != 0.0f : moving, dt);
         if (!riding) {
             const PlayerFrame f = player_frame_of(scene, entityRig, palettes, heightmap,
-                                                  camera_look_yaw(camera));
+                                                  camera_look_yaw(camera), ctx.enc());
             player_step(player, combat, input, f, tuning, dt);
             apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
         }
@@ -478,7 +478,7 @@ SelftestResult run_s8(StageCtx& ctx, RunState& run) {
         for (int i = 0; i < n && along_edge(player.position) < edgeLength; ++i) {
             palettes = update_all_poses(renderer, scene, playbacks, dt, club);
             const PlayerFrame f =
-                player_frame_of(scene, entityRig, palettes, heightmap, edgeYaw);
+                player_frame_of(scene, entityRig, palettes, heightmap, edgeYaw, ctx.enc());
             player_step(player, combat, forward, f, tuning, dt);
         }
         const bool blocked = along_edge(player.position) < edgeLength - 0.5f;

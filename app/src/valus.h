@@ -1,6 +1,6 @@
 #pragma once
 
-#include "encounters/valus.h"
+#include "encounters/valus_desc.h"
 #include "math3d.h"
 
 // Valus's attack decision (S4.2 Task 7, ruling R8): a pure, headless-testable

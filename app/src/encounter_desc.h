@@ -5,7 +5,7 @@
 #include "behaviour.h"
 
 // The encounter description (S11 Task 7, design D8 and rulings §13.10, A5): one
-// constexpr table per colossus (`encounters/valus.h`, later `quadratus.h`),
+// constexpr table per colossus (`encounters/valus_desc.h`, later `quadratus.h`),
 // selected by the arena manifest's `encounter <id>` directive (absent = valus).
 // It holds what used to be literals scattered through grab/collision/valus/
 // death/camera/audio_map/encounter_rt: the skeleton map, the props, the

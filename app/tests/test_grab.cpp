@@ -275,7 +275,8 @@ TEST_CASE("capsule identity carries the rig and the table segment index") {
     const Scene scene = capsule_scene(true);
     REQUIRE(scene.rigs.size() == 2);
     const std::vector<Mat4> palette = identity_palette(scene, 1);
-    const std::vector<Capsule> capsules = entity_collision_capsules(scene, 1, palette);
+    const std::vector<Capsule> capsules =
+        entity_collision_capsules(scene, 1, palette, encounters::kValus.capsules);
     REQUIRE(capsules.size() == 8);
     for (std::size_t i = 0; i < capsules.size(); ++i) {
         CHECK(capsules[i].rig == 1);
@@ -286,7 +287,8 @@ TEST_CASE("capsule identity carries the rig and the table segment index") {
     // remaining capsules must keep their table indices (2..7), not renumber.
     const Scene with_gap = capsule_scene(false);
     const std::vector<Mat4> gap_palette = identity_palette(with_gap, 1);
-    const std::vector<Capsule> gap_capsules = entity_collision_capsules(with_gap, 1, gap_palette);
+    const std::vector<Capsule> gap_capsules =
+        entity_collision_capsules(with_gap, 1, gap_palette, encounters::kValus.capsules);
     REQUIRE(gap_capsules.size() == 6);
     const int expected_segments[] = {2, 3, 4, 5, 6, 7};
     for (std::size_t i = 0; i < gap_capsules.size(); ++i) {

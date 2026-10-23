@@ -4,7 +4,7 @@
 #include <span>
 #include <vector>
 
-#include "encounters/valus.h"
+#include "encounters/valus_desc.h"
 #include "heightmap.h"
 #include "math3d.h"
 #include "player.h"
@@ -81,4 +81,4 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
 // are included.
 std::vector<Capsule> entity_collision_capsules(
     const Scene& scene, std::size_t rigIndex, const std::vector<Mat4>& palette,
-    std::span<const CapsuleDesc> capsules = encounters::kValus.capsules);
+    std::span<const CapsuleDesc> capsules);

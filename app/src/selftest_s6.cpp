@@ -370,10 +370,10 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
         update_all_poses(renderer, scene, playbacks, 0.0f, club);
     const PlayerFrame liveFrame =
         player_frame_of(scene, entityRig, donePalettes, heightmap,
-                        camera_look_yaw(camera), /*entityLive=*/true);
+                        camera_look_yaw(camera), ctx.enc(), /*entityLive=*/true);
     const PlayerFrame deadFrame =
         player_frame_of(scene, entityRig, donePalettes, heightmap,
-                        camera_look_yaw(camera), /*entityLive=*/false);
+                        camera_look_yaw(camera), ctx.enc(), /*entityLive=*/false);
     if (liveFrame.entityCapsules.empty() || !deadFrame.entityCapsules.empty() ||
         deadFrame.jointWorld || deadFrame.weakpointProxy) {
         std::fprintf(stderr,

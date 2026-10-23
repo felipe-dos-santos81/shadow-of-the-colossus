@@ -338,9 +338,9 @@ void maybe_club_swing(Encounter& encounter, SfxQueue* sfx) {
     if (encounter.attack != ValusAttack::Club || encounter.attackSwinged) {
         return;
     }
-    if (!(encounter.attackSeconds >=
-          valus_attack_desc(ValusAttack::Club, *encounter.desc)->swingSeconds)) {
-        return;
+    const AttackDesc* club = valus_attack_desc(ValusAttack::Club, *encounter.desc);
+    if (club == nullptr || !(encounter.attackSeconds >= club->swingSeconds)) {
+        return;  // no club row (another colossus), or not yet at the swing
     }
     encounter.attackSwinged = true;
     if (sfx != nullptr) {
@@ -627,7 +627,7 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
 PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                             const std::vector<std::vector<Mat4>>& palettes,
                             const Heightmap& heightmap, float cameraYawDeg,
-                            bool entityLive, const EncounterDesc& desc) {
+                            const EncounterDesc& desc, bool entityLive) {
     PlayerFrame frame;
     frame.bands = desc.bands;
     frame.scene = &scene;
@@ -639,9 +639,9 @@ PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
             return posed_joint_world_position(scene, entityRig, palettes[entityRig],
                                               std::string(name), out);
         };
-        frame.weakpointProxy = [&scene, entityRig, &palettes,
-                                &desc](int weakpoint, Vec3& center, float& radius) {
-            const char* material = weakpoint_material_name(desc.weakpoints, weakpoint);
+        frame.weakpointProxy = [&scene, entityRig, &palettes, weakpoints = desc.weakpoints](
+                                   int weakpoint, Vec3& center, float& radius) {
+            const char* material = weakpoint_material_name(weakpoints, weakpoint);
             if (material == nullptr) {
                 return false;
             }
@@ -653,23 +653,6 @@ PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
         frame.entityCapsules = entity_capsules(scene, palettes, desc);
     }
     return frame;
-}
-
-void update_climb_camera(Camera& camera, CameraClimb& climb, const PlayerState& player,
-                         const PlayerCombat& combat, const PlayerFrame& frame, float dragDx,
-                         float dragDy, float wheelDelta, bool recenter, float dtSeconds) {
-    if (climb.active && !recenter) {
-        camera_climb_update(camera, climb, player.position, dragDx, dragDy, wheelDelta,
-                            dtSeconds);
-        return;
-    }
-    Vec3 point{};
-    Vec3 normal{};
-    if (!climb_surface_point(climb_band(combat.band), frame.jointWorld, combat.bandT,
-                             player.position, point, normal)) {
-        normal = Vec3{};
-    }
-    camera_climb_enter(camera, climb, player.position, normal);
 }
 
 void start_encounter_one_shot(Playback& playback, Encounter& encounter, int clipIndex) {
@@ -860,8 +843,8 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
 
 void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
                         const PlayerFrame& frame, const CombatTuning& tuning,
-                        ValusAttack attack, SfxQueue* sfx,
-                        StepEvents* events, const EncounterDesc& desc) {
+                        ValusAttack attack, const EncounterDesc& desc,
+                        SfxQueue* sfx, StepEvents* events) {
     if (attack == ValusAttack::None) {
         return;
     }

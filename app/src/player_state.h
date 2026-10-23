@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 
+#include "camera.h"
 #include "collision.h"
 #include "grab.h"
 #include "heightmap.h"
@@ -250,3 +251,13 @@ bool player_take_damage(PlayerCombat& combat, float damage, bool heavy,
 // player's own state.
 void reset_player_combat(PlayerState& player, PlayerCombat& combat, Vec3 spawnPosition,
                          float spawnYawDeg, const CombatTuning& tuning);
+
+// S11 Task 7 fix: moved here from encounter_rt so a unit test can drive it.
+// Enters the climb orbit on the first attached frame (or on F, `recenter`),
+// seeded outward along the band's surface normal; every later attached frame
+// just keeps the orbit on the attach point. The player position *is* the
+// attach point (the state machine wrote the band surface into it). A band that
+// cannot be resolved enters with a zero normal, which keeps the current yaw.
+void update_climb_camera(Camera& camera, CameraClimb& climb, const PlayerState& player,
+                         const PlayerCombat& combat, const PlayerFrame& frame, float dragDx,
+                         float dragDy, float wheelDelta, bool recenter, float dtSeconds);

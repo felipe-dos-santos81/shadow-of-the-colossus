@@ -148,7 +148,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
     };
     const auto frame_of = [&](const std::vector<std::vector<Mat4>>& palettes) {
         return player_frame_of(scene, entityRig, palettes, heightmap,
-                               camera_look_yaw(camera));
+                               camera_look_yaw(camera), ctx.enc());
     };
 
     // One frame of the timeline: the entity's one-shot clock, the
@@ -196,7 +196,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
             attack_impact_due(encounter.attack, encounter.attackSeconds,
                               encounter.attackHit)) {
             encounter.attackHit = true;
-            apply_valus_impact(combat, player, frame, tuning, encounter.attack,
+            apply_valus_impact(combat, player, frame, tuning, encounter.attack, ctx.enc(),
                                audioOn ? &sfx : nullptr,
                                audioOn ? &events : nullptr);
         }
@@ -661,7 +661,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         const PlayerFrame hitFrame = frame_of(hitPalettes);
         const float healthBeforeBlocked = combat.health;
         const PlayerMode modeBeforeBlocked = combat.mode;
-        apply_valus_impact(combat, player, hitFrame, tuning, ValusAttack::StompL);
+        apply_valus_impact(combat, player, hitFrame, tuning, ValusAttack::StompL, ctx.enc());
         if (combat.health != healthBeforeBlocked ||
             combat.mode != modeBeforeBlocked) {
             throw std::runtime_error(
@@ -732,7 +732,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
                        "club-miss");
         probe_baseline();
         const float healthBeforeMiss = combat.health;
-        apply_valus_impact(combat, player, missFrame, tuning, ValusAttack::Club);
+        apply_valus_impact(combat, player, missFrame, tuning, ValusAttack::Club, ctx.enc());
         clubMissDamage =
             static_cast<int>(std::lround(healthBeforeMiss - combat.health));
         if (clubMissDamage != 0 || combat.mode != PlayerMode::Grounded) {
@@ -755,7 +755,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
                        "stomp-wave");
         probe_baseline();
         const float healthBeforeWave = combat.health;
-        apply_valus_impact(combat, player, waveFrame, tuning, ValusAttack::StompL);
+        apply_valus_impact(combat, player, waveFrame, tuning, ValusAttack::StompL, ctx.enc());
         stompWaveDamage =
             static_cast<int>(std::lround(healthBeforeWave - combat.health));
         const int expectedWave =
@@ -946,7 +946,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
             update_locomotion(playback, scene, input, /*manualClip=*/false);
             const std::vector<std::vector<Mat4>> palettes =
                 update_all_poses(renderer, scene, playbacks, stepSeconds, club);
-            resolve_player_collision(player, entity_capsules(scene, palettes),
+            resolve_player_collision(player, entity_capsules(scene, palettes, ctx.enc()),
                                      heightmap);
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
                           0.0f, /*moving=*/true, stepSeconds);
@@ -985,7 +985,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
 
     std::vector<std::vector<Mat4>> palettes = palettes_now();
     const std::vector<Capsule> capsules =
-        entity_collision_capsules(scene, entityRig, palettes[entityRig]);
+        entity_collision_capsules(scene, entityRig, palettes[entityRig], ctx.enc().capsules);
     if (capsules.empty()) {
         throw std::runtime_error(
             "s42-selftest: the entity rig has no collision capsules");

@@ -75,10 +75,10 @@ SelftestResult run_s3(StageCtx& ctx, RunState& run) {
             update_all_poses(renderer, scene, playbacks, kFixedFrameSeconds, club);
         // The collision hook: after this frame's pose/playback update,
         // before the player transform that is drawn below the loop.
-        resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
+        resolve_player_collision(player, entity_capsules(scene, palettes, ctx.enc()), heightmap);
         if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
             haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
-                                                   entityChest);
+                                                   entityChest, ctx.enc());
             if (targetCamera.active && haveEntityChest) {
                 camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
             }

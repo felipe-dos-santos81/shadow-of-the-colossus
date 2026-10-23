@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "valus.h"
+#include "valus_desc.h"
 
 // Every encounter description, by the manifest's `encounter <id>` (S11 Task 7).
 // A colossus adds its table's header and one row.
