@@ -221,7 +221,7 @@ committed. S11: `scripts/s11-acceptance.sh` green; Valus unchanged; the Quadratu
 7. **Concurrency.** The GPU-width measurement (Task 4) runs three viewers at once, with nothing else
    running; AGENTS.md's "never two acceptances concurrently" is reworded to "never two runs sharing an
    `out/` directory; the runner parallelises within its own `out/verify/<worktree>/`".
-8. **`run_flags`** reproduces seven fields exactly — `frozenSelftest` (main.cpp:325), `interactiveRun`,
+8. **`run_flags`** (amended 2026-10-23, ruling A9: split by availability — `RunFlags run_flags(opts, stage, followMode, returnAvailable)` for the pre-load fields plus S8/S9's `s8Wired`/`s9Wired`/`road` and the folded `scriptedE2e`/`audioStrict`; `SceneFlags scene_flags(opts, stage, followMode, hasEntity, entityRigValid)` for `audioWanted`/`valusBehavior`, called after the manifest loads; `is_frozen_selftest(opts)`) reproduces seven fields exactly — `frozenSelftest` (main.cpp:325), `interactiveRun`,
    `deathWired`, `audioWanted`, `valusBehavior`, `returnWired`, `pumpLoad` — taking every input they read
    (`opts`, the stage, `followMode`, `hasEntity`, `entityRigValid`, `returnAvailable`); the exhaustive test
    covers all their boolean inputs (~32k cases).
