@@ -3,14 +3,18 @@
 #include "anim.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 // The single-header implementations live here, exactly once per binary.
 #define CGLTF_IMPLEMENTATION
@@ -340,6 +344,104 @@ Vec3 transform_point(const Mat4& matrix, Vec3 point) {
         matrix.m[2] * point.x + matrix.m[6] * point.y + matrix.m[10] * point.z + matrix.m[14]};
 }
 
+// Decodes one PNG into RGBA8 (`sourceRelPath` is left to the caller). Returns
+// false when the file is absent or undecodable, with stbi_failure_reason() set
+// — thread-locally, so workers may call this concurrently.
+bool decode_png(const std::filesystem::path& file, TextureCpu& out) {
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    StbPixels pixels;
+    pixels.data = stbi_load(file.string().c_str(), &width, &height, &channels, 4);
+    if (pixels.data == nullptr) {
+        return false;
+    }
+    out.width = width;
+    out.height = height;
+    const std::size_t pixel_bytes =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
+    out.rgba8.assign(pixels.data, pixels.data + pixel_bytes);
+    return true;
+}
+
+// Library-relative PNG path -> its decoded texture, ready for load_glb_into to
+// move into the scene instead of decoding it there.
+using DecodedTextures = std::unordered_map<std::string, TextureCpu>;
+
+// Decodes every PNG the materials of `glbRelPaths` name, each once, on up to
+// hardware_concurrency threads (S7 task 11: the shrine's ~150 unique PNGs).
+// Only the pixels are made here; the serial loads still assign the texture
+// indices, so the order is the serial one whoever finishes first. A glb that
+// does not parse or a PNG that does not decode is simply left out: its serial
+// load reports it exactly as before.
+DecodedTextures decode_textures(const std::filesystem::path& libraryDir,
+                                const std::vector<std::string>& glbRelPaths) {
+    const std::filesystem::path library = std::filesystem::weakly_canonical(libraryDir);
+    std::vector<std::string> paths;
+    std::unordered_set<std::string> seen_glbs;
+    std::unordered_set<std::string> seen_paths;
+    for (const std::string& glb : glbRelPaths) {
+        if (!seen_glbs.insert(glb).second) {
+            continue;
+        }
+        const std::filesystem::path model_path = library / glb;
+        cgltf_options options{};
+        CgltfDocument document;
+        if (cgltf_parse_file(&options, model_path.string().c_str(), &document.data) !=
+            cgltf_result_success) {
+            continue;
+        }
+        for (cgltf_size m = 0; m < document.data->materials_count; ++m) {
+            const cgltf_material& material = document.data->materials[m];
+            // The three slots load_glb_into resolves.
+            for (const cgltf_texture* texture :
+                 {material.pbr_metallic_roughness.base_color_texture.texture,
+                  material.normal_texture.texture, material.emissive_texture.texture}) {
+                if (texture == nullptr || texture->image == nullptr ||
+                    texture->image->uri == nullptr) {
+                    continue;
+                }
+                // load_image's resolution; an escaping URI is its to report.
+                const std::filesystem::path rel =
+                    (model_path.parent_path() / std::filesystem::path(texture->image->uri))
+                        .lexically_normal()
+                        .lexically_relative(library);
+                if (!rel.empty() && *rel.begin() != ".." &&
+                    seen_paths.insert(rel.generic_string()).second) {
+                    paths.push_back(rel.generic_string());
+                }
+            }
+        }
+    }
+
+    std::vector<TextureCpu> textures(paths.size());
+    std::vector<char> decoded_ok(paths.size(), 0);
+    std::atomic<std::size_t> next{0};
+    const auto worker = [&] {
+        for (std::size_t i = next++; i < paths.size(); i = next++) {
+            decoded_ok[i] = decode_png(library / paths[i], textures[i]) ? 1 : 0;
+        }
+    };
+    const std::size_t thread_count = std::min<std::size_t>(
+        std::max(1u, std::thread::hardware_concurrency()), paths.size());
+    std::vector<std::thread> threads;
+    for (std::size_t t = 0; t < thread_count; ++t) {
+        threads.emplace_back(worker);
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    DecodedTextures decoded;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        if (decoded_ok[i] != 0) {
+            textures[i].sourceRelPath = paths[i];
+            decoded.emplace(paths[i], std::move(textures[i]));
+        }
+    }
+    return decoded;
+}
+
 // How one glb lands in the target scene: the world matrix baked into every mesh
 // it contributes, the index its materials start at, and whether it contributes
 // a rig record (`includeRig`) — and, if so, whether that record is the player's
@@ -362,10 +464,11 @@ struct GlbPlacement {
 // from the same library path, so their index already is global).
 // `have_bounds` is the caller's running "some vertex was seen" flag: the
 // scene's bounds are set from the first glb that has vertices and grown by each
-// later one, always in world space.
+// later one, always in world space. `decoded` (optional) holds pixels decoded
+// ahead of time; a PNG found there is moved into the scene, not decoded again.
 void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
                    const std::string& glbRelPath, const GlbPlacement& placement,
-                   bool& have_bounds) {
+                   bool& have_bounds, DecodedTextures* decoded = nullptr) {
     const std::filesystem::path library = std::filesystem::weakly_canonical(libraryDir);
     const std::filesystem::path model_path = library / glbRelPath;
     const std::filesystem::path model_dir = model_path.parent_path();
@@ -426,29 +529,23 @@ void load_glb_into(Scene& scene, const std::filesystem::path& libraryDir,
             return -1;
         }
 
-        const auto shared = scene_textures.find(rel.generic_string());
+        const std::string key = rel.generic_string();
+        const auto shared = scene_textures.find(key);
         if (shared != scene_textures.end()) {
             return shared->second;
         }
 
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        StbPixels pixels;
-        pixels.data = stbi_load(resolved.string().c_str(), &width, &height, &channels, 4);
-        if (pixels.data == nullptr) {
-            std::fprintf(stderr, "sotc-viewer: skipping texture %s: %s\n",
-                         rel.generic_string().c_str(), stbi_failure_reason());
+        TextureCpu texture;
+        DecodedTextures::iterator ready;
+        if (decoded != nullptr && (ready = decoded->find(key)) != decoded->end()) {
+            texture = std::move(ready->second);
+            decoded->erase(ready);
+        } else if (!decode_png(resolved, texture)) {
+            std::fprintf(stderr, "sotc-viewer: skipping texture %s: %s\n", key.c_str(),
+                         stbi_failure_reason());
             return -1;
         }
-
-        TextureCpu texture;
-        texture.width = width;
-        texture.height = height;
-        const std::size_t pixel_bytes =
-            static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
-        texture.rgba8.assign(pixels.data, pixels.data + pixel_bytes);
-        texture.sourceRelPath = rel.generic_string();
+        texture.sourceRelPath = key;
         scene.textures.push_back(std::move(texture));
         const int index = static_cast<int>(scene.textures.size()) - 1;
         scene_textures.emplace(scene.textures.back().sourceRelPath, index);
@@ -692,6 +789,20 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     Scene scene;
     bool have_bounds = false;
 
+    // Every PNG the scene will use, decoded in parallel up front, in load order.
+    std::vector<std::string> glbs;
+    for (const ManifestInstance& instance : manifest.instances) {
+        glbs.push_back(instance.glbRelPath);
+    }
+    glbs.push_back(playerGlbRelPath);
+    for (const ManifestEntity& entity : manifest.entities) {
+        glbs.push_back(entity.placement.glbRelPath);
+    }
+    for (const ManifestPosed& posed : manifest.posed) {
+        glbs.push_back(posed.glb);
+    }
+    DecodedTextures decoded = decode_textures(libraryDir, glbs);
+
     // Static instances: no rig record, meshes keep rig = -1.
     for (const ManifestInstance& instance : manifest.instances) {
         const GlbPlacement placement{
@@ -699,7 +810,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             .materialOffset = static_cast<int>(scene.materials.size()),
         };
         try {
-            load_glb_into(scene, libraryDir, instance.glbRelPath, placement, have_bounds);
+            load_glb_into(scene, libraryDir, instance.glbRelPath, placement, have_bounds, &decoded);
         } catch (const std::runtime_error& error) {
             // Name the manifest's own glb token: the resolved path alone is
             // harder to match back to the instance that placed it.
@@ -715,7 +826,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
         .includeRig = true,
         .dynamic = true,
     };
-    load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds);
+    load_glb_into(scene, libraryDir, playerGlbRelPath, player_placement, have_bounds, &decoded);
 
     // The player's meshes start here (rig 0's meshBegin): everything before is
     // the manifest's instances, everything after is an entity's.
@@ -735,7 +846,8 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             .includeRig = true,
         };
         try {
-            load_glb_into(scene, libraryDir, entity.placement.glbRelPath, placement, have_bounds);
+            load_glb_into(scene, libraryDir, entity.placement.glbRelPath, placement, have_bounds,
+                          &decoded);
         } catch (const std::runtime_error& error) {
             throw std::runtime_error("compose_scene: entity \"" + entity.placement.glbRelPath +
                                      "\": " + error.what());
@@ -776,7 +888,7 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             .includeRig = true,
         };
         try {
-            load_glb_into(scene, libraryDir, posed.glb, placement, have_bounds);
+            load_glb_into(scene, libraryDir, posed.glb, placement, have_bounds, &decoded);
         } catch (const std::runtime_error& error) {
             throw std::runtime_error("compose_scene: posed \"" + posed.glb + "\": " + error.what());
         }
