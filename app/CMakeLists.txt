@@ -14,7 +14,8 @@ add_executable(sotc-viewer
   src/manifest.cpp src/heightmap.cpp src/player.cpp src/collision.cpp src/grab.cpp
   src/player_state.cpp src/hud.cpp src/valus.cpp src/audio.cpp src/wav_io.cpp
   src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
-  src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp)
+  src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp
+  src/quadratus_fight.cpp)
 target_link_libraries(sotc-viewer PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 target_include_directories(sotc-viewer PRIVATE third_party)
 
@@ -48,11 +49,13 @@ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/te
   tests/test_behaviour.cpp tests/test_locomotion.cpp tests/test_run_flags.cpp tests/test_encounter.cpp
   tests/test_quadratus.cpp
   tests/test_quadratus_motion.cpp
+  tests/test_quadratus_fight.cpp
   src/encounter_rt.cpp src/renderer.cpp src/audio_seam.cpp
   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
   src/audio.cpp src/wav_io.cpp src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
-  src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp)
+  src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp
+  src/quadratus_fight.cpp)
 target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 target_include_directories(sotc-app-tests PRIVATE third_party src)
 add_test(NAME unit_tests COMMAND sotc-app-tests)
