@@ -58,11 +58,32 @@ AGRO_CLIPS = horse_a_add_horse_kick horse_a_uma_stand1 horse_a_uma_walk_start \
              horse_a_uma_run_stop1 horse_a_uma_run_stop2 horse_a_uma_run_stop3 \
              horse_a_uma_back_start horse_a_uma_back horse_a_uma_back_stop \
              horse_a_uma_neigh horse_a_uma_neigh_end
+# Quadratus's 58 clips (docs/notes/colossi-census.md, S11 recon), every cp3shadow/anim/boss_a_*.anb,
+# in byte order (LC_ALL=C sort). The order is the clip index. Baked only by `make bake-quadratus`.
+QUADRATUS_CLIPS = boss_a_add_bl_shoulder_top_damage boss_a_add_body_damage \
+                  boss_a_add_br_shoulder_top_damage boss_a_add_fl_foot_damage \
+                  boss_a_add_fl_shoulder_top_damage boss_a_add_fr_foot_damage \
+                  boss_a_add_fr_shoulder_top_damage boss_a_add_hara_r_damage \
+                  boss_a_add_head_damage boss_a_add_insight_dummy boss_a_add_neck_l_damage \
+                  boss_a_add_neck_r_damage boss_a_angry_1 boss_a_attack_l boss_a_attack_l_end \
+                  boss_a_attack_l_loop boss_a_attack_r boss_a_attack_r_cancel \
+                  boss_a_attack_r_end boss_a_attack_r_loop boss_a_attack_r_start boss_a_back \
+                  boss_a_boot boss_a_boot_cancel boss_a_boot_walk_start boss_a_death \
+                  boss_a_death_loop boss_a_down_b_l_end boss_a_down_b_l_loop \
+                  boss_a_down_b_l_start boss_a_down_b_r_end boss_a_down_b_r_loop \
+                  boss_a_down_b_r_start boss_a_down_f_l_end boss_a_down_f_l_loop \
+                  boss_a_down_f_l_start boss_a_down_f_r_end boss_a_down_f_r_loop \
+                  boss_a_down_f_r_start boss_a_limit_pose boss_a_refuse_arm_l \
+                  boss_a_refuse_arm_r boss_a_refuse_head boss_a_refuse_leg_l \
+                  boss_a_refuse_leg_r boss_a_refuse_shoulder boss_a_return_pos \
+                  boss_a_scale_center boss_a_search boss_a_stand boss_a_standby boss_a_turn_l \
+                  boss_a_turn_r boss_a_walk boss_a_walk_end boss_a_walk_start \
+                  boss_a_walk_turn_l boss_a_walk_turn_r
 comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake run shrine plain road viewer shrine-manifest plain-manifest road-manifest probe-check accept clean libview \
+        bake bake-quadratus run shrine plain road viewer shrine-manifest plain-manifest road-manifest probe-check accept clean libview \
         verify verify-long
 
 help: ## List the targets
@@ -97,6 +118,11 @@ bake: publish ## Bake Mono's pose, Wander's 49 clips, Agro's 20 and the sword's 
 		--under models/shadow/characters/agro/_cmn/agro.cmsh --force --clips $(subst $(space),$(comma),$(strip $(AGRO_CLIPS)))
 	$(foreach t,$(SWORD_TEXTURES),$(AWAKE) $(CLI) texture --in "$(GAME_ROOT)/textures/$(t).cptx" \
 		--out "$(LIB)/textures/$(t).png" &&) true
+
+# S11: bakes into the branch's view only (export SOTC_LIB=out/libviews/s11-quadratus); not part of `bake`.
+bake-quadratus: publish ## Bake Quadratus (colossus_02_bull_a) with his 58 clips (rewrites his glb; use a library view)
+	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
+		--under models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.cmsh --force --clips $(subst $(space),$(comma),$(strip $(QUADRATUS_CLIPS)))
 
 inspect: publish ## Inspect one source container (f=models/.../wander.cmsh)
 	$(CLI) inspect "$(GAME_ROOT)/$(f)"
