@@ -27,13 +27,30 @@ CLASSES = {
     "audio": ["tools/re/audio/**", "src/**", LIBPATH, LIBAUDIO],
     "probes": ["tools/re/stage/**", "tools/re/anb/**", "tools/re/s6/**",
                "tools/re/s7/shrine_placements.json", "tools/re/s8/placements.json", "tools/re/s9/**",
-               "out/re/stage/*.manifest", "out/re/stage/arena_paths.txt", LIBGEO],
-    "gpu": ["app/**", "out/re/stage/*.manifest", "tools/re/stage/**", "tools/re/s7/**", "tools/re/s8/**",
-            "tools/re/s9/**", LIB],
+               "out/re/stage/arena_paths.txt", LIBGEO],
+    "gpu": ["app/**", "tools/re/stage/**", "tools/re/s7/**", "tools/re/s8/**", "tools/re/s9/**", LIB],
 }
 # An audio *section* also runs s9's preflight (Wander's clips, the sword PNGs, the placements, the
 # manifests); the runner's decode step does not.
-AUDIO_SECTION = [LIBGEO, "tools/re/s9/placements.json", "out/re/stage/*.manifest"]
+AUDIO_SECTION = [LIBGEO, "tools/re/s9/placements.json"]
+# The out/re/stage/<name>.manifest files a section reads: what its adapter passes the viewer
+# (--manifest, --shrine-manifest, --plain-manifest, --road-manifest; the viewer's defaults are never
+# relied on, every flag is explicit), what its probes check or compose from, and what its preflight
+# requires. A new stage manifest (arena_02, ...) is in no stamp until a section lists it here;
+# test_stamps cross-checks this table against the adapters. A listed manifest that is absent hashes
+# as "absent", so deleting one changes the stamp and the adapter then fails (never a stale PASS).
+MANIFESTS = {
+    "s3": {"gpu": "valus"},
+    "s4": {"probes": "valus encounter", "gpu": "encounter"},
+    "s41": {"gpu": "encounter"},
+    "s42": {"gpu": "encounter"},
+    "s5": {"audio": "encounter", "gpu": "encounter"},
+    "s6": {"probes": "encounter", "audio": "encounter", "gpu": "encounter"},
+    "s7": {"probes": "encounter shrine", "gpu": "encounter shrine"},
+    "s8": {s: "encounter shrine plain" for s in ("probes", "audio", "gpu")},
+    "s9": {s: "encounter shrine plain road" for s in ("probes", "audio", "gpu")},   # via preflight()
+}
+NAMED = "@named:"   # a pattern naming one file that must exist: absent hashes as "absent"
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",
           "tools/verify/stamps.py"]
 SKIP_DIRS = {"build", "bin", "obj", "__pycache__", ".git"}
@@ -89,6 +106,10 @@ class Stamper:
                     if name != ".DS_Store":
                         path = os.path.join(dirpath, name)
                         yield (os.path.relpath(path, root), _file_sha(path))
+        elif pattern.startswith(NAMED):
+            rel = pattern[len(NAMED):]
+            path = os.path.join(root, rel)
+            yield (rel, _file_sha(path) if os.path.isfile(path) else "absent")
         else:
             for path in sorted(glob.glob(os.path.join(root, pattern))):
                 if os.path.isfile(path):
@@ -138,4 +159,8 @@ class Stamper:
             own.append("tools/re/audio/%s_map.json" % milestone)
         if section == "audio":
             own += AUDIO_SECTION
+        # an undeclared adapter falls back to every manifest (over-invalidates, never stale)
+        names = MANIFESTS.get(milestone, {}).get(section)
+        own += ([NAMED + "out/re/stage/%s.manifest" % n for n in names.split()] if names is not None
+                else ["out/re/stage/*.manifest"])
         return self.stamp(CLASSES[section] + VERIFY + own, "%s.%s" % (milestone, section))

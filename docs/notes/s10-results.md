@@ -59,8 +59,10 @@ Not done: the scratch-branch mutation check of bless step 5 (a changed selftest 
 FAIL); `test_run.py` covers a changed line against fake sections only.
 
 Known limits (deferred, none affects a PASS verdict):
-- The stamps hash every `out/re/stage/*.manifest`, so changing one (e.g. `arena_02.manifest`) re-runs every
-  section that reads any.
+- (Fixed: `fix(verify): stamp only the manifests a section reads`.) A section's stamp hashes only the
+  `out/re/stage/<name>.manifest` files it reads, declared in `stamps.MANIFESTS` and cross-checked against the
+  adapters by `test_stamps.py`; a new stage manifest (e.g. `arena_02`) joins a section's stamp only when its
+  adapter starts reading it, and a listed manifest that is missing hashes as `absent`.
 - `--quick` skips the four s9 refusal runs labelled `[e2e]` from golden comparison; their bash gates still
   run.
 - A git worktree needs `git submodule update --init --recursive` (nested submodules) before dotnet or

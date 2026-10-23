@@ -10,7 +10,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stamps  # noqa: E402
 
-MILESTONES = {"s3": ["gpu"], "s4": ["probes", "gpu"], "s5": ["audio", "gpu"], "s8": ["probes", "audio", "gpu"],
+MILESTONES = {"s3": ["gpu"], "s4": ["probes", "gpu"], "s41": ["gpu"], "s42": ["gpu"], "s5": ["audio", "gpu"],
+              "s6": ["probes", "audio", "gpu"], "s7": ["probes", "gpu"], "s8": ["probes", "audio", "gpu"],
               "s9": ["probes", "audio", "gpu"]}
 STEPS = ["dotnet", "ctest", "audio"]
 ALL = STEPS + ["%s.%s" % (m, s) for m, ss in MILESTONES.items() for s in ss]
@@ -24,6 +25,20 @@ def by(*classes):
 # the audio sections (not the runner's decode step) run s9's preflight: the clips, the sword PNGs,
 # the placements and the manifests
 AUDIO_SECTIONS = {k for k in ALL if k.endswith(".audio")}
+
+
+# the sections that read each stage manifest (what the adapters pass the viewer / check / preflight)
+def of(*milestones, **only):
+    return {k for k in ALL if k.split(".")[0] in milestones} | set(only.get("plus", ()))
+
+
+MANIFEST_READERS = {
+    "valus": {"s3.gpu", "s4.probes"},
+    "encounter": of(*[m for m in MILESTONES if m != "s3"]) - {"s7.audio"},
+    "shrine": of("s7", "s8", "s9"),
+    "plain": of("s8", "s9"),
+    "road": of("s9"),
+}
 
 
 # file -> the steps whose stamp must change when only that file changes
@@ -43,7 +58,7 @@ CASES = {
     "app/src/shrine_points.h": by("ctest", "gpu"),
     "app/src/ride_points.h": by("ctest", "gpu"),
     "app/src/road_points.h": by("ctest", "gpu"),
-    "out/re/stage/encounter.manifest": by("probes", "gpu") | AUDIO_SECTIONS,
+    **{"out/re/stage/%s.manifest" % n: s for n, s in MANIFEST_READERS.items()},
     "tools/re/stage/probe.py": by("probes", "gpu"),   # s9.gpu re-composes the road
     "tools/re/anb/probe.py": by("probes"),
     "tools/re/s6/s6_asset_gate.py": by("probes"),
@@ -65,7 +80,8 @@ CASES = {
     "tools/verify/golden/s5/gpu/run.txt": {"s5.gpu"},
     "tools/verify/golden/s8/probes/compose.txt": {"s8.probes"},
 }
-UNCHANGED = ["app/build/CMakeCache.txt", "src/BpConvert.Cli/bin/x.dll", "lib/textures/t.png", "lib/textures/models/m.png",
+UNCHANGED = ["out/re/stage/zz_test.manifest", "out/re/stage/arena_02.manifest",   # no section reads these
+             "app/build/CMakeCache.txt", "src/BpConvert.Cli/bin/x.dll", "lib/textures/t.png", "lib/textures/models/m.png",
              "lib/audio/clip.txt", "docs/notes/x.md"]
 
 
@@ -83,7 +99,27 @@ def all_stamps(root, lib):
     return out
 
 
+def adapter_manifests():
+    """{milestone.section: names} read off the adapters: the out/re/stage/<name>.manifest variables
+    a section's body uses (s9's sections call preflight(), which requires four of them)."""
+    import re
+    import run
+    out = {}
+    for m in MILESTONES:
+        text = run.read(os.path.join(run.HERE, m + ".sh"))
+        names = {v: n for v, n in re.findall(r'^(\w+)="\$repo_root/out/re/stage/([\w-]+)\.manifest"', text, re.M)}
+        pre = re.search(r"^preflight\(\) \{\n.*?(?=^section_)", text, re.M | re.S)
+        for section, body in run.sections_of(m).items():
+            if re.search(r"^preflight$", body, re.M):
+                body += pre.group(0)
+            out["%s.%s" % (m, section)] = {n for v, n in names.items() if re.search(r"\$\{?%s\b" % v, body)}
+    return out
+
+
 def main():
+    declared = {"%s.%s" % (m, s): set(n.split()) for m, ss in stamps.MANIFESTS.items() for s, n in ss.items()}
+    assert declared == adapter_manifests(), "stamps.MANIFESTS drifted from the adapters: %s vs %s" % (
+        sorted(declared.items()), sorted(adapter_manifests().items()))
     with tempfile.TemporaryDirectory() as root:
         lib = os.path.join(root, "lib")
         for rel in list(CASES) + UNCHANGED:
@@ -127,8 +163,17 @@ def main():
         write(root, "out/re/stage/encounter.manifest", src % ("/Users/x/wt-b", "1" * 64))
         assert changed() == set(), "the `# source:` worktree prefix is not an input"
         write(root, "out/re/stage/encounter.manifest", src % ("/Users/x/wt-b", "2" * 64))
-        assert changed() == by("probes", "gpu") | AUDIO_SECTIONS, "the source's sha is an input"
+        assert changed() == MANIFEST_READERS["encounter"], "the source's sha is an input"
         base = all_stamps(root, lib)
+
+        # a manifest a section reads that goes missing changes its stamp (the adapter then fails):
+        # never a stale PASS
+        for name, want in MANIFEST_READERS.items():
+            rel = "out/re/stage/%s.manifest" % name
+            os.rename(os.path.join(root, rel), os.path.join(root, rel + ".gone"))
+            assert changed() == want, "deleting %s: changed %s" % (rel, sorted(changed()))
+            os.rename(os.path.join(root, rel + ".gone"), os.path.join(root, rel))
+            assert changed() == set(), rel
 
         subprocess.run(git + ["update-index", "--cacheinfo",
                               "160000,%s,third_party/PSO2-Aqua-Library" % ("2" * 40)], check=True)
