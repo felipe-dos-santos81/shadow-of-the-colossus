@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -580,4 +581,109 @@ TEST_CASE("a backdrop mesh above a floor changes no ground sample") {
     Scene only = scene_from_triangles({{0, 9, 0}, {10, 9, 0}, {0, 9, 10}});
     only.meshes[0].ground = false;
     CHECK_THROWS_AS(build_heightmap(only, 1.0f), std::runtime_error);
+}
+
+// ---- S9: raw nodes, rays and the backdrop ray grid ---------------------------
+
+namespace {
+
+bool is_nan(float v) { return std::isnan(v); }
+
+// Ground x 0..3 at y = 5, a hole x 3..10, ground x 10..14 at y = 3 (z 0..10).
+Heightmap holed_map() {
+    std::vector<Vec3> tris;
+    add_floor(tris, 0, 3, 0, 10, 5.0f);
+    add_floor(tris, 10, 14, 0, 10, 3.0f);
+    return build_heightmap(scene_from_triangles(tris), 1.0f);
+}
+
+}  // namespace
+
+TEST_CASE("heightmap_node does not fill, clamp or interpolate") {
+    const Heightmap hm = holed_map();
+    // Over the hole heightmap_sample fills from the nearest ground; the raw node is empty.
+    CHECK(is_nan(heightmap_node(hm, {6, 0, 5})));
+    CHECK_FALSE(is_nan(heightmap_sample(hm, {6, 0, 5})));
+    // Out of bounds heightmap_sample clamps; the raw node is NaN.
+    CHECK(is_nan(heightmap_node(hm, {-1, 0, 5})));
+    CHECK(is_nan(heightmap_node(hm, {5, 0, 11})));
+    CHECK_FALSE(is_nan(heightmap_sample(hm, {-1, 0, 5})));
+    CHECK(is_nan(heightmap_node(hm, {std::nanf(""), 0, 5})));
+    // The nearest node's own value elsewhere (no interpolation).
+    CHECK(heightmap_node(hm, {1, 0, 5}) == doctest::Approx(5.0f));
+    CHECK(heightmap_node(hm, {12.4f, 0, 5.4f}) == doctest::Approx(3.0f));
+    CHECK(is_nan(heightmap_node(Heightmap{}, {0, 0, 0})));
+}
+
+TEST_CASE("ray_march hits a raised block at its face") {
+    const Heightmap hm = holed_map();
+    // Above the block's top (3): flies over it.
+    CHECK(is_nan(ray_march(hm, {4, 4, 5}, {1, 0, 0}, 9.0f, 0.5f)));
+    // Below its top (y 2) the block is a wall: hit at its face (+- step).
+    const float t = ray_march(hm, {4, 2, 5}, {1, 0, 0}, 9.0f, 0.5f);
+    CHECK_FALSE(is_nan(t));
+    CHECK(t == doctest::Approx(5.5f));  // x = 9.5 rounds to node 10, the block face
+}
+
+TEST_CASE("ray_march passes over a hole") {
+    const Heightmap hm = holed_map();
+    // y 2 inside the hole: a filled hole would read the 5 m ground (> 2) and hit at once.
+    CHECK(is_nan(ray_march(hm, {5, 4, 5}, {1, 0, 0}, 3.0f, 0.25f)));
+    CHECK(is_nan(ray_march(hm, {4, 4, 5}, {0, 0, 1}, 4.0f, 0.25f)));
+}
+
+TEST_CASE("ray_march: beyond maxLen, out of bounds and on an empty map is no hit") {
+    const Heightmap hm = holed_map();
+    // The block face is 6 away; maxLen 5 stops short of it.
+    CHECK(is_nan(ray_march(hm, {4, 2, 5}, {1, 0, 0}, 5.0f, 0.5f)));
+    // Leaving the bounds with nothing hit.
+    CHECK(is_nan(ray_march(hm, {5, 6, 5}, {-1, 0, 0}, 100.0f, 0.5f)));
+    CHECK(is_nan(ray_march(hm, {20, 0, 5}, {1, 0, 0}, 100.0f, 0.5f)));
+    CHECK(is_nan(ray_march(Heightmap{}, {0, 0, 0}, {1, 0, 0}, 10.0f, 0.5f)));
+    // A bad step is no hit, not a hang.
+    CHECK(is_nan(ray_march(hm, {4, 2, 5}, {1, 0, 0}, 9.0f, 0.0f)));
+}
+
+TEST_CASE("build_backdrop_grid rasterizes only the ground = false static meshes") {
+    Scene scene = scene_from_triangles({{0, 0, 0}, {10, 0, 0}, {0, 0, 10}});
+    MeshCpu backdrop;  // a quad at y = 20 over x 30..40, z 0..10
+    backdrop.vertices = {vertex_at({30, 20, 0}), vertex_at({40, 20, 0}), vertex_at({30, 20, 10}),
+                         vertex_at({40, 20, 10})};
+    backdrop.indices = {0, 1, 2, 1, 3, 2};
+    backdrop.ground = false;
+    MeshCpu rigged = backdrop;  // a rigged mesh never rasterizes, backdrop or not
+    rigged.rig = 0;
+    for (Vertex& v : rigged.vertices) v.px += 500.0f;
+    scene.meshes.push_back(std::move(backdrop));
+    scene.meshes.push_back(std::move(rigged));
+    scene.boundsMax = {540, 20, 10};
+
+    const Heightmap before = build_heightmap(scene, 1.0f);
+    const Heightmap grid = build_backdrop_grid(scene, 1.0f);
+    CHECK(grid.maxLayers == 0);
+    CHECK(grid.boundsMin.x == doctest::Approx(30.0f));
+    CHECK(grid.boundsMax.x == doctest::Approx(40.0f));
+    CHECK(grid.boundsMax.z == doctest::Approx(10.0f));
+    CHECK(grid.width == 11);
+    CHECK(heightmap_node(grid, {35, 0, 5}) == doctest::Approx(20.0f));
+    // The ground triangle (x 0..10) is not in this grid.
+    CHECK(is_nan(heightmap_node(grid, {5, 0, 5})));
+
+    // The scene's own map is the same with or without the call.
+    const Heightmap after = build_heightmap(scene, 1.0f);
+    CHECK(after.heights.size() == before.heights.size());
+    CHECK(std::memcmp(after.heights.data(), before.heights.data(),
+                      before.heights.size() * sizeof(float)) == 0);
+    CHECK(heightmap_node(after, {5, 0, 2}) == doctest::Approx(0.0f));
+    CHECK(is_nan(heightmap_node(after, {35, 0, 5})));
+}
+
+TEST_CASE("build_backdrop_grid is empty when the scene has no backdrops") {
+    const Scene scene = scene_from_triangles({{0, 0, 0}, {10, 0, 0}, {0, 0, 10}});
+    const Heightmap grid = build_backdrop_grid(scene, 1.0f);
+    CHECK(grid.width == 0);
+    CHECK(grid.height == 0);
+    CHECK(grid.heights.empty());
+    CHECK(is_nan(ray_march(grid, {0, 0, 0}, {1, 0, 0}, 10.0f, 0.5f)));
+    CHECK(is_nan(heightmap_node(grid, {0, 0, 0})));
 }

@@ -557,11 +557,14 @@ TEST_CASE("S8: agro carries the kick at 0 then the 19 riding clips, by name") {
     }
 }
 
-TEST_CASE("S8: wander carries the 26 ride clips at 17..42, after the wake cuts") {
+TEST_CASE("S8/S9: wander carries the 26 ride clips at 17..42, then (S9 view) the six raise clips at 43..48") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     const auto& clips = player_rig(scene).animations;
     check_wander_s2s6_clips(clips);
-    REQUIRE(clips.size() == 43);
+    // The base library (main's bake) has 43; S9's library view has 49 — like the
+    // audio slice case, accept either and pin the raise clips only where baked.
+    const bool raised = clips.size() == 49;
+    REQUIRE((clips.size() == 43 || raised));
     CHECK(clips[15].name == "player_a_home_boss01_cut04");
     CHECK(clips[16].name == "player_a_home_boss01_cut05");
     for (int i = 0; i < 19; ++i) {
@@ -573,7 +576,14 @@ TEST_CASE("S8: wander carries the 26 ride clips at 17..42, after the wake cuts")
                            "player_a_uma_stand_getoff_fall", "player_a_whistle",
                            "player_a_whistle_near"};
     for (int i = 0; i < 7; ++i) CHECK(clips[36 + i].name == tail[i]);
-    for (int i = 17; i < 43; ++i) CHECK(!clips[i].channels.empty());
+    // S9 (design D9): the raise clips are appended after S8's 43, indices kept.
+    const char* raise_clips[6] = {"player_a_hoist_sword_start", "player_a_hoist_sword_loop",
+                                  "player_a_hoist_sword_end", "player_a_uma_hoist_sword_start",
+                                  "player_a_uma_hoist_sword_loop", "player_a_uma_hoist_sword_end"};
+    if (raised) {
+        for (int i = 0; i < 6; ++i) CHECK(clips[43 + i].name == raise_clips[i]);
+    }
+    for (std::size_t i = 17; i < clips.size(); ++i) CHECK(!clips[i].channels.empty());
 }
 
 TEST_CASE("S7: wander carries the wake clips after its S2-S6 set, mono her death loop") {

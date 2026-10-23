@@ -360,3 +360,30 @@ TEST_CASE("S8: the ride cue table maps exactly the S8 events of s8_map.json") {
     CHECK(ride_cue_clip(RideSfx::HoofGallop, 4) == "agro.hoof_gallop.4");
     CHECK(std::string(ride_sfx_name(RideSfx::StopHorse)) == "stop_horse");
 }
+
+// --- S9 Task 4: the sword's cue table ----------------------------------------
+
+TEST_CASE("S9: the sword cue table covers every SwordSfx; the S5/S6/S8 tables are unchanged") {
+    std::set<std::string> clips;
+    for (int i = 0; i < static_cast<int>(SwordSfx::Count); ++i) {
+        const SwordSfx id = static_cast<SwordSfx>(i);
+        const SwordCue& cue = sword_cue(id);
+        CAPTURE(sword_sfx_name(id));
+        CHECK(cue.clip != nullptr);
+        CHECK(cue.gain > 0.0f);
+        CHECK(clips.insert(cue.clip).second);
+    }
+    CHECK(clips == std::set<std::string>{"sword.shimmer", "sword.search"});
+    CHECK(std::string(sword_cue(SwordSfx::Shimmer).clip) == "sword.shimmer");
+    CHECK(sword_cue(SwordSfx::Shimmer).gain == doctest::Approx(0.6f));
+    CHECK(std::string(sword_cue(SwordSfx::Search).clip) == "sword.search");
+    CHECK(sword_cue(SwordSfx::Search).gain == doctest::Approx(0.7f));
+    CHECK(std::string(sword_sfx_name(SwordSfx::Shimmer)) == "shimmer");
+    CHECK(std::string(sword_sfx_name(SwordSfx::Search)) == "search");
+
+    // The earlier tables still hold their pinned sizes and rows.
+    CHECK(static_cast<int>(RideSfx::Count) == 8);
+    CHECK(std::string(ride_cue(RideSfx::Kick).event) == "player.kick");
+    CHECK(ride_cue(RideSfx::HoofWalk).variants == 10);
+    CHECK(std::string(sfx_name(Sfx::ValusReaction)) == "valus_reaction");
+}

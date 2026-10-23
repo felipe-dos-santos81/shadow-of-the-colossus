@@ -6,6 +6,31 @@ This file is workspace guidance and is tracked with the project.
 
 ## Status (2026-10-23)
 
+**Milestone S9 "The road to Valus" — implemented; scripted acceptance green, user walk PENDING.**
+Interactive play's plain is now the **road** (`out/re/stage/road.manifest`, `probe.py compose --stage
+road`: S8's plain + the arena's six entrance glbs as ground + `arena_01.glb` as a backdrop): the entrance
+stairs and corridor are walkable, the corridor's dead end is a door (`road_points::kDoorCorridor`) into
+Valus's arena at its spawn with a fresh encounter, and a box on the arena's rim (`kDoorArena`) leads back
+onto the corridor floor; Agro's pose is stored when the player leaves the road by either door and she
+waits there (`R` clears it). Holding `C` (gamepad left shoulder; the game's R2, remapped) raises
+`wander_sword.glb` (Wander's six raise clips at 43…48; mounted only at Stand): in sunlight the eight-line
+fan opens around the camera's look and closes as the look nears Valus's chest, locking at `k < 0.01`; a
+locked ray (150 m, raw heightmap nodes + a backdrop ray grid) sparks where it lands; in shade (a 300 m
+march toward the authored sun) the light fades at 9.0/s. The shimmer loops while raised and the search
+cue plays once per lock (`tools/re/audio/s9_map.json`, 36 entries). `--s8-selftest`/`--s8-e2e` still load
+`plain.manifest` and never see S9 state. The proof is `--s9-selftest --s9-stills out/s9/stills` (15
+`s9-*` lines + four stills) and `--stage shrine --s9-e2e` (shrine → road → mount → gallop → lock →
+stairs → corridor door → arena → the lethal hit → death → shrine); the acceptance script is
+`scripts/s9-acceptance.sh` (it runs the frozen S8 chain first, then decodes the S9 map itself), and the
+recorded numbers are in `docs/notes/s9-results.md`. Valus's chest is 150–157 m from the road's sunlit
+points, beyond the 150 m ray, so every road lock lands on the entrance's east bank (ruling B6). Authored:
+the 0.9 m × raise camera shoulder shift, the 90° × raise grip standing in for the hoist's missing
+additive layer, the sun, the cue timings. Known gaps: the climb, the moving/additive raises, raised
+walking, the sky and weak-point beams, the sword glow, skirts drawn opaque, the black sky, the
+low-confidence shimmer pick. **S9's bake (Wander 49 clips, the sword PNGs, the 36-entry audio, the 10
+cmdl-fix glbs) lives in the library view `out/libviews/s9-road` until S9's merge promotes it to the
+base.** The user's walk is still the user's to fill in.
+
 **Milestone S8 "Agro" — implemented; scripted acceptance green, user walk PENDING.**
 The shrine's front door (an authored trigger box, entry only; `app/src/door.h`: FadeOut 1.0 s → Load →
 FadeIn 1.5 s) now leads onto the plain: a third stage `plain` (`out/re/stage/plain.manifest`, composed by
@@ -86,8 +111,8 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 |---|---|
 | `app/` | the native viewer (`app/src/`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6`/`s7` are invoked unchanged as later milestones' regressions |
-| `docs/notes/` | RE records and per-milestone results notes (`s8-results.md` is this milestone's; `s8-recon.md` is its RE gates) |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6`/`s7`/`s8` are invoked unchanged as later milestones' regressions |
+| `docs/notes/` | RE records and per-milestone results notes (`s9-results.md` is this milestone's; `s9-recon.md` is its RE gates) |
 | `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
@@ -108,6 +133,12 @@ the tests at the view, so a branch's re-bakes and audio decodes never touch the 
 is cloned, no symlinks (the converter rewrites every referenced texture PNG on a bake and would write
 through). Delete a view with `rm -rf out/libviews/<name>` when the branch is done.
 
+S9 works in `out/libviews/s9-road` (`export SOTC_LIB=<repo>/out/libviews/s9-road`): its bake (Wander's
+49 clips, the four sword PNGs, the 36-entry audio manifest, the sibling-`.cmdl` fix: 10 sources rebaked, 8 glbs changed)
+is promoted to the base `out/library` at S9's merge, after `main`'s pins (Wander `== 43`, audio 8/10/34)
+are relaxed with the user's OK. Until then `scripts/s9-acceptance.sh` refuses a base library without the
+S9 bake.
+
 The machine suspends idle background work. **Every viewer run and every acceptance run must be
 wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Never run two
 acceptances concurrently.
@@ -115,10 +146,11 @@ acceptances concurrently.
 ## Build and test
 
 `make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make plain`, `make
-accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 43 clips (the 15 S2–S6 clips,
-the two S7 wake cuts, then the 26 S8 ride clips) and Agro's 20 (the S4.2 kick at index 0, then the 19
-riding clips) into `$SOTC_LIB` (the view, when exported) with `--force`; `make run`/`make accept` compose the shrine and
-plain manifests first. The underlying commands:
+accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 49 clips (the 15 S2–S6 clips,
+the two S7 wake cuts, the 26 S8 ride clips, then the six S9 raise clips at 43…48), Agro's 20 (the S4.2
+kick at index 0, then the 19 riding clips) and the sword's light atlases into `$SOTC_LIB` (the view, when
+exported) with `--force`; `make audio` decodes the S9 map (36 entries); `make run`/`make accept` compose
+the shrine, plain and road manifests first. The underlying commands:
 
 ```bash
 dotnet build BpConvert.sln
@@ -126,10 +158,10 @@ dotnet test tests/BpConvert.Tests -v q
 cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release
 cmake --build app/build -j
 ctest --test-dir app/build --output-on-failure
-# the curated audio slice into <SOTC_LIB>/audio/ — 8 cues for S5, 10 for S6, 34 for S8
+# the curated audio slice into <SOTC_LIB>/audio/ — 8 cues for S5, 10 for S6, 34 for S8, 36 for S9
 dotnet publish src/BpConvert.Cli -c Release -o out/bin
 caffeinate -dimsu dotnet exec out/bin/bp-convert.dll audio --root "$SOTC_GAME_ROOT" \
-  --out "$SOTC_LIB" --map tools/re/audio/s8_map.json --force
+  --out "$SOTC_LIB" --map tools/re/audio/s9_map.json --force
 ```
 
 Dependencies: SDL3 and SDL3_ttf via Homebrew (`brew install sdl3 sdl3_ttf`).
@@ -200,14 +232,34 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --stage shrine --s8-e2e                    # the interactive loop, scripted: door -> ride -> door -> R
 ```
 
+In interactive play the plain is the road (`--road-manifest PATH` overrides
+`out/re/stage/road.manifest`; `make road` starts there): ride to the arena's entrance stairs, up them and
+into the corridor; its dead end fades into Valus's arena, and a box on the arena's rim above it fades
+back onto the corridor floor, where Agro waits where she was left. Hold `C` (gamepad left shoulder) to
+raise the sword — on foot it stops you (`W`/`A`/`S`/`D` turn), mounted only at a stand; release lowers
+it. An S8 acceptance leaves S8's 34 in the audio manifest: re-run `make audio` (36 entries) before any
+`--s9-*` run. The S9 proof:
+
+```bash
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s9-selftest --s9-stills out/s9/stills    # the raise, the lock, the shade, both doors + the stills
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/encounter.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --stage shrine --s9-e2e                    # the interactive loop, scripted: shrine -> road -> Valus -> shrine
+```
+
 ## Acceptance
 
 ```bash
-caffeinate -dimsu ./scripts/s8-acceptance.sh   # S8 + S7 (which runs S6 → S5 → S4.2 → S4.1 → S4 → S3)
+export SOTC_LIB=<repo>/out/libviews/s9-road   # until S9's merge promotes the bake to out/library
+caffeinate -dimsu ./scripts/s9-acceptance.sh   # S9 + S8 (which runs S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s7-acceptance.sh`, `scripts/s6-acceptance.sh`, `scripts/s5-acceptance.sh`,
-`scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh` or `scripts/s4-acceptance.sh` for an S8
-change: they are the regression.
+Never modify `scripts/s8-acceptance.sh`, `scripts/s7-acceptance.sh`, `scripts/s6-acceptance.sh`,
+`scripts/s5-acceptance.sh`, `scripts/s42-acceptance.sh`, `scripts/s41-acceptance.sh`,
+`scripts/s4-acceptance.sh` or `scripts/s3-acceptance.sh` for an S9 change: they are the regression.
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
 measured values, not adjectives.

@@ -10,7 +10,7 @@ import os
 import subprocess
 
 GITLINK = "@gitlink"    # the PSO2-Aqua-Library submodule SHA recorded in the index
-LIB = "@lib"            # the library: its realpath, glbs, *.clips.json and audio/audio.manifest
+LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, audio/, textures/vfx/ PNGs
 LIBPATH = "@libpath"    # the library's realpath only (where the audio decode writes)
 LIBAUDIO = "@libaudio"  # the library's audio/audio.manifest content (8/10/34 entries: who decoded last)
 
@@ -24,7 +24,7 @@ CLASSES = {
     "probes": ["tools/re/stage/**", "tools/re/anb/**", "tools/re/s6/**",
                "tools/re/s7/shrine_placements.json", "tools/re/s8/placements.json", "tools/re/s9/**",
                "out/re/stage/*.manifest", "out/re/stage/arena_paths.txt", LIB],
-    "gpu": ["app/**", "out/re/stage/*.manifest", "tools/re/s7/**", "tools/re/s8/**", LIB],
+    "gpu": ["app/**", "out/re/stage/*.manifest", "tools/re/s7/**", "tools/re/s8/**", "tools/re/s9/**", LIB],
 }
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",
           "tools/verify/stamps.py"]
@@ -91,11 +91,16 @@ class Stamper:
             # fingerprinted by size + mtime, not content (3 GB); a bake rewrites both the glb and its
             # textures, so the glb's mtime moves, and a re-decode rewrites the WAVs even when the
             # manifest is byte-identical. Hash content if a texture-only change ever needs catching.
-            dirs[:] = sorted(d for d in dirs if not (dirpath == real and d == "textures"))
+            # textures/vfx/ (a dozen files: S9's four sword PNGs among them) is walked; the rest of
+            # textures/ is not.
+            if dirpath == os.path.join(real, "textures"):
+                dirs[:] = [d for d in dirs if d == "vfx"]
+            dirs[:] = sorted(dirs)
             for name in sorted(files):
                 path = os.path.join(dirpath, name)
                 rel = os.path.relpath(path, real)
-                if name.endswith(".glb") or (name.endswith(".wav") and rel.startswith("audio" + os.sep)):
+                if (name.endswith(".glb") or (name.endswith(".wav") and rel.startswith("audio" + os.sep))
+                        or (name.endswith(".png") and rel.startswith(os.path.join("textures", "vfx", "")))):
                     st = os.stat(path)
                     h.update(("%s %d %d\n" % (rel, st.st_size, st.st_mtime_ns)).encode())
                 elif name.endswith(".clips.json") or rel == os.path.join("audio", "audio.manifest"):

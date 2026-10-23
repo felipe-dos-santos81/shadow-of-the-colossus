@@ -118,6 +118,26 @@ horse models/shadow/characters/agro/_cmn/agro.glb 301 -7.361 -203 0 1 0 0 1 1 1
 spawn 301 -7.14 -210 0
 ```
 
+## Example (the road, S9)
+
+`out/re/stage/road.manifest` (gitignored; `probe.py compose --stage road`) is the plain manifest
+byte-for-byte (header, 7 instances, 27 backdrops, the `horse`, the `spawn`), then a comment block,
+the six `levels/arena_01_entrance` glbs as identity `instance` lines (`arena_01_entrance`,
+`_furwall`, `_ground`, `_skirt`, `_skirt_02`, `_stairs`) and one identity `backdrop` naming
+`levels/arena_01/_cmn/arena_01.glb`. The six are the encounter's 18 entrance instances minus the 8
+hash-suffixed stubs, `_stairs_lod1`, `arena_01_entrance_low1` (excluded by name: it survives both the
+`_lod[0-9]` and the `_low` suffix rule), the demoblocker and `arena01e_occluder`; the horse-ramp
+collision glb is not in the set. Pins in `STAGES["road"]`: 13 instances (7 + 6), 28 backdrops (27 + 1),
+3620 meshes and 2,256,460 vertices over the 13 + 28 + 1 glbs, spawn `301 -7.14 -210 0`, sha256
+`3af63a18f88b12de32d07c4d10a33e0d91ed26306bc8193f0dfdcb97b70a5df4`. `compose --stage road` and
+`check-manifest --stage road` use their own `compose_road`/`road_checks` (the plain helpers are
+untouched); the check asserts the plain prefix is byte-equal to a fresh plain compose.
+
+```text
+instance models/shadow/levels/arena_01_entrance/_cmn/arena_01_entrance_stairs.glb 0 0 0 0 0 0 1 1 1 1
+backdrop models/shadow/levels/arena_01/_cmn/arena_01.glb 0 0 0 0 0 0 1 1 1 1
+```
+
 ## Example (arena_02, S11 — Quadratus)
 
 `out/re/stage/arena_02.manifest` (gitignored; `probe.py compose --stage arena_02`, checked by
@@ -177,3 +197,8 @@ z −1150…−463).
 W2's `compose` step writes the arena manifest to **`out/re/stage/valus.manifest`**
 (gitignored, regenerable); W1.5's acceptance consumes exactly that path and fails loudly
 when it is absent.
+
+The other stages default to their own file (`probe.py` `STAGE_OUT`; `compose --stage X` without
+`--out`, and `check-manifest --stage X` without a file): `shrine` → `shrine.manifest`, `plain` →
+`plain.manifest`, `road` → `road.manifest`, `arena_02` → `arena_02.manifest`, all under
+`out/re/stage/`. Only `arena_01` (the default stage) writes `valus.manifest`.

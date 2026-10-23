@@ -20,9 +20,11 @@ VIEWER    = $(AWAKE) app/build/sotc-viewer --library "$(LIB)" \
 ENCOUNTER = out/re/stage/encounter.manifest
 SHRINE    = out/re/stage/shrine.manifest
 PLAIN     = out/re/stage/plain.manifest
+ROAD      = out/re/stage/road.manifest
 # The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, the
-# two S7 wake cuts (docs/notes/s7-recon.md §6), then the 26 S8 ride clips
-# (docs/notes/s8-recon.md). The order is the clip index.
+# two S7 wake cuts (docs/notes/s7-recon.md §6), the 26 S8 ride clips
+# (docs/notes/s8-recon.md), then the six S9 raise clips at 43…48 (design D9).
+# The order is the clip index.
 WANDER_CLIPS = player_a_stand player_a_walk player_a_run player_a_grip_stand_crouch \
                player_a_grip_loop player_a_grip_move_f1 player_a_grip_move_f2 \
                player_a_grip_float_u_hi_attack player_a_atk1 player_a_damage_m_fly2 \
@@ -38,7 +40,16 @@ WANDER_CLIPS = player_a_stand player_a_walk player_a_run player_a_grip_stand_cro
                player_a_uma_neigh player_a_uma_neigh_end player_a_uma_stand_ride_l \
                player_a_uma_stand_ride_r player_a_uma_stand_getoff_l_start \
                player_a_uma_stand_getoff_r_start player_a_uma_stand_getoff_fall \
-               player_a_whistle player_a_whistle_near
+               player_a_whistle player_a_whistle_near \
+               player_a_hoist_sword_start player_a_hoist_sword_loop player_a_hoist_sword_end \
+               player_a_uma_hoist_sword_start player_a_uma_hoist_sword_loop \
+               player_a_uma_hoist_sword_end
+# The sword's light atlases (tools/re/s9/placements.json textures.sources: lines, overlay,
+# flare, hit — hit is the flare's atlas, so the last line rewrites the same PNG).
+SWORD_TEXTURES = vfx/common/beam/_ps4/vertical_solid_beams_01_pfx \
+                 vfx/common/beam/_ps4/vertical_beams_wave_01_pfx \
+                 vfx/common/glows/_ps4/soft_glow_01_falloff_pfx \
+                 vfx/common/glows/_ps4/soft_glow_01_falloff_pfx
 # Agro's clips: the S4.2 kick first (index 0, pinned by name), then the 19 S8 riding clips.
 AGRO_CLIPS = horse_a_add_horse_kick horse_a_uma_stand1 horse_a_uma_walk_start \
              horse_a_uma_walk horse_a_uma_walk_stop horse_a_uma_run_n_start \
@@ -51,7 +62,7 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake run shrine plain viewer shrine-manifest plain-manifest probe-check accept clean libview \
+        bake run shrine plain road viewer shrine-manifest plain-manifest road-manifest probe-check accept clean libview \
         verify verify-long
 
 help: ## List the targets
@@ -72,16 +83,20 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 	$(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" --under models --under characters \
 		--ext cmsh --jobs $(JOBS) $(if $(force),--force)
 
-audio: publish ## Decode the curated audio slice (the S8 map, 34 entries)
-	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s8_map.json --force
+# S9: run without LIB/SOTC_LIB only at S9's merge (until then, LIB=out/libviews/s9-road).
+audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
+	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-bake: publish ## Bake the animation clips: Mono's pose, Wander's 43 clips and Agro's 20 (rewrites the glbs)
+# S9: run without LIB/SOTC_LIB only at S9's merge (until then, LIB=out/libviews/s9-road).
+bake: publish ## Bake Mono's pose, Wander's 49 clips, Agro's 20 and the sword's atlases (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/wander/_cmn/wander.cmsh --force --clips $(subst $(space),$(comma),$(strip $(WANDER_CLIPS)))
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/agro/_cmn/agro.cmsh --force --clips $(subst $(space),$(comma),$(strip $(AGRO_CLIPS)))
+	$(foreach t,$(SWORD_TEXTURES),$(AWAKE) $(CLI) texture --in "$(GAME_ROOT)/textures/$(t).cptx" \
+		--out "$(LIB)/textures/$(t).png" &&) true
 
 inspect: publish ## Inspect one source container (f=models/.../wander.cmsh)
 	$(CLI) inspect "$(GAME_ROOT)/$(f)"
@@ -97,15 +112,17 @@ app: ## Configure and build the viewer (Release)
 app-test: app ## Run the viewer's unit and windowed tests
 	ctest --test-dir app/build --output-on-failure
 
-run: app shrine-manifest plain-manifest ## Play the Valus encounter (defeat him to return to the shrine)
+run: app shrine-manifest plain-manifest road-manifest ## Play the Valus encounter (defeat him to return to the shrine)
 	@test -f $(ENCOUNTER) || { echo "missing $(ENCOUNTER): run make accept-s4"; exit 1; }
 	$(VIEWER) --manifest $(ENCOUNTER)
 
-shrine: app shrine-manifest plain-manifest ## Start in the Shrine of Worship (its front door leads to the plain)
+shrine: app shrine-manifest plain-manifest road-manifest ## Start in the Shrine of Worship (its front door leads to the plain)
 	$(VIEWER) --manifest $(ENCOUNTER) --stage shrine
 
-plain: app shrine-manifest plain-manifest ## Start on the plain with Agro (Q whistles, E mounts)
+plain: app shrine-manifest plain-manifest road-manifest ## Start on the plain with Agro (Q whistles, E mounts)
 	$(VIEWER) --manifest $(ENCOUNTER) --stage plain
+
+road: plain ## The same start as `plain`: interactive play loads the road (C raises the sword)
 
 viewer: app ## Show Wander alone (no stage)
 	$(VIEWER)
@@ -116,13 +133,17 @@ shrine-manifest: ## Compose out/re/stage/shrine.manifest from the stage data
 plain-manifest: ## Compose out/re/stage/plain.manifest from the stage data
 	@test -f $(PLAIN) || python3 tools/re/stage/probe.py compose --stage plain --library "$(LIB)" --out $(PLAIN)
 
-probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain manifests)
+road-manifest: ## Compose out/re/stage/road.manifest from the stage data
+	@test -f $(ROAD) || python3 tools/re/stage/probe.py compose --stage road --library "$(LIB)" --out $(ROAD)
+
+probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road manifests)
 	python3 tools/re/anb/probe.py check-skb
 	python3 tools/re/stage/probe.py check-cwks
 	python3 tools/re/stage/probe.py check-manifest --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-encounter --library "$(LIB)"
 	python3 tools/re/stage/probe.py check-manifest --stage shrine --library "$(LIB)" $(SHRINE)
 	python3 tools/re/stage/probe.py check-manifest --stage plain --library "$(LIB)" $(PLAIN)
+	python3 tools/re/stage/probe.py check-manifest --stage road --library "$(LIB)" $(ROAD)
 
 census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
@@ -130,9 +151,10 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest accept-s8 ## Run the current milestone's acceptance (S8 → S7 → S6 → … → S3)
+# S9: before S9's merge run it with LIB/SOTC_LIB at the view (out/libviews/s9-road).
+accept: shrine-manifest plain-manifest road-manifest accept-s9 ## Run the current milestone's acceptance (S9 → S8 → S7 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s8 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
 verify: shrine-manifest plain-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")

@@ -83,6 +83,10 @@ public:
     // SFX that caused the stop. Idempotent. `reset` and `set_muted(true)` are
     // the calls that drop the queue.
     void stop_music();
+    // Stops every SFX voice playing `name` (the music and ambience slots are
+    // untouched); a no-op when none does. Like `stop_music`, it leaves the
+    // queued device mix to drain.
+    void stop(const std::string& name);
     // Slot 1; a second call replaces the current ambience.
     void play_ambience(const std::string& name, float gain = 1.0f);
 

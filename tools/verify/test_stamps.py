@@ -10,7 +10,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stamps  # noqa: E402
 
-MILESTONES = {"s3": ["gpu"], "s4": ["probes", "gpu"], "s5": ["audio", "gpu"], "s8": ["probes", "audio", "gpu"]}
+MILESTONES = {"s3": ["gpu"], "s4": ["probes", "gpu"], "s5": ["audio", "gpu"], "s8": ["probes", "audio", "gpu"],
+              "s9": ["probes", "audio", "gpu"]}
 STEPS = ["dotnet", "ctest", "audio"]
 ALL = STEPS + ["%s.%s" % (m, s) for m, ss in MILESTONES.items() for s in ss]
 
@@ -29,12 +30,14 @@ CASES = {
     "tools/native/liboo2core_8_win64_.dylib": by("dotnet"),
     "tools/re/audio/s8_map.json": by("dotnet", "audio", "ctest") | {"s8.gpu"},
     "tools/re/audio/s5_map.json": by("dotnet", "audio", "ctest") | {"s5.gpu"},
+    "tools/re/audio/s9_map.json": by("dotnet", "audio", "ctest") | {"s9.gpu"},
     "tools/re/audio/s5_audition.py": by("audio"),
     "app/src/app.cpp": by("ctest", "gpu"),
     "app/shaders/mesh.metal": by("ctest", "gpu"),
     "app/CMakeLists.txt": by("ctest", "gpu"),
     "app/src/shrine_points.h": by("ctest", "gpu"),
     "app/src/ride_points.h": by("ctest", "gpu"),
+    "app/src/road_points.h": by("ctest", "gpu"),
     "out/re/stage/encounter.manifest": by("probes", "gpu"),
     "tools/re/stage/probe.py": by("probes"),
     "tools/re/anb/probe.py": by("probes"),
@@ -42,19 +45,21 @@ CASES = {
     "tools/re/s7/shrine_placements.json": by("probes", "gpu"),
     "tools/re/s8/placements.json": by("probes", "gpu"),
     "tools/re/s8/ride_points.py": by("gpu"),
-    "tools/re/s9/road.json": by("probes"),
+    "tools/re/s9/placements.json": by("probes", "gpu"),
+    "tools/re/s9/road_points.py": by("probes", "gpu"),
     "out/re/stage/arena_paths.txt": by("probes"),
     "lib/models/a/a.glb": by("ctest", "probes", "gpu"),
     "lib/models/a/a.clips.json": by("ctest", "probes", "gpu"),
     "lib/audio/audio.manifest": by("ctest", "probes", "gpu", "audio"),
     "lib/audio/s5/valus_hurt.wav": by("ctest", "probes", "gpu"),
+    "lib/textures/vfx/common/beam/_ps4/vertical_solid_beams_01_pfx.png": by("ctest", "probes", "gpu"),
     "tools/verify/common.sh": {k for k in ALL if "." in k},
     "tools/verify/s3.sh": {"s3.gpu"},
     "scripts/s4-acceptance.sh": {"s4.probes", "s4.gpu"},
     "tools/verify/golden/s5/gpu/run.txt": {"s5.gpu"},
     "tools/verify/golden/s8/probes/compose.txt": {"s8.probes"},
 }
-UNCHANGED = ["app/build/CMakeCache.txt", "src/BpConvert.Cli/bin/x.dll", "lib/textures/t.png",
+UNCHANGED = ["app/build/CMakeCache.txt", "src/BpConvert.Cli/bin/x.dll", "lib/textures/t.png", "lib/textures/models/m.png",
              "lib/audio/clip.txt", "docs/notes/x.md"]
 
 
@@ -93,7 +98,7 @@ def main():
             got = changed()
             assert got == want, "%s: changed %s, expected %s" % (rel, sorted(got), sorted(want))
             write(root, rel, "v1 " + rel)
-            if not rel.endswith((".glb", ".wav")):   # size+mtime fingerprints: v1 again has a new mtime
+            if not rel.endswith((".glb", ".wav", ".png")):   # size+mtime fingerprints: v1 again has a new mtime
                 assert changed() == set(), rel
             base = all_stamps(root, lib)
 

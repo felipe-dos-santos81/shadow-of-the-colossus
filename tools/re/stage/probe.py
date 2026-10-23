@@ -49,7 +49,7 @@ Modes
                              records, string pool; extracts the pool path list
                              matching SUBSTR (default: the stage's match)
   check-cwks                 pinned assertions for the workspace file (exit 0/1)
-  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|arena_02|shrine|plain]
+  compose --library <dir> [--out <file>] [--paths <file>] [--stage arena_01|arena_02|shrine|plain|road]
                              emit the stage's scene manifest (the W1↔W2 format):
                              arena_01: the level sets' non-*_collision* glbs,
                              identity transforms, the labeled spawn pick;
@@ -59,10 +59,16 @@ Modes
                              + the horse + spawn (tools/re/s8/placements.json)
                              arena_02: the levels/arena_02 set + the csml bridge
                              placements + `encounter quadratus` + Quadratus + spawn
-                             (S11; default --out out/re/stage/arena_02.manifest)
-  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|shrine|plain]
+                             (S11)
+                             road: the plain set + the six arena_01_entrance glbs +
+                             arena_01.glb as a backdrop (S9)
+                             --out defaults per stage: arena_01 out/re/stage/valus.manifest,
+                             arena_02 .../arena_02.manifest, shrine .../shrine.manifest,
+                             plain .../plain.manifest, road .../road.manifest
+  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|shrine|plain|road]
                              pinned assertions for the stage's manifest (exit 0/1);
-                             no --stage means arena_01
+                             no --stage means arena_01; <file> defaults per stage
+                             as for compose --out
   compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
                              derive the S4 encounter manifest from the S3 one:
                              the 30 instances verbatim, a rewritten spawn, one
@@ -77,14 +83,17 @@ the one measured workspace file.
 """
 
 import argparse
+import contextlib
 import glob
 import hashlib
+import io
 import json
 import math
 import os
 import re
 import struct
 import sys
+import tempfile
 
 DEFAULT_GAME_ROOT = "/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game"
 
@@ -239,6 +248,28 @@ STAGES["plain"] = {
         "home_occluder", "home_shadowblocker", "home_cliff_shadow_lod", "home_ground_high",
     ),
 }
+# road (S9): the plain stage verbatim (its compose output is the prefix), then the six entrance glbs
+# of `levels/arena_01_entrance` as identity `instance` lines and the arena bowl (`arena_01.glb`) as one
+# identity `backdrop` — the road from the plain to Valus's door.  The entrance set is the encounter's 18
+# instances minus the 8 hash stubs, `_lod`, `arena_01_entrance_low1` (by name: it survives both the
+# `_lod[0-9]` and the `_low` suffix rule), the demoblocker and `arena01e_occluder`.  Composed by
+# `compose_road`, not by the plain/shrine helpers.  `meshes`/`sha256` are pinned on the measured compose.
+ENTRANCE_SET = "models/shadow/levels/arena_01_entrance"
+STAGES["road"] = {
+    "cwks_match": STAGES["plain"]["cwks_match"],
+    "instances": 13,              # the plain's 7 + the 6 entrance glbs
+    "entrance": tuple(
+        "%s/_cmn/%s.glb" % (ENTRANCE_SET, name)
+        for name in ("arena_01_entrance", "arena_01_entrance_furwall", "arena_01_entrance_ground",
+                     "arena_01_entrance_skirt", "arena_01_entrance_skirt_02", "arena_01_entrance_stairs")
+    ),
+    "entrance_exclude_names": ("arena_01_entrance_low1", "arena_01_entrance_demoblocker", "arena01e_occluder"),
+    "backdrops": 28,              # the plain's 27 + the arena bowl
+    "arena_glb": "models/shadow/levels/arena_01/_cmn/arena_01.glb",
+    "meshes": (3620, 2256460),    # (primitives, vertices) over the 13 + 28 + 1 glbs (measured 2026-10-23)
+    "sha256": "3af63a18f88b12de32d07c4d10a33e0d91ed26306bc8193f0dfdcb97b70a5df4",
+    "spawn": STAGES["plain"]["spawn"],   # == the plain's
+}
 # arena_02 (S11, Quadratus): `levels/arena_02` in the world frame — the 67 glb files minus the shrine's
 # rules (28 hash stubs, 4 *_collision*, 3 _lod*, the `_low` dup = 31 kept), minus the occluders, the
 # shadow blocker and the two demo (cutscene) blockers (invisible: occluder*/shadow_caster/defaultSG
@@ -295,6 +326,11 @@ ARENA_02_OUT = "out/re/stage/arena_02.manifest"
 ARENA = STAGES["arena_01"]
 COLLISION_MARK = "_collision"
 MANIFEST_OUT = "out/re/stage/valus.manifest"
+# the default compose output / check-manifest input per stage: only arena_01 writes valus.manifest
+SHRINE_OUT = "out/re/stage/shrine.manifest"
+PLAIN_OUT = "out/re/stage/plain.manifest"
+ROAD_OUT = "out/re/stage/road.manifest"
+STAGE_OUT = {"arena_02": ARENA_02_OUT, "shrine": SHRINE_OUT, "plain": PLAIN_OUT, "road": ROAD_OUT}
 ARENA_PATHS_OUT = "out/re/stage/arena_paths.txt"
 
 # The S4 encounter (Task 6): the S3 arena's 30 instances carried verbatim, a
@@ -1553,9 +1589,11 @@ def cmd_compose(args):
     if not os.path.isdir(library):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
     if args.out is None:
-        args.out = ARENA_02_OUT if args.stage == "arena_02" else MANIFEST_OUT
+        args.out = STAGE_OUT.get(args.stage, MANIFEST_OUT)
     if args.stage == "arena_02":
         return compose_arena_02(args, library)
+    if args.stage == "road":
+        return compose_road(library, args.out)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
     plain = args.stage == "plain"
@@ -1731,7 +1769,9 @@ def cmd_check_manifest(args):
     if not os.path.isdir(library):
         die("library not found: %s (the converted glb tree, e.g. out/library)" % library)
     if args.file is None:
-        args.file = ARENA_02_OUT if args.stage == "arena_02" else MANIFEST_OUT
+        args.file = STAGE_OUT.get(args.stage, MANIFEST_OUT)
+    if args.stage == "road":
+        return road_check_manifest(library, os.path.abspath(args.file))
     path = os.path.abspath(args.file)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
@@ -2106,6 +2146,173 @@ def plain_checks(library, text, instances, spawns, backdrop, horse):
     return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
 
 
+# ---------------------------------------------------------------------- road (S9)
+
+
+def plain_compose_text(library):
+    """What `compose --stage plain` writes for this library, as text (the road's prefix)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "plain.manifest")
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_compose(argparse.Namespace(library=library, stage="plain", out=out))
+        with open(out) as fh:
+            return fh.read()
+
+
+def road_entrance(library):
+    """The entrance glbs the road keeps: the arena composition's entrance set (sorted, no
+    *_collision*) minus stubs, `_lod`, and the named proxies; must equal the pinned six."""
+    stage = STAGES["road"]
+    plain = STAGES["plain"]
+    rels = dict((setrel, kept) for setrel, kept, _ in arena_sets(library))[ENTRANCE_SET]
+    kept = [
+        rel for rel in rels
+        if not plain["exclude_stub"].search(os.path.basename(rel))
+        and not plain["exclude_lod"].search(os.path.basename(rel)[: -len(".glb")])
+        and os.path.basename(rel)[: -len(".glb")] not in stage["entrance_exclude_names"]
+    ]
+    if tuple(kept) != stage["entrance"]:
+        die("road entrance set %s != the pin %s" % (kept, list(stage["entrance"])))
+    return kept
+
+
+def compose_road(library, out):
+    stage = STAGES["road"]
+    entrance = road_entrance(library)
+    trailer = (
+        ["# road — S9 composition, generated by tools/re/stage/probe.py compose --stage road",
+         "# the lines above are `compose --stage plain` verbatim; below: the %d arena_01_entrance glbs" % len(entrance),
+         "#   (the encounter's 18 minus the 8 hash stubs, _stairs_lod1, arena_01_entrance_low1, the",
+         "#   demoblocker and arena01e_occluder) at identity, and the arena bowl as one identity backdrop."]
+        + ["instance %s 0 0 0 0 0 0 1 1 1 1" % rel for rel in entrance]
+        + ["backdrop %s 0 0 0 0 0 0 1 1 1 1" % stage["arena_glb"]]
+    )
+    text = plain_compose_text(library) + "\n".join(trailer) + "\n"
+    backdrop, horse = [], []
+    instances, spawns, entities = parse_manifest_text(text, out, None, backdrop, horse)
+    if (len(instances), len(backdrop), len(horse), len(spawns)) != (stage["instances"], stage["backdrops"], 1, 1) \
+            or entities:
+        die("road manifest does not round-trip: %d instances, %d backdrops, %d horses, %d spawns"
+            % (len(instances), len(backdrop), len(horse), len(spawns)))
+    totals = manifest_counts(library, [r for r, _ in instances] + [r for r, _ in backdrop] + [horse[0][0]])
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if stage["meshes"] is not None and totals != stage["meshes"]:
+        die("road mesh/vertex totals %s != the pin %s" % (totals, stage["meshes"]))
+    if stage["sha256"] is not None and sha != stage["sha256"]:
+        die("road manifest sha256 %s != the pin %s" % (sha, stage["sha256"]))
+    out = os.path.abspath(out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w") as fh:
+        fh.write(text)
+    print("compose: road = plain (%d instances, %d backdrops, 1 horse) + %d entrance glbs + 1 arena backdrop"
+          % (STAGES["plain"]["instances"], STAGES["plain"]["backdrops"], len(entrance)))
+    print("compose: totals %d meshes, %d vertices; sha256 %s" % (totals[0], totals[1], sha))
+    print("compose: wrote %s" % out)
+    return 0
+
+
+def road_check_spec():
+    stage = STAGES["road"]
+    spawn = " ".join(fmt_manifest_float(v) for v in stage["spawn"])
+    offset = " ".join(fmt_manifest_float(v) for v in STAGES["plain"]["backdrop_offset"])
+    meshes = "%d meshes, %d vertices" % tuple(stage["meshes"]) if stage["meshes"] else "unpinned"
+    return [
+        ("manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)", "structure", "ok"),
+        ("manifest starts with a fresh `compose --stage plain` (byte-equal prefix)", "structure", "equal"),
+        ("manifest instances (plain 7 + entrance 6)", "structure", stage["instances"]),
+        ("the six entrance glbs, by name, in order, after the plain set", "structure",
+         "exact (%d)" % len(stage["entrance"])),
+        ("no hash stub, _lod, _low1, demoblocker or occluder among the instances", "structure", "0 excluded"),
+        ("identity transforms on every instance", "structure", "%d/%d" % (stage["instances"], stage["instances"])),
+        ("exactly one horse line", "structure", 1),
+        ("%d backdrops: 27 at offset %s, one at identity naming arena_01.glb" % (stage["backdrops"], offset),
+         "structure", "%d/%d" % (stage["backdrops"], stage["backdrops"])),
+        ("every glbRelPath exists under the library", "structure", "all"),
+        ("exactly one spawn == the pin (%s)" % spawn, "structure", 1),
+        ("mesh/vertex totals over the manifest's glbs", "measured", meshes),
+        ("manifest sha256", "measured", stage["sha256"]),
+    ]
+
+
+def road_checks(library, text, instances, spawns, backdrop, horse):
+    """The road rows, measured: [(name, kind, expected, measured, ok)] in `road_check_spec` order."""
+    stage = STAGES["road"]
+    spec = road_check_spec()
+    rels = [rel for rel, _ in instances]
+    results = [("ok", True)]
+
+    prefix_ok = text.startswith(plain_compose_text(library))
+    results.append(("equal" if prefix_ok else "differs", prefix_ok))
+
+    results.append((len(instances), len(instances) == stage["instances"]))
+
+    got = tuple(rels[STAGES["plain"]["instances"]:])
+    results.append(("exact (%d)" % len(got) if got == stage["entrance"] else "differs: %s" % ", ".join(got),
+                    got == stage["entrance"]))
+
+    bad = [rel for rel in rels
+           if shrine_excluded(rel, "plain")
+           or os.path.basename(rel)[: -len(".glb")] in stage["entrance_exclude_names"]]
+    results.append(("%d excluded" % len(bad) + (": %s" % ", ".join(bad[:3]) if bad else ""), not bad))
+
+    identity = [1 for _, v in instances if v[:3] == [0, 0, 0] and v[3:7] == [0, 0, 0, 1] and v[7:10] == [1, 1, 1]]
+    results.append(("%d/%d" % (len(identity), len(instances)), len(identity) == len(instances)))
+
+    results.append((len(horse), len(horse) == 1))
+
+    placed = fmt_values(backdrop_values(STAGES["plain"]))
+    at_offset = [1 for _, v in backdrop if fmt_values(v) == placed]
+    arena = [1 for rel, v in backdrop
+             if rel == stage["arena_glb"] and fmt_values(v) == fmt_values([0, 0, 0, 0, 0, 0, 1, 1, 1, 1])]
+    ok = len(backdrop) == stage["backdrops"] and len(at_offset) == 27 and len(arena) == 1
+    results.append(("%d/%d" % (len(at_offset) + len(arena), len(backdrop)), ok))
+
+    every = rels + [rel for rel, _ in backdrop] + [h[0] for h in horse]
+    missing = sorted({r for r in every if not os.path.isfile(os.path.join(library, r))})
+    results.append(("%d/%d" % (len(every) - len([r for r in every if r in missing]), len(every))
+                    + (" missing: %s" % ", ".join(missing[:3]) if missing else ""), not missing))
+
+    spawn_ok = len(spawns) == 1 and tuple(spawns[0]) == stage["spawn"]
+    results.append((len(spawns), spawn_ok))
+
+    if missing:
+        results.append(("unmeasurable: missing glbs", False))
+    else:
+        totals = manifest_counts(library, every)
+        results.append(("%d meshes, %d vertices" % totals,
+                        stage["meshes"] is not None and totals == tuple(stage["meshes"])))
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    results.append((sha, sha == stage["sha256"]))
+
+    return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
+
+
+def road_check_manifest(library, path):
+    try:
+        if not os.path.isfile(path):
+            raise ManifestError("%s: cannot open manifest file" % path)
+        raw = read_bytes(path)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ManifestError("%s: not UTF-8 text (%s)" % (path, exc))
+        backdrop, horse = [], []
+        instances, spawns, _ = parse_manifest_text(text, path, None, backdrop, horse)
+        rows = road_checks(library, text, instances, spawns, backdrop, horse)
+    except ManifestError as exc:
+        rows = [(n, k, e, "unparsed: %s" % exc, False) for n, k, e in road_check_spec()]
+    print("check-manifest: %s (library %s)" % (path, library))
+    for name, kind, expected, measured, ok in rows:
+        print("%-5s %-9s %-58s expected %s, measured %s" % ("PASS" if ok else "FAIL", kind, name, expected, measured))
+    failed = [r for r in rows if not r[4]]
+    print("summary: %d/%d gating assertions pass" % (len(rows) - len(failed), len(rows)))
+    if failed:
+        print("gate: NOT MET — %d assertion(s) fail" % len(failed))
+        return 1
+    print("gate: MET")
+    return 0
+
+
 # ------------------------------------------------------------ arena_02 (S11)
 
 
@@ -2333,6 +2540,8 @@ def check_manifest_spec(name):
         ("manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats)",
          "structure", "ok"),
     ]
+    if name == "road":
+        return road_check_spec()
     if name == "plain":
         return plain_check_spec()
     if name == "arena_02":
@@ -2981,7 +3190,8 @@ def main(argv=None):
     )
     p_compose.add_argument(
         "--out", default=None, metavar="FILE",
-        help="manifest output (default %s; %s for arena_02)" % (MANIFEST_OUT, ARENA_02_OUT)
+        help="manifest output (default %s for arena_01; per stage: %s)"
+        % (MANIFEST_OUT, ", ".join("%s %s" % kv for kv in sorted(STAGE_OUT.items())))
     )
     p_compose.add_argument(
         "--paths",
@@ -2998,7 +3208,8 @@ def main(argv=None):
         "check-manifest", help="pinned assertions for the arena manifest"
     )
     p_check_manifest.add_argument("file", nargs="?", default=None,
-                                  help="manifest (default %s; %s for arena_02)" % (MANIFEST_OUT, ARENA_02_OUT))
+                                  help="manifest (default %s for arena_01; per stage: %s)"
+                                  % (MANIFEST_OUT, ", ".join("%s %s" % kv for kv in sorted(STAGE_OUT.items()))))
     p_check_manifest.add_argument(
         "--library", required=True, metavar="DIR", help="the converted glb tree (out/library)"
     )

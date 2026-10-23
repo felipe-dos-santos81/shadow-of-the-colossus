@@ -1,0 +1,278 @@
+{
+ "door_corridor": {
+  "stage": "plain",
+  "min": [
+   300.0,
+   2.2,
+   286.0
+  ],
+  "max": [
+   308.0,
+   8.3,
+   296.0
+  ],
+  "arrive_arena": {
+   "p": [
+    353.0,
+    27.951,
+    345.0
+   ],
+   "yaw_deg": 49.24
+  },
+  "source": "authored|data",
+  "box_source": "authored (xz); y = the reached floor -0.5 .. +2.5 m",
+  "arrive_source": "data (the arena spawn; manifest yaw 49.236395)",
+  "reach": {
+   "nodes_inside": 77,
+   "floor_y": [
+    2.781,
+    5.766
+   ]
+  }
+ },
+ "door_arena": {
+  "stage": "arena",
+  "min": [
+   298.0,
+   27.5,
+   303.0
+  ],
+  "max": [
+   312.0,
+   32.0,
+   311.0
+  ],
+  "arrive_road": {
+   "p": [
+    304.0,
+    2.788,
+    282.0
+   ],
+   "yaw_deg": 180.0
+  },
+  "source": "authored",
+  "reach": {
+   "walk": "arena unlayered 1 m map, no refuseHoles, straight from the spawn",
+   "walk_m": 55.0,
+   "enters_at": [
+    309.88,
+    29.431,
+    310.86
+   ],
+   "bowl_nodes_inside": 108,
+   "spawn_dist_m": 53.26,
+   "valus_dist_m": 91.55,
+   "arrive_road_outside_door_corridor_m": 4.0
+  }
+ },
+ "valus": {
+  "feet": [
+   382.0,
+   28.369,
+   370.0
+  ],
+  "chest_lift": 10.93,
+  "source": "data",
+  "chest": [
+   382.0,
+   39.299,
+   370.0
+  ]
+ },
+ "sun": {
+  "dir": [
+   0.4,
+   0.8,
+   0.6
+  ],
+  "normalized": [
+   0.371391,
+   0.742781,
+   0.557086
+  ],
+  "shade_m": 300.0,
+  "source": "authored",
+  "shader": "app/shaders/mesh.metal:93"
+ },
+ "sword": {
+  "glb": "models/shadow/characters/wander/_cmn/wander_sword.glb",
+  "bone": "OptBone_sword",
+  "tip": [
+   0,
+   0,
+   -0.58
+  ],
+  "source": "measured|authored",
+  "hand_bone": "Bone_HAND_A_R",
+  "blade_z": [
+   -0.58,
+   0.1215
+  ],
+  "note": "the end farther from the hand at player_a_hoist_sword_loop (measured); the tip point on the blade's end (authored)"
+ },
+ "textures": {
+  "lines": "textures/vfx/common/beam/_ps4/vertical_solid_beams_01_pfx.png",
+  "overlay": "textures/vfx/common/beam/_ps4/vertical_beams_wave_01_pfx.png",
+  "flare": "textures/vfx/common/glows/_ps4/soft_glow_01_falloff_pfx.png",
+  "hit": "textures/vfx/common/glows/_ps4/soft_glow_01_falloff_pfx.png",
+  "sources": {
+   "lines": "textures/vfx/common/beam/_ps4/vertical_solid_beams_01_pfx.cptx",
+   "overlay": "textures/vfx/common/beam/_ps4/vertical_beams_wave_01_pfx.cptx",
+   "flare": "textures/vfx/common/glows/_ps4/soft_glow_01_falloff_pfx.cptx",
+   "hit": "textures/vfx/common/glows/_ps4/soft_glow_01_falloff_pfx.cptx"
+  },
+  "frame": [
+   1,
+   1
+  ],
+  "emitters": {
+   "lines": "sword_line.cprt:sword_beam_base",
+   "overlay": "sword_line.cprt:sword_beam_overlay",
+   "flare": "sword_line.cprt:flare_center",
+   "hit": "sword_reaction.cprt:flare_radial_ring"
+  },
+  "note": "flare = sword_line's flare_center glow (labelled; not sword_flare_tip's flare_02_*); hit = sword_reaction's atlas, the same glow"
+ },
+ "clips": {
+  "player_a_hoist_sword_start": 30,
+  "player_a_hoist_sword_loop": 50,
+  "player_a_hoist_sword_end": 29,
+  "player_a_uma_hoist_sword_start": 35,
+  "player_a_uma_hoist_sword_loop": 60,
+  "player_a_uma_hoist_sword_end": 25,
+  "fps": 30
+ },
+ "clips_measured": {
+  "player_a_hoist_sword_start": {
+   "keys": 16,
+   "fps": 15.0,
+   "seconds": 1.0
+  },
+  "player_a_hoist_sword_loop": {
+   "keys": 26,
+   "fps": 15.0,
+   "seconds": 1.6667
+  },
+  "player_a_hoist_sword_end": {
+   "keys": 16,
+   "fps": 15.5127,
+   "seconds": 0.9669
+  },
+  "player_a_uma_hoist_sword_start": {
+   "keys": 19,
+   "fps": 15.4248,
+   "seconds": 1.167
+  },
+  "player_a_uma_hoist_sword_loop": {
+   "keys": 31,
+   "fps": 15.0,
+   "seconds": 2.0
+  },
+  "player_a_uma_hoist_sword_end": {
+   "keys": 14,
+   "fps": 15.5933,
+   "seconds": 0.8337
+  }
+ },
+ "probes": {
+  "sunlit": {
+   "p": [
+    335.0,
+    -4.534,
+    233.5
+   ],
+   "yaw_away_deg": -161.0,
+   "shade_hit_m": null,
+   "beam_hit_m": 37.5
+  },
+  "shade": {
+   "p": [
+    304.0,
+    2.925,
+    284.0
+   ],
+   "shade_hit_m": 17.5
+  },
+  "stairs_foot": [
+   304.0,
+   -3.603,
+   238.0
+  ],
+  "entrance_top": [
+   304.0,
+   2.434,
+   273.0
+  ],
+  "agro_stairs": {
+   "p": [
+    330.0,
+    -5.234,
+    228.0
+   ],
+   "yaw_deg": 20.11,
+   "beam_hit_m": {
+    "tip_2": 43.5,
+    "tip_3_5": 44.5
+   }
+  },
+  "e2e_route": [
+   [
+    301.0,
+    -245.0
+   ],
+   [
+    290.9,
+    -231.3
+   ],
+   [
+    304.9,
+    -49.3
+   ],
+   [
+    304.0,
+    238.0
+   ]
+  ],
+  "source": "authored|measured",
+  "sources": {
+   "sunlit": "authored p (y = ground), yaw_away measured toward Valus's chest + 180; marches measured",
+   "shade": "authored p (y = ground); march measured",
+   "stairs_foot": "authored (y = ground)",
+   "entrance_top": "authored (y = ground)",
+   "agro_stairs": "authored p (y = ground), yaw measured toward Valus's chest; marches measured",
+   "e2e_route": "measured (Dijkstra over the road walk, slope < 9.5 deg, then straight legs)",
+   "marches": "tools/re/s9/probes.cpp: ray_march step 0.5 m, unit dir, ground fmin backdrop; t +-1.0 m"
+  },
+  "tip_lift_m": {
+   "foot": 2.0,
+   "mounted": 3.5
+  }
+ },
+ "road_reach": {
+  "nodes": 509579,
+  "z_max": 296.69,
+  "corridor": {
+   "x": [
+    300.0,
+    308.0
+   ],
+   "z": [
+    280.0,
+    296.0
+   ],
+   "y": [
+    2.71,
+    5.77
+   ]
+  },
+  "ground": "plain.manifest's 7 instance glbs + arena_01_entrance, arena_01_entrance_furwall, arena_01_entrance_ground, arena_01_entrance_skirt, arena_01_entrance_skirt_02, arena_01_entrance_stairs",
+  "overhang": {
+   "xz": [
+    315.5,
+    291.0
+   ],
+   "node_y": 31.15,
+   "reached": false
+  }
+ }
+}
