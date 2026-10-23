@@ -4,7 +4,12 @@
 
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <string>
+
+#include <unistd.h>
 
 #include "app.h"
 #include "door.h"
@@ -324,4 +329,38 @@ TEST_CASE("S9: every box has positive extent; no arrival lands inside a door of 
             CHECK_FALSE(inside_xz(*kDoors[j].door, from.arrive[0], from.arrive[2]));
         }
     }
+}
+
+TEST_CASE("S9: the corridor and arena rows need Valus's arena (door_row_count)") {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("sotc-door-rows-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    const auto arena = [&](const char* name, const std::string& text) {
+        const std::filesystem::path p = dir / name;
+        std::ofstream(p) << text;
+        return p;
+    };
+    const std::string body = "spawn 1 2 3 0\n";
+    const auto absent = arena("absent.manifest", body);
+    const auto valus = arena("valus.manifest", body + "encounter valus\n");
+    const auto quadratus = arena("quadratus.manifest", body + "encounter quadratus\n");
+    const auto broken = arena("broken.manifest", body + "encounter\n");
+
+    CHECK(door_row_count(true, absent) == kDoorCount);
+    CHECK(door_row_count(true, valus) == kDoorCount);
+    CHECK(door_row_count(true, quadratus) == kS8DoorCount);
+    CHECK(door_row_count(true, broken) == kS8DoorCount);
+    CHECK(door_row_count(true, dir / "missing.manifest") == kS8DoorCount);
+    CHECK(door_row_count(false, valus) == kS8DoorCount);
+
+    // With Quadratus's arena, rows 2-3 never enter; S8's rows still do.
+    const int rows = door_row_count(true, quadratus);
+    CHECK(door_entered_row(StageId::Plain, Vec3{304.0f, 3.0f, 284.0f}, Vec3{304.0f, 3.0f, 288.0f},
+                           rows) == -1);
+    CHECK(door_entered_row(StageId::Arena, Vec3{305.0f, 29.0f, 313.0f}, Vec3{305.0f, 29.0f, 309.0f},
+                           rows) == -1);
+    CHECK(door_entered_row(StageId::Plain, Vec3{301.0f, 0.0f, -250.0f}, Vec3{301.0f, 0.0f, -255.0f},
+                           rows) == 1);
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
 }

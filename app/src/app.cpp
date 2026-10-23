@@ -2514,6 +2514,9 @@ int run_app(const AppOptions& opts) {
                                   opts.s9Selftest || opts.s9E2e;
             // S8 (D2) / S9 (D2): the Plain stage is the road when S9-wired.
             const bool road = s9_wired && here == StageId::Plain;
+            // S9's corridor/arena door rows only into Valus's arena (door_row_count).
+            const int door_rows =
+                door_row_count(s9_wired && follow_mode, opts.manifestPath);
             const std::string& stage_manifest_path =
                 here == StageId::Shrine  ? opts.shrineManifestPath
                 : road                   ? opts.roadManifestPath
@@ -5634,14 +5637,15 @@ int run_app(const AppOptions& opts) {
             // both call it.
             const auto door_frame = [&](float dt, Vec3 positionBefore, bool riding,
                                         bool inputLocked, bool live) {
-                // S9: the corridor and arena rows only when S9-wired.
+                // S9: the corridor and arena rows only when S9-wired into
+                // Valus's arena (door_rows).
                 // S9 (Task 7 review): no door while the return runs (its
                 // 2 s Hold leaves the input unlocked).
                 const bool returnSettled = carry.ret.phase == ReturnPhase::Idle ||
                                            carry.ret.phase == ReturnPhase::Free;
                 const int row = live && !riding && !inputLocked && returnSettled
                                     ? door_entered_row(here, positionBefore, player.position,
-                                                       s9_wired ? kDoorCount : kS8DoorCount)
+                                                       door_rows)
                                     : -1;
                 const DoorState doorBefore = carry.door;
                 carry.door = step_door(carry.door, dt, row >= 0, row, /*loadDone=*/false);

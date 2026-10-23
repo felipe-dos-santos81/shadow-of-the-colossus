@@ -4,6 +4,7 @@
 #include <string>
 
 #include "door.h"
+#include "manifest.h"
 #include "ride_points.h"
 #include "road_points.h"
 #include "transition.h"
@@ -257,9 +258,27 @@ inline constexpr DoorRow kDoors[] = {
 inline constexpr int kDoorCount = static_cast<int>(sizeof(kDoors) / sizeof(kDoors[0]));
 inline constexpr int kS8DoorCount = 2;
 
+// How many kDoors rows a run steps (S9 final review): S9's corridor and arena
+// rows (2-3) lead into Valus's arena, so they are live only when S9-wired and the
+// arena manifest's `encounter` is absent or `valus` (read with the opt-in). Any
+// other encounter, or an arena manifest that does not parse (its own load reports
+// that), keeps the S8 rows.
+inline int door_row_count(bool s9Wired, const std::filesystem::path& arenaManifest) {
+    if (!s9Wired) {
+        return kS8DoorCount;
+    }
+    try {
+        return parse_manifest(arenaManifest, /*acceptEncounter=*/true).encounter == "valus"
+                   ? kDoorCount
+                   : kS8DoorCount;
+    } catch (const std::exception&) {
+        return kS8DoorCount;
+    }
+}
+
 // The row (among the first `rowCount`) of a door on `here` whose box the step
 // prev -> now entered (box_entered), or -1. The first row in table order wins.
-// `rowCount` is required: a frozen run passes kS8DoorCount, an S9-wired one kDoorCount.
+// `rowCount` is required: a frozen run passes kS8DoorCount, an S9-wired one door_row_count.
 inline int door_entered_row(StageId here, Vec3 prev, Vec3 now, int rowCount) {
     for (int i = 0; i < rowCount && i < kDoorCount; ++i) {
         const ride_points::Door& d = *kDoors[i].door;
