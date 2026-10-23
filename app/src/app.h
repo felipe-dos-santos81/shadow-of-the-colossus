@@ -313,6 +313,11 @@ struct StageCarry {
     // --s8-selftest's progress (0 the plain, 1 the arena after R) and
     // --s8-e2e's (0 the shrine, 1 the plain, 2 the shrine again, 3 the arena).
     int s8Step = 0;
+    // --s9-selftest's progress (0 the road, 1 the arena through the corridor door,
+    // 2 the road through the arena door, 3 the arena after R) and --s9-e2e's (0 the
+    // shrine, 1 the road, 2 the arena, 3 the shrine after the return); --s9-e2e
+    // counts its frames in e2eFrame.
+    int s9Step = 0;
     // S9 (D4): Agro's pose when the player last left the road by a door (S9-wired
     // runs only); the next road load places her there. R clears it.
     std::optional<HorsePose> horse;

@@ -92,7 +92,18 @@ void print_usage(FILE* out) {
                  "  --s8-e2e          with --stage shrine: drive the interactive loop at\n"
                  "                    fixed 1/60 s with scripted input through the\n"
                  "                    shrine door, the plain, the whistle, the ride and\n"
-                 "                    back, then R; print the s8e2e-* lines, exit\n");
+                 "                    back, then R; print the s8e2e-* lines, exit\n"
+                 "  --s9-selftest     on the road: raise the sword (the fan, the lock,\n"
+                 "                    the shade, mounted at a stand), the entrance\n"
+                 "                    stairs, the corridor and arena doors, Agro left\n"
+                 "                    behind, R raised; print the s9-* lines, exit\n"
+                 "  --s9-stills DIR   with --s9-selftest: write the fan, locked,\n"
+                 "                    entrance and arena_door stills to DIR\n"
+                 "  --s9-e2e          with --stage shrine: drive the interactive loop at\n"
+                 "                    fixed 1/60 s with scripted input: the shrine door,\n"
+                 "                    the ride to the stairs, the lock, up the stairs,\n"
+                 "                    the corridor door, the lethal hit, the return;\n"
+                 "                    print the s9e2e-* lines, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -428,8 +439,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     // S9: the selftest starts on the road and runs alone; the e2e is an
-    // interactive run (--stage shrine allowed) with no selftest, capture or
-    // --no-return.
+    // interactive run that starts in the shrine (--stage shrine) with no
+    // selftest, capture or --no-return.
     if ((opts.s9Selftest || opts.s9E2e) &&
         (opts.manifestPath.empty() || opts.modelRelPath.empty())) {
         std::fprintf(stderr, "sotc-viewer: --s9-selftest/--s9-e2e need --manifest and --model\n");
@@ -447,10 +458,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (opts.s9E2e && (frozen_selftest || opts.s7Selftest || opts.s7E2e || opts.s8E2e ||
-                       opts.noReturn || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+                       opts.stage != StageId::Shrine || opts.noReturn ||
+                       !opts.screenshotPath.empty() || opts.entityTimeSet)) {
         std::fprintf(stderr,
-                     "sotc-viewer: --s9-e2e runs alone: no selftest, other e2e, capture, "
-                     "--entity-time or --no-return\n");
+                     "sotc-viewer: --s9-e2e runs alone and starts in the shrine: --stage shrine, "
+                     "no selftest, other e2e, capture, --entity-time or --no-return\n");
         print_usage(stderr);
         return 2;
     }
