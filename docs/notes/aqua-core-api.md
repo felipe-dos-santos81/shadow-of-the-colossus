@@ -556,9 +556,13 @@ matName → sibling .cmdl .GetCMATMaterialMap()[matName]  →  $/…/x.cmat  →
   The hex preference changes **10** picks over the tree (the entrance skirt, `arena_02_gbskirt`,
   `arena_02_landbridge`, `arena_11_skirts`, `hall_09_skirts`, `hall_15_water`, `level_02`,
   `level_10`, plus `hall_16_skirts` and `cathedral_ext_fur`, which re-convert byte-identical: same map)
-  and loses none; a strict hex-only rule would lose 18 `_group` owners (`lion_a_statue_broke` →
+  and loses none; a strict hex-only rule would lose 18 non-hex owners (17 `_group` + `collectibles_corrupt_cloak`: `lion_a_statue_broke` →
   `lion_a_statue_broke_group.cmdl`, `hall_08_water` → `hall_08_water_group_38bd1fbf.cmdl`, …), hence
-  the first-match fallback. Pinned by `SiblingCmdlTests`. Measured over the tree (22,012 `*.cmsh` under `models/`):
+  the first-match fallback. Pinned by `SiblingCmdlTests`. The tree holds **22,012** `*.cmsh` under `models/` (the S9
+  white-slab simulation's `cmdlpick.txt` counted 21,510; 22,012 is the recount). The figures below
+  **predate B7** (measured under the first-match rule): B7 changes which extension wins for 10 cmsh,
+  not how many find one, so the exact/extension counts stand; the all-`matName`s percentages may have
+  moved for those 10. Measured over the tree:
   **5,610 exact + 1,292 extension-only = 6,902 (31 %)**; of those, 97.9 % / 97.6 % have *all* their
   `matName`s present in the chosen cmdl's map. The remaining 15,110 are UDIM/LOD tiles whose owner
   cmdl references *them* (20,005 have such a referencing cmdl) — that search is **not** implemented

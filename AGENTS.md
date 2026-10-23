@@ -22,7 +22,7 @@ cue plays once per lock (`tools/re/audio/s9_map.json`, 36 entries). `--s8-selfte
 `s9-*` lines + four stills) and `--stage shrine --s9-e2e` (shrine → road → mount → gallop → lock →
 stairs → corridor door → arena → the lethal hit → death → shrine); the acceptance script is
 `scripts/s9-acceptance.sh` (it runs the frozen S8 chain first, then decodes the S9 map itself), and the
-recorded numbers are in `docs/notes/s9-results.md`. Valus's chest is 157 m from the road's sunlit
+recorded numbers are in `docs/notes/s9-results.md`. Valus's chest is 150–157 m from the road's sunlit
 points, beyond the 150 m ray, so every road lock lands on the entrance's east bank (ruling B6). Authored:
 the 0.9 m × raise camera shoulder shift, the 90° × raise grip standing in for the hoist's missing
 additive layer, the sun, the cue timings. Known gaps: the climb, the moving/additive raises, raised
@@ -134,7 +134,7 @@ is cloned, no symlinks (the converter rewrites every referenced texture PNG on a
 through). Delete a view with `rm -rf out/libviews/<name>` when the branch is done.
 
 S9 works in `out/libviews/s9-road` (`export SOTC_LIB=<repo>/out/libviews/s9-road`): its bake (Wander's
-49 clips, the four sword PNGs, the 36-entry audio manifest, the 10 glbs the sibling-`.cmdl` fix changed)
+49 clips, the four sword PNGs, the 36-entry audio manifest, the sibling-`.cmdl` fix: 10 sources rebaked, 8 glbs changed)
 is promoted to the base `out/library` at S9's merge, after `main`'s pins (Wander `== 43`, audio 8/10/34)
 are relaxed with the user's OK. Until then `scripts/s9-acceptance.sh` refuses a base library without the
 S9 bake.
