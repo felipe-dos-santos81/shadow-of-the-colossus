@@ -1,0 +1,15 @@
+check-manifest: <REPO>/out/re/stage/plain.manifest (library <LIB>)
+PASS  structure manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats) expected ok, measured ok
+PASS  structure manifest instances (the plain set)                         expected 7, measured 7
+PASS  structure plain instance lines == the library's set, in cwks order   expected exact, ordered (7), measured ordered (7)
+PASS  structure identity transforms on every plain-set instance            expected 7/7, measured 7/7
+PASS  structure backdrop lines == the placements JSON, in order (27)       expected exact (27), measured exact (27)
+PASS  structure backdrops are shrine-set glbs at offset 300 0.071 -300, identity rotation, scale 1 expected 27/27, measured 27/27
+PASS  structure exactly one horse line naming agro.glb == the placements JSON expected exact (1), measured exact (1)
+PASS  structure every glbRelPath exists under the library                  expected all, measured 35/35
+PASS  structure no excluded name among the plain instances                 expected 0 excluded, measured 0 excluded
+PASS  structure exactly one spawn == the pin (301 -7.14 -210 0)            expected 1, measured 1
+PASS  measured  mesh/vertex totals over the manifest's glbs                expected 3541 meshes, 1916318 vertices, measured 3541 meshes, 1916318 vertices
+PASS  measured  manifest sha256                                            expected 3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d, measured 3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d
+summary: 12/12 gating assertions pass
+gate: MET

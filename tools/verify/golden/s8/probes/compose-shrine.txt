@@ -1,0 +1,6 @@
+compose: library <LIB>
+compose: models/shadow/levels/cathedral               118 glb (34 instances, 84 excluded)
+compose: cross-check levels/cathedral/ (sha256 c52e90a6…, 589 entries): 34/34 kept glbs' cmsh referenced
+compose: spawn 0 8.998 1 0 (shrine_placements.json)
+compose: 17 statue instances + 1 posed (mono.glb girl_a_death_loop at 0 s); totals 3551 meshes, 2229907 vertices; sha256 6bacc017ab2349786b5fcb126dd2a931ccc863ec7fea0f5b70f4e6d3d9bc97d8
+compose: wrote <OUT>/s8/probes/shrine-compose.manifest (52 instances + 1 spawn + 8 comment lines)

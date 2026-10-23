@@ -1,0 +1,7 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --model models/shadow/characters/wander/_cmn/wander.glb --screenshot <OUT>/s4/gpu/control/s4-perf.png --frames 240 --anim-time 0 --entity-time 0
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=135 vertices=941302 materials=129 textures=86
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s1-pixels min=0,0,0 max=248,248,248 mean=102.2,96.7,88.8
+s1-screenshot path=<OUT>/s4/gpu/control/s4-perf.png width=2560 height=1440

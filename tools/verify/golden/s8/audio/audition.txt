@@ -1,0 +1,1 @@
+AUDITION PASSED: 34 cue(s), 1 rate(s) (48000 Hz), resident layers non-silent; music rows identity/config-checked

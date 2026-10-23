@@ -1,0 +1,35 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --shrine-manifest <REPO>/out/re/stage/shrine.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s7-e2e
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=142 vertices=1161131 materials=136 textures=87
+s7-load stage=arena instances=30 meshes=142 ms=<masked>
+s7e2e-load stage=arena meshes=142 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s7e2e-death phase=Idle total=0.000
+s7e2e-return phase=Idle t=0.000 fade=0.000 lock=0
+s7e2e-death phase=Motion total=0.000
+s7e2e-input frame=61 locked=1
+s7e2e-death phase=Collapse total=6.183
+s7e2e-death phase=Done total=8.000
+s7e2e-return phase=Hold t=0.000 fade=0.000 lock=0
+s7e2e-return phase=FadeOut t=0.017 fade=0.017 lock=1
+s7e2e-return phase=Load t=0.000 fade=1.000 lock=1
+s1-scene meshes=3563 vertices=2292373 materials=272 textures=151
+s7-load stage=shrine instances=51 meshes=3563 ms=<masked>
+s7e2e-load stage=shrine meshes=3563 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s7e2e-return phase=FadeIn t=0.000 fade=1.000 lock=1
+s7e2e-return phase=Wake t=0.017 fade=0.000 lock=1
+s7e2e-wake clip=player_a_home_boss01_cut04 t=0.017
+s7e2e-wake clip=player_a_home_boss01_cut05 t=8.183
+s7e2e-return phase=Free t=0.000 fade=0.000 lock=0
+s7e2e-input frame=1514 locked=0
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s7e2e-status stage=shrine phase=Free lock=0 player_y=8.998 floor=8.998
+s1-scene meshes=142 vertices=1161131 materials=136 textures=87
+s7-load stage=arena instances=30 meshes=142 ms=<masked>
+s7e2e-load stage=arena meshes=142 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s7e2e-reset stage=arena valus=100 player=100 death=Idle return=Idle
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3

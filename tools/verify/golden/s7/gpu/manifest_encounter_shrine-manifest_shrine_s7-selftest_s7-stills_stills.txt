@@ -1,0 +1,49 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --shrine-manifest <REPO>/out/re/stage/shrine.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s7-selftest --s7-stills <OUT>/s7/gpu/stills
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=142 vertices=1161131 materials=136 textures=87
+s7-load stage=arena instances=30 meshes=142 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s7-phase phase=Idle t=0.000 fade=0.000 lock=0
+s7-phase phase=Hold t=0.000 fade=0.000 lock=0
+s7-phase phase=FadeOut t=0.017 fade=0.017 lock=1
+s1-pixels min=153,153,153 max=255,255,255 mean=193.9,191.8,188.3
+s1-screenshot path=<OUT>/s7/gpu/stills/fade.png width=2560 height=1440
+s7-reset stage=arena phase=Idle death=Idle valus=100 player=100
+s7-phase phase=Idle t=0.000 fade=0.000 lock=0
+s7-phase phase=Hold t=0.000 fade=0.000 lock=0
+s7-phase phase=FadeOut t=0.017 fade=0.017 lock=1
+s7-phase phase=Load t=0.000 fade=1.000 lock=1
+s1-scene meshes=3563 vertices=2292373 materials=272 textures=151
+s7-load stage=shrine instances=51 meshes=3563 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s7-phase phase=FadeIn t=0.000 fade=1.000 lock=1
+s7-phase phase=Wake t=0.017 fade=0.000 lock=1
+s1-pixels min=3,0,0 max=255,255,255 mean=96.6,96.9,84.1
+s1-screenshot path=<OUT>/s7/gpu/stills/wake.png width=2560 height=1440
+s7-phase phase=Free t=0.000 fade=0.000 lock=0
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s7-ground probe=spawn floor=8.998 column_max=60.391
+s7-ground probe=altar_step floor=10.316 column_max=83.170
+s7-ground probe=hall floor=8.999 column_max=109.979
+s7-ground probe=stair floor=9.856 column_max=158.834
+s7-wall from=0.00,-13.00 to=14.00,-13.00 stopped=8.54,-13.00 blocked=1
+s7-idols count=16 broken_slot=1
+s7-mono clip=girl_a_death_loop present=1
+s1-pixels min=7,8,6 max=255,255,255 mean=89.4,89.6,78.6
+s1-screenshot path=<OUT>/s7/gpu/stills/altar.png width=2560 height=1440
+s1-pixels min=12,12,9 max=255,255,255 mean=88.5,88.2,77.2
+s1-screenshot path=<OUT>/s7/gpu/stills/idols.png width=2560 height=1440
+s1-pixels min=5,0,0 max=255,255,255 mean=106.9,107.1,92.7
+s1-screenshot path=<OUT>/s7/gpu/stills/hall.png width=2560 height=1440
+s7-perf frames=240 frame_ms=<masked> drawn=170 culled=3393
+s7-status stage=shrine phase=Free lock=0
+s1-scene meshes=142 vertices=1161131 materials=136 textures=87
+s7-load stage=arena instances=30 meshes=142 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s7-reset stage=arena phase=Idle death=Idle valus=100 player=100
+s1-scene meshes=3563 vertices=2292373 materials=272 textures=151
+s7-load stage=shrine instances=51 meshes=3563 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3

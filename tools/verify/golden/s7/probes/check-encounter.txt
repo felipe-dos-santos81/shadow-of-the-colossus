@@ -1,0 +1,25 @@
+check-encounter: <REPO>/out/re/stage/encounter.manifest (library <LIB>)
+PASS  structure manifest parses (S3 schema + entity directive)             expected ok, measured ok
+PASS  structure manifest instances (the S3 arena set)                      expected 30, measured 30
+PASS  structure instance set == the library's non-*_collision* set         expected exact (30), measured exact (30)
+PASS  structure every glbRelPath exists under the library                  expected 30/30, measured 30/30
+PASS  structure identity transforms on every instance                      expected 30/30, measured 30/30
+PASS  structure exactly one entity                                         expected 1, measured 1
+PASS  structure exactly one spawn                                          expected 1, measured 1
+PASS  provenance header provenance placement=builder-pick                   expected builder-pick, measured present
+PASS  provenance header provenance spawn=data-position+builder-yaw          expected data-position+builder-yaw, measured present
+PASS  provenance header provenance entity clip=minotaur_a_stand             expected minotaur_a_stand, measured present
+PASS  structure entity glb                                                 expected models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb, measured models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb
+PASS  structure entity glb exists under the library                        expected present, measured present
+PASS  structure entity clip                                                expected minotaur_a_stand, measured minotaur_a_stand
+PASS  structure spawn inside the arena bowl (x/z)                          expected inside, measured inside
+PASS  structure entity inside the arena bowl (x/z)                         expected inside, measured inside
+PASS  measured  spawn y == the sampled ground (27.951)                     expected ±0.001, measured manifest 27.951, ground 27.951
+PASS  measured  entity y == the sampled ground (28.369)                    expected ±0.001, measured manifest 28.369, ground 28.369
+PASS  measured  entity faces the spawn (quaternion yaw)                    expected ±0.01 deg, measured -130.763565 (expected -130.763605, delta 0.000040)
+PASS  measured  spawn faces the entity (yaw)                               expected ±0.01 deg, measured 49.236395 (expected 49.236395, delta 0.000000)
+PASS  measured  entity yawed bind footprint inside the bowl                expected inside, measured x[366.521,396.776] z[353.255,386.139]
+PASS  structure spawn outside the entity's yawed bind footprint            expected outside, measured outside
+PASS  measured  spawn-entity distance < 100 m                              expected < 100, measured 38.288 m
+summary: 22/22 gating assertions pass
+gate: MET

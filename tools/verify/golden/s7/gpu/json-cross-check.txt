@@ -1,0 +1,1 @@
+s7-acceptance: json cross-check OK (wall, 4 probes, flow timings and colour)

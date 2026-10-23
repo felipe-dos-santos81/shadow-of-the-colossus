@@ -1,0 +1,6 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/valus.manifest --model models/shadow/characters/wander/_cmn/wander.glb --screenshot <OUT>/s3/gpu/spawn.png --anim-time 0
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=122 vertices=454935 materials=116 textures=75
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-pixels min=3,0,0 max=226,226,219 mean=73.0,68.1,59.1
+s1-screenshot path=<OUT>/s3/gpu/spawn.png width=2560 height=1440

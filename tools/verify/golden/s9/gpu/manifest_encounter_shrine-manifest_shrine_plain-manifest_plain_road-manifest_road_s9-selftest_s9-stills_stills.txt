@@ -1,0 +1,44 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --shrine-manifest <REPO>/out/re/stage/shrine.manifest --plain-manifest <REPO>/out/re/stage/plain.manifest --road-manifest <REPO>/out/re/stage/road.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s9-selftest --s9-stills <OUT>/s9/gpu/stills
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=3633 vertices=2324237 materials=342 textures=155
+s9-load stage=plain manifest=road instances=13 backdrops=28 meshes=3633 raygrid=217x831 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=horse_a_uma_stand1 joints=132 procedural=0 t=0.000
+s9-sun dir=0.371391,0.742781,0.557086
+s9-raise clip=player_a_hoist_sword_start then=player_a_hoist_sword_loop raise=1.000
+s9-fan dot=-1.000 k=1.000 lean_deg=75.00 width=0.000
+s9-partial dot=0.800 k=0.100 lean_deg=7.50 width=0.674
+s1-pixels min=0,0,0 max=255,255,255 mean=81.1,77.1,69.8
+s1-screenshot path=<OUT>/s9/gpu/stills/fan.png width=2560 height=1440
+s9-lock k=0.0000 locked=1 ray_m=150.0 hit=1 hit_m=38.0
+s9-spark count=4 seconds=2.0
+s1-pixels min=0,0,0 max=255,255,255 mean=79.3,75.0,67.2
+s1-screenshot path=<OUT>/s9/gpu/stills/locked.png width=2560 height=1440
+s9-shade light_from=1.000 light=0.000 seconds=0.117
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s9-mounted clip=player_a_uma_hoist_sword_loop gait=Stand kick_ignored=1
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s9-entrance top=304.00,2.79,282.00
+s1-pixels min=3,2,0 max=248,244,237 mean=92.7,86.5,75.0
+s1-screenshot path=<OUT>/s9/gpu/stills/entrance.png width=2560 height=1440
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-scene meshes=135 vertices=941302 materials=129 textures=86
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s9-door from=plain to=arena spawn=353.00,27.95,345.00 yaw=49.24 ret=Idle
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-scene meshes=3633 vertices=2324237 materials=342 textures=155
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=horse_a_uma_stand1 joints=132 procedural=0 t=0.000
+s9-door from=arena to=plain spawn=304.00,2.79,282.00 agro_moved=0.000
+s1-pixels min=0,0,0 max=255,252,244 mean=88.3,83.1,73.5
+s1-screenshot path=<OUT>/s9/gpu/stills/arena_door.png width=2560 height=1440
+s9-audio shimmer_started=1 shimmer_stopped=1 search=1
+s9-perf frames=240 frame_ms=<masked> drawn=84 culled=3549
+s1-scene meshes=135 vertices=941302 materials=129 textures=86
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s9-reset stage=arena ride=OnFoot door=Idle sword=Lowered horse=none valus=100 player=100
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3

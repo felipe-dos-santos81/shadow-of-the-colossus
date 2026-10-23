@@ -1,0 +1,5 @@
+compose-encounter: library <LIB>
+compose-encounter: source <REPO>/out/re/stage/valus.manifest (sha256 088e621894ecd383…, 30 instances)
+compose-encounter: entity models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.glb clip minotaur_a_stand at (382, 370) ground 28.369 yaw -130.763605 (placement=builder-pick)
+compose-encounter: spawn (353, 345) ground 27.951 yaw 49.236395 (provenance=data-position+builder-yaw)
+compose-encounter: wrote <OUT>/s4/probes/encounter.manifest (30 instances + 1 entity + 1 spawn + 12 comment lines)

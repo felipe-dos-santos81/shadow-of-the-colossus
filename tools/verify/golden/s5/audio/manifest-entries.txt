@@ -1,0 +1,8 @@
+name=valus.hurt bank=boss01 file=audio/boss01/valus.hurt.wav rate=48000 channels=1 frames=50456 seconds=1.051167 codec=psadpcm loop=0 gain_db=-0.0873
+name=valus.impact bank=boss01 file=audio/boss01/valus.impact.wav rate=48000 channels=2 frames=391356 seconds=8.153250 codec=psadpcm loop=0 gain_db=0
+name=valus.telegraph bank=boss01 file=audio/boss01/valus.telegraph.wav rate=48000 channels=1 frames=57680 seconds=1.201667 codec=psadpcm loop=0 gain_db=-0.0873
+name=player.death bank=com_b_h file=audio/com_b_h/player.death.wav rate=48000 channels=1 frames=38976 seconds=0.812000 codec=psadpcm loop=0 gain_db=-0.0873
+name=player.hit bank=com_obj file=audio/com_obj/player.hit.wav rate=48000 channels=1 frames=34020 seconds=0.708750 codec=psadpcm loop=0 gain_db=-0.0873
+name=player.swing bank=com_obj file=audio/com_obj/player.swing.wav rate=48000 channels=1 frames=22316 seconds=0.464917 codec=psadpcm loop=0 gain_db=-0.0873
+name=player.hurt bank=com_v file=audio/com_v/player.hurt.wav rate=48000 channels=1 frames=12964 seconds=0.270083 codec=psadpcm loop=0 gain_db=-0.0873
+name=music.boss bank=music file=audio/music/music.boss.wav rate=48000 channels=2 frames=6044672 seconds=125.930667 codec=at9 loop=1 gain_db=-10.0912

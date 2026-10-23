@@ -7,10 +7,12 @@ headed `# run: <args>`, plus the pixel/probe/decode outputs the adapter `keep`s)
 were blessed on; the runner refuses to run while any frozen `scripts/*-acceptance.sh` that exists at
 `PIN` differs from it.
 
-**Not blessed yet.** Blessing waits until S9 merges (design §13.3: goldens come from fresh runs on the
-pinned commit, never from files under the shared `out/`).
+**Blessed** at `PIN` (main after S9 merged, the base `out/library` with the S9 bake), from two fresh
+runs that agreed byte for byte after normalisation — no mask beyond the timing table was needed
+(design §13.3: goldens come from fresh runs on the pinned commit, never from files under the shared
+`out/`). Evidence: `.superpowers/sdd/2026-10-23-s10-s11-acceleration/task-1-bless-report.md`.
 
-## How to bless (once, on main after S9 merges; nothing else running on the machine)
+## How to bless (on a clean pinned commit; nothing else running on the machine)
 
 1. Check out the pinned commit clean (`git status` empty; `scripts/` must equal `HEAD`).
 2. `make shrine-manifest plain-manifest road-manifest`, then `SOTC_LIB=<the library with the S9 bake> make verify ARGS=--bless`.

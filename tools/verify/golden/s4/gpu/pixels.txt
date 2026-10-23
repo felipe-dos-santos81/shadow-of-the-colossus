@@ -1,0 +1,2 @@
+s4-region pixels=253895 span=244 changed=138417 changed_pct=54.517 outside=0 bbox=993,237,1484,748
+s4-idle-pixels differing=146864 total=3686400 pct=3.984 outside=0 margin=16 bbox=993,237,1484,748

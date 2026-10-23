@@ -1,0 +1,4 @@
+s41-defeat-region pixels=2525550 span=252 changed=1066513 changed_pct=42.229 outside=0 bbox=326,188,2559,1254
+s41-defeat-hud changed=21685 outside=0 stamina_changed=21685 health_changed=0
+s41-reaction-hud changed=32413 outside=0 stamina_changed=19741 health_changed=12672
+s41-hud-bars stamina_green=11520 health_red=12672 stamina_pixels=12025 health_pixels=20417

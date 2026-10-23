@@ -1,0 +1,29 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s6-selftest --s6-stills <OUT>/s6/gpu/stills
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=142 vertices=1161131 materials=136 textures=87
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s6-phase phase=Idle t=0.000 total=0.000 lock=0 corpse=0 roots=0
+s6-event t=0.000 event=club_start clip=valus.telegraph gain=0.60
+s6-event t=0.300 event=club_swing clip=valus.club_swing gain=0.70
+s6-event t=0.000 event=music_start clip=music.boss gain=0.45
+s6-event t=0.000 event=music_stop clip=music.boss gain=0.00
+s6-phase phase=Motion t=0.000 total=0.000 lock=1 corpse=0 roots=2
+s1-pixels min=0,0,0 max=254,254,253 mean=81.6,78.2,72.1
+s1-screenshot path=<OUT>/s6/gpu/stills/motion.png width=2560 height=1440
+s6-event t=0.400 event=valus_defeat clip=valus.death gain=0.80
+s1-pixels min=0,0,0 max=255,254,255 mean=62.7,61.6,58.8
+s1-screenshot path=<OUT>/s6/gpu/stills/camera.png width=2560 height=1440
+s1-pixels min=0,0,0 max=254,254,254 mean=57.5,56.4,53.7
+s1-screenshot path=<OUT>/s6/gpu/stills/tendrils.png width=2560 height=1440
+s1-pixels min=0,0,0 max=254,254,254 mean=57.5,56.4,53.7
+s1-screenshot path=<OUT>/s6/gpu/stills/tendrils-control.png width=2560 height=1440
+s6-perf frames=240 effect_ms=<masked> base_ms=<masked> marginal_ms=<masked> frame_ms=<masked>
+s6-phase phase=Collapse t=0.016 total=6.183 lock=1 corpse=1 roots=2
+s1-pixels min=0,0,0 max=255,255,255 mean=112.3,106.7,97.6
+s1-screenshot path=<OUT>/s6/gpu/stills/corpse.png width=2560 height=1440
+s6-phase phase=Done t=0.000 total=8.000 lock=0 corpse=1 roots=2
+s6-death clip=minotaur_a_death_front total=8.000 corpse=1 health=0 camera=follow
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3
+s6-status defeated=1 corpse=1 roots=2 player_dead=0
+s6-reset phase=Idle corpse=0 lock=0 valus=100 player=100

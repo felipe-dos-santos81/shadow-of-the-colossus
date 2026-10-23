@@ -1,0 +1,13 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s4-selftest --screenshot <OUT>/s4/gpu/s4-approach.png
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=135 vertices=941302 materials=129 textures=86
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s1-pixels min=0,0,0 max=242,242,242 mean=100.3,95.7,89.1
+s1-screenshot path=<OUT>/s4/gpu/s4-approach.png width=2560 height=1440
+s4-spawn capsules=8 clearance=34.810 spawn=353.000,27.951,345.000
+s4-entity clip=minotaur_a_stand joints=238 lowest=28.297 ground=28.368 delta=-0.070 bbox=993,237,1485,751 screen=2560x1440
+s4-walk frames=423 stop=yes aim=379.600,0.000,370.372 pos=378.187,28.430,369.028 clearance=-0.000 penetration=0.000 stop_before=1.950 grounded=0.0000
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3
+s4-status instances=30 rigs=2 entity=minotaur_a_stand placement=builder-pick spawn=data-position+builder-yaw feet=ok entity_bbox=993,237,1485,751 pos=378.187,28.430,369.028 frames=423

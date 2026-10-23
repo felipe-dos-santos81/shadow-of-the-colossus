@@ -1,0 +1,15 @@
+check-manifest: <REPO>/out/re/stage/shrine.manifest (library <LIB>)
+PASS  structure manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats) expected ok, measured ok
+PASS  structure manifest instances (the shrine set)                        expected 34, measured 34
+PASS  structure shrine instance lines == the library's set, in cwks order  expected exact, ordered (34), measured ordered (34)
+PASS  structure statue instance lines == the placements JSON, in order     expected exact (17), measured exact (17)
+PASS  structure slot 1 is the broken glb + skirt (no intact mino_a_statue) expected ok, measured ok
+PASS  structure one posed Mono line == the placements JSON (girl_a_death_loop) expected exact (1), measured exact (1)
+PASS  structure every glbRelPath exists under the library                  expected all, measured 52/52
+PASS  structure identity transforms on every shrine-set instance           expected 34/34, measured 34/34
+PASS  structure no excluded name among the instances                       expected 0 excluded, measured 0 excluded
+PASS  structure exactly one spawn == the pin (0 8.998 1 0)                 expected 1, measured 1
+PASS  measured  mesh/vertex totals over the manifest's glbs                expected 3551 meshes, 2229907 vertices, measured 3551 meshes, 2229907 vertices
+PASS  measured  manifest sha256                                            expected 6bacc017ab2349786b5fcb126dd2a931ccc863ec7fea0f5b70f4e6d3d9bc97d8, measured 6bacc017ab2349786b5fcb126dd2a931ccc863ec7fea0f5b70f4e6d3d9bc97d8
+summary: 12/12 gating assertions pass
+gate: MET

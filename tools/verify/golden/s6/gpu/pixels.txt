@@ -1,0 +1,8 @@
+s6-tendrils changed=14597 bbox=719,0,1515,1048 violet=1943 strong=275 dark=1828
+s6-corpse veins=15449 sand=32527
+s6-camera floor=101960 top=27286
+s6-motion floor=698840 top=0 body=500826
+s6-hud still=motion valus=0 stamina=11520 player=7680
+s6-hud still=camera valus=0 stamina=11520 player=7680
+s6-hud still=tendrils valus=0 stamina=11520 player=7680
+s6-hud still=corpse valus=0 stamina=11520 player=7680

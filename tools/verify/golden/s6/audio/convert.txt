@@ -1,0 +1,14 @@
+audio: root=<GAME> out=<OUT>/s6/audio/lib map=<REPO>/tools/re/audio/s6_map.json events=[] music=[all] force=true
+  write boss01/valus.telegraph  1,202 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write boss01/valus.impact  8,153 s  48000 Hz 2 ch  gain 0,00 dB  (psadpcm)
+  write boss01/valus.hurt  1,051 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write com_obj/player.swing  0,465 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write com_obj/player.hit  0,709 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write com_v/player.hurt  0,270 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write com_b_h/player.death  0,812 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write music/music.boss  125,931 s  48000 Hz 2 ch  gain -10,09 dB  (at9)
+  write boss01/valus.death  5,278 s  48000 Hz 1 ch  gain -0,09 dB  (psadpcm)
+  write boss01/valus.club_swing  3,802 s  48000 Hz 1 ch  gain 0,00 dB  (psadpcm)
+manifest: <OUT>/s6/audio/lib/audio/audio.manifest (10 entries)
+
+audio: 10 written, 0 reused, 10 manifest entries

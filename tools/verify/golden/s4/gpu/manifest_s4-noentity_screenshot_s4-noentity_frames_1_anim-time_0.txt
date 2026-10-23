@@ -1,0 +1,6 @@
+# run: --library <LIB> --manifest <OUT>/s4/gpu/control/s4-noentity.manifest --model models/shadow/characters/wander/_cmn/wander.glb --screenshot <OUT>/s4/gpu/control/s4-noentity.png --frames 1 --anim-time 0
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=122 vertices=454935 materials=116 textures=75
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-pixels min=0,0,0 max=247,247,247 mean=103.0,97.5,89.4
+s1-screenshot path=<OUT>/s4/gpu/control/s4-noentity.png width=2560 height=1440

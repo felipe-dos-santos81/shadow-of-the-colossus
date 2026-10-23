@@ -1,0 +1,3 @@
+compose: road = plain (7 instances, 27 backdrops, 1 horse) + 6 entrance glbs + 1 arena backdrop
+compose: totals 3620 meshes, 2256460 vertices; sha256 3af63a18f88b12de32d07c4d10a33e0d91ed26306bc8193f0dfdcb97b70a5df4
+compose: wrote <OUT>/s9/probes/road-compose.manifest

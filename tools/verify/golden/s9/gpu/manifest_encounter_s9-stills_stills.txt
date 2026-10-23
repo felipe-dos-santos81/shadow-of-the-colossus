@@ -1,0 +1,92 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s9-stills <OUT>/s9/gpu/stills
+sotc-viewer: --s9-stills needs --s9-selftest
+usage: sotc-viewer [options]
+
+  --library DIR     converted asset library (default: $SOTC_LIB)
+  --model REL       model to load, relative to the library
+  --manifest PATH   compose the scene from a scene manifest; --model
+                    is then the player's glb (W/A/S/D walk, Shift runs;
+                    the clip follows: stand/walk/run)
+  --anim NAME|IDX   clip to play, by name or 0-based index (default: the
+                    model's first clip; procedural-wave only when a
+                    skinned model carries no clips); in arena mode it is
+                    the manual override of stand/walk/run selection
+  --anim-time SEC   pause playback at SEC seconds (deterministic captures;
+                    also pins the clip in arena mode)
+  --entity-time SEC pin every manifest entity's clip to SEC seconds
+                    (clamped into the clip; deterministic captures)
+  --camera-target player|entity  initial framing for captures (entity
+                    frames the entity's chest; requires --manifest)
+  --screenshot PNG  write a PNG after --frames frames, then exit
+  --frames N        frames the --screenshot path renders first (default 3)
+  --width N         window width in points (default 1280)
+  --height N        window height in points (default 720)
+  --selftest        render one frame, print s1-status, exit
+  --s3-selftest     compose --manifest, walk 240 fixed frames, print
+                    s3-status, exit
+  --s4-selftest     compose the encounter --manifest, pin the entity at
+                    t=0, walk the player into its collision proxy, print
+                    s4-status, exit
+  --s41-selftest    compose the encounter --manifest, then grab, climb,
+                    strike, catch, miss, force a stamina fall and land
+                    the killing blow through fixed 1/60 s steps; print
+                    s41-status, exit
+  --s41-stills DIR  with --s41-selftest: write grab, mid-climb, strike,
+                    reaction and defeat stills (plus controls) to DIR
+  --s42-selftest    compose the encounter --manifest, then run the
+                    weakpoint, gate, arm-route, stomp, club, death,
+                    reset and stamina timeline through fixed 1/60 s
+                    steps; print s42-status, exit
+  --s42-stills DIR  with --s42-selftest: write the stomp telegraph
+                    and impact, club, hurt, death and arm-weakpoint
+                    stills to DIR
+  --s5-selftest     run the same timeline with the curated audio on;
+                    print s5-event/s5-status and capture the mix
+                    (requires --audio-mixdown)
+  --audio-mixdown PATH  the --s5-selftest WAV capture destination
+  --s6-selftest     compose the encounter --manifest, hear a club
+                    swing, drive a scripted lethal event, run the
+                    death sequence (tendrils, corpse, cinematic
+                    camera), print s6-status, soft-reset with R,
+                    print s6-reset, exit
+  --s6-stills DIR   with --s6-selftest: write the motion, camera,
+                    tendrils and corpse stills to DIR
+  --stage arena|shrine|plain  the first stage (default arena; the
+                    shrine and the plain start with control; R
+                    returns to the arena)
+  --shrine-manifest PATH  the shrine's manifest (default
+                    out/re/stage/shrine.manifest)
+  --plain-manifest PATH  the plain's manifest (default
+                    out/re/stage/plain.manifest)
+  --road-manifest PATH  the road's manifest: the plain stage in
+                    interactive play (default out/re/stage/road.manifest)
+  --no-return       keep S6's end state: no return to the shrine
+  --s7-selftest     seed Valus dead, run the return to the shrine, the
+                    wake and the shrine probes, R back and reload;
+                    print the s7-* lines, exit
+  --s7-stills DIR   with --s7-selftest: write the fade, wake, altar,
+                    idols and hall stills to DIR
+  --s7-e2e          drive the interactive loop at fixed 1/60 s with
+                    scripted input: one lethal hit, the death, the
+                    return, the shrine load, the wake, Free, then R
+                    back to the arena; print the s7e2e-* lines, exit
+  --s8-selftest     on the plain: whistle, mount, kick through the
+                    gaits, steer, stop, back up, dismount, the cliff
+                    edge, R mounted; print the s8-* lines, exit
+  --s8-stills DIR   with --s8-selftest: write the mount, gallop,
+                    whistle and plain stills to DIR
+  --s8-e2e          with --stage shrine: drive the interactive loop at
+                    fixed 1/60 s with scripted input through the
+                    shrine door, the plain, the whistle, the ride and
+                    back, then R; print the s8e2e-* lines, exit
+  --s9-selftest     on the road: raise the sword (the fan, the lock,
+                    the shade, mounted at a stand), the entrance
+                    stairs, the corridor and arena doors, Agro left
+                    behind, R raised; print the s9-* lines, exit
+  --s9-stills DIR   with --s9-selftest: write the fan, locked,
+                    entrance and arena_door stills to DIR
+  --s9-e2e          with --stage shrine: drive the interactive loop at
+                    fixed 1/60 s with scripted input: the shrine door,
+                    the ride to the stairs, the lock, up the stairs,
+                    the corridor door, the lethal hit, the return;
+                    print the s9e2e-* lines, exit

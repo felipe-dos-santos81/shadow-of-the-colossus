@@ -1,0 +1,43 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --shrine-manifest <REPO>/out/re/stage/shrine.manifest --plain-manifest <REPO>/out/re/stage/plain.manifest --road-manifest <REPO>/out/re/stage/road.manifest --model models/shadow/characters/wander/_cmn/wander.glb --stage shrine --s9-e2e
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=3563 vertices=2292373 materials=272 textures=151
+s7-load stage=shrine instances=51 meshes=3563 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-scene meshes=3633 vertices=2324237 materials=342 textures=155
+s7-load stage=plain instances=13 meshes=3633 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=horse_a_uma_stand1 joints=132 procedural=0 t=0.000
+s9e2e-door from=shrine to=plain
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_walk joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_walk joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s9e2e-mount side=L
+s9e2e-ride gallop_m=455.4
+s9e2e-lock k=0.0000 locked=1 hit=1 hit_m=52.5
+s9e2e-stairs mounted=1 top=303.57,2.79,282.00
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s1-scene meshes=142 vertices=1161131 materials=136 textures=87
+s7-load stage=arena instances=30 meshes=142 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s9e2e-door from=plain to=arena
+s9e2e-death phase=Done
+s1-scene meshes=3563 vertices=2292373 materials=272 textures=151
+s7-load stage=shrine instances=51 meshes=3563 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s9e2e-return to=shrine
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s9e2e-done frames=9099
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3

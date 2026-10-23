@@ -1,0 +1,1 @@
+s3-wave-pixels differing=5487 total=3686400 margin=0 bbox=1218,766,1342,964

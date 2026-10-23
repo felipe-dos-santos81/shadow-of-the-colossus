@@ -1,0 +1,29 @@
+S6 asset/death gate — root <GAME>
+                     out  <LIB>
+clips (source)
+  warn source   minotaur_a_death_front.anb  known 2026-10-22 clobber: a 246449 B `player_a_stand` JSON dump, not the 24732 B clip; restore it from the pak (docs/notes/s6-recon.md §2.1)
+  warn source   minotaur_a_death_front_loop.anb  known 2026-10-22 clobber: a 246449 B `player_a_stand` JSON dump, not the 3532 B clip; restore it from the pak (docs/notes/s6-recon.md §2.1)
+  warn source   objanim_minotaur_a_death_front.anb  known 2026-10-22 clobber: a 246449 B `player_a_stand` JSON dump, not the 4808 B clip; restore it from the pak (docs/notes/s6-recon.md §2.1)
+  warn source   camera_minoa_death_front_camera_01.anb  known 2026-10-22 clobber: a 246449 B `player_a_stand` JSON dump, not the 844 B clip; restore it from the pak (docs/notes/s6-recon.md §2.1)
+  ok   source   camera_minoa_death_front_camera_02.anb  2244 B sha256 1a57e540eedf629c
+clips (library)
+  ok   clip     models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a.clips.json  minotaur_a_death_front frames=94 fps=15.0806 tracks=58
+  ok   clip     c01_minotaur_a.glb  animation minotaur_a_death_front 94 keys, 6.1669 s
+corpse
+  ok   corpse   c01_minotaur_a_dead_body.glb  6 meshes, 6 materials (colossus_01_arms_dead, colossus_01_back_dead, colossus_01_chest_dead, colossus_01_face_dead, colossus_01_legs_dead, colossus_01_waist_dead), 0 skins, 11925120 B, veins emissive on all 6
+  ok   corpse   c01_minotaur_a_dead_dirtmound.glb  1 mesh(es), 1 material(s)
+  ok   corpse   c01_minotaur_a.glb  12 material(s), none carries an emissiveTexture (the veil stays dead-only)
+cprt
+  ok   cprt     death_tentacle.cprt  header 0,3,8,1,100, 3 emitters
+  ok   cprt     main_wisp  3 csdr (emitter_0_*) + 8x8_wispysmoke02_1024_white_pfx.cptx
+  ok   cprt     smoke  3 csdr (emitter_1_*) + 8x8_smoke_wispy_sharp_1024_pfx.cptx
+  ok   cprt     veins  3 csdr (emitter_2_*) + 2x2_smoke_tendrils_01_pfx.cptx
+textures
+  ok   texture  8x8_wispysmoke02_1024_white_pfx.png  1024x1024, 707088 B, sha256 0fd737f277bf3b70
+  ok   texture  8x8_smoke_wispy_sharp_1024_pfx.png  1024x1024, 919600 B, sha256 135499f5485f2a37
+  ok   texture  2x2_smoke_tendrils_01_pfx.png  512x512, 73087 B, sha256 2788814f0d2b06d0
+  ok   texture  death_tentacle_veins.png  1024x256, 228032 B, sha256 f45991263e0ebc32
+
+checked 14 required asset(s): 14 ok, 0 failed
+source warnings: 4 (not required assets — the known game-tree clobber; see docs/notes/s6-recon.md §2.1)
+S6 ASSET GATE PASSED (4 source warning(s))

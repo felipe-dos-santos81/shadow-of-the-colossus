@@ -1,0 +1,6 @@
+compose: library <LIB>
+compose: models/shadow/levels/home                    23 glb (7 instances, 16 excluded)
+compose: cross-check levels/home/ (sha256 8a573631…, 134 entries): 7/7 kept glbs' cmsh referenced
+compose: spawn 301 -7.14 -210 0 (placements.json)
+compose: 27 backdrops at 300 0.071 -300 + 1 horse (agro.glb); totals 3541 meshes, 1916318 vertices; sha256 3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d
+compose: wrote <OUT>/s9/probes/plain-compose.manifest (35 instances + 1 spawn + 8 comment lines)

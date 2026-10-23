@@ -1,0 +1,6 @@
+compose: library <LIB>
+compose: models/shadow/levels/arena_01                13 glb (12 instances, 1 *_collision* excluded)
+compose: models/shadow/levels/arena_01_entrance       22 glb (18 instances, 4 *_collision* excluded)
+compose: cross-check out/re/stage/arena_paths.txt (sha256 13e3bb60…): arena_01: 12/12 cmsh referenced; arena_01_entrance: not covered by the list
+compose: spawn 309.312 4.394 285.403 0 (builder pick — docs/notes/re-stage.md §3)
+compose: wrote <OUT>/s9/probes/arena-compose.manifest (30 instances + 1 spawn + 10 comment lines)

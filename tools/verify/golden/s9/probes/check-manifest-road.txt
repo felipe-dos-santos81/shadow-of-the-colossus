@@ -1,0 +1,15 @@
+check-manifest: <REPO>/out/re/stage/road.manifest (library <LIB>)
+PASS  structure manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats) expected ok, measured ok
+PASS  structure manifest starts with a fresh `compose --stage plain` (byte-equal prefix) expected equal, measured equal
+PASS  structure manifest instances (plain 7 + entrance 6)                  expected 13, measured 13
+PASS  structure the six entrance glbs, by name, in order, after the plain set expected exact (6), measured exact (6)
+PASS  structure no hash stub, _lod, _low1, demoblocker or occluder among the instances expected 0 excluded, measured 0 excluded
+PASS  structure identity transforms on every instance                      expected 13/13, measured 13/13
+PASS  structure exactly one horse line                                     expected 1, measured 1
+PASS  structure 28 backdrops: 27 at offset 300 0.071 -300, one at identity naming arena_01.glb expected 28/28, measured 28/28
+PASS  structure every glbRelPath exists under the library                  expected all, measured 42/42
+PASS  structure exactly one spawn == the pin (301 -7.14 -210 0)            expected 1, measured 1
+PASS  measured  mesh/vertex totals over the manifest's glbs                expected 3620 meshes, 2256460 vertices, measured 3620 meshes, 2256460 vertices
+PASS  measured  manifest sha256                                            expected 3af63a18f88b12de32d07c4d10a33e0d91ed26306bc8193f0dfdcb97b70a5df4, measured 3af63a18f88b12de32d07c4d10a33e0d91ed26306bc8193f0dfdcb97b70a5df4
+summary: 12/12 gating assertions pass
+gate: MET

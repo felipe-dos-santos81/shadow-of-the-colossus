@@ -1,0 +1,14 @@
+check-manifest: <OUT>/s8/probes/arena-compose.manifest (library <LIB>)
+PASS  structure manifest parses (W1↔W2 schema: comments, exact tokens, strict finite floats) expected ok, measured ok
+PASS  structure arena glb files (pre-filter)                               expected 13 + 22 = 35, measured 13 + 22 = 35
+PASS  structure *_collision* glbs excluded                                 expected 1 + 4 = 5, measured 1 + 4 = 5
+PASS  structure manifest instances (non-*_collision*)                      expected 30 (35 - 5), measured 30
+PASS  structure instance set == the library's non-*_collision* set         expected exact (30), measured exact (30)
+PASS  structure every glbRelPath exists under the library                  expected 30/30, measured 30/30
+PASS  structure identity transforms on every instance                      expected 30/30, measured 30/30
+PASS  structure exactly one spawn                                          expected 1, measured 1
+PASS  measured  arena_01 bounds evidence (plan x[237,431] y[28,70] z[298,390]) expected x[237,431] y[28,70] z[298,390], measured x[237,431] y[28,70] z[298,390]
+PASS  measured  entrance bounds evidence (plan x[259,345] y[-1.7,81.5] z[249,307]) expected x[259,345] y[-1.7,81.5] z[249,307], measured x[259,345] y[-1.7,81.5] z[249,307]
+PASS  structure spawn inside the entrance bounds                           expected inside x[259,345] y[-1.7,81.5] z[249,307], measured inside
+summary: 11/11 gating assertions pass
+gate: MET

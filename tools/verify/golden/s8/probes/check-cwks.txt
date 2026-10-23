@@ -1,0 +1,16 @@
+check-cwks: <GAME>/workspaces/_ps4/shadow.cwks
+PASS  structure magic PSKW                                 expected b'PSKW', measured b'PSKW'
+PASS  structure u32 6 @0x04 (version)                      expected 6, measured 6
+PASS  structure file size                                  expected 29398788, measured 29398788
+PASS  structure header pair @0x08                          expected 130234, 67045, measured 130234, 67045
+PASS  structure index record count                         expected 67045, measured 67045
+PASS  structure records end at the pool start              expected 0x105E60, measured 0x105E60
+PASS  structure pool start                                 expected 0x105E60, measured 0x105E60
+PASS  measured  string entries                             expected 407965, measured 407965
+PASS  measured  tagged / bare split                        expected 340920 / 67045, measured 340920 / 67045
+PASS  structure record field[0] non-decreasing             expected 0 decreases, measured 0 decreases
+PASS  structure arena list (match 'levels/arena_01/')      expected 142, measured 142
+PASS  structure arena list sha256                          expected 13e3bb60daf3dc91bbf36818b3bc6dd50dc59c27e9730f341d2c4b24d77e5706, measured 13e3bb60daf3dc91bbf36818b3bc6dd50dc59c27e9730f341d2c4b24d77e5706
+PASS  structure tail stage paths (13 verbatim from 0x1C07319) expected 13 paths, measured 13 paths
+summary: 13/13 gating assertions pass
+gate: MET

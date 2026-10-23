@@ -1,0 +1,1 @@
+s8-acceptance: json cross-check OK (ride_points.h regenerated, 3 speeds + back, whistle 59.99 m, 2 edge stops)

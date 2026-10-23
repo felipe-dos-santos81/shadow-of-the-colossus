@@ -1,0 +1,38 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/encounter.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s42-selftest
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=135 vertices=941302 materials=129 textures=86
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=minotaur_a_stand joints=238 procedural=0 t=0.000
+s42-proxy weakpoint=0 radius=1.955
+s42-proxy weakpoint=1 radius=2.165
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s42-gate foot=0 head=34
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s42-arm band=right_arm weakpoint=1 damage=34
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s42-stomp damage=35 health=100->65 mode=hurt
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s42-miss club=0 stomp=15
+s42-club damage=45 health=65->20
+s2-anim clip=player_a_damage_h_fly1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_damage_h_fly_end joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_fall_damage_to_death joints=348 procedural=0 t=0.000
+s42-death clip=player_a_fall_damage_to_death mode=dead
+s42-reset health=100 stamina=100 mode=grounded valus=100
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s42-stamina from_y=28.425 to_y=43.484 remaining=39
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3
+s42-status proxy=2 gate_foot=0 gate_head=34 arm_band=right_arm arm_weakpoint=1 arm_damage=34 stomp_damage=35 stomp_health=65 club_damage=45 club_health=20 death_clip=player_a_fall_damage_to_death reset_health=100 reset_stamina=100 reset_mode=grounded reset_valus=100 stamina_remaining=39 defeated=0
