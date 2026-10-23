@@ -213,3 +213,44 @@ inline const char* ride_sfx_name(RideSfx id) {
     }
     return "unknown";
 }
+
+// --- S9: the sword's cue table -------------------------------------
+//
+// Authored behaviour: the shimmer (a `loop=1` manifest row) starts when the
+// sword leaves Lowered and is stopped with `AudioEngine::stop` when it reaches
+// Lowering; the search cue plays once on each rising edge of `locked`. The
+// gains are authored.
+enum class SwordSfx { Shimmer, Search, Count };
+
+struct SwordCue {
+    const char* clip;
+    float gain;  // authored
+};
+
+namespace audio_map_detail {
+
+inline constexpr SwordCue kSwordCues[] = {
+    {"sword.shimmer", 0.6f},  // Shimmer
+    {"sword.search", 0.7f},   // Search
+};
+
+static_assert(sizeof(kSwordCues) / sizeof(kSwordCues[0]) ==
+                  static_cast<std::size_t>(SwordSfx::Count),
+              "the sword cue table must cover every SwordSfx");
+
+}  // namespace audio_map_detail
+
+inline const SwordCue& sword_cue(SwordSfx id) {
+    const std::size_t index =
+        std::min(static_cast<std::size_t>(id), static_cast<std::size_t>(SwordSfx::Count) - 1);
+    return audio_map_detail::kSwordCues[index];
+}
+
+inline const char* sword_sfx_name(SwordSfx id) {
+    switch (id) {
+        case SwordSfx::Shimmer: return "shimmer";
+        case SwordSfx::Search: return "search";
+        case SwordSfx::Count: break;
+    }
+    return "unknown";
+}
