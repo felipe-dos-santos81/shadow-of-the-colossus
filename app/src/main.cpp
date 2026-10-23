@@ -81,7 +81,16 @@ void print_usage(FILE* out) {
                  "  --s7-e2e          drive the interactive loop at fixed 1/60 s with\n"
                  "                    scripted input: one lethal hit, the death, the\n"
                  "                    return, the shrine load, the wake, Free, then R\n"
-                 "                    back to the arena; print the s7e2e-* lines, exit\n");
+                 "                    back to the arena; print the s7e2e-* lines, exit\n"
+                 "  --s8-selftest     on the plain: whistle, mount, kick through the\n"
+                 "                    gaits, steer, stop, back up, dismount, the cliff\n"
+                 "                    edge, R mounted; print the s8-* lines, exit\n"
+                 "  --s8-stills DIR   with --s8-selftest: write the mount, gallop,\n"
+                 "                    whistle and plain stills to DIR\n"
+                 "  --s8-e2e          with --stage shrine: drive the interactive loop at\n"
+                 "                    fixed 1/60 s with scripted input through the\n"
+                 "                    shrine door, the plain, the whistle, the ride and\n"
+                 "                    back, then R; print the s8e2e-* lines, exit\n");
 }
 
 bool parse_int(const char* text, int& out) {
@@ -151,6 +160,14 @@ int main(int argc, char** argv) {
             opts.s7E2e = true;
             continue;
         }
+        if (arg == "--s8-selftest") {
+            opts.s8Selftest = true;
+            continue;
+        }
+        if (arg == "--s8-e2e") {
+            opts.s8E2e = true;
+            continue;
+        }
         if (arg == "--no-return") {
             opts.noReturn = true;
             continue;
@@ -163,7 +180,8 @@ int main(int argc, char** argv) {
                                  arg == "--s41-stills" || arg == "--s42-stills" ||
                                  arg == "--s6-stills" || arg == "--audio-mixdown" ||
                                  arg == "--stage" || arg == "--shrine-manifest" ||
-                                 arg == "--s7-stills" || arg == "--plain-manifest";
+                                 arg == "--s7-stills" || arg == "--plain-manifest" ||
+                                 arg == "--s8-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -238,6 +256,8 @@ int main(int argc, char** argv) {
             opts.plainManifestPath = value;
         } else if (arg == "--s7-stills") {
             opts.s7StillsPath = value;
+        } else if (arg == "--s8-stills") {
+            opts.s8StillsPath = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -335,7 +355,7 @@ int main(int argc, char** argv) {
     // --manifest too (R returns there) and is an interactive start.
     const bool frozen_selftest = opts.selftest || opts.s3Selftest || opts.s4Selftest ||
                                  opts.s41Selftest || opts.s42Selftest || opts.s5Selftest ||
-                                 opts.s6Selftest;
+                                 opts.s6Selftest || opts.s8Selftest;
     if (opts.s7Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s7-selftest needs --manifest\n");
         print_usage(stderr);
@@ -358,11 +378,42 @@ int main(int argc, char** argv) {
         print_usage(stderr);
         return 2;
     }
-    if (opts.s7E2e && (frozen_selftest || opts.s7Selftest || opts.stage != StageId::Arena ||
-                       opts.noReturn || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+    if (opts.s7E2e && (frozen_selftest || opts.s7Selftest || opts.s8E2e ||
+                       opts.stage != StageId::Arena || opts.noReturn ||
+                       !opts.screenshotPath.empty() || opts.entityTimeSet)) {
         std::fprintf(stderr,
                      "sotc-viewer: --s7-e2e runs alone: no selftest, capture, --entity-time, "
                      "--stage shrine|plain or --no-return\n");
+        print_usage(stderr);
+        return 2;
+    }
+    // S8 (D17): the selftest starts on the plain and runs alone; the e2e starts
+    // in the shrine (--stage shrine) and is otherwise an interactive run.
+    if ((opts.s8Selftest || opts.s8E2e) &&
+        (opts.manifestPath.empty() || opts.modelRelPath.empty())) {
+        std::fprintf(stderr, "sotc-viewer: --s8-selftest/--s8-e2e need --manifest and --model\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s8Selftest && (opts.selftest || opts.s3Selftest || opts.s4Selftest ||
+                            opts.s41Selftest || opts.s42Selftest || opts.s5Selftest ||
+                            opts.s6Selftest || opts.s7Selftest || opts.s7E2e || opts.s8E2e)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s8-selftest cannot be combined with another selftest; "
+                     "pass one\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s8E2e && (frozen_selftest || opts.s7Selftest || opts.stage != StageId::Shrine ||
+                       opts.noReturn || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s8-e2e runs alone and starts in the shrine: --stage shrine, "
+                     "no selftest, capture, --entity-time or --no-return\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.s8StillsPath.empty() && !opts.s8Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s8-stills needs --s8-selftest\n");
         print_usage(stderr);
         return 2;
     }

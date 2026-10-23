@@ -4,7 +4,7 @@
   python3 -I tools/re/s8/ride_points.py [placements.json] [ride_points.h]
 
 Transcribes `speeds`, `root_z`, `rider_root_xz`, `root_fps`, `footfalls` and the two
-doors (`door_shrine`, `door_plain`: boxes and arrival spawns) verbatim (ruling R2), so
+doors (`door_shrine`, `door_plain`: boxes and arrival spawns) and the `probes` verbatim (ruling R2), so
 the header is reproducible from the gate's output. Stdlib only.
 """
 
@@ -109,6 +109,17 @@ def render(d):
         w("inline constexpr Door %s{{%s}, {%s}, {%s}, %s};" % (
             name, ", ".join(f(v) for v in door["min"]), ", ".join(f(v) for v in door["max"]),
             ", ".join(f(v) for v in arrive["p"]), f(arrive["yaw_deg"])))
+    w("")
+    pr = d["probes"]
+    gl, ed = pr["gallop_line"], pr["edge"]
+    w("// The selftest/e2e probe points (source: %s), world x/z on the plain: the whistle's" % pr["source"])
+    w("// standpoint, the gallop line (start, heading, length) and the cliff-edge walk.")
+    w("inline constexpr float kProbeWhistleFrom[2] = {%s};" % ", ".join(f(v) for v in pr["whistle_from"]))
+    w("inline constexpr float kProbeGallopFrom[2] = {%s};" % ", ".join(f(v) for v in gl["from"]))
+    w("inline constexpr float kProbeGallopHeadingDeg = %s;" % f(gl["heading_deg"]))
+    w("inline constexpr float kProbeGallopLength = %s;" % f(gl["len_m"]))
+    w("inline constexpr float kProbeEdgeFrom[2] = {%s};" % ", ".join(f(v) for v in ed["from"]))
+    w("inline constexpr float kProbeEdgeTo[2] = {%s};" % ", ".join(f(v) for v in ed["to"]))
     w("")
     w("}  // namespace ride_points")
     return "\n".join(out) + "\n"

@@ -155,6 +155,19 @@ Vec3 rider_offset(const RideState& s);
 // `side` ends: the last `stand_getoff_fall` frame, mirrored on the right.
 Vec3 dismount_offset(Side side);
 
+// Ruling R11: a move the ground refused (no ground, a cliff, a wall — the app's
+// heightmap_walkable) reads as a held rein while Agro is ridden in a moving gait
+// (Walk/Trot/Gallop), so the stop chain runs instead of a gallop in place. It never
+// backs her up: at Stand (a stop clip, stand1) or Back it adds nothing. The app
+// passes last frame's refusal; `in`'s own keys pass through unchanged.
+RideInput blocked_rein(RideInput in, const RideState& s, bool blocked);
+
+// Ruling R12: the rider's seat-relative offset during the mount's 0.25 s blend,
+// lerped from `onFoot` (where he stood, in the same seat-relative frame; y ignored)
+// to rider_offset(s), so pressing E never snaps him onto the clip's first frame.
+// rider_offset(s) everywhere else.
+Vec3 mount_offset(const RideState& s, Vec3 onFoot);
+
 // "Stand", "Walk", "Trot", "Gallop", "Back".
 const char* gait_name(Gait gait);
 

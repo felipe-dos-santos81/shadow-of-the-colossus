@@ -705,3 +705,78 @@ TEST_CASE("R8: a dismount pressed during a downshift clip is refused, not queued
     s = run(s, 1.0f, none());
     CHECK(s.phase == RidePhase::Dismounting);
 }
+
+TEST_CASE("R11: a refused move reads as a held rein: each moving gait stops, never backs up") {
+    struct Case {
+        Gait g;
+        std::vector<const char*> chain;
+    };
+    for (const Case& c :
+         {Case{Gait::Gallop, {"run_stop1", "run_stop2", "run_stop3", "stand1"}},
+          Case{Gait::Trot, {"run_n_stop", "stand1"}}, Case{Gait::Walk, {"walk_stop", "stand1"}}}) {
+        CAPTURE(gait_name(c.g));
+        RideState s = at(c.g);
+        std::vector<std::string> seq;
+        // Blocked every frame the machine would move her (the app's refusal, fed back):
+        // the hold timer stops her after 0.5 s; at stand1 nothing is refused, nothing held.
+        for (int i = 0; i < 300; ++i) {
+            const bool blocked = s.speed != 0.0f;
+            const std::string before = s.horseClip;
+            s = step_ride(s, kDt, blocked_rein(none(), s, blocked), kNear);
+            if (s.horseClip != before) seq.push_back(s.horseClip);
+            CHECK(s.gait != Gait::Back);
+        }
+        std::vector<std::string> w;
+        for (const char* n : c.chain) w.push_back(std::string("horse_a_uma_") + n);
+        CHECK(seq == w);
+        CHECK(s.gait == Gait::Stand);
+        CHECK(s.reinSeconds < 0.0f);
+    }
+}
+
+TEST_CASE("R11: the refusal is ignored on foot, at a standstill and backing up; S still works") {
+    const RideInput fed = blocked_rein(none(), riding(), true);
+    CHECK_FALSE(fed.reinHeld);  // Stand: no back-up from a wall
+    CHECK_FALSE(blocked_rein(none(), reset_ride(), true).reinHeld);
+    RideState back = step_ride(riding(), kDt, rein(true, true), kNear);
+    REQUIRE(back.gait == Gait::Back);
+    CHECK_FALSE(blocked_rein(none(), back, true).reinHeld);
+    CHECK(blocked_rein(none(), at(Gait::Walk), true).reinHeld);
+    CHECK_FALSE(blocked_rein(none(), at(Gait::Walk), false).reinHeld);
+    CHECK(blocked_rein(rein(true, true), riding(), false).reinHeld);  // the key itself passes
+    CHECK(blocked_rein(rein(true, true), riding(), false).reinPressed);
+}
+
+TEST_CASE("R12: the mount's offset lerps from the on-foot spot to rider_offset over the blend") {
+    const Vec3 foot{-1.2f, 0.4f, 0.3f};  // y is ignored: the clip carries the height
+    RideState s = step_ride(reset_ride(), kDt, mount(), {{-1.2f, 0.0f, 0.3f}, true, true});
+    REQUIRE(s.phase == RidePhase::Mounting);
+    REQUIRE(s.blendFrom == 0.0f);
+    Vec3 o = mount_offset(s, foot);
+    CHECK(o.x == doctest::Approx(foot.x));
+    CHECK(o.y == 0.0f);
+    CHECK(o.z == doctest::Approx(foot.z));
+    // Halfway through the blend: the midpoint of the two.
+    RideState q = s;
+    q.clipTime = 0.5f * kClipBlendSeconds;
+    q.blendFrom = 0.5f * kClipBlendSeconds;
+    o = mount_offset(q, foot);
+    const Vec3 r = rider_offset(q);
+    CHECK(o.x == doctest::Approx(0.5f * (foot.x + r.x)));
+    CHECK(o.z == doctest::Approx(0.5f * (foot.z + r.z)));
+    // Continuous across the blend's end, then rider_offset alone.
+    s = run(s, kClipBlendSeconds - kDt, none());
+    REQUIRE(s.blendFrom >= 0.0f);
+    const Vec3 last = mount_offset(s, foot);
+    s = run(s, kDt, none());
+    REQUIRE(s.blendFrom < 0.0f);
+    const Vec3 after = mount_offset(s, foot);
+    // No jump at the blend's end: one frame of the lerp (~0.77 m / 15 frames) at most.
+    CHECK(std::hypot(after.x - last.x, after.z - last.z) < 0.06f);
+    CHECK(after.x == rider_offset(s).x);
+    CHECK(after.z == rider_offset(s).z);
+    // Riding and dismounting are rider_offset's.
+    const RideState g = at(Gait::Gallop);
+    CHECK(mount_offset(g, foot).x == 0.0f);
+    CHECK(mount_offset(g, foot).z == 0.0f);
+}

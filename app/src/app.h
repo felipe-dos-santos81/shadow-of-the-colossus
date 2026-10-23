@@ -197,6 +197,25 @@ struct AppOptions {
     // and --model; runs alone (no selftest, capture, --stage shrine or
     // --no-return).
     bool s7E2e = false;
+    // --s8-selftest (S8 Task 9, D17): starts on the plain at fixed 1/60 s with
+    // no window input — the whistle from probes.whistle_from, a left mount,
+    // kicks through Walk/Trot/Gallop (each loop's speed measured), a full-right
+    // steer at the gallop, a held S through the stop clips, S at a standstill
+    // backing up, a ride into the plateau's edge (R11's stop), a right dismount
+    // there, the on-foot edge walk, the rider/audio/perf probes, then R mounted
+    // at a gallop and the arena's opening state. Prints the `s8-*` lines and
+    // exits 0. Requires --manifest (the arena R returns to) and --model.
+    bool s8Selftest = false;
+    // --s8-stills DIR: with --s8-selftest, write mount.png, gallop.png,
+    // whistle.png and plain.png into DIR (the caller creates it).
+    std::string s8StillsPath;
+    // --s8-e2e: the interactive loop at fixed 1/60 s with a scripted input
+    // source (its own script state, a ride-input path): from --stage shrine it
+    // walks into the shrine's door, whistles on the plain, mounts, gallops 5 s
+    // along probes.gallop_line, stops, dismounts, walks into the plain's door,
+    // presses R in the shrine and exits 1 s into the arena. Prints the
+    // `s8e2e-*` lines; a failed join exits 1 naming the step.
+    bool s8E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode
@@ -224,6 +243,9 @@ struct StageCarry {
     std::size_t shrineMeshes = 0;
     int e2eStep = 0;
     int e2eFrame = 0;
+    // --s8-selftest's progress (0 the plain, 1 the arena after R) and
+    // --s8-e2e's (0 the shrine, 1 the plain, 2 the shrine again, 3 the arena).
+    int s8Step = 0;
 };
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the

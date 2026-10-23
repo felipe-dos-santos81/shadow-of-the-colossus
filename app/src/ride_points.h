@@ -100,4 +100,13 @@ struct Door {
 inline constexpr Door kDoorShrine{{-2.5f, -0.5f, 44.0f}, {2.5f, 3.0f, 46.0f}, {301.0f, -2.333f, -245.0f}, 0.0f};
 inline constexpr Door kDoorPlain{{296.0f, -2.0f, -258.5f}, {306.0f, 2.5f, -252.5f}, {0.0f, 9.79f, 34.0f}, 180.0f};
 
+// The selftest/e2e probe points (source: authored), world x/z on the plain: the whistle's
+// standpoint, the gallop line (start, heading, length) and the cliff-edge walk.
+inline constexpr float kProbeWhistleFrom[2] = {252.5f, -167.7f};
+inline constexpr float kProbeGallopFrom[2] = {301.0f, -203.0f};
+inline constexpr float kProbeGallopHeadingDeg = -54.0f;
+inline constexpr float kProbeGallopLength = 300.0f;
+inline constexpr float kProbeEdgeFrom[2] = {114.3f, -280.5f};
+inline constexpr float kProbeEdgeTo[2] = {76.9f, -294.6f};
+
 }  // namespace ride_points
