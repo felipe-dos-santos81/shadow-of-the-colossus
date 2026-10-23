@@ -247,7 +247,7 @@ TEST_CASE("Valus's behaviour is the one-state machine: stand + three attacks, bo
 
 TEST_CASE("the encounter id selects the table; an unknown id has none") {
     CHECK(find_encounter("valus") == &kValus);
-    CHECK(find_encounter("quadratus") == nullptr);
+    CHECK(find_encounter("quadratus") == &encounters::kQuadratus);
     CHECK(find_encounter("") == nullptr);
     CHECK(find_encounter("Valus") == nullptr);
 }
