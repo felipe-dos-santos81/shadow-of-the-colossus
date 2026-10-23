@@ -86,9 +86,14 @@ enum : int {
 }  // namespace S
 
 // The sprain (modes 9–12) ends when its transition timer reaches 20 s (cond[67],
-// data) — or its mode time 45 s (cond[65], data; never first while the 20 s
-// timer runs from the same mode entry). The mode is entered on the hit, so the
-// held loop is 20 s minus the start clip (2.0 s, measured).
+// data, FUN_00833d80 on +0x4b54) or its mode time 45 s (cond[65], data,
+// FUN_00833d50 on +0x4b50). The mode is entered on the hit, so the held loop is
+// 20 s minus the start clip (2.0 s, measured). The 45 s cap is not modelled: in
+// the game a re-hit on a sole re-enters the sprain with the same control held
+// (the loop keeps playing), which plausibly refreshes the 20 s timer while the
+// mode time runs on to 45 s (the RE reading, not traced). Our Down* states
+// ignore hoof hits (no re-hit), so the 20 s always ends the sprain first; the
+// refresh-with-cap needs a second clock BehaviourDesc does not have (Task 10).
 inline constexpr float kSprainSeconds = 20.0f;
 inline constexpr float kDownStartSeconds = 2.0f;
 inline constexpr float kSprainLoopSeconds = kSprainSeconds - kDownStartSeconds;
@@ -168,12 +173,16 @@ inline constexpr std::array<BehaviourStateDesc, S::Count> kStates{{
     {.clip = C::RefuseLegR, .clipEndNext = S::Stand},
     // mode 16 anger_playback (motion 16 "A_boss_anger"), then mode 17's attacks.
     {.clip = C::Angry, .clipEndNext = S::Stand},
-    // mode 8 (motion 42; the game then plays 43 death_loop). -1 = "loops" in the
-    // machine's terms, but the app must HOLD the last frame (C§notes: the baked
-    // death_loop is root-less and sinks him 4.6 m). The desc has no hold flag;
-    // the app's pinned one-shot death already holds.
+    // mode 8 (motion 42; the game then plays 43 death_loop). The machine reads
+    // -1 as "loops", but Death HOLDS its last frame (kHoldLastFrameState: the
+    // baked death_loop is root-less and sinks him 4.6 m, C§notes). Reached only
+    // by the app at HP 0 (the data forces mode 8 from common code, F).
     {.clip = C::Death},
 }};
+
+// The one state whose clip plays once and holds its last frame instead of
+// looping (BehaviourStateDesc has no hold flag yet: Task 10).
+inline constexpr int kHoldLastFrameState = S::Death;
 
 // --- Weakpoints ---------------------------------------------------------------
 
@@ -210,8 +219,11 @@ inline constexpr std::array<int, 2> kSigilOrder{{W::BackSigil, W::HeadSigil}};
 inline constexpr std::array<float, 4> kSigilDamageScale{{0.34f, 0.034f, 0.51f, 0.34f}};
 inline constexpr std::array<float, 4> kFleshDamageScale{{1.0f, 0.1f, 1.5f, 1.0f}};
 
-// The hoof gate (data: a sword hit on a sole region -> that hoof's sprain mode,
-// no damage; `FUN_00832710(mask 0x3f0, region)`, F §3): a hoof's shell, the joint
+// The hoof gate: a sword hit on a sole region -> that hoof's sprain mode (data,
+// `FUN_00832710(mask 0x3f0, region)`, F §3). "No damage" is ours (authored, the
+// recon / design G6 reading): the game's damage table gives the soles flesh-like
+// rows (`mammoth_first` [35]–[38] @0x16d1bf0…0x16d1dd0: {1, 0.5, 1.5, 1,
+// +14 = 10}); here the hit is a state change only. A hoof's shell, the joint
 // its sole is 100 % skinned to (measured, 233–235 verts each), the kneel it
 // starts, and the sole lift at which a strike counts (the game's region ->
 // triangle mapping is still open, so the reach rule is ours: 0.5 m proposed from
@@ -229,23 +241,36 @@ inline constexpr std::array<HoofDesc, 4> kHooves{{
     {.weakpoint = W::HoofFR, .joint = "Bone_TOE_R", .downState = S::DownFRStart, .liftMeters = 0.5f},
 }};
 
-// The states with no sole transition (data): modes 14 (rising_return), 19/20
-// (attached) and 8 (death). Every other mode — patrol, standby, lose-sight, the
-// attack modes and the sprains themselves — checks all four soles.
-inline constexpr std::array<int, 9> kNoHoofGateStates{{
+// The states that ignore hoof hits:
+// - the 12 kneel states: the sprain modes 9–12 do re-check the soles (data), but
+//   a re-hit there re-enters the sprain with the loop still playing; a
+//   Transition to Down*Start would pop him back to the standing pose (+6.9 m)
+//   and restart the 20 s — so no re-hit (see kSprainSeconds); the end clips
+//   play in mode 14 (motion graph: the loop holds only while the sprain
+//   control does), which has no sole transition (data);
+// - modes 14 (rising_return), 19/20 (attached) and 8 (death): no sole
+//   transition (data).
+// Every other mode — patrol, standby, lose-sight, the attack modes — checks all
+// four soles (data).
+inline constexpr std::array<int, 21> kNoHoofGateStates{{
+    S::DownBLStart, S::DownBLLoop, S::DownBLEnd, S::DownBRStart, S::DownBRLoop, S::DownBREnd,
+    S::DownFLStart, S::DownFLLoop, S::DownFLEnd, S::DownFRStart, S::DownFRLoop, S::DownFREnd,
     S::RiseReturnB, S::RiseReturnF, S::RefuseHead, S::RefuseShoulder, S::RefuseArmL,
     S::RefuseArmR, S::RefuseLegL, S::RefuseLegR, S::Death,
 }};
 
-// Ruling A5: the gates. The no-gate states' Ignore rows come first, then a hoof
-// hit anywhere else is a Transition into its kneel (no damage); the two sigils
-// deal damage in every state (the "only while attached" and "back before head"
-// rules are the runtime's, from kSigilOrder).
+// Ruling A5: the gates. Death ignores the sigils (a post-mortem hit counts for
+// nothing); the no-gate states ignore the hooves; then a hoof hit anywhere else
+// is a Transition into its kneel (no damage); the two sigils deal damage in
+// every other state (the "only while attached" and "back before head" rules are
+// the runtime's, from kSigilOrder).
 inline constexpr std::size_t kGateCount =
-    kNoHoofGateStates.size() * kHooves.size() + kHooves.size() + 2;
+    2 + kNoHoofGateStates.size() * kHooves.size() + kHooves.size() + 2;
 constexpr std::array<WeakpointGate, kGateCount> make_gates() {
     std::array<WeakpointGate, kGateCount> gates{};
     std::size_t n = 0;
+    gates[n++] = {.state = S::Death, .weakpoint = W::BackSigil, .kind = GateKind::Ignore};
+    gates[n++] = {.state = S::Death, .weakpoint = W::HeadSigil, .kind = GateKind::Ignore};
     for (int state : kNoHoofGateStates) {
         for (const HoofDesc& hoof : kHooves) {
             gates[n++] = {.state = state, .weakpoint = hoof.weakpoint, .kind = GateKind::Ignore};
@@ -277,6 +302,9 @@ enum : int {
 // (data; matches measured p50–p99): B_TOE 2.5, SUNE 2.0, MOMO 3.0, KUBI 6.0,
 // HEAD 3.0. The rump's 4.3 is measured (MATA p99 4.26–4.32). MATA_L/R share a
 // bind point, so both thighs end on the same rump start (measured).
+// The hoof bands carry no shell (weakpoint -1, though the recon json links them
+// to the rl/rr soles): a sole faces down and is struck from the ground beside the
+// lifted hoof (the hoof gate), never by a climber on the band.
 // The back: Weak_point2 -> KUBI, horizontal (stood on). Its surface is a slope
 // (+17° standing, +35° in the rear kneel, C§5), so the band is TAPERED: 1.5 m
 // at the rear (the back sigil end) to 6.3 m at KUBI (measured mesh-top above the
@@ -405,8 +433,11 @@ inline constexpr std::array<CapsuleDesc, 17> kCapsules{{
 //   reachMeters 25: authored — selection range from the entity origin; the
 //     stomp lands 24.2 m ahead, 7.4 m aside (measured, C§4; scr_attainrange[0]
 //     {8, 25, 180, 80} carries a 25 whose meaning is undecoded, F).
-//   facingDot 0.9397 = cos 20°: data — he attacks when the player is within
-//     ±20° in front (cond[43] "P_is_at_the_front", +1c = 20).
+//   facingDot 0.9397 = cos 20°: the value is data (cond[43] "P_is_at_the_front",
+//     +1c = 20); its role as the attack gate is the RE lane's reading — cond[43]
+//     feeds func[30] -> control 342 "Mammoth_rise" (the rear-up start) in modes
+//     7/16, while mode 15's own trigger (scr_attackdata / scr_attainrange
+//     {8, 25, 180, 80}) is undecoded.
 //   hit 3.0 / wave 8.0 m: authored — sole proxy 2.6 + player 0.35 (measured),
 //     Valus's 6.0 wave scaled. (The game's volume is objanim type 46, ≈ 15 × 15
 //     × 30 m at (±14.7, 3.3, 37.4), F: not ported.)
@@ -549,7 +580,8 @@ constexpr bool quadratus_links_valid() {
             return false;
         }
     }
-    return state(q::kShakeRule.state) && band(q::kBandTaper.band);
+    return state(q::kShakeRule.state) && state(q::kHoldLastFrameState) &&
+           band(q::kBandTaper.band);
 }
 
 static_assert(behaviour_valid(kQuadratus.behaviour));

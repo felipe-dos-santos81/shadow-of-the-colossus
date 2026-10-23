@@ -1,18 +1,22 @@
-// S11 Task 9: Quadratus's EncounterDesc against his baked glb and his arena.
-// The library-dependent cases fail (never skip) without SOTC_LIB or without his
-// bake (`make bake-quadratus` into the s11-quadratus view); the manifest case
-// fails without `out/re/stage/arena_02.manifest` (compose it with
-// `python3 tools/re/stage/probe.py compose --stage arena_02 --library "$SOTC_LIB"`).
+// S11 Task 9: Quadratus's EncounterDesc against his baked glb and the mode
+// graph. The library-dependent cases fail (never skip) without SOTC_LIB or
+// without his bake (`make bake-quadratus`; promoted to the base out/library at
+// S11's merge, ruling A16). No case reads out/re/stage: the manifest case
+// writes its own fixture.
 
 #include <doctest.h>
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <filesystem>
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "asset_io.h"
@@ -90,7 +94,103 @@ BehaviourRuntime in_state(int state) {
     return rt;
 }
 
+// One kneel, timed on the glb's clip lengths: the hit -> start -> loop until
+// 20 s -> end -> mode 14's rest until 30 s -> stand. Mid-kneel and in the rest
+// a hoof hit is ignored and a sigil hit still damages.
+void check_kneel(int weakpoint, int start, int loop, int end, int rest) {
+    const BehaviourDesc& b = kQuadratus.behaviour;
+    const std::vector<float> durations = state_clip_durations();
+
+    const BehaviourHit hit = behaviour_hit(b, in_state(q::S::Walk), weakpoint);
+    REQUIRE(hit.kind == GateKind::Transition);
+    CHECK(hit.runtime.state == start);
+
+    BehaviourRuntime rt = step_behaviour(b, hit.runtime, 2.1f, durations);
+    CHECK(rt.state == loop);
+    for (int hoof = q::W::HoofRL; hoof <= q::W::HoofFR; ++hoof) {
+        CHECK(behaviour_hit(b, rt, hoof).kind == GateKind::Ignore);
+    }
+    CHECK(behaviour_hit(b, rt, q::W::BackSigil).kind == GateKind::Damage);
+    rt = step_behaviour(b, rt, 17.8f, durations);  // 19.9 s after the hit
+    CHECK(rt.state == loop);
+    rt = step_behaviour(b, rt, 0.2f, durations);  // 20.1 s: the end clip
+    CHECK(rt.state == end);
+    CHECK(behaviour_hit(b, rt, weakpoint).kind == GateKind::Ignore);
+    rt = step_behaviour(b, rt, 9.8f, durations);  // 29.9 s: mode 14's rest
+    CHECK(rt.state == rest);
+    CHECK(behaviour_hit(b, rt, q::W::HoofRR).kind == GateKind::Ignore);
+    CHECK(behaviour_hit(b, rt, q::W::HeadSigil).kind == GateKind::Damage);
+    rt = step_behaviour(b, rt, 0.2f, durations);  // 30.1 s
+    CHECK(rt.state == q::S::Stand);
+}
+
 }  // namespace
+
+TEST_CASE("a rear-left hoof hit kneels him: 20 s of sprain, 10 s of rest, then stand") {
+    check_kneel(q::W::HoofRL, q::S::DownBLStart, q::S::DownBLLoop, q::S::DownBLEnd,
+                q::S::RiseReturnB);
+}
+
+TEST_CASE("a front-right hoof hit kneels him: 20 s of sprain, 10 s of rest, then stand") {
+    check_kneel(q::W::HoofFR, q::S::DownFRStart, q::S::DownFRLoop, q::S::DownFREnd,
+                q::S::RiseReturnF);
+}
+
+TEST_CASE("Quadratus's gates, state by state, against the mode graph") {
+    namespace s = q::S;
+    // Literal (not read back from the table): the kneels (no re-hit), mode 14's
+    // rest, mode 19's swings and death ignore the soles; every other state
+    // kneels him on the struck hoof.
+    const std::set<int> noHoofGate{
+        s::DownBLStart, s::DownBLLoop, s::DownBLEnd, s::DownBRStart, s::DownBRLoop, s::DownBREnd,
+        s::DownFLStart, s::DownFLLoop, s::DownFLEnd, s::DownFRStart, s::DownFRLoop, s::DownFREnd,
+        s::RiseReturnB, s::RiseReturnF, s::RefuseHead, s::RefuseShoulder, s::RefuseArmL,
+        s::RefuseArmR, s::RefuseLegL, s::RefuseLegR, s::Death};
+    const std::pair<int, int> kneelOf[] = {{q::W::HoofRL, s::DownBLStart},
+                                           {q::W::HoofRR, s::DownBRStart},
+                                           {q::W::HoofFL, s::DownFLStart},
+                                           {q::W::HoofFR, s::DownFRStart}};
+    const BehaviourDesc& b = kQuadratus.behaviour;
+    for (int state = 0; state < s::Count; ++state) {
+        CAPTURE(state);
+        for (const auto& [hoof, kneel] : kneelOf) {
+            const WeakpointGate gate = behaviour_gate(b, state, hoof);
+            if (noHoofGate.count(state) != 0) {
+                CHECK(gate.kind == GateKind::Ignore);
+            } else {
+                CHECK(gate.kind == GateKind::Transition);
+                CHECK(gate.target == kneel);
+            }
+        }
+        const GateKind sigil = state == s::Death ? GateKind::Ignore : GateKind::Damage;
+        CHECK(behaviour_gate(b, state, q::W::BackSigil).kind == sigil);
+        CHECK(behaviour_gate(b, state, q::W::HeadSigil).kind == sigil);
+    }
+}
+
+TEST_CASE("every state but the loops (stand, walk) and death runs back to stand or walk") {
+    const BehaviourDesc& b = kQuadratus.behaviour;
+    const std::vector<float> durations = state_clip_durations();
+    for (int state = 0; state < q::S::Count; ++state) {
+        if (state == q::S::Stand || state == q::S::Walk || state == q::S::Death) {
+            continue;
+        }
+        CAPTURE(state);
+        BehaviourRuntime rt = in_state(state);
+        for (int i = 0; i < 400 && rt.state != q::S::Stand && rt.state != q::S::Walk; ++i) {
+            rt = step_behaviour(b, rt, 0.1f, durations);  // up to 40 s
+        }
+        CHECK((rt.state == q::S::Stand || rt.state == q::S::Walk));
+    }
+    // The loops hold, and Death is entered only by the app (HP 0): no row leads
+    // there, and it holds its last frame.
+    for (const BehaviourStateDesc& st : b.states) {
+        CHECK(st.clipEndNext != q::S::Death);
+        CHECK(st.timerNext != q::S::Death);
+    }
+    CHECK(q::kHoldLastFrameState == q::S::Death);
+    CHECK(step_behaviour(b, in_state(q::S::Death), 60.0f, durations).state == q::S::Death);
+}
 
 static_assert(behaviour_valid(kQuadratus.behaviour));
 static_assert(encounters::quadratus_links_valid());
@@ -161,46 +261,6 @@ TEST_CASE("every weakpoint material and every clip Quadratus's table names is in
     CHECK(clip_seconds("boss_a_down_f_r_end") == doctest::Approx(q::kDownFEndSeconds).epsilon(1e-4));
 }
 
-TEST_CASE("a rear hoof hit kneels him for the sprain's 20 s, then 10 s of rest, then stand") {
-    const BehaviourDesc& b = kQuadratus.behaviour;
-    const std::vector<float> durations = state_clip_durations();
-
-    const BehaviourHit hit = behaviour_hit(b, in_state(q::S::Walk), q::W::HoofRL);
-    REQUIRE(hit.kind == GateKind::Transition);
-    CHECK(hit.runtime.state == q::S::DownBLStart);
-
-    BehaviourRuntime rt = step_behaviour(b, hit.runtime, 2.1f, durations);
-    CHECK(rt.state == q::S::DownBLLoop);
-    rt = step_behaviour(b, rt, 17.8f, durations);  // 19.9 s after the hit
-    CHECK(rt.state == q::S::DownBLLoop);
-    rt = step_behaviour(b, rt, 0.2f, durations);  // 20.1 s: the end clip
-    CHECK(rt.state == q::S::DownBLEnd);
-    rt = step_behaviour(b, rt, 9.8f, durations);  // 29.9 s: mode 14's rest
-    CHECK(rt.state == q::S::RiseReturnB);
-    CHECK(behaviour_hit(b, rt, q::W::HoofRR).kind == GateKind::Ignore);
-    CHECK(behaviour_hit(b, rt, q::W::BackSigil).kind == GateKind::Damage);
-    rt = step_behaviour(b, rt, 0.2f, durations);  // 30.1 s
-    CHECK(rt.state == q::S::Stand);
-}
-
-TEST_CASE("Quadratus's gates: soles kneel him outside rest/attached/death, sigils always damage") {
-    const BehaviourDesc& b = kQuadratus.behaviour;
-    for (int state = 0; state < q::S::Count; ++state) {
-        CAPTURE(state);
-        const bool noGate = std::find(q::kNoHoofGateStates.begin(), q::kNoHoofGateStates.end(),
-                                      state) != q::kNoHoofGateStates.end();
-        for (const q::HoofDesc& hoof : q::kHooves) {
-            const WeakpointGate gate = behaviour_gate(b, state, hoof.weakpoint);
-            CHECK(gate.kind == (noGate ? GateKind::Ignore : GateKind::Transition));
-            if (!noGate) {
-                CHECK(gate.target == hoof.downState);
-            }
-        }
-        CHECK(behaviour_gate(b, state, q::W::BackSigil).kind == GateKind::Damage);
-        CHECK(behaviour_gate(b, state, q::W::HeadSigil).kind == GateKind::Damage);
-    }
-}
-
 TEST_CASE("both stomp chains run start -> attack -> landing -> stop -> stand on his clip lengths") {
     const BehaviourDesc& b = kQuadratus.behaviour;
     const std::vector<float> durations = state_clip_durations();
@@ -219,15 +279,29 @@ TEST_CASE("both stomp chains run start -> attack -> landing -> stop -> stand on 
     }
 }
 
-TEST_CASE("arena_02.manifest selects Quadratus and names his glb and stand clip") {
-    const std::filesystem::path path = kRepoRoot / "out/re/stage/arena_02.manifest";
-    INFO("compose it: python3 tools/re/stage/probe.py compose --stage arena_02 --library \"$SOTC_LIB\"");
-    REQUIRE(std::filesystem::exists(path));
-    const SceneManifest manifest = parse_manifest(path, /*acceptEncounter=*/true);
+TEST_CASE("an arena manifest naming quadratus selects his table; an unknown id has none") {
+    // The real out/re/stage/arena_02.manifest is checked by Task 10's selftest;
+    // a unit test reads its own fixture through the same parser and registry.
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() /
+                                      ("sotc-quadratus-fixture-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    const auto write = [&dir](const std::string& encounterLine) {
+        const std::filesystem::path path = dir / "arena_02.manifest";
+        std::ofstream(path) << "instance models/a.glb 0 0 0 0 0 0 1 1 1 1\n"
+                            << encounterLine << "\n"
+                            << "entity " << kGlb
+                            << " 240 -96.741 -925 0 0.188087 0 0.982152 1 1 1 boss_a_stand\n"
+                            << "spawn 273 -98.308 -842 -158.317708\n";
+        return path;
+    };
+    const SceneManifest manifest = parse_manifest(write("encounter quadratus"), true);
     CHECK(manifest.encounter == "quadratus");
     CHECK(find_encounter(manifest.encounter) == &kQuadratus);
     REQUIRE(manifest.entities.size() == 1);
     CHECK(manifest.entities[0].placement.glbRelPath == kGlb);
     CHECK(manifest.entities[0].clip == q::kClips[q::C::Stand]);
-    CHECK(manifest.hasSpawn);
+
+    // stage_setup's "unknown encounter" error is find_encounter's nullptr.
+    CHECK(find_encounter(parse_manifest(write("encounter quadratu"), true).encounter) == nullptr);
+    std::filesystem::remove_all(dir);
 }
