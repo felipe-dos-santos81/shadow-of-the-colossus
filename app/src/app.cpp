@@ -26,6 +26,7 @@
 #include "road_points.h"
 #include "run_flags.h"
 #include "scene.h"
+#include "selftests.h"
 #include "stage_ctx.h"
 #include "shrine_points.h"
 #include "sword.h"
@@ -4519,60 +4520,25 @@ int run_app(const AppOptions& opts) {
             }
 
             if (opts.selftest) {
-                update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f, club);
-                renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                      /*acquire_swapchain=*/true);
-                print_status_line(opts, shell.win);
-                return 0;
+                const SelftestResult result = run_selftest(ctx, run);
+                if (result.exitCode) {
+                    return *result.exitCode;
+                }
+                if (result.next) {
+                    stage = *result.next;
+                    continue;
+                }
             }
 
             if (!opts.screenshotPath.empty()) {
-                // A capture run: in manifest mode the player stands at its spawn
-                // (ground-followed, camera behind it) while the pose advances with
-                // the real frame times; then one PNG is written.
-                Uint64 last_ticks = SDL_GetTicks();
-                for (int frame = 0; frame < opts.frames; ++frame) {
-                    const Uint64 now = SDL_GetTicks();
-                    const float dt = static_cast<float>(now - last_ticks) / 1000.0f;
-                    last_ticks = now;
-                    if (follow_mode) {
-                        const PlayerInput still;
-                        update_locomotion(playback, scene, still, manual_clip);
-                        const std::vector<std::vector<Mat4>> palettes =
-                            update_all_poses(renderer, scene, playbacks, dt, club);
-                        if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
-                            haveEntityChest = entity_chest_position(scene, entityRig,
-                                                                   palettes[entityRig], entityChest);
-                        }
-                        if (targetCamera.active) {
-                            if (haveEntityChest) {
-                                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f,
-                                                     0.0f);
-                            }
-                        } else if (targetCamera.returning) {
-                            camera_target_return(camera, follow, targetCamera, player.position,
-                                                 player.yawDeg, 0.0f, 0.0f, 0.0f,
-                                                 /*moving=*/false, dt);
-                        } else {
-                            camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,
-                                          0.0f, /*moving=*/false, dt);
-                        }
-                        player_update(player, still, dt, heightmap, camera_look_yaw(camera));
-                        // The collision hook: after player_update, before the
-                        // player transform the frame is drawn with.
-                        resolve_player_collision(player, entity_capsules(scene, palettes), heightmap);
-                        apply_player_transform(scene, player_rig_record, player,
-                                               active_player_lift(scene, playback,
-                                                                  player_rig_record));
-                    } else {
-                        update_all_poses(renderer, scene, playbacks, dt, club);
-                    }
-                    renderer.render_frame(scene, camera_view_proj(camera, shell.win),
-                                          /*acquire_swapchain=*/true);
+                const SelftestResult result = run_screenshot(ctx, run);
+                if (result.exitCode) {
+                    return *result.exitCode;
                 }
-
-                write_screenshot(renderer, shell.win, opts.screenshotPath);
-                return 0;
+                if (result.next) {
+                    stage = *result.next;
+                    continue;
+                }
             }
 
             // Interactive: left-drag orbits (single-model mode) or turns the follow
