@@ -1,7 +1,9 @@
 """The runner's orchestration against fake sections (no build, no viewer, no decode): bless writes
 normalised goldens only when two runs agree, a run passes on unchanged output and stores stamps, an
 unchanged tree re-runs nothing, a changed selftest line fails naming it, --quick skips the e2e
-goldens and its pass does not satisfy a full run.
+goldens and its pass does not satisfy a full run; a frozen script without an adapter refuses the run;
+the audio sections never use a bp-convert published from other sources; ctest starts after the audio
+decode and the headless suites finish before any perf-gated section starts.
 
 Run: python3 -I tools/verify/test_run.py
 """
@@ -11,6 +13,7 @@ import io
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run  # noqa: E402
@@ -20,14 +23,26 @@ class Fake(run.Runner):
     line = "s7-status stage=shrine phase=Free lock=0"
     calls = []
     counter = 0
+    events = []
+    publishes = 0
 
     def sh(self, cmd, log, env=None, mode="a"):
+        if cmd[0] == "ctest":
+            Fake.events.append("ctest-start")
+            time.sleep(0.2)
+            Fake.events.append("ctest-end")
+        elif cmd[:2] == ["dotnet", "exec"]:
+            Fake.events.append("decode")
         return 0
 
-    def app_build(self):
+    def publish(self, log):
+        Fake.publishes += 1
+        os.makedirs(self.bin, exist_ok=True)
+        open(os.path.join(self.bin, "bp-convert.dll"), "w").close()
+        self.mark_published()
         return True
 
-    def ensure_cli(self):
+    def app_build(self):
         return True
 
     def pin_check(self):
@@ -35,6 +50,7 @@ class Fake(run.Runner):
 
     def run_section(self, m, section):
         Fake.calls.append("%s.%s" % (m, section))
+        Fake.events.append("%s.%s" % (m, section))
         Fake.counter += 1
         cand = self.p("candidates", m, section)
         os.makedirs(cand, exist_ok=True)
@@ -55,7 +71,7 @@ def go(out, *argv):
         setattr(args, a, True)
     r = Fake(args)
     r.out, r.bin = out, os.path.join(out, "bin")
-    Fake.calls = []
+    Fake.calls, Fake.events = [], []
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         rc = r.run()
@@ -80,9 +96,13 @@ def main():
         assert "path=<OUT>/s7/gpu/stills/fade.png" in golden and "ms=<masked>" in golden, golden
         assert os.path.exists(run.PIN)
 
-        rc, log, calls = go(out)
+        rc, log, calls = go(out, "force")
         assert rc == 0 and calls == all_sections, log
         assert "verify: s7 PASS" in log and "verify: dotnet PASS" in log, log
+        ev = Fake.events
+        assert ev.index("decode") < ev.index("ctest-start"), "ctest reads the library: after the decode %s" % ev
+        perf = [ev.index(k) for k in ("s4.gpu", "s41.gpu", "s42.gpu", "s6.gpu", "s7.gpu", "s8.gpu")]
+        assert ev.index("ctest-end") < min(perf), "the perf-gated sections run alone: %s" % ev
 
         rc, log, calls = go(out)
         assert rc == 0 and calls == [], "an unchanged tree re-runs nothing: %s" % calls
@@ -98,6 +118,26 @@ def main():
         assert rc == 0, "quick skips the e2e goldens: %s" % log
         rc, log, calls = go(out)
         assert calls == ["s7.gpu", "s8.gpu"], "only the sections with e2e runs owe a full run: %s" % calls
+
+        # the CLI: republished when the dotnet stamp moved, refused when the dotnet build failed
+        r = Fake(argparse.Namespace(only=[], quick=False, jobs=1, force=False, dry_run=False, bless=False, long=False))
+        r.out, r.bin = out, os.path.join(out, "bin")
+        r.published.set()
+        r.dotnet_value = "A"
+        Fake.publishes = 0
+        assert r.ensure_cli() and Fake.publishes == 1, "published from stamp A"
+        assert r.ensure_cli() and Fake.publishes == 1, "A again: reused"
+        r.dotnet_value = "B"
+        assert r.ensure_cli() and Fake.publishes == 2, "src moved (--only sN): republished"
+        r.dotnet_failed = True
+        assert not r.ensure_cli(), "a failed dotnet build never feeds the audio sections"
+
+        # a frozen script without an adapter refuses the run (S9's script arrives before s9.sh)
+        real = run.adapters
+        run.adapters = lambda: [a for a in real() if a != "s8"]
+        rc, log, calls = go(out)
+        assert rc == 1 and calls == [] and "s8-acceptance.sh has no adapter" in log, log
+        run.adapters = real
 
         Fake.line = "s7-status stage=shrine phase=Free lock=%d"
         orig = Fake.run_section

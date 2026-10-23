@@ -27,7 +27,8 @@ CASES = {
     "BpConvert.sln": by("dotnet"),
     "Directory.Build.props": by("dotnet"),
     "tools/native/liboo2core_8_win64_.dylib": by("dotnet"),
-    "tools/re/audio/s8_map.json": by("dotnet", "audio"),
+    "tools/re/audio/s8_map.json": by("dotnet", "audio", "ctest") | {"s8.gpu"},
+    "tools/re/audio/s5_map.json": by("dotnet", "audio", "ctest") | {"s5.gpu"},
     "tools/re/audio/s5_audition.py": by("audio"),
     "app/src/app.cpp": by("ctest", "gpu"),
     "app/shaders/mesh.metal": by("ctest", "gpu"),
@@ -42,9 +43,11 @@ CASES = {
     "tools/re/s8/placements.json": by("probes", "gpu"),
     "tools/re/s8/ride_points.py": by("gpu"),
     "tools/re/s9/road.json": by("probes"),
+    "out/re/stage/arena_paths.txt": by("probes"),
     "lib/models/a/a.glb": by("ctest", "probes", "gpu"),
     "lib/models/a/a.clips.json": by("ctest", "probes", "gpu"),
-    "lib/audio/audio.manifest": by("ctest", "probes", "gpu"),
+    "lib/audio/audio.manifest": by("ctest", "probes", "gpu", "audio"),
+    "lib/audio/s5/valus_hurt.wav": by("ctest", "probes", "gpu"),
     "tools/verify/common.sh": {k for k in ALL if "." in k},
     "tools/verify/s3.sh": {"s3.gpu"},
     "scripts/s4-acceptance.sh": {"s4.probes", "s4.gpu"},
@@ -52,7 +55,7 @@ CASES = {
     "tools/verify/golden/s8/probes/compose.txt": {"s8.probes"},
 }
 UNCHANGED = ["app/build/CMakeCache.txt", "src/BpConvert.Cli/bin/x.dll", "lib/textures/t.png",
-             "lib/audio/clip.wav", "docs/notes/x.md"]
+             "lib/audio/clip.txt", "docs/notes/x.md"]
 
 
 def write(root, rel, text):
@@ -90,7 +93,7 @@ def main():
             got = changed()
             assert got == want, "%s: changed %s, expected %s" % (rel, sorted(got), sorted(want))
             write(root, rel, "v1 " + rel)
-            if not rel.endswith(".glb"):   # a glb is fingerprinted by size+mtime: v1 again has a new mtime
+            if not rel.endswith((".glb", ".wav")):   # size+mtime fingerprints: v1 again has a new mtime
                 assert changed() == set(), rel
             base = all_stamps(root, lib)
 
