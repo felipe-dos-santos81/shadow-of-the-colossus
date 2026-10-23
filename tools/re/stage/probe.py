@@ -49,7 +49,7 @@ Modes
                              records, string pool; extracts the pool path list
                              matching SUBSTR (default: the stage's match)
   check-cwks                 pinned assertions for the workspace file (exit 0/1)
-  compose --library <dir> --out <file> [--paths <file>] [--stage arena_01|arena_02|shrine|plain]
+  compose --library <dir> [--out <file>] [--paths <file>] [--stage arena_01|arena_02|shrine|plain|road]
                              emit the stage's scene manifest (the W1↔W2 format):
                              arena_01: the level sets' non-*_collision* glbs,
                              identity transforms, the labeled spawn pick;
@@ -59,10 +59,16 @@ Modes
                              + the horse + spawn (tools/re/s8/placements.json)
                              arena_02: the levels/arena_02 set + the csml bridge
                              placements + `encounter quadratus` + Quadratus + spawn
-                             (S11; default --out out/re/stage/arena_02.manifest)
-  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|shrine|plain]
+                             (S11)
+                             road: the plain set + the six arena_01_entrance glbs +
+                             arena_01.glb as a backdrop (S9)
+                             --out defaults per stage: arena_01 out/re/stage/valus.manifest,
+                             arena_02 .../arena_02.manifest, shrine .../shrine.manifest,
+                             plain .../plain.manifest, road .../road.manifest
+  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|shrine|plain|road]
                              pinned assertions for the stage's manifest (exit 0/1);
-                             no --stage means arena_01
+                             no --stage means arena_01; <file> defaults per stage
+                             as for compose --out
   compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
                              derive the S4 encounter manifest from the S3 one:
                              the 30 instances verbatim, a rewritten spawn, one
