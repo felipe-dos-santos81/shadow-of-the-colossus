@@ -102,16 +102,18 @@ int joint_index_named(const RigCpu& rig, std::string_view name) {
 }
 
 ClubAttachment load_club(Scene& scene, const std::filesystem::path& libraryDir,
-                         std::size_t entityRig, const std::string& entityGlb) {
+                         std::size_t entityRig, const std::string& entityGlb,
+                         const EncounterDesc& desc) {
     ClubAttachment club{};
-    if (entityRig >= scene.rigs.size()) {
-        return club;
+    const PropDesc* weapon = encounter_prop(desc, PropRole::Weapon);
+    if (weapon == nullptr || entityRig >= scene.rigs.size()) {
+        return club;  // an unarmed colossus has no club to draw
     }
     const RigCpu& rig = scene.rigs[entityRig];
-    const int socket = joint_index_named(rig, kClubSocketJoint);
+    const int socket = joint_index_named(rig, weapon->socketJoint);
     if (socket < 0) {
         std::fprintf(stderr, "sotc-viewer: %s has no %s joint; the club is not drawn\n",
-                     entityGlb.c_str(), kClubSocketJoint);
+                     entityGlb.c_str(), weapon->socketJoint);
         return club;
     }
     if (rig.meshBegin >= scene.meshes.size()) {
@@ -122,7 +124,7 @@ ClubAttachment load_club(Scene& scene, const std::filesystem::path& libraryDir,
 
     // Static geometry at the entity's placement; each frame its model is
     // rewritten from the posed socket (update_club_model).
-    club.meshBegin = append_static_model(scene, libraryDir, kClubGlb,
+    club.meshBegin = append_static_model(scene, libraryDir, weapon->glb,
                                          scene.meshes[rig.meshBegin].model);
     club.meshEnd = scene.meshes.size();
     club.loaded = true;
@@ -151,9 +153,11 @@ void update_club_model(Scene& scene, const std::vector<std::vector<Mat4>>& palet
 }
 
 CorpseAttachment load_corpse(Scene& scene, const std::filesystem::path& libraryDir,
-                             std::size_t entityRig) {
+                             std::size_t entityRig, const EncounterDesc& desc) {
     CorpseAttachment corpse{};
-    if (entityRig >= scene.rigs.size()) {
+    const PropDesc* body = encounter_prop(desc, PropRole::Corpse);
+    const PropDesc* ground = encounter_prop(desc, PropRole::Ground);
+    if (body == nullptr || entityRig >= scene.rigs.size()) {
         return corpse;
     }
     const RigCpu& rig = scene.rigs[entityRig];
@@ -161,8 +165,10 @@ CorpseAttachment load_corpse(Scene& scene, const std::filesystem::path& libraryD
         return corpse;
     }
     const Mat4 model = scene.meshes[rig.meshBegin].model;
-    corpse.meshBegin = append_static_model(scene, libraryDir, kCorpseGlb, model);
-    append_static_model(scene, libraryDir, kDirtmoundGlb, model);
+    corpse.meshBegin = append_static_model(scene, libraryDir, body->glb, model);
+    if (ground != nullptr) {
+        append_static_model(scene, libraryDir, ground->glb, model);
+    }
     corpse.meshEnd = scene.meshes.size();
     for (std::size_t i = corpse.meshBegin; i < corpse.meshEnd; ++i) {
         scene.meshes[i].visible = false;
@@ -261,10 +267,13 @@ EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
         return frame;
     }
 
-    Vec3 centre{encounter.entityPosition.x, encounter.entityPosition.y + kEffectFallbackChestHeight,
+    const EncounterDesc& desc = *encounter.desc;
+    Vec3 centre{encounter.entityPosition.x,
+                encounter.entityPosition.y + desc.death.fallbackChestHeight,
                 encounter.entityPosition.z};
     Vec3 chest{};
-    if (posed_joint_world_position(scene, entityRig, palettes[entityRig], "Bone_MUNE", chest) &&
+    if (posed_joint_world_position(scene, entityRig, palettes[entityRig], desc.joints.chest,
+                                   chest) &&
         std::isfinite(chest.x) && std::isfinite(chest.y) && std::isfinite(chest.z)) {
         centre = chest;
     }
@@ -275,7 +284,7 @@ EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
         if (frame.rootCount >= static_cast<int>(frame.roots.size())) {
             break;
         }
-        const char* material = weakpoint_material_name(weakpoint);
+        const char* material = weakpoint_material_name(desc.weakpoints, weakpoint);
         if (material == nullptr) {
             continue;
         }
@@ -329,7 +338,8 @@ void maybe_club_swing(Encounter& encounter, SfxQueue* sfx) {
     if (encounter.attack != ValusAttack::Club || encounter.attackSwinged) {
         return;
     }
-    if (!(encounter.attackSeconds >= kValusClubSwingSeconds)) {
+    if (!(encounter.attackSeconds >=
+          valus_attack_desc(ValusAttack::Club, *encounter.desc)->swingSeconds)) {
         return;
     }
     encounter.attackSwinged = true;
@@ -510,12 +520,14 @@ void update_entity_transform(Scene& scene, const Encounter& encounter,
 }
 
 bool entity_chest_position(const Scene& scene, std::size_t rigIndex,
-                           const std::vector<Mat4>& palette, Vec3& out) {
-    return posed_joint_world_position(scene, rigIndex, palette, "Bone_MUNE", out);
+                           const std::vector<Mat4>& palette, Vec3& out,
+                           const EncounterDesc& desc) {
+    return posed_joint_world_position(scene, rigIndex, palette, desc.joints.chest, out);
 }
 
 std::vector<Capsule> entity_capsules(const Scene& scene,
-                                     const std::vector<std::vector<Mat4>>& palettes) {
+                                     const std::vector<std::vector<Mat4>>& palettes,
+                                     const EncounterDesc& desc) {
     std::vector<Capsule> all;
     for (std::size_t rigIndex = scene.playerRig + 1; rigIndex < scene.rigs.size(); ++rigIndex) {
         if (rigIndex >= palettes.size()) {
@@ -525,7 +537,7 @@ std::vector<Capsule> entity_capsules(const Scene& scene,
             continue;  // S8 (D4/D17): Agro is never an encounter entity
         }
         std::vector<Capsule> capsules =
-            entity_collision_capsules(scene, rigIndex, palettes[rigIndex]);
+            entity_collision_capsules(scene, rigIndex, palettes[rigIndex], desc.capsules);
         all.insert(all.end(), capsules.begin(), capsules.end());
     }
     return all;
@@ -559,15 +571,27 @@ PlayerClips resolve_player_clips(const Playback& playback) {
                        clip_index_named(playback, kPlayerDeathClip)};
 }
 
-EntityClips resolve_entity_clips(const Playback& playback, const std::string& standClip) {
+EntityClips resolve_entity_clips(const Playback& playback, const std::string& standClip,
+                                 const EncounterDesc& desc) {
+    const auto named = [&playback](const char* name) {
+        return name != nullptr ? clip_index_named(playback, name) : -1;
+    };
+    const auto reaction = [&desc, &named](std::size_t weakpoint) {
+        return weakpoint < desc.weakpoints.size() ? named(desc.weakpoints[weakpoint].reactionClip)
+                                                  : -1;
+    };
+    const auto attack = [&desc, &named](ValusAttack a) {
+        const AttackDesc* row = valus_attack_desc(a, desc);
+        return row != nullptr ? named(row->clip) : -1;
+    };
     return EntityClips{clip_index_named(playback, standClip),
-                       clip_index_named(playback, kHeadReactionClip),
-                       clip_index_named(playback, kArmReactionClip),
-                       clip_index_named(playback, kBodyReactionClip),
-                       clip_index_named(playback, kDeathClip),
-                       clip_index_named(playback, kStompLeftClip),
-                       clip_index_named(playback, kStompRightClip),
-                       clip_index_named(playback, kClubSwingClip)};
+                       reaction(0),
+                       reaction(1),
+                       named(desc.bodyReactionClip),
+                       named(desc.death.clip),
+                       attack(ValusAttack::StompL),
+                       attack(ValusAttack::StompR),
+                       attack(ValusAttack::Club)};
 }
 
 bool require_named_clip(const Playback& playback, const std::string& model, const char* name) {
@@ -603,8 +627,9 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
 PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                             const std::vector<std::vector<Mat4>>& palettes,
                             const Heightmap& heightmap, float cameraYawDeg,
-                            bool entityLive) {
+                            bool entityLive, const EncounterDesc& desc) {
     PlayerFrame frame;
+    frame.bands = desc.bands;
     frame.scene = &scene;
     frame.heightmap = &heightmap;
     frame.entityRig = entityRig;
@@ -614,9 +639,9 @@ PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
             return posed_joint_world_position(scene, entityRig, palettes[entityRig],
                                               std::string(name), out);
         };
-        frame.weakpointProxy = [&scene, entityRig,
-                                &palettes](int weakpoint, Vec3& center, float& radius) {
-            const char* material = weakpoint_material_name(weakpoint);
+        frame.weakpointProxy = [&scene, entityRig, &palettes,
+                                &desc](int weakpoint, Vec3& center, float& radius) {
+            const char* material = weakpoint_material_name(desc.weakpoints, weakpoint);
             if (material == nullptr) {
                 return false;
             }
@@ -625,7 +650,7 @@ PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
         };
     }
     if (entityLive) {
-        frame.entityCapsules = entity_capsules(scene, palettes);
+        frame.entityCapsules = entity_capsules(scene, palettes, desc);
     }
     return frame;
 }
@@ -721,18 +746,9 @@ int valus_attack_clip(ValusAttack attack, const EntityClips& clips) {
     return -1;
 }
 
-const char* valus_attack_damage_joint(ValusAttack attack) {
-    switch (attack) {
-        case ValusAttack::StompL:
-            return "Bone_TUMASAKI_L";
-        case ValusAttack::StompR:
-            return "Bone_TUMASAKI_R";
-        case ValusAttack::Club:
-            return "OptBone_hit";
-        case ValusAttack::None:
-            break;
-    }
-    return nullptr;
+const char* valus_attack_damage_joint(ValusAttack attack, const EncounterDesc& desc) {
+    const AttackDesc* row = valus_attack_desc(attack, desc);
+    return row != nullptr ? row->damageJoint : nullptr;
 }
 
 void cancel_valus_attack(Encounter& encounter, SfxQueue* sfx) {
@@ -845,11 +861,11 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
 void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
                         const PlayerFrame& frame, const CombatTuning& tuning,
                         ValusAttack attack, SfxQueue* sfx,
-                        StepEvents* events) {
+                        StepEvents* events, const EncounterDesc& desc) {
     if (attack == ValusAttack::None) {
         return;
     }
-    const char* joint = valus_attack_damage_joint(attack);
+    const char* joint = valus_attack_damage_joint(attack, desc);
     Vec3 point{};
     const bool resolved =
         joint != nullptr && static_cast<bool>(frame.jointWorld) && frame.jointWorld(joint, point);
@@ -874,14 +890,14 @@ void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
     switch (attack) {
         case ValusAttack::StompL:
         case ValusAttack::StompR:
-            if (distance <= kValusStompDirectRangeMeters) {
+            if (distance <= valus_attack_desc(attack, desc)->hitRangeMeters) {
                 damage = tuning.stompDamage;
-            } else if (distance <= kValusStompWaveRangeMeters) {
+            } else if (distance <= valus_attack_desc(attack, desc)->waveRangeMeters) {
                 damage = tuning.stompWaveDamage;
             }
             break;
         case ValusAttack::Club:
-            if (distance <= kValusClubHitRangeMeters) {
+            if (distance <= valus_attack_desc(attack, desc)->hitRangeMeters) {
                 damage = tuning.clubDamage;
                 heavy = true;
             }
@@ -923,11 +939,11 @@ ValusAttackInput valus_attack_input(const Scene& scene, std::size_t entityRig,
     if (entityRig < palettes.size()) {
         Vec3 foot{};
         if (posed_joint_world_position(scene, entityRig, palettes[entityRig],
-                                       "Bone_TUMASAKI_L", foot)) {
+                                       encounter.desc->joints.footL, foot)) {
             input.footL = foot;
         }
         if (posed_joint_world_position(scene, entityRig, palettes[entityRig],
-                                       "Bone_TUMASAKI_R", foot)) {
+                                       encounter.desc->joints.footR, foot)) {
             input.footR = foot;
         }
     }

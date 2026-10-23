@@ -225,6 +225,9 @@ struct StageCtx {
     // the whole run; the climb camera is entered/left by the mode.
     PlayerCombat combat{};
     Encounter encounter{};
+    // The stage's encounter description (S11 Task 7): the arena manifest's
+    // `encounter <id>` (Valus when absent), set by stage_setup on `encounter`.
+    const EncounterDesc& enc() const { return *encounter.desc; }
     // One tuning table for every step path — the scripted timelines and the
     // interactive loop — and for the HUD's health fractions.
     const CombatTuning tuning{};

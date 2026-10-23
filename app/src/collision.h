@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
+#include "encounters/valus.h"
 #include "heightmap.h"
 #include "math3d.h"
 #include "player.h"
@@ -22,7 +24,7 @@ struct Capsule {
     Vec3 a, b;  // the segment's endpoints, world space
     float r;    // radius (metres)
     // Identity of the body segment that produced this capsule: the rig index
-    // and the capsule's index in that rig's table (kValusCapsules order).
+    // and the capsule's index in that rig's table (EncounterDesc::capsules order).
     // -1 means hand-built/unknown. The grab solver uses these to exclude the
     // limb the player already holds; they are trailing fields so the original
     // aggregate initialiser `Capsule{a, b, r}` still compiles.
@@ -58,8 +60,10 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
 void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& capsules,
                               const Heightmap& heightmap);
 
-// Builds the Valus collision proxy from rig `rigIndex`'s posed palette: the
-// two leg chains and the torso chain, in this pinned order
+// Builds the entity's collision proxy from rig `rigIndex`'s posed palette, one
+// capsule per `capsules` row in table order (S11: the encounter's table; the
+// default is Valus's). Valus's: the two leg chains and the torso chain, in this
+// pinned order
 //
 //   left  MOMO_L -> SUNE_L -> TOE_L -> TUMASAKI_L   (thigh, shin, foot)
 //   right MOMO_R -> SUNE_R -> TOE_R -> TUMASAKI_R
@@ -75,5 +79,6 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
 // skipped; the default Valus rig yields 8. The world-space conversion uses the
 // rig's mesh model transform, so the manifest placement and `apply_rig_lift`
 // are included.
-std::vector<Capsule> entity_collision_capsules(const Scene& scene, std::size_t rigIndex,
-                                               const std::vector<Mat4>& palette);
+std::vector<Capsule> entity_collision_capsules(
+    const Scene& scene, std::size_t rigIndex, const std::vector<Mat4>& palette,
+    std::span<const CapsuleDesc> capsules = encounters::kValus.capsules);

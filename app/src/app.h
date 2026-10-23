@@ -15,9 +15,13 @@
 // since S4.2 — the attack in progress, its pinned clock and cooldown.
 // `reactionClip` is an index into the entity rig's Playback (-1 = none), never a
 // clip name: the app resolves the R3 names once at load.
-inline constexpr float kEncounterMaxHealth = 100.0f;
+// `desc` is the colossus's table (S11 Task 7): stage_setup points it at the
+// manifest's `encounter`; the runtime helpers that take an Encounter read their
+// joints, clips, materials and timings from it. The HUD's max health is Valus's.
+inline constexpr float kEncounterMaxHealth = encounters::kValus.maxHealth;
 
 struct Encounter {
+    const EncounterDesc* desc = &encounters::kValus;
     float health = kEncounterMaxHealth;
     bool defeated = false;
     int reactionClip = -1;
@@ -61,7 +65,7 @@ struct Encounter {
 // facing. The caller also returns the entity playback to its manifest stand
 // clip and recomposes the model; this helper owns the state, not the clip.
 inline void reset_encounter(Encounter& encounter) {
-    encounter.health = kEncounterMaxHealth;
+    encounter.health = encounter.desc->maxHealth;
     encounter.defeated = false;
     encounter.reactionClip = -1;
     encounter.reactionSeconds = 0.0f;

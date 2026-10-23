@@ -45,7 +45,7 @@ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/te
   tests/test_grab.cpp tests/test_player_state.cpp tests/test_hud.cpp tests/test_valus.cpp
   tests/test_gamepad.cpp tests/test_audio.cpp tests/test_audio_events.cpp tests/test_death.cpp tests/test_transition.cpp tests/test_door.cpp
   tests/test_effect.cpp tests/test_ride.cpp tests/test_sword.cpp tests/test_sword_fx.cpp
-  tests/test_behaviour.cpp tests/test_locomotion.cpp tests/test_run_flags.cpp
+  tests/test_behaviour.cpp tests/test_locomotion.cpp tests/test_run_flags.cpp tests/test_encounter.cpp
   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
   src/audio.cpp src/wav_io.cpp src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h

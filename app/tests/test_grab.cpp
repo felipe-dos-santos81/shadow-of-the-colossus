@@ -87,7 +87,7 @@ std::vector<Mat4> identity_palette(const Scene& scene, std::size_t rigIndex) {
 TEST_CASE("climb bands form a connected chain") {
     for (int i = 0; i < static_cast<int>(ClimbBandId::Count); ++i) {
         const ClimbBand& b = climb_band(static_cast<ClimbBandId>(i));
-        if (b.up != ClimbBandId::Count) {
+        if (b.up != ClimbBandId::None) {
             REQUIRE(climb_band(b.up).down == static_cast<ClimbBandId>(i));
         }
     }
@@ -118,17 +118,17 @@ TEST_CASE("climb band table matches the pinned S4 measurements") {
     const ClimbBandId expected_up[] = {
         ClimbBandId::LeftShin, ClimbBandId::LeftThigh, ClimbBandId::Waist,
         ClimbBandId::Chest,    ClimbBandId::Neck,      ClimbBandId::Head,
-        ClimbBandId::Count,    ClimbBandId::RightArm,  ClimbBandId::Count};
+        ClimbBandId::None,    ClimbBandId::RightArm,  ClimbBandId::None};
     const ClimbBandId expected_down[] = {
-        ClimbBandId::Count,     ClimbBandId::LeftFoot,      ClimbBandId::LeftShin,
+        ClimbBandId::None,     ClimbBandId::LeftFoot,      ClimbBandId::LeftShin,
         ClimbBandId::LeftThigh, ClimbBandId::Waist,         ClimbBandId::Chest,
         ClimbBandId::Neck,      ClimbBandId::Chest,         ClimbBandId::RightShoulder};
     const int expected_weakpoint[] = {-1, -1, -1, -1, -1, -1, 0, -1, 1};
     // The one branch in the table: W plus any lateral at the top of the chest.
     const ClimbBandId expected_branch[] = {
-        ClimbBandId::Count, ClimbBandId::Count,         ClimbBandId::Count,
-        ClimbBandId::Count, ClimbBandId::RightShoulder, ClimbBandId::Count,
-        ClimbBandId::Count, ClimbBandId::Count,         ClimbBandId::Count};
+        ClimbBandId::None, ClimbBandId::None,         ClimbBandId::None,
+        ClimbBandId::None, ClimbBandId::RightShoulder, ClimbBandId::None,
+        ClimbBandId::None, ClimbBandId::None,         ClimbBandId::None};
     for (int i = 0; i < static_cast<int>(ClimbBandId::Count); ++i) {
         const ClimbBand& band = climb_band(static_cast<ClimbBandId>(i));
         CHECK(band.radius == doctest::Approx(expected_radius[i]));
@@ -146,7 +146,7 @@ TEST_CASE("only the chest branches, and its branch rejoins the chain") {
         if (id == ClimbBandId::Chest) {
             CHECK(band.branch == ClimbBandId::RightShoulder);
         } else {
-            CHECK(band.branch == ClimbBandId::Count);
+            CHECK(band.branch == ClimbBandId::None);
         }
     }
 
@@ -156,8 +156,8 @@ TEST_CASE("only the chest branches, and its branch rejoins the chain") {
     CHECK(climb_band(branch).up == ClimbBandId::RightArm);
 
     // The trailing default keeps a hand-written six-field band branchless.
-    const ClimbBand legacy{"A", "B", 1.0f, ClimbBandId::Count, ClimbBandId::Count, -1};
-    CHECK(legacy.branch == ClimbBandId::Count);
+    const ClimbBand legacy{"A", "B", 1.0f, ClimbBandId::None, ClimbBandId::None, -1};
+    CHECK(legacy.branch == ClimbBandId::None);
 }
 
 TEST_CASE("climb surface point sits outside the band radius") {
@@ -172,7 +172,7 @@ TEST_CASE("climb surface point sits outside the band radius") {
         }
         return false;
     };
-    const ClimbBand band{"A", "B", 1.5f, ClimbBandId::Count, ClimbBandId::Count, -1};
+    const ClimbBand band{"A", "B", 1.5f, ClimbBandId::None, ClimbBandId::None, -1};
     Vec3 point, normal;
     REQUIRE(climb_surface_point(band, lookup, 0.5f, Vec3{3, 2, 0}, point, normal));
     REQUIRE(point.y == doctest::Approx(2.0f).epsilon(1e-4));
@@ -191,7 +191,7 @@ TEST_CASE("climb surface point sits outside the band radius") {
 TEST_CASE("climb surface point falls back to +X when the hint is on the axis") {
     const JointLookup lookup =
         lookup_of({{"A", Vec3{0.0f, 0.0f, 0.0f}}, {"B", Vec3{0.0f, 4.0f, 0.0f}}});
-    const ClimbBand band{"A", "B", 1.0f, ClimbBandId::Count, ClimbBandId::Count, -1};
+    const ClimbBand band{"A", "B", 1.0f, ClimbBandId::None, ClimbBandId::None, -1};
     Vec3 point{}, normal{};
     REQUIRE(climb_surface_point(band, lookup, 0.25f, Vec3{0.0f, 1.0f, 0.0f}, point, normal));
     CHECK(point.x == doctest::Approx(1.0f + kPlayerCapsuleRadius).epsilon(1e-4));
@@ -203,8 +203,8 @@ TEST_CASE("climb surface point falls back to +X when the hint is on the axis") {
 }
 
 TEST_CASE("climb surface point rejects missing and degenerate input without writing") {
-    const ClimbBand missing_band{"MISSING_A", "MISSING_B", 1.5f, ClimbBandId::Count,
-                                 ClimbBandId::Count, -1};
+    const ClimbBand missing_band{"MISSING_A", "MISSING_B", 1.5f, ClimbBandId::None,
+                                 ClimbBandId::None, -1};
     Vec3 point{7.0f, 8.0f, 9.0f};
     Vec3 normal{6.0f, 5.0f, 4.0f};
     const JointLookup missing = [](std::string_view, Vec3&) { return false; };
@@ -219,7 +219,7 @@ TEST_CASE("climb surface point rejects missing and degenerate input without writ
 
     const JointLookup lookup =
         lookup_of({{"A", Vec3{0.0f, 0.0f, 0.0f}}, {"B", Vec3{0.0f, 4.0f, 0.0f}}});
-    const ClimbBand band{"A", "B", 1.5f, ClimbBandId::Count, ClimbBandId::Count, -1};
+    const ClimbBand band{"A", "B", 1.5f, ClimbBandId::None, ClimbBandId::None, -1};
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     CHECK_FALSE(climb_surface_point(band, lookup, nan, Vec3{3, 2, 0}, point, normal));
@@ -254,15 +254,15 @@ TEST_CASE("nearest climb band returns the closest band within reach") {
                                           {"Bone_MUNE", Vec3{5.0f, 4.0f, 0.0f}}});
     const Vec3 player{2.0f, 0.0f, 0.0f};
     CHECK(nearest_climb_band(lookup, player, 0.1f) == ClimbBandId::LeftShin);
-    CHECK(nearest_climb_band(lookup, player, 0.04f) == ClimbBandId::Count);
-    CHECK(nearest_climb_band(lookup, Vec3{100.0f, 0.0f, 0.0f}, 0.5f) == ClimbBandId::Count);
+    CHECK(nearest_climb_band(lookup, player, 0.04f) == ClimbBandId::None);
+    CHECK(nearest_climb_band(lookup, Vec3{100.0f, 0.0f, 0.0f}, 0.5f) == ClimbBandId::None);
 }
 
-TEST_CASE("nearest climb band answers Count when no band can be formed") {
+TEST_CASE("nearest climb band answers None when no band can be formed") {
     CHECK(nearest_climb_band(JointLookup{}, Vec3{0.0f, 0.0f, 0.0f}, 10.0f) ==
-          ClimbBandId::Count);
+          ClimbBandId::None);
     const JointLookup missing = [](std::string_view, Vec3&) { return false; };
-    CHECK(nearest_climb_band(missing, Vec3{0.0f, 0.0f, 0.0f}, 10.0f) == ClimbBandId::Count);
+    CHECK(nearest_climb_band(missing, Vec3{0.0f, 0.0f, 0.0f}, 10.0f) == ClimbBandId::None);
 }
 
 TEST_CASE("capsule identity carries the rig and the table segment index") {
@@ -314,7 +314,7 @@ namespace {
 
 // A horizontal band along +Z at y 10 (A at z 0, B at z 10), radius 2.
 ClimbBand back_band() {
-    ClimbBand band{"A", "B", 2.0f, ClimbBandId::Count, ClimbBandId::Count, -1};
+    ClimbBand band{"A", "B", 2.0f, ClimbBandId::None, ClimbBandId::None, -1};
     band.horizontal = true;
     return band;
 }

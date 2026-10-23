@@ -1,56 +1,35 @@
 #pragma once
 
 #include <functional>
+#include <span>
 #include <string_view>
 
+#include "encounters/valus.h"
 #include "math3d.h"
 
-// Climbing bands for the colossus grab (S4.1 Task 2).
+// Climbing bands for the colossus grab (S4.1 Task 2; S11 Task 7 moved the band
+// table and its types into the encounter description, encounter_desc.h).
 //
 // A band is one capsule-shaped strip of the body between two posed skeleton
-// joints. The chain runs from the left foot up the left leg and torso to the
-// head, then down the right arm; `up`/`down` are the band above and below in
-// that chain, and `ClimbBandId::Count` terminates either end. `weakpoint` is
-// -1 for an ordinary band, 0 for the forehead and 1 for the right arm — the
-// two weakpoint identifiers the fight design pins (the values the later task's
-// hit routing consumes). `branch` is the one lateral fork in the chain: the
-// chest's is the right shoulder, reached by climbing forward with a lateral
-// input at the band top; every other band leaves it `Count`.
+// joints; its `up`/`down`/`branch` links and its `weakpoint` are indices into
+// the encounter's tables, -1 (`ClimbBandId::None`) for none. The functions
+// below take the encounter's band table; the overloads without one read
+// Valus's (`encounters::kValus.bands`), which every pre-S11 caller meant.
 
-enum class ClimbBandId {
-    LeftFoot,
-    LeftShin,
-    LeftThigh,
-    Waist,
-    Chest,
-    Neck,
-    Head,
-    RightShoulder,
-    RightArm,
-    Count,
-};
-
-struct ClimbBand {
-    const char* boneA;  // segment start, a joint name in the colossus rig
-    const char* boneB;  // segment end
-    float radius;       // body radius around the segment (metres)
-    ClimbBandId up;     // next band towards the head; Count at the top
-    ClimbBandId down;   // next band towards the feet; Count at the bottom
-    int weakpoint;      // -1 none, 0 forehead, 1 right arm
-    ClimbBandId branch = ClimbBandId::Count;  // W+lateral fork at the top; Count none
-    bool horizontal = false;  // S11 surface walk: stood on and walked, not hung from
-};
-
-// The band record for `id`. `Count` (and any out-of-range cast) answers a
-// stable empty band rather than indexing out of bounds.
+// The band record for `id` in `bands`. An out-of-range id (None included)
+// answers a stable empty band rather than indexing out of bounds.
+const ClimbBand& climb_band(std::span<const ClimbBand> bands, int id);
 const ClimbBand& climb_band(ClimbBandId id);
 
-// The band's stable lowercase status token (`left_foot` .. `right_arm`), and
-// `"none"` for `Count`. Never null.
+// The band's stable lowercase status token (its table `name`), and `"none"`
+// for an out-of-range id. Never null.
+const char* climb_band_name(std::span<const ClimbBand> bands, int id);
 const char* climb_band_name(ClimbBandId id);
 
-// The material shell of weakpoint `weakpoint` — 0 is "weakpoint_03" (the
-// forehead), 1 is "weakpoint_04" (the right arm). Any other id answers nullptr.
+// The material shell of weakpoint `weakpoint` in `weakpoints` — Valus's 0 is
+// "weakpoint_03" (the forehead), 1 is "weakpoint_04" (the right arm). Any other
+// id answers nullptr.
+const char* weakpoint_material_name(std::span<const WeakpointDesc> weakpoints, int weakpoint);
 const char* weakpoint_material_name(int weakpoint);
 
 // Resolves joint names to posed world positions. The next task adapts
@@ -71,12 +50,14 @@ bool climb_band_segment(const ClimbBand& band, const JointLookup& lookup, Vec3& 
 bool climb_surface_point(const ClimbBand& band, const JointLookup& lookup, float t, Vec3 hint,
                          Vec3& point, Vec3& normal);
 
-// The band whose surface is nearest the player capsule (feet at `playerPos`,
-// kPlayerCapsuleHeight tall, kPlayerCapsuleRadius around the axis) when that
-// surface distance is at most `maxSurfaceDistance`. Returns
-// ClimbBandId::Count when no band is within reach, when the lookup is empty,
+// The band of `bands` whose surface is nearest the player capsule (feet at
+// `playerPos`, kPlayerCapsuleHeight tall, kPlayerCapsuleRadius around the axis)
+// when that surface distance is at most `maxSurfaceDistance`. Returns
+// ClimbBandId::None when no band is within reach, when the lookup is empty,
 // or when the input is invalid — never an out-of-range index. Ties keep the
 // earlier band in table order.
+ClimbBandId nearest_climb_band(std::span<const ClimbBand> bands, const JointLookup& lookup,
+                               Vec3 playerPos, float maxSurfaceDistance);
 ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
                                float maxSurfaceDistance);
 

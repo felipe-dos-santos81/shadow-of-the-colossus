@@ -68,74 +68,37 @@ float segment_segment_distance(Vec3 p1, Vec3 q1, Vec3 p2, Vec3 q2) {
     return length(sub(closest_1, closest_2));
 }
 
-// The pinned S4 band table. Radii are the S4 capsule measurements; the chain
-// order is foot -> shin -> thigh -> waist -> chest -> neck -> head, with the
-// right arm hanging off the chest. The chest carries the only branch: W plus
-// any lateral input at its top (W+A too) crosses to the right shoulder (S4.2
-// design §7.3).
-constexpr ClimbBand kClimbBands[] = {
-    {"Bone_TUMASAKI_L", "Bone_TOE_L", 1.7f, ClimbBandId::LeftShin, ClimbBandId::Count, -1},
-    {"Bone_TOE_L", "Bone_MOMO_L", 1.6f, ClimbBandId::LeftThigh, ClimbBandId::LeftFoot, -1},
-    {"Bone_MOMO_L", "Bone_KOSI", 1.7f, ClimbBandId::Waist, ClimbBandId::LeftShin, -1},
-    {"Bone_KOSI", "Bone_HARA", 2.0f, ClimbBandId::Chest, ClimbBandId::LeftThigh, -1},
-    {"Bone_HARA", "Bone_MUNE", 2.0f, ClimbBandId::Neck, ClimbBandId::Waist, -1,
-     ClimbBandId::RightShoulder},
-    {"Bone_MUNE", "Bone_KUBI", 1.6f, ClimbBandId::Head, ClimbBandId::Chest, -1},
-    {"Bone_KUBI", "Bone_KAO", 1.75f, ClimbBandId::Count, ClimbBandId::Neck, 0},
-    {"Bone_MUNE", "Bone_KATA_R", 1.5f, ClimbBandId::RightArm, ClimbBandId::Chest, -1},
-    {"Bone_KATA_R", "Bone_UDE_R", 1.2f, ClimbBandId::Count, ClimbBandId::RightShoulder, 1},
-};
-
-static_assert(std::size(kClimbBands) == static_cast<std::size_t>(ClimbBandId::Count),
-              "the climb band table must cover exactly the enum's bands");
-
 }  // namespace
 
-const ClimbBand& climb_band(ClimbBandId id) {
-    const int index = static_cast<int>(id);
-    if (index < 0 || index >= static_cast<int>(ClimbBandId::Count)) {
-        static constexpr ClimbBand kNoBand{"", "", 0.0f, ClimbBandId::Count, ClimbBandId::Count,
+const ClimbBand& climb_band(std::span<const ClimbBand> bands, int id) {
+    if (id < 0 || static_cast<std::size_t>(id) >= bands.size()) {
+        static constexpr ClimbBand kNoBand{"", "", 0.0f, ClimbBandId::None, ClimbBandId::None,
                                            -1};
         return kNoBand;
     }
-    return kClimbBands[index];
+    return bands[static_cast<std::size_t>(id)];
+}
+
+const ClimbBand& climb_band(ClimbBandId id) { return climb_band(encounters::kValus.bands, id); }
+
+const char* climb_band_name(std::span<const ClimbBand> bands, int id) {
+    const char* name = climb_band(bands, id).name;
+    return name != nullptr ? name : "none";
 }
 
 const char* climb_band_name(ClimbBandId id) {
-    switch (id) {
-        case ClimbBandId::LeftFoot:
-            return "left_foot";
-        case ClimbBandId::LeftShin:
-            return "left_shin";
-        case ClimbBandId::LeftThigh:
-            return "left_thigh";
-        case ClimbBandId::Waist:
-            return "waist";
-        case ClimbBandId::Chest:
-            return "chest";
-        case ClimbBandId::Neck:
-            return "neck";
-        case ClimbBandId::Head:
-            return "head";
-        case ClimbBandId::RightShoulder:
-            return "right_shoulder";
-        case ClimbBandId::RightArm:
-            return "right_arm";
-        case ClimbBandId::Count:
-            break;
+    return climb_band_name(encounters::kValus.bands, id);
+}
+
+const char* weakpoint_material_name(std::span<const WeakpointDesc> weakpoints, int weakpoint) {
+    if (weakpoint < 0 || static_cast<std::size_t>(weakpoint) >= weakpoints.size()) {
+        return nullptr;
     }
-    return "none";
+    return weakpoints[static_cast<std::size_t>(weakpoint)].material;
 }
 
 const char* weakpoint_material_name(int weakpoint) {
-    switch (weakpoint) {
-        case 0:
-            return "weakpoint_03";  // the forehead shell
-        case 1:
-            return "weakpoint_04";  // the right-arm shell
-        default:
-            return nullptr;
-    }
+    return weakpoint_material_name(encounters::kValus.weakpoints, weakpoint);
 }
 
 bool climb_band_segment(const ClimbBand& band, const JointLookup& lookup, Vec3& a, Vec3& b) {
@@ -201,22 +164,22 @@ bool climb_surface_point(const ClimbBand& band, const JointLookup& lookup, float
     return true;
 }
 
-ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
-                               float maxSurfaceDistance) {
+ClimbBandId nearest_climb_band(std::span<const ClimbBand> bands, const JointLookup& lookup,
+                               Vec3 playerPos, float maxSurfaceDistance) {
     if (!lookup || !is_finite(playerPos) || !std::isfinite(maxSurfaceDistance) ||
         maxSurfaceDistance < 0.0f) {
-        return ClimbBandId::Count;
+        return ClimbBandId::None;
     }
     // The player capsule axis: feet at playerPos, kPlayerCapsuleHeight above.
     const Vec3 playerTop{playerPos.x, playerPos.y + kPlayerCapsuleHeight, playerPos.z};
     if (!is_finite(playerTop)) {
-        return ClimbBandId::Count;
+        return ClimbBandId::None;
     }
 
     float best_surface_distance = std::numeric_limits<float>::infinity();
-    ClimbBandId best = ClimbBandId::Count;
-    for (int i = 0; i < static_cast<int>(ClimbBandId::Count); ++i) {
-        const ClimbBand& band = climb_band(static_cast<ClimbBandId>(i));
+    ClimbBandId best = ClimbBandId::None;
+    for (int i = 0; i < static_cast<int>(bands.size()); ++i) {
+        const ClimbBand& band = bands[static_cast<std::size_t>(i)];
         Vec3 a{};
         Vec3 b{};
         if (!climb_band_segment(band, lookup, a, b)) {
@@ -229,14 +192,19 @@ ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
         const float surface_distance = axis_distance - kPlayerCapsuleRadius - band.radius;
         if (surface_distance < best_surface_distance) {
             best_surface_distance = surface_distance;
-            best = static_cast<ClimbBandId>(i);
+            best = i;
         }
     }
 
-    if (best == ClimbBandId::Count || best_surface_distance > maxSurfaceDistance) {
-        return ClimbBandId::Count;
+    if (best == ClimbBandId::None || best_surface_distance > maxSurfaceDistance) {
+        return ClimbBandId::None;
     }
     return best;
+}
+
+ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
+                               float maxSurfaceDistance) {
+    return nearest_climb_band(encounters::kValus.bands, lookup, playerPos, maxSurfaceDistance);
 }
 
 namespace {

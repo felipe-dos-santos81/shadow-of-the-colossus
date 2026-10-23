@@ -20,7 +20,7 @@
 
 namespace {
 
-// The corpse assets (kCorpseGlb/kDirtmoundGlb) are declared with the club's
+// The corpse assets (Valus's EncounterDesc Corpse/Ground props) load with the club's
 // in encounter_rt.h: the load precedes the renderer's one-shot upload.
 constexpr int kS6MaxSwingFrames = 240;  // 4 s: walk the club clip to its swing phase
 constexpr int kS6MaxDeathFrames = 600;  // 10 s: the death machine to Done

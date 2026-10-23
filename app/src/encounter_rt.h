@@ -60,11 +60,8 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
 
 // S4.2: Valus's club is a separate, unskinned glb authored in the bind frame of
 // the entity rig's OptBone_sword. It is appended as static geometry (rig = -1)
-// and placed from that joint's posed frame each frame.
-constexpr const char* kClubGlb =
-    "models/shadow/characters/colossus_01_minotaur_a/_cmn/c01_minotaur_a_weapon.glb";
-
-constexpr const char* kClubSocketJoint = "OptBone_sword";
+// and placed from that joint's posed frame each frame. Since S11 the glb and
+// the socket are the encounter's `PropRole::Weapon` row (EncounterDesc).
 
 // S9 (design D5): Wander's sword, an unskinned glb placed every frame on the
 // road from the player rig's posed OptBone_sword (recon §3) through the grip
@@ -117,13 +114,9 @@ Vec3 valus_chest();
 
 // The corpse swap's assets (S6, design D5/§8.3): the already-converted dead
 // body (6 meshes, the six `_dead` materials with the veins veil) and the
-// dirtmound it lies on. Both load as static instances at startup, hidden, and
-// appear at Collapse at the live entity's transform.
-constexpr const char* kCorpseGlb =
-    "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_body.glb";
-
-constexpr const char* kDirtmoundGlb =
-    "models/shadow/characters/colossus_01_minotaur_a_deadbody/_cmn/c01_minotaur_a_dead_dirtmound.glb";
+// dirtmound it lies on — the encounter's `PropRole::Corpse` and `Ground` rows
+// (S11). Both load as static instances at startup, hidden, and appear at
+// Collapse at the live entity's transform.
 
 // The club, once loaded into a composed scene: the entity rig it binds to, the
 // socket joint resolved by name, and its half-open static mesh range. `loaded`
@@ -147,7 +140,8 @@ int joint_index_named(const RigCpu& rig, std::string_view name);
 // a rig without OptBone_sword leaves the club undrawn, with one line naming the
 // missing joint rather than a silently wrong-hand prop.
 ClubAttachment load_club(Scene& scene, const std::filesystem::path& libraryDir,
-                         std::size_t entityRig, const std::string& entityGlb);
+                         std::size_t entityRig, const std::string& entityGlb,
+                         const EncounterDesc& desc);
 
 // Places the club's meshes at the entity's posed sword joint. The entity's own
 // first mesh carries the placement (manifest TRS plus the once-per-run grounding
@@ -172,7 +166,7 @@ struct CorpseAttachment {
 // mesh, so it lands exactly where the body fell. A missing glb throws (the same
 // policy as the club): the corpse is the death's payoff, not an optional prop.
 CorpseAttachment load_corpse(Scene& scene, const std::filesystem::path& libraryDir,
-                             std::size_t entityRig);
+                             std::size_t entityRig, const EncounterDesc& desc);
 
 // The per-mesh draw gate for a half-open range; out-of-range bounds are
 // clamped, so a caller never indexes past the scene.
@@ -202,17 +196,15 @@ const char* death_phase_name(DeathPhase phase);
 // `s6-death` line reports it.
 const char* death_camera_key(float t);
 
-// The fallback chest height (above the entity's placement) for the tendril
-// roots' outward direction when the rig has no Bone_MUNE.
-constexpr float kEffectFallbackChestHeight = 8.0f;
-
 // This frame's tendril roots (design §8.2): the hit weakpoint's shell first,
 // the other second — the binary's one-tendril-per-hit-point list, with the
 // shells as the fallback for a hit point the app does not track. Each root's
 // outward direction is the shell's direction from the body centre (the curl's
 // initial heading); `seed` is the root's slot, so the two curls differ. `age`
 // is the death clock (the burst begins at 0.4 s); `active` is the machine's
-// burst window, so the frame is the renderer's no-op outside it.
+// burst window, so the frame is the renderer's no-op outside it. The chest
+// joint, the fallback chest height (without one) and the shells are
+// `encounter.desc`'s.
 EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
                                const std::vector<std::vector<Mat4>>& palettes,
                                const Encounter& encounter, const DeathState& death);
@@ -260,18 +252,10 @@ std::vector<std::vector<Mat4>> update_all_poses(Renderer& renderer, Scene& scene
 // Manifest mode never uses this: its follow camera tracks the player instead.
 void frame_single_model(Camera& camera, const Scene& scene, const Playback& playback);
 
-// The R3 reaction names, plus the generic body reaction a strike on a band with
-// no weakpoint plays (the pinned bands without a weakpoint are not silent). The
-// player's combat clips are the binding's mode mapping. Every name is resolved
-// once at load; a missing one is a load error, never a silent fallback.
-constexpr const char* kHeadReactionClip = "minotaur_a_add_head_damage";
-
-constexpr const char* kArmReactionClip = "minotaur_a_add_ude_r_damage";
-
-constexpr const char* kBodyReactionClip = "minotaur_a_add_mune_r_damage";
-
-constexpr const char* kDeathClip = "minotaur_a_death_front";
-
+// The player's combat clips are the binding's mode mapping (the entity's R3
+// reactions, death and attack clips are its EncounterDesc's since S11). Every
+// name is resolved once at load; a missing one is a load error, never a silent
+// fallback.
 constexpr const char* kGripLoopClip = "player_a_grip_loop";
 
 constexpr const char* kGripMoveClip = "player_a_grip_move_f1";
@@ -285,13 +269,6 @@ constexpr const char* kHeavyHurtClip = "player_a_damage_h_fly1";
 constexpr const char* kHeavyHurtEndClip = "player_a_damage_h_fly_end";
 
 constexpr const char* kPlayerDeathClip = "player_a_fall_damage_to_death";
-
-// The S4.2 Valus attack clips (design §7.4): the two stomps and the club.
-constexpr const char* kStompLeftClip = "minotaur_a_atk_leg_l";
-
-constexpr const char* kStompRightClip = "minotaur_a_atk_leg_r";
-
-constexpr const char* kClubSwingClip = "minotaur_a_atk_weapon2_a";
 
 // The world position of one vertex under a rig's palette: the shader's
 // skinning sum (worldJoint * inverseBind per influence), then the mesh's own
@@ -355,15 +332,18 @@ void update_entity_transform(Scene& scene, const Encounter& encounter,
                              std::size_t rigIndex);
 
 // The entity's chest joint in world space for this frame's palette — the
-// target-framing camera's orbit point. False when the rig has no Bone_MUNE.
+// target-framing camera's orbit point. False when the rig has no chest joint
+// (`desc.joints.chest`; Valus's Bone_MUNE).
 bool entity_chest_position(const Scene& scene, std::size_t rigIndex,
-                           const std::vector<Mat4>& palette, Vec3& out);
+                           const std::vector<Mat4>& palette, Vec3& out,
+                           const EncounterDesc& desc = encounters::kValus);
 
 // Every entity rig's collision proxy for this frame (S4.0 has one entity; the
 // loop keeps the composed order general). The player's rig is skipped: its
 // capsule is the controller's own, pinned by collision.h.
 std::vector<Capsule> entity_capsules(const Scene& scene,
-                                     const std::vector<std::vector<Mat4>>& palettes);
+                                     const std::vector<std::vector<Mat4>>& palettes,
+                                     const EncounterDesc& desc = encounters::kValus);
 
 // Applies the controller's locomotion choice unless a clip was pinned on the
 // command line (--anim or --anim-time): a hard switch — the chosen clip
@@ -389,7 +369,8 @@ struct PlayerClips {
     int death = -1;
 };
 
-// The entity clips R3 names, resolved once at load. `stand` is the clip the
+// The entity clips R3 names, resolved once at load from the EncounterDesc
+// (`head`/`arm` are weakpoints 0/1's reactions). `stand` is the clip the
 // manifest itself named (the entity's own loop).
 struct EntityClips {
     int stand = -1;
@@ -404,7 +385,8 @@ struct EntityClips {
 
 PlayerClips resolve_player_clips(const Playback& playback);
 
-EntityClips resolve_entity_clips(const Playback& playback, const std::string& standClip);
+EntityClips resolve_entity_clips(const Playback& playback, const std::string& standClip,
+                                 const EncounterDesc& desc);
 
 // Prints one load error when `name` is absent from `playback`; false means the
 // caller must exit 2. The message names the model and the exact clip: the
@@ -437,7 +419,8 @@ void update_combat_clips(Playback& playback, const Scene& scene, const PlayerCom
 PlayerFrame player_frame_of(const Scene& scene, std::size_t entityRig,
                             const std::vector<std::vector<Mat4>>& palettes,
                             const Heightmap& heightmap, float cameraYawDeg,
-                            bool entityLive = true);
+                            bool entityLive = true,
+                            const EncounterDesc& desc = encounters::kValus);
 
 // Enters the climb orbit on the first attached frame (or on F, `recenter`),
 // seeded outward along the band's surface normal; every later attached frame
@@ -466,8 +449,9 @@ void advance_encounter_reaction(Playback& playback, Encounter& encounter, int st
 int valus_attack_clip(ValusAttack attack, const EntityClips& clips);
 
 // The posed joint the attack's damage is measured from: the attacking foot for
-// a stomp, the club's tip for the swing (design §7.4).
-const char* valus_attack_damage_joint(ValusAttack attack);
+// a stomp, the club's tip for the swing (design §7.4) — the attack row's.
+const char* valus_attack_damage_joint(ValusAttack attack,
+                                      const EncounterDesc& desc = encounters::kValus);
 
 // Cuts an in-progress attack short. The cooldown it would have started is
 // parked in pendingCooldownSeconds: design §7.4 starts it after the reaction,
@@ -508,7 +492,8 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
 void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
                         const PlayerFrame& frame, const CombatTuning& tuning,
                         ValusAttack attack, SfxQueue* sfx = nullptr,
-                        StepEvents* events = nullptr);
+                        StepEvents* events = nullptr,
+                        const EncounterDesc& desc = encounters::kValus);
 
 // The per-frame attack decision input: the posed feet from the last palette
 // (posed_joint_world_position reads the live mesh model, so a yaw step taken

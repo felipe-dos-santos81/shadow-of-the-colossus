@@ -3,6 +3,7 @@
 #include "selftests.h"
 
 #include "door.h"
+#include "encounters/registry.h"
 #include "ride_points.h"
 #include "road_points.h"
 #include "shrine_points.h"
@@ -123,7 +124,9 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         // The manifest is user data: a malformed line is a usage error
         // (exit 2) carrying the file and line, never a crash.
         try {
-            manifest = parse_manifest(stage_manifest_path);
+            // S11: only the arena's manifest may name its encounter.
+            manifest = parse_manifest(stage_manifest_path,
+                                      /*acceptEncounter=*/here == StageId::Arena);
         } catch (const std::exception& error) {
             std::fprintf(stderr, "sotc-viewer: %s%s\n", error.what(),
                      here == StageId::Shrine
@@ -135,6 +138,19 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
                          : "");
             return 2;
         }
+        // S11 (D8): the encounter's description, by the manifest's id.
+        const EncounterDesc* desc = find_encounter(manifest.encounter);
+        if (desc == nullptr) {
+            std::fprintf(stderr, "sotc-viewer: %s: unknown encounter '%s' (known:",
+                         stage_manifest_path.c_str(), manifest.encounter.c_str());
+            for (const EncounterDesc* known : kEncounters) {
+                std::fprintf(stderr, " %s", known->id);
+            }
+            std::fprintf(stderr, ")\n");
+            return 2;
+        }
+        encounter.desc = desc;
+        encounter.health = desc->maxHealth;
         if (opts.entityTimeSet && manifest.entities.empty()) {
             std::fprintf(stderr, "sotc-viewer: --entity-time: the manifest has no entity\n");
             return 2;
@@ -192,13 +208,13 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         // precede upload().
         if (!manifest.entities.empty()) {
             club = load_club(scene, opts.libraryDir, scene.playerRig + 1,
-                             manifest.entities[0].placement.glbRelPath);
+                             manifest.entities[0].placement.glbRelPath, ctx.enc());
         }
         // S6: the corpse, hidden until Collapse. Also a static append, so it
         // must precede upload() too; a scene the death cannot reach never
         // loads it (the frozen timelines' mesh counts stay untouched).
         if (death_wired && !manifest.entities.empty()) {
-            corpse = load_corpse(scene, opts.libraryDir, scene.playerRig + 1);
+            corpse = load_corpse(scene, opts.libraryDir, scene.playerRig + 1, ctx.enc());
         }
         renderer.upload(scene);
         print_scene_line(scene);
@@ -412,19 +428,25 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
             return 2;
         }
         if (entityRig < playbacks.size()) {
+            const EncounterDesc& desc = ctx.enc();
             entityClips = resolve_entity_clips(playbacks[entityRig],
-                                               manifest.entities[0].clip);
+                                               manifest.entities[0].clip, desc);
             const std::string& entityModel = manifest.entities[0].placement.glbRelPath;
-            if (!require_named_clip(playbacks[entityRig], entityModel,
-                                    manifest.entities[0].clip.c_str()) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kHeadReactionClip) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kArmReactionClip) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kBodyReactionClip) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kDeathClip) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kStompLeftClip) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kStompRightClip) ||
-                !require_named_clip(playbacks[entityRig], entityModel, kClubSwingClip)) {
-                return 2;
+            // The order of the S4.2 gate: the stand, the reactions (the
+            // weakpoints', then the body's), the death, the attacks.
+            std::vector<const char*> required{manifest.entities[0].clip.c_str()};
+            for (const WeakpointDesc& weakpoint : desc.weakpoints) {
+                required.push_back(weakpoint.reactionClip);
+            }
+            required.push_back(desc.bodyReactionClip);
+            required.push_back(desc.death.clip);
+            for (const AttackDesc& attack : desc.attacks) {
+                required.push_back(attack.clip);
+            }
+            for (const char* name : required) {
+                if (!require_named_clip(playbacks[entityRig], entityModel, name)) {
+                    return 2;
+                }
             }
         }
     }
@@ -581,12 +603,13 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
             entity_playback.clips[static_cast<std::size_t>(entity_playback.index)];
         const std::vector<Mat4> palette = animation_pose(
             scene, entityRig, clip, playback_time(entity_playback, clip.duration));
-        haveEntityChest = entity_chest_position(scene, entityRig, palette, entityChest);
+        haveEntityChest =
+            entity_chest_position(scene, entityRig, palette, entityChest, ctx.enc());
     }
     if (opts.cameraTarget == "entity") {
         if (!haveEntityChest) {
-            std::fprintf(stderr,
-                         "sotc-viewer: --camera-target entity: no Bone_MUNE in the entity\n");
+            std::fprintf(stderr, "sotc-viewer: --camera-target entity: no %s in the entity\n",
+                         ctx.enc().joints.chest);
             return 2;
         }
         camera_target_enter(camera, follow, targetCamera, entityChest);

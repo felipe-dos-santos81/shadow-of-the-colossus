@@ -142,6 +142,12 @@ int run_app(const AppOptions& opts) {
             if (played.exitCode) {
                 return *played.exitCode;
             }
+            // run_interactive's contract: an exit code or the next stage.
+            if (!played.next) {
+                std::fprintf(stderr, "sotc-viewer: internal error: the interactive loop "
+                                     "ended with neither an exit code nor a next stage\n");
+                return 1;
+            }
             stage = *played.next;
         }
     } catch (const std::exception& error) {

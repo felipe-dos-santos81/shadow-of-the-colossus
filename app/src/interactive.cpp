@@ -213,7 +213,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         if (combat.mode == PlayerMode::Grounded && !encounter.defeated) {
             encounter.entityYawDeg = valus_yaw_slew(
                 encounter.entityYawDeg, encounter.entityPosition,
-                player.position, kValusYawSlewDegPerSecond, valus_dt);
+                player.position, ctx.enc().turnDegPerSec, valus_dt);
         }
         update_entity_transform(scene, encounter, entityRig);
         const ValusAttackInput attack_input = valus_attack_input(
@@ -255,7 +255,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     const bool followMoving = riding ? pr.ride.speed != 0.0f : moving;
     if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
         haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
-                                               entityChest);
+                                               entityChest, ctx.enc());
     }
 
     // While gripping, the climb orbit owns the camera: it is updated
@@ -287,7 +287,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     const PlayerFrame frame =
         player_frame_of(scene, entityRig, palettes, heightmap,
                         camera_look_yaw(camera),
-                        /*entityLive=*/!death_corpse_visible(death));
+                        /*entityLive=*/!death_corpse_visible(death), ctx.enc());
     const int weakpoint = combat.weakpoint;  // detach() clears it
     const Vec3 positionBefore = player.position;
     // S8 (D8): no player_step while mounted — the ride places him.
@@ -320,7 +320,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         encounter.attackHit = true;
         apply_valus_impact(combat, player, frame, tuning, encounter.attack,
                            audio_on ? &frameSfx : nullptr,
-                           audio_on ? &events : nullptr);
+                           audio_on ? &events : nullptr, ctx.enc());
     }
 
     if (mode_is_attached(combat.mode)) {

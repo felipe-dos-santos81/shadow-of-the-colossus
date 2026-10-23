@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <span>
 #include <vector>
 
 #include "collision.h"
@@ -58,7 +59,7 @@ struct PlayerCombat {
     float modeSeconds = 0.0f;
     float stamina = 100.0f;
     float regenDelay = 0.0f;         // s left before ground regen resumes
-    ClimbBandId band = ClimbBandId::Count;
+    ClimbBandId band = ClimbBandId::None;
     float bandT = 0.5f;              // normalized position along the band
     int weakpoint = -1;              // the attached band's weakpoint, -1 none
     bool strikeHit = false;          // this swing has emitted its one damage event
@@ -110,6 +111,9 @@ struct PlayerFrame {
     float cameraYawDeg = 0.0f;
     std::vector<Capsule> entityCapsules;
     ShakeOff shake;
+    // The encounter's climb bands (S11 Task 7): grab, climb and catch walk this
+    // table; the default is Valus's.
+    std::span<const ClimbBand> bands = encounters::kValus.bands;
 };
 
 // The pinned S4.1 constants. Ruling R6 replaces the plan's `strikeSeconds` /
@@ -134,9 +138,10 @@ struct CombatTuning {
     // S4.2 player health (design §7.5).
     float maxHealth = 100.0f;
     float invulnSeconds = 1.0f;      // i-frame window after a hit
-    float stompDamage = 35.0f;       // direct stomp
-    float stompWaveDamage = 15.0f;   // stomp shockwave
-    float clubDamage = 45.0f;        // club swing
+    // Valus's attack damages (his EncounterDesc's attack rows, S11).
+    float stompDamage = encounters::kValus.attacks[0].damage;       // direct stomp
+    float stompWaveDamage = encounters::kValus.attacks[0].waveDamage;  // stomp shockwave
+    float clubDamage = encounters::kValus.attacks[2].damage;        // club swing
     float mediumHurtSeconds = 0.40f;  // m_fly2, one clip
     float heavyHurtSeconds = 1.23f;   // h_fly1 0.60 s + h_fly_end 0.63 s
 };

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "audio_events.h"
+#include "encounters/valus.h"
 
 // The S5 cue table: the curated `Sfx` -> shipped manifest clip mapping (design
 // §7.3/§7.4, ruling R15). The table is deliberately narrow — the attribution
@@ -18,18 +19,14 @@
 // first offending `Sfx`, and the app turns that into a load error (fatal in
 // --s5-selftest, one warning and a silent game in interactive play).
 
-struct SoundCue {
-    const char* clip;  // manifest name, never null for a mapped cue
-    float gain;        // fractional voice gain (HurtHeavy is a 1.25 boost)
-    bool loop;         // the clip's own loop flag is authoritative; informational
-    bool s6Only = false;  // required only by the S6 slice's load gate (death, club swing)
-};
+// `SoundCue` lives in encounter_desc.h: the encounter's rows below are Valus's
+// EncounterDesc `cues` (S11 Task 7).
 
 // The fight music is not an `Sfx`: the app owns its lifecycle through
 // AudioEngine::play_music / stop_music (D5: starts on the first landed hit,
 // loops, stops on defeat and reset).
-inline constexpr const char* kMusicClip = "music.boss";
-inline constexpr float kMusicGain = 0.45f;
+inline constexpr const char* kMusicClip = encounters::kValus.cues.music;
+inline constexpr float kMusicGain = encounters::kValus.cues.musicGain;
 
 namespace audio_map_detail {
 
@@ -46,17 +43,17 @@ inline constexpr SoundCue kCues[] = {
     {"player.hurt", 1.00f, false},     // HurtLight
     {"player.hurt", 1.25f, false},     // HurtHeavy: the same clip, pushed
     {"player.death", 0.80f, false},    // Death
-    {"valus.telegraph", 0.60f, false},  // StompStart
-    {"valus.impact", 0.50f, false},     // StompImpact
-    {"valus.telegraph", 0.60f, false},  // ClubStart
-    {"valus.impact", 0.50f, false},     // ClubImpact
-    {nullptr, 1.00f, false},            // ClubCancel: deferred
-    {"valus.hurt", 0.60f, false, false},       // ValusReaction
-    {"valus.death", 0.80f, false, true},       // ValusDefeat: the S6 death roar
-    {nullptr, 1.00f, false, false},            // FootLeft: deferred
-    {nullptr, 1.00f, false, false},            // FootRight: deferred
-    {nullptr, 1.00f, false, false},            // Reset: deferred
-    {"valus.club_swing", 0.70f, false, true},  // ClubSwing: the S6 club whoosh
+    encounters::kValus.cues.stompStart,   // StompStart
+    encounters::kValus.cues.stompImpact,  // StompImpact
+    encounters::kValus.cues.clubStart,    // ClubStart
+    encounters::kValus.cues.clubImpact,   // ClubImpact
+    encounters::kValus.cues.clubCancel,   // ClubCancel: deferred
+    encounters::kValus.cues.reaction,     // ValusReaction
+    encounters::kValus.cues.defeat,       // ValusDefeat: the S6 death roar
+    encounters::kValus.cues.footLeft,     // FootLeft: deferred
+    encounters::kValus.cues.footRight,    // FootRight: deferred
+    {nullptr, 1.00f, false, false},       // Reset: deferred
+    encounters::kValus.cues.clubSwing,    // ClubSwing: the S6 club whoosh
 };
 
 static_assert(sizeof(kCues) / sizeof(kCues[0]) == static_cast<std::size_t>(Sfx::Count),

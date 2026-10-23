@@ -112,37 +112,13 @@ void resolve_player_collision(PlayerState& player, const std::vector<Capsule>& c
     }
 }
 
-namespace {
-
-struct CapsuleSpec {
-    const char* from;
-    const char* to;
-    float radius;
-};
-
-// The pinned Valus proxy (see collision.h). Legs: hip -> knee -> ankle -> toe;
-// torso: waist -> chest -> neck. Radii measured from the posed body mesh around
-// each segment (dominant-weight vertices, p99/max: thigh 1.61/2.00, shin
-// 1.49/1.56, foot 1.68/1.75; +0.35 m player at resolution).
-constexpr CapsuleSpec kValusCapsules[] = {
-    {"Bone_MOMO_L", "Bone_SUNE_L", 1.7f},       // left thigh
-    {"Bone_SUNE_L", "Bone_TOE_L", 1.6f},        // left shin
-    {"Bone_TOE_L", "Bone_TUMASAKI_L", 1.7f},    // left foot
-    {"Bone_MOMO_R", "Bone_SUNE_R", 1.7f},       // right thigh
-    {"Bone_SUNE_R", "Bone_TOE_R", 1.6f},        // right shin
-    {"Bone_TOE_R", "Bone_TUMASAKI_R", 1.7f},    // right foot
-    {"Bone_HARA", "Bone_MUNE", 2.0f},           // waist -> chest
-    {"Bone_MUNE", "Bone_KUBI", 2.0f},           // chest -> neck
-};
-
-}  // namespace
-
 std::vector<Capsule> entity_collision_capsules(const Scene& scene, std::size_t rigIndex,
-                                               const std::vector<Mat4>& palette) {
+                                               const std::vector<Mat4>& palette,
+                                               std::span<const CapsuleDesc> table) {
     std::vector<Capsule> capsules;
-    capsules.reserve(std::size(kValusCapsules));
-    for (std::size_t segment = 0; segment < std::size(kValusCapsules); ++segment) {
-        const CapsuleSpec& spec = kValusCapsules[segment];
+    capsules.reserve(table.size());
+    for (std::size_t segment = 0; segment < table.size(); ++segment) {
+        const CapsuleDesc& spec = table[segment];
         Vec3 from{};
         Vec3 to{};
         if (!posed_joint_world_position(scene, rigIndex, palette, spec.from, from) ||

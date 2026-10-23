@@ -239,7 +239,7 @@ TEST_CASE("stamina zero forces a fall once, not every frame") {
     REQUIRE(combat.mode == PlayerMode::Falling);
     CHECK(combat.stamina == 0.0f);
     CHECK(combat.catchSecondsLeft == doctest::Approx(0.6f));
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.weakpoint == -1);
 
     // The fall starts at the ground here, so the next step lands.
@@ -323,7 +323,7 @@ TEST_CASE("a full-charge strike deals damage once and shakes the player off") {
     CHECK(combat.strikeHit);                    // the swing landed
     CHECK(combat.mode == PlayerMode::Falling);  // R7: the hit shakes him off
     CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.weakpoint == -1);
 
     // A fresh grab press inside the window catches the nearest band.
@@ -575,7 +575,7 @@ TEST_CASE("a zero-stamina catch does not re-attach") {
     CHECK(combat.mode == PlayerMode::Falling);
     CHECK(combat.stamina == 0.0f);
     CHECK(combat.catchSecondsLeft <= window);  // no new 0.6 s window was opened
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
 }
 
 TEST_CASE("a missed catch means the ground") {
@@ -1126,7 +1126,7 @@ TEST_CASE("a lethal fall cannot be caught: the grab press is ignored and the lan
         player_step(player, combat, input, head_frame(ground, joints_ok), tuning, kStep);
     CHECK_FALSE(press.grabbed);
     CHECK(combat.mode == PlayerMode::Falling);
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
 
     int frames = 0;
     StepEvents last{};
@@ -1165,7 +1165,7 @@ TEST_CASE("damage while attached drops the grip and clears its fight state") {
 
     CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
     CHECK(combat.mode == PlayerMode::Hurt);
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.bandT == doctest::Approx(0.5f));
     CHECK(combat.weakpoint == -1);
     CHECK(combat.charge == doctest::Approx(0.0f));
@@ -1231,7 +1231,7 @@ TEST_CASE("the R soft reset restores the player and Valus") {
     CHECK(combat.invulnSeconds == doctest::Approx(0.0f));
     CHECK_FALSE(combat.heavyHit);
     CHECK_FALSE(combat.pendingDeath);
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.bandT == doctest::Approx(0.5f));
     CHECK(combat.weakpoint == -1);
     CHECK(combat.charge == doctest::Approx(0.0f));
@@ -1722,7 +1722,7 @@ TEST_CASE("a forced release throws the climber off as a grip break") {
     CHECK(e.gripBroke);
     CHECK(e.damageDealt == 0);
     CHECK(combat.mode == PlayerMode::Falling);
-    CHECK(combat.band == ClimbBandId::Count);
+    CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.catchSecondsLeft == doctest::Approx(tuning.catchSeconds));
     CHECK(combat.stamina == stamina);  // thrown, not drained
 }

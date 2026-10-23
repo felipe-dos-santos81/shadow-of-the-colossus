@@ -1,5 +1,7 @@
 #pragma once
 
+#include "encounters/valus.h"
+
 // Valus's death sequence (S6 Task 2, design §8.1, ruling D3): a pure,
 // headless-testable phase machine, so the sequence's clock, input lock and
 // corpse window do not live inside the app loop. `app.cpp` owns the encounter,
@@ -50,14 +52,15 @@ struct DeathState {
     int roots = 0;  // tendril roots: 2 from the defeat until the reset
 };
 
-// The pinned timeline (design §8.1 and §9). The motion duration is the clip's;
-// the tendril start/end and the cinematic end are the builder's calls. Exported
-// so the app and the tests read the same numbers instead of restating them.
-inline constexpr float kDeathTendrilStart = 0.4f;
-inline constexpr float kDeathTendrilEnd = 3.0f;
-inline constexpr float kMotionSeconds = 6.166877f;  // 93 / 15.08056640625
-inline constexpr float kDeathEnd = 8.0f;
-inline constexpr int kDeathRoots = 2;
+// The pinned timeline (design §8.1 and §9), read from Valus's table (S11). The
+// motion duration is the clip's; the tendril start/end and the cinematic end
+// are the builder's calls. Exported so the app and the tests read the same
+// numbers instead of restating them.
+inline constexpr float kDeathTendrilStart = encounters::kValus.death.tendrilStartSeconds;
+inline constexpr float kDeathTendrilEnd = encounters::kValus.death.tendrilEndSeconds;
+inline constexpr float kMotionSeconds = encounters::kValus.death.motionSeconds;  // 93 / 15.08056640625
+inline constexpr float kDeathEnd = encounters::kValus.death.endSeconds;
+inline constexpr int kDeathRoots = encounters::kValus.death.roots;
 
 // One frame. In Idle, a true `defeated` starts the sequence (phase Motion,
 // t = total = 0, input locked, two roots); a false one leaves the state

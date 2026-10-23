@@ -1,5 +1,6 @@
 #pragma once
 
+#include "encounters/valus.h"
 #include "math3d.h"
 
 // Orbit camera: the eye sits `distance` from `target` at the given yaw and
@@ -89,11 +90,12 @@ void camera_follow(Camera&, CameraFollow&, Vec3 playerPos, float playerYawDeg,
 // follow offsets/distance and leaves the camera where the orbit had it, so the
 // next camera_follow call eases back without a snap.
 
-inline constexpr float kTargetDistanceMin = 22.0f;
-inline constexpr float kTargetDistanceMax = 30.0f;
-inline constexpr float kTargetDefaultDistance = 26.0f;
-inline constexpr float kTargetDefaultPitchDeg = 10.0f;
-inline constexpr float kTargetPitchLimitDeg = 80.0f;
+// Valus's target camera (his EncounterDesc's `targetCam`, S11).
+inline constexpr float kTargetDistanceMin = encounters::kValus.targetCam.distanceMin;
+inline constexpr float kTargetDistanceMax = encounters::kValus.targetCam.distanceMax;
+inline constexpr float kTargetDefaultDistance = encounters::kValus.targetCam.defaultDistance;
+inline constexpr float kTargetDefaultPitchDeg = encounters::kValus.targetCam.defaultPitchDeg;
+inline constexpr float kTargetPitchLimitDeg = encounters::kValus.targetCam.pitchLimitDeg;
 
 struct CameraTarget {
     bool active = false;
@@ -217,23 +219,29 @@ void camera_climb_exit(Camera&, CameraClimb&);
 inline constexpr float kFollowHeadHeight = 1.4f;
 static_assert(CameraFollow{}.headHeight == kFollowHeadHeight, "the follow default is unchanged");
 
-inline constexpr float kDeathPullSeconds = 0.4f;   // the pull-back key
-inline constexpr float kDeathLowSeconds = 3.0f;    // the low-angle key
-inline constexpr float kDeathWideSeconds = 6.2f;   // the corpse-wide key
-inline constexpr float kDeathFollowSeconds = 8.0f; // the follow key
-inline constexpr float kDeathPullDistance = 12.0f;      // the 12 m pull-back
-inline constexpr float kDeathPullEyeHeight = 4.0f;      // the eye 4 m above the entity base
-inline constexpr float kDeathPullTargetHeight = 9.0f;   // the body's midpoint
+// Valus's death cinematic keys (his EncounterDesc's `death.camera`, S11).
+inline constexpr float kDeathPullSeconds = encounters::kValus.death.camera.pullSeconds;   // the pull-back key
+inline constexpr float kDeathLowSeconds = encounters::kValus.death.camera.lowSeconds;     // the low-angle key
+inline constexpr float kDeathWideSeconds = encounters::kValus.death.camera.wideSeconds;   // the corpse-wide key
+inline constexpr float kDeathFollowSeconds = encounters::kValus.death.camera.followSeconds;  // the follow key
+inline constexpr float kDeathPullDistance = encounters::kValus.death.camera.pullDistance;  // the 12 m pull-back
+// The eye 4 m above the entity base.
+inline constexpr float kDeathPullEyeHeight = encounters::kValus.death.camera.pullEyeHeight;
+// The body's midpoint.
+inline constexpr float kDeathPullTargetHeight = encounters::kValus.death.camera.pullTargetHeight;
 // The pitch that puts the eye at kDeathPullEyeHeight: -asin((9 - 4) / 12).
-inline constexpr float kDeathPullPitchDeg = -24.6243f;
-inline constexpr float kDeathLowTargetHeight = 10.0f;  // the tendril band
-inline constexpr float kDeathLowDistance = 8.0f;
-inline constexpr float kDeathLowPitchDeg = -40.0f;     // below the target: a low angle
-inline constexpr float kDeathLowYawOffsetDeg = 25.0f;
-inline constexpr float kDeathWideTargetHeight = 2.0f;  // the corpse on the ground
-inline constexpr float kDeathWideDistance = 24.0f;
-inline constexpr float kDeathWidePitchDeg = 12.0f;
-inline constexpr float kDeathWideYawOffsetDeg = 45.0f;
+inline constexpr float kDeathPullPitchDeg = encounters::kValus.death.camera.pullPitchDeg;
+// The tendril band.
+inline constexpr float kDeathLowTargetHeight = encounters::kValus.death.camera.lowTargetHeight;
+inline constexpr float kDeathLowDistance = encounters::kValus.death.camera.lowDistance;
+// Below the target: a low angle.
+inline constexpr float kDeathLowPitchDeg = encounters::kValus.death.camera.lowPitchDeg;
+inline constexpr float kDeathLowYawOffsetDeg = encounters::kValus.death.camera.lowYawOffsetDeg;
+// The corpse on the ground.
+inline constexpr float kDeathWideTargetHeight = encounters::kValus.death.camera.wideTargetHeight;
+inline constexpr float kDeathWideDistance = encounters::kValus.death.camera.wideDistance;
+inline constexpr float kDeathWidePitchDeg = encounters::kValus.death.camera.widePitchDeg;
+inline constexpr float kDeathWideYawOffsetDeg = encounters::kValus.death.camera.wideYawOffsetDeg;
 
 // The pose at death-clock time `t`. `t <= 0` answers `base` exactly, and so
 // does a non-finite `t` or point (a broken sample never writes NaN). The

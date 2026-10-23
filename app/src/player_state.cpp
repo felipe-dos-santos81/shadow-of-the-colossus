@@ -78,10 +78,10 @@ void orbit_about_segment(PlayerState& player, Vec3 a, Vec3 b, float bandRadius,
     player.position = rotate_about_axis(player.position, a, axis, angle);
 }
 
-void select_band(PlayerCombat& combat, ClimbBandId band, float t) {
+void select_band(PlayerCombat& combat, const PlayerFrame& frame, ClimbBandId band, float t) {
     combat.band = band;
     combat.bandT = std::clamp(std::isfinite(t) ? t : 0.5f, 0.0f, 1.0f);
-    combat.weakpoint = climb_band(band).weakpoint;
+    combat.weakpoint = climb_band(frame.bands, band).weakpoint;
 }
 
 // The band reachable from `band` in the chain direction whose segment this
@@ -90,28 +90,29 @@ void select_band(PlayerCombat& combat, ClimbBandId band, float t) {
 // them is zero-length — and a zero-length band has no surface to hold. Skipping
 // it keeps the foot -> head route continuous instead of detaching the climber
 // on a segment the table happens to contain; a band with two distinct posed
-// joints is returned unchanged. Count terminates a chain with no such band.
+// joints is returned unchanged. None terminates a chain with no such band.
 ClimbBandId next_climbable_band(const PlayerFrame& frame, ClimbBandId band, bool ascending) {
     int guard = 0;
-    while (band != ClimbBandId::Count && guard < static_cast<int>(ClimbBandId::Count)) {
+    while (band != ClimbBandId::None && guard < static_cast<int>(frame.bands.size())) {
         Vec3 a{};
         Vec3 b{};
-        if (climb_band_segment(climb_band(band), frame.jointWorld, a, b)) {
+        const ClimbBand& record = climb_band(frame.bands, band);
+        if (climb_band_segment(record, frame.jointWorld, a, b)) {
             return band;
         }
-        band = ascending ? climb_band(band).up : climb_band(band).down;
+        band = ascending ? record.up : record.down;
         ++guard;
     }
-    return ClimbBandId::Count;
+    return ClimbBandId::None;
 }
 
-void attach_band(PlayerCombat& combat, ClimbBandId band, float t) {
+void attach_band(PlayerCombat& combat, const PlayerFrame& frame, ClimbBandId band, float t) {
     combat.mode = PlayerMode::Grabbing;
     combat.modeSeconds = 0.0f;
     combat.strikeHit = false;
     combat.charge = 0.0f;
     combat.catchSecondsLeft = 0.0f;
-    select_band(combat, band, t);
+    select_band(combat, frame, band, t);
 }
 
 // Leaves the entity. `broke_grip` distinguishes a forced loss (reported and
@@ -124,7 +125,7 @@ void detach(PlayerCombat& combat, StepEvents& events, bool brokeGrip, float catc
     combat.charge = 0.0f;
     // `strikeHit` is deliberately left as it was: a landed hit stays true for
     // the fall, and a mid-charge break was never a hit. attach_band clears it.
-    combat.band = ClimbBandId::Count;
+    combat.band = ClimbBandId::None;
     combat.bandT = 0.5f;
     combat.weakpoint = -1;
     if (brokeGrip) {
@@ -139,7 +140,7 @@ void detach(PlayerCombat& combat, StepEvents& events, bool brokeGrip, float catc
 bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame) {
     Vec3 point{};
     Vec3 normal{};
-    if (!climb_surface_point(climb_band(combat.band), frame.jointWorld, combat.bandT,
+    if (!climb_surface_point(climb_band(frame.bands, combat.band), frame.jointWorld, combat.bandT,
                              player.position, point, normal)) {
         return false;
     }
@@ -154,15 +155,16 @@ bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame&
 // it reports no event and opens no catch window.
 bool try_attach(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame,
                 ClimbBandId band, PlayerMode fallback) {
-    attach_band(combat, band,
-                nearest_t(climb_band(band), frame.jointWorld, player.position, 0.5f));
+    attach_band(combat, frame, band,
+                nearest_t(climb_band(frame.bands, band), frame.jointWorld, player.position,
+                          0.5f));
     if (!write_surface(player, combat, frame)) {
         combat.mode = fallback;
         combat.modeSeconds = 0.0f;
         combat.charge = 0.0f;
         combat.strikeHit = false;
         combat.catchSecondsLeft = 0.0f;
-        combat.band = ClimbBandId::Count;
+        combat.band = ClimbBandId::None;
         combat.bandT = 0.5f;
         combat.weakpoint = -1;
         return false;
@@ -204,7 +206,7 @@ bool strike_reaches_shell(Vec3 feet, int weakpoint, const WeakpointProxyLookup& 
 // mode and modeSeconds stay the caller's business, so Hurt, Dead and the R
 // reset share one sweep instead of three drifting copies.
 void clear_fight_attachment(PlayerCombat& combat) {
-    combat.band = ClimbBandId::Count;
+    combat.band = ClimbBandId::None;
     combat.bandT = 0.5f;
     combat.weakpoint = -1;
     combat.charge = 0.0f;
@@ -287,8 +289,9 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
 
             if (grabPressed && combat.stamina > 0.0f) {
                 const ClimbBandId band =
-                    nearest_climb_band(frame.jointWorld, player.position, tuning.grabRange);
-                if (band != ClimbBandId::Count) {
+                    nearest_climb_band(frame.bands, frame.jointWorld, player.position,
+                                       tuning.grabRange);
+                if (band != ClimbBandId::None) {
                     if (try_attach(player, combat, frame, band, PlayerMode::Grounded)) {
                         events.grabbed = true;
                     }
@@ -320,7 +323,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             }
 
             if (combat.mode == PlayerMode::Grabbing || combat.mode == PlayerMode::Climbing) {
-                const ClimbBand& band = climb_band(combat.band);
+                const ClimbBand& band = climb_band(frame.bands, combat.band);
                 const float axis =
                     (input.forward ? 1.0f : 0.0f) - (input.back ? 1.0f : 0.0f);
                 const float lateral =
@@ -352,20 +355,20 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                             // W + lateral takes the branch when the band has
                             // one; W alone always follows the chain up.
                             ClimbBandId next = band.up;
-                            if (lateral != 0.0f && band.branch != ClimbBandId::Count) {
+                            if (lateral != 0.0f && band.branch != ClimbBandId::None) {
                                 next = band.branch;
                             }
                             next = next_climbable_band(frame, next, /*ascending=*/true);
-                            if (next != ClimbBandId::Count) {
-                                select_band(combat, next, 0.0f);
+                            if (next != ClimbBandId::None) {
+                                select_band(combat, frame, next, 0.0f);
                             } else {
                                 combat.bandT = 1.0f;
                             }
                         } else if (t <= 0.0f) {
                             const ClimbBandId down = next_climbable_band(
                                 frame, band.down, /*ascending=*/false);
-                            if (down != ClimbBandId::Count) {
-                                select_band(combat, down, 1.0f);
+                            if (down != ClimbBandId::None) {
+                                select_band(combat, frame, down, 1.0f);
                             } else {
                                 combat.bandT = 0.0f;
                             }
@@ -437,8 +440,9 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             // ignored and the existing window simply runs out.
             if (grabPressed && combat.catchSecondsLeft > 0.0f && combat.stamina > 0.0f) {
                 const ClimbBandId band =
-                    nearest_climb_band(frame.jointWorld, player.position, tuning.catchRange);
-                if (band != ClimbBandId::Count) {
+                    nearest_climb_band(frame.bands, frame.jointWorld, player.position,
+                                       tuning.catchRange);
+                if (band != ClimbBandId::None) {
                     if (try_attach(player, combat, frame, band, PlayerMode::Falling)) {
                         events.grabbed = true;
                     }

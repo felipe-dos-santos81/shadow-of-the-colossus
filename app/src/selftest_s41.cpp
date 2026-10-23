@@ -85,7 +85,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
 
     const float stepSeconds = kFixedFrameSeconds;
     int strikes = 0;
-    ClimbBandId grabBand = ClimbBandId::Count;
+    ClimbBandId grabBand = ClimbBandId::None;
     bool grabBandSet = false;
 
     // One frame of the fight: the entity's one-shot clock, the player's
@@ -311,7 +311,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
         nearest_climb_band(footFrame.jointWorld, player.position, 1000.0f);
     Vec3 footPoint{};
     Vec3 footNormal{};
-    if (approachBand == ClimbBandId::Count ||
+    if (approachBand == ClimbBandId::None ||
         !climb_surface_point(climb_band(approachBand), footFrame.jointWorld, 0.5f,
                              player.position, footPoint, footNormal)) {
         throw std::runtime_error(
@@ -331,7 +331,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     PlayerFrame reachFrame =
         player_frame_of(scene, entityRig, palettes, heightmap, footYaw);
     if (nearest_climb_band(reachFrame.jointWorld, player.position, tuning.grabRange) ==
-        ClimbBandId::Count) {
+        ClimbBandId::None) {
         throw std::runtime_error(
             "s41-selftest: the approach stopped out of grab range of every climb "
             "band");
@@ -340,7 +340,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     grabInput.grab = true;
     const StepEvents grabEvents = step_frame(grabInput);
     if (!grabEvents.grabbed || combat.mode != PlayerMode::Grabbing ||
-        combat.band == ClimbBandId::Count) {
+        combat.band == ClimbBandId::None) {
         throw std::runtime_error(
             "s41-selftest: the grab did not attach (mode " +
             std::string(player_mode_name(combat.mode)) + ")");
@@ -532,7 +532,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     catchInput.grab = true;
     const StepEvents caught = step_frame(catchInput);
     if (!caught.grabbed || combat.mode != PlayerMode::Grabbing ||
-        combat.band == ClimbBandId::Count) {
+        combat.band == ClimbBandId::None) {
         throw std::runtime_error(
             "s41-selftest: the fresh grab press did not catch a band (mode " +
             std::string(player_mode_name(combat.mode)) + ")");
@@ -658,7 +658,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
         nearest_climb_band(landingFrame.jointWorld, player.position, 1000.0f);
     Vec3 returnPoint{};
     Vec3 returnNormal{};
-    if (returnBand == ClimbBandId::Count ||
+    if (returnBand == ClimbBandId::None ||
         !climb_surface_point(climb_band(returnBand), landingFrame.jointWorld, 0.5f,
                              firstGrabPosition, returnPoint, returnNormal)) {
         throw std::runtime_error(
@@ -668,7 +668,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     player.yawDeg = std::atan2(-returnNormal.x, -returnNormal.z) / kDegToRad;
     combat.mode = PlayerMode::Grounded;
     combat.modeSeconds = 0.0f;
-    combat.band = ClimbBandId::Count;
+    combat.band = ClimbBandId::None;
     combat.weakpoint = -1;
     combat.catchSecondsLeft = 0.0f;
     combat.fallVelocity = 0.0f;
@@ -816,7 +816,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
     std::printf("s41-settle frames=%d grounded=1\n", settleFrames);
 
     // --- 9. The final frame and status -------------------------------
-    if (!grabBandSet || grabBand == ClimbBandId::Count) {
+    if (!grabBandSet || grabBand == ClimbBandId::None) {
         throw std::runtime_error(
             "s41-selftest: the status has no resolved grab band");
     }

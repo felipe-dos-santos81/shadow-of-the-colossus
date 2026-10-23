@@ -1,5 +1,6 @@
 #pragma once
 
+#include "encounters/valus.h"
 #include "math3d.h"
 
 // Valus's attack decision (S4.2 Task 7, ruling R8): a pure, headless-testable
@@ -17,26 +18,38 @@
 
 enum class ValusAttack { None, StompL, StompR, Club };
 
-// The design's pinned numbers (§7.4). Exported so the app and the tests read the
-// same constants instead of restating them.
-inline constexpr float kValusStompRangeMeters = 4.5f;
-inline constexpr float kValusClubRangeMeters = 14.0f;
-inline constexpr float kValusClubFacingDot = 0.2f;
-inline constexpr float kValusStompDirectRangeMeters = 2.5f;
-inline constexpr float kValusStompWaveRangeMeters = 6.0f;
-inline constexpr float kValusClubHitRangeMeters = 2.5f;
-inline constexpr float kValusYawSlewDegPerSecond = 30.0f;
-inline constexpr float kValusStompCooldownSeconds = 4.0f;
-inline constexpr float kValusClubCooldownSeconds = 5.0f;
-inline constexpr float kValusStompImpactBegin = 0.55f;
-inline constexpr float kValusStompImpactEnd = 0.70f;
-inline constexpr float kValusClubImpactBegin = 0.45f;
-inline constexpr float kValusClubImpactEnd = 0.65f;
+// The table row of `attack` (S11 Task 7: Valus's attacks are rows of his
+// EncounterDesc, indexed ValusAttack - 1; None has no row), or nullptr.
+constexpr const AttackDesc* valus_attack_desc(ValusAttack attack,
+                                              const EncounterDesc& desc = encounters::kValus) {
+    const int index = static_cast<int>(attack) - 1;
+    return index >= 0 && static_cast<std::size_t>(index) < desc.attacks.size()
+               ? &desc.attacks[static_cast<std::size_t>(index)]
+               : nullptr;
+}
+static_assert(static_cast<int>(ValusAttack::Club) == static_cast<int>(encounters::kValus.attacks.size()),
+              "ValusAttack names Valus's attack rows (+ None)");
+
+// The design's pinned numbers (§7.4), read from Valus's table. Exported so the
+// app and the tests read the same constants instead of restating them.
+inline constexpr float kValusStompRangeMeters = encounters::kValus.attacks[0].reachMeters;
+inline constexpr float kValusClubRangeMeters = encounters::kValus.attacks[2].reachMeters;
+inline constexpr float kValusClubFacingDot = encounters::kValus.attacks[2].facingDot;
+inline constexpr float kValusStompDirectRangeMeters = encounters::kValus.attacks[0].hitRangeMeters;
+inline constexpr float kValusStompWaveRangeMeters = encounters::kValus.attacks[0].waveRangeMeters;
+inline constexpr float kValusClubHitRangeMeters = encounters::kValus.attacks[2].hitRangeMeters;
+inline constexpr float kValusYawSlewDegPerSecond = encounters::kValus.turnDegPerSec;
+inline constexpr float kValusStompCooldownSeconds = encounters::kValus.attacks[0].cooldownSeconds;
+inline constexpr float kValusClubCooldownSeconds = encounters::kValus.attacks[2].cooldownSeconds;
+inline constexpr float kValusStompImpactBegin = encounters::kValus.attacks[0].impactBegin;
+inline constexpr float kValusStompImpactEnd = encounters::kValus.attacks[0].impactEnd;
+inline constexpr float kValusClubImpactBegin = encounters::kValus.attacks[2].impactBegin;
+inline constexpr float kValusClubImpactEnd = encounters::kValus.attacks[2].impactEnd;
 // S6: the club's swing phase — the whoosh fires once here, mid-clip and before
 // the [0.45, 0.65] impact window (design §8.4: the swing, not the telegraph).
 // Builder call, tuned by ear against the club clip (`minotaur_a_atk_weapon2_a`,
 // 1.333 s).
-inline constexpr float kValusClubSwingSeconds = 0.30f;
+inline constexpr float kValusClubSwingSeconds = encounters::kValus.attacks[2].swingSeconds;
 
 // One frame's attack decision inputs. The fields are ruling R8's list, plus
 // `stompLeftNext`: alternation needs one bit of memory, and carrying it in the

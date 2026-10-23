@@ -1022,7 +1022,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         nearest_climb_band(footFrame.jointWorld, player.position, 1000.0f);
     Vec3 footPoint{};
     Vec3 footNormal{};
-    if (approachBand == ClimbBandId::Count ||
+    if (approachBand == ClimbBandId::None ||
         !climb_surface_point(climb_band(approachBand), footFrame.jointWorld, 0.5f,
                              player.position, footPoint, footNormal)) {
         throw std::runtime_error(
@@ -1040,7 +1040,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
     palettes = palettes_now();
     PlayerFrame reachFrame = frame_of(palettes);
     if (nearest_climb_band(reachFrame.jointWorld, player.position, tuning.grabRange) ==
-        ClimbBandId::Count) {
+        ClimbBandId::None) {
         throw std::runtime_error(
             "s42-selftest: the approach stopped out of grab range of every climb band");
     }

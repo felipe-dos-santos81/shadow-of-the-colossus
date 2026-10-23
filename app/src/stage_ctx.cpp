@@ -17,9 +17,8 @@
 HudState StageCtx::hud_state(bool visible) {
     const float playerHealth =
         tuning.maxHealth > 0.0f ? combat.health / tuning.maxHealth : 0.0f;
-    const float valusHealth = encounter.health < kEncounterMaxHealth
-                                  ? encounter.health / kEncounterMaxHealth
-                                  : 0.0f;
+    const float maxHealth = enc().maxHealth;
+    const float valusHealth = encounter.health < maxHealth ? encounter.health / maxHealth : 0.0f;
     HudState hud{visible && !manifest.entities.empty(), combat.stamina / 100.0f,
                  valusHealth, playerHealth};
     // S7: the return's full-window fade (0 = nothing drawn — every
