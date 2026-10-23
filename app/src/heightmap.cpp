@@ -182,29 +182,14 @@ void flag_walls_near(Heightmap& hm, float x, float z, float y_lo, float y_hi) {
 
 }  // namespace
 
-Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
-    if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
-        throw std::runtime_error("heightmap cell size must be positive and finite");
-    }
-    if (scene.meshes.empty()) {
-        throw std::runtime_error("no meshes");
-    }
-    // Only static meshes are ground: the player and the entities are rigged and
-    // must never rasterize into the surface they stand on.
-    std::size_t static_count = 0;
-    for (const MeshCpu& mesh : scene.meshes) {
-        if (mesh.rig < 0 && mesh.ground) {
-            ++static_count;
-        }
-    }
-    if (static_count == 0) {
-        throw std::runtime_error("no static meshes");
-    }
-
+// The rasterizer behind build_heightmap and build_backdrop_grid: the static
+// (rig < 0) meshes whose `ground` flag is `!backdrops`, over the given bounds.
+static Heightmap rasterize(const Scene& scene, float cellSize, bool layered, bool backdrops,
+                           Vec3 boundsMin, Vec3 boundsMax) {
     Heightmap heightmap;
     heightmap.cellSize = cellSize;
-    heightmap.boundsMin = scene.boundsMin;
-    heightmap.boundsMax = scene.boundsMax;
+    heightmap.boundsMin = boundsMin;
+    heightmap.boundsMax = boundsMax;
     heightmap.width = axis_nodes(heightmap.boundsMax.x - heightmap.boundsMin.x, cellSize);
     heightmap.height = axis_nodes(heightmap.boundsMax.z - heightmap.boundsMin.z, cellSize);
     heightmap.heights.assign(
@@ -222,8 +207,8 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
     const auto for_each_triangle = [&](auto&& visit) {
         for (std::size_t mesh_index = 0; mesh_index < scene.meshes.size(); ++mesh_index) {
             const MeshCpu& mesh = scene.meshes[mesh_index];
-            if (mesh.rig >= 0 || !mesh.ground) {
-                continue;  // a rigged mesh (player or entity) or a backdrop: never ground
+            if (mesh.rig >= 0 || mesh.ground == backdrops) {
+                continue;  // a rigged mesh (player or entity), or the other kind of static mesh
             }
             for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
                 const std::size_t i0 = mesh.indices[t];
@@ -345,6 +330,86 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
         });
     }
     return heightmap;
+}
+
+Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
+    if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
+        throw std::runtime_error("heightmap cell size must be positive and finite");
+    }
+    if (scene.meshes.empty()) {
+        throw std::runtime_error("no meshes");
+    }
+    // Only static meshes are ground: the player and the entities are rigged and
+    // must never rasterize into the surface they stand on.
+    std::size_t static_count = 0;
+    for (const MeshCpu& mesh : scene.meshes) {
+        if (mesh.rig < 0 && mesh.ground) {
+            ++static_count;
+        }
+    }
+    if (static_count == 0) {
+        throw std::runtime_error("no static meshes");
+    }
+
+    return rasterize(scene, cellSize, layered, false, scene.boundsMin, scene.boundsMax);
+}
+
+Heightmap build_backdrop_grid(const Scene& scene, float cellSize) {
+    if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
+        throw std::runtime_error("heightmap cell size must be positive and finite");
+    }
+    // The backdrops' own world-space XZ bounds (finite vertices of static, non-ground meshes).
+    const float inf = std::numeric_limits<float>::infinity();
+    Vec3 lo{inf, inf, inf};
+    Vec3 hi{-inf, -inf, -inf};
+    for (const MeshCpu& mesh : scene.meshes) {
+        if (mesh.rig >= 0 || mesh.ground) {
+            continue;
+        }
+        for (const Vertex& v : mesh.vertices) {
+            const Vec3 p = transform_point(mesh.model, Vec3{v.px, v.py, v.pz});
+            if (!is_finite(p)) {
+                continue;
+            }
+            lo = Vec3{std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+            hi = Vec3{std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+        }
+    }
+    if (lo.x > hi.x) {
+        Heightmap empty{};
+        empty.cellSize = cellSize;
+        return empty;  // no backdrops: width 0, no grid
+    }
+    return rasterize(scene, cellSize, false, true, lo, hi);
+}
+
+float heightmap_node(const Heightmap& heightmap, Vec3 p) {
+    if (heightmap.width <= 0 || heightmap.height <= 0 || !heightmap_in_bounds(heightmap, p) ||
+        heightmap.heights.size() <
+            static_cast<std::size_t>(heightmap.width) * static_cast<std::size_t>(heightmap.height)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    int i = 0;
+    int j = 0;
+    nearest_node(heightmap, p, i, j);
+    return heightmap.heights[static_cast<std::size_t>(j) * heightmap.width + i];
+}
+
+float ray_march(const Heightmap& heightmap, Vec3 origin, Vec3 dir, float maxLen, float step) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    if (!(step > 0.0f) || !std::isfinite(step) || !std::isfinite(maxLen)) {
+        return nan;
+    }
+    // t = k * step (no accumulated drift); a sample outside the bounds or on an empty node
+    // reads NaN, which never compares greater, so it is no hit.
+    for (int k = 1; static_cast<float>(k) * step <= maxLen; ++k) {
+        const float t = static_cast<float>(k) * step;
+        const Vec3 p{origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t};
+        if (heightmap_node(heightmap, p) > p.y) {
+            return t;
+        }
+    }
+    return nan;
 }
 
 float heightmap_sample(const Heightmap& heightmap, Vec3 p) {
