@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 int resolve_clip(const std::vector<AnimationCpu>& clips, const std::string& want) {
     char* end = nullptr;
@@ -241,17 +242,18 @@ const char* death_phase_name(DeathPhase phase) {
     return "Idle";
 }
 
-const char* death_camera_key(float t) {
+const char* death_camera_key(float t, const EncounterDesc& desc) {
+    const DeathCameraDesc& keys = desc.death.camera;
     if (!std::isfinite(t) || t <= 0.0f) {
         return "follow";
     }
-    if (t <= kDeathPullSeconds) {
+    if (t <= keys.pullSeconds) {
         return "pull";
     }
-    if (t <= kDeathLowSeconds) {
+    if (t <= keys.lowSeconds) {
         return "low";
     }
-    if (t <= kDeathWideSeconds) {
+    if (t <= keys.wideSeconds) {
         return "wide";
     }
     return "follow";
@@ -260,14 +262,14 @@ const char* death_camera_key(float t) {
 EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
                                const std::vector<std::vector<Mat4>>& palettes,
                                const Encounter& encounter, const DeathState& death) {
+    const EncounterDesc& desc = *encounter.desc;
     EffectFrame frame;
     frame.age = death.total;
-    frame.active = death_tendrils_active(death);
+    frame.active = death_tendrils_active(death, desc);
     if (!frame.active || entityRig >= palettes.size()) {
         return frame;
     }
 
-    const EncounterDesc& desc = *encounter.desc;
     Vec3 centre{encounter.entityPosition.x,
                 encounter.entityPosition.y + desc.death.fallbackChestHeight,
                 encounter.entityPosition.z};
@@ -278,12 +280,17 @@ EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
         centre = chest;
     }
 
-    const int first = encounter.deathWeakpoint == 1 ? 1 : 0;
-    const int order[2] = {first, 1 - first};
-    for (const int weakpoint : order) {
-        if (frame.rootCount >= static_cast<int>(frame.roots.size())) {
+    // The hit weakpoint's shell first, then the others in table order, up to
+    // the encounter's `death.roots` (and the renderer's slots).
+    const int shells = static_cast<int>(desc.weakpoints.size());
+    const int hit = encounter.deathWeakpoint;
+    const int first = hit >= 0 && hit < shells ? hit : 0;
+    const int roots = std::min(desc.death.roots, static_cast<int>(frame.roots.size()));
+    for (int slot = 0; slot < shells; ++slot) {
+        if (frame.rootCount >= roots) {
             break;
         }
+        const int weakpoint = slot == 0 ? first : (slot <= first ? slot - 1 : slot);
         const char* material = weakpoint_material_name(desc.weakpoints, weakpoint);
         if (material == nullptr) {
             continue;
@@ -311,11 +318,11 @@ EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
     return frame;
 }
 
-bool death_cue_due(const DeathState& death, bool& fired) {
+bool death_cue_due(const DeathState& death, bool& fired, const EncounterDesc& desc) {
     if (fired || death.phase == DeathPhase::Idle) {
         return false;
     }
-    if (!(death.total >= kDeathTendrilStart)) {
+    if (!(death.total >= desc.death.tendrilStartSeconds)) {
         return false;
     }
     fired = true;
@@ -324,10 +331,10 @@ bool death_cue_due(const DeathState& death, bool& fired) {
 
 void advance_death_frame(DeathState& death, float dt, Playback& entityPlayback, int deathClip,
                          const CorpseAttachment& corpse, const ClubAttachment& club,
-                         Scene& scene, std::size_t entityRig) {
-    death = step_death(death, dt, true);
+                         Scene& scene, std::size_t entityRig, const EncounterDesc& desc) {
+    death = step_death(death, dt, true, desc);
     if (deathClip >= 0 && entityPlayback.index == deathClip) {
-        entityPlayback.time = std::min(death.total, kMotionSeconds);
+        entityPlayback.time = std::min(death.total, desc.death.motionSeconds);
         entityPlayback.pinned = true;
         entityPlayback.playing = false;
     }
@@ -576,17 +583,16 @@ EntityClips resolve_entity_clips(const Playback& playback, const std::string& st
     const auto named = [&playback](const char* name) {
         return name != nullptr ? clip_index_named(playback, name) : -1;
     };
-    const auto reaction = [&desc, &named](std::size_t weakpoint) {
-        return weakpoint < desc.weakpoints.size() ? named(desc.weakpoints[weakpoint].reactionClip)
-                                                  : -1;
-    };
     const auto attack = [&desc, &named](ValusAttack a) {
         const AttackDesc* row = valus_attack_desc(a, desc);
         return row != nullptr ? named(row->clip) : -1;
     };
+    std::vector<int> reactions;
+    for (const WeakpointDesc& weakpoint : desc.weakpoints) {
+        reactions.push_back(named(weakpoint.reactionClip));
+    }
     return EntityClips{clip_index_named(playback, standClip),
-                       reaction(0),
-                       reaction(1),
+                       std::move(reactions),
                        named(desc.bodyReactionClip),
                        named(desc.death.clip),
                        attack(ValusAttack::StompL),
@@ -738,7 +744,8 @@ void cancel_valus_attack(Encounter& encounter, SfxQueue* sfx) {
     if (encounter.attack == ValusAttack::None) {
         return;
     }
-    encounter.pendingCooldownSeconds = valus_attack_cooldown_seconds(encounter.attack);
+    encounter.pendingCooldownSeconds =
+        valus_attack_cooldown_seconds(encounter.attack, *encounter.desc);
     encounter.attack = ValusAttack::None;
     encounter.attackSeconds = 0.0f;
     encounter.attackHit = false;
@@ -795,7 +802,7 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
         if (encounter.reactionClip >= 0) {
             return;
         }
-        const ValusAttack chosen = select_valus_attack(input);
+        const ValusAttack chosen = select_valus_attack(input, *encounter.desc);
         if (chosen == ValusAttack::None) {
             return;
         }
@@ -825,7 +832,8 @@ void advance_valus_attack(Encounter& encounter, Playback& playback,
     }
     if (encounter.attackSeconds >= duration) {
         // Clip over: back to the entity's own loop, then the cooldown starts.
-        encounter.cooldownSeconds = valus_attack_cooldown_seconds(encounter.attack);
+        encounter.cooldownSeconds =
+            valus_attack_cooldown_seconds(encounter.attack, *encounter.desc);
         encounter.attack = ValusAttack::None;
         encounter.attackSeconds = 0.0f;
         encounter.attackHit = false;
@@ -868,25 +876,16 @@ void apply_valus_impact(PlayerCombat& combat, const PlayerState& player,
         return;
     }
 
+    // The attack row's direct hit (its `heavy` reaction), else its lighter
+    // wave (Valus: the stomp's shockwave; the club has none).
+    const AttackDesc* row = valus_attack_desc(attack, desc);
     float damage = 0.0f;
     bool heavy = false;
-    switch (attack) {
-        case ValusAttack::StompL:
-        case ValusAttack::StompR:
-            if (distance <= valus_attack_desc(attack, desc)->hitRangeMeters) {
-                damage = tuning.stompDamage;
-            } else if (distance <= valus_attack_desc(attack, desc)->waveRangeMeters) {
-                damage = tuning.stompWaveDamage;
-            }
-            break;
-        case ValusAttack::Club:
-            if (distance <= valus_attack_desc(attack, desc)->hitRangeMeters) {
-                damage = tuning.clubDamage;
-                heavy = true;
-            }
-            break;
-        case ValusAttack::None:
-            break;
+    if (distance <= row->hitRangeMeters) {
+        damage = row->damage;
+        heavy = row->heavy;
+    } else if (distance <= row->waveRangeMeters) {
+        damage = row->waveDamage;
     }
     if (!(damage > 0.0f)) {
         return;
@@ -951,8 +950,10 @@ void apply_combat_events(Encounter& encounter, Playback& entityPlayback,
         start_encounter_one_shot(entityPlayback, encounter, clips.death);
         return;
     }
+    const bool shell =
+        weakpoint >= 0 && static_cast<std::size_t>(weakpoint) < clips.reactions.size();
     const int reaction =
-        weakpoint == 1 ? clips.arm : (weakpoint == 0 ? clips.head : clips.body);
+        shell ? clips.reactions[static_cast<std::size_t>(weakpoint)] : clips.body;
     start_encounter_one_shot(entityPlayback, encounter, reaction);
     if (sfx != nullptr) {
         append_encounter_sfx(EncounterSfx::ValusReaction, encounter.entityPosition, *sfx);

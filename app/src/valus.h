@@ -20,8 +20,7 @@ enum class ValusAttack { None, StompL, StompR, Club };
 
 // The table row of `attack` (S11 Task 7: Valus's attacks are rows of his
 // EncounterDesc, indexed ValusAttack - 1; None has no row), or nullptr.
-constexpr const AttackDesc* valus_attack_desc(ValusAttack attack,
-                                              const EncounterDesc& desc = encounters::kValus) {
+constexpr const AttackDesc* valus_attack_desc(ValusAttack attack, const EncounterDesc& desc) {
     const int index = static_cast<int>(attack) - 1;
     return index >= 0 && static_cast<std::size_t>(index) < desc.attacks.size()
                ? &desc.attacks[static_cast<std::size_t>(index)]
@@ -29,27 +28,6 @@ constexpr const AttackDesc* valus_attack_desc(ValusAttack attack,
 }
 static_assert(static_cast<int>(ValusAttack::Club) == static_cast<int>(encounters::kValus.attacks.size()),
               "ValusAttack names Valus's attack rows (+ None)");
-
-// The design's pinned numbers (§7.4), read from Valus's table. Exported so the
-// app and the tests read the same constants instead of restating them.
-inline constexpr float kValusStompRangeMeters = encounters::kValus.attacks[0].reachMeters;
-inline constexpr float kValusClubRangeMeters = encounters::kValus.attacks[2].reachMeters;
-inline constexpr float kValusClubFacingDot = encounters::kValus.attacks[2].facingDot;
-inline constexpr float kValusStompDirectRangeMeters = encounters::kValus.attacks[0].hitRangeMeters;
-inline constexpr float kValusStompWaveRangeMeters = encounters::kValus.attacks[0].waveRangeMeters;
-inline constexpr float kValusClubHitRangeMeters = encounters::kValus.attacks[2].hitRangeMeters;
-inline constexpr float kValusYawSlewDegPerSecond = encounters::kValus.turnDegPerSec;
-inline constexpr float kValusStompCooldownSeconds = encounters::kValus.attacks[0].cooldownSeconds;
-inline constexpr float kValusClubCooldownSeconds = encounters::kValus.attacks[2].cooldownSeconds;
-inline constexpr float kValusStompImpactBegin = encounters::kValus.attacks[0].impactBegin;
-inline constexpr float kValusStompImpactEnd = encounters::kValus.attacks[0].impactEnd;
-inline constexpr float kValusClubImpactBegin = encounters::kValus.attacks[2].impactBegin;
-inline constexpr float kValusClubImpactEnd = encounters::kValus.attacks[2].impactEnd;
-// S6: the club's swing phase — the whoosh fires once here, mid-clip and before
-// the [0.45, 0.65] impact window (design §8.4: the swing, not the telegraph).
-// Builder call, tuned by ear against the club clip (`minotaur_a_atk_weapon2_a`,
-// 1.333 s).
-inline constexpr float kValusClubSwingSeconds = encounters::kValus.attacks[2].swingSeconds;
 
 // One frame's attack decision inputs. The fields are ruling R8's list, plus
 // `stompLeftNext`: alternation needs one bit of memory, and carrying it in the
@@ -69,20 +47,23 @@ struct ValusAttackInput {
     bool stompLeftNext = true;
 };
 
-// The attack Valus starts this frame, or None. Range is horizontal (the feet
-// and the player both stand on the ground); the club's facing dot is on the
-// horizontal player direction.
-ValusAttack select_valus_attack(const ValusAttackInput& input);
+// The attack the encounter starts this frame, or None. Range is horizontal (the
+// feet and the player both stand on the ground); the club's facing dot is on
+// the horizontal player direction. Every range and gate is `desc`'s attack row
+// (S11 M-1); an attack without a row is never chosen.
+ValusAttack select_valus_attack(const ValusAttackInput& input, const EncounterDesc& desc);
 
-// Whether an in-progress attack's pinned impact window is open at
-// `clipSeconds`, and has not already fired. A stomp's window is [0.55, 0.70] of
-// the clip, a club's [0.45, 0.65]; `alreadyHit` makes the impact once-only.
-// None, a negative/non-finite time, or a hit already applied all answer false.
-bool attack_impact_due(ValusAttack attack, float clipSeconds, bool alreadyHit);
+// Whether an in-progress attack's impact window (its row's [impactBegin,
+// impactEnd]; Valus: a stomp's [0.55, 0.70], the club's [0.45, 0.65]) is open
+// at `clipSeconds`, and has not already fired; `alreadyHit` makes the impact
+// once-only. None (or no row), a negative/non-finite time, or a hit already
+// applied all answer false.
+bool attack_impact_due(ValusAttack attack, float clipSeconds, bool alreadyHit,
+                       const EncounterDesc& desc);
 
-// The cooldown an attack sets when its clip ends: 4 s for a stomp, 5 s for the
-// club, 0 for None.
-float valus_attack_cooldown_seconds(ValusAttack attack);
+// The cooldown an attack sets when its clip ends: its row's (Valus: 4 s for a
+// stomp, 5 s for the club), 0 for None or no row.
+float valus_attack_cooldown_seconds(ValusAttack attack, const EncounterDesc& desc);
 
 // Whether `attack`'s in-progress clip is cancelled: only a landed strike does
 // (design §7.4), and only when there is an attack to cancel. A whiff leaves the

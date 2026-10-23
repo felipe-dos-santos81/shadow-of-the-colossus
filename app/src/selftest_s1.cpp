@@ -74,7 +74,7 @@ SelftestResult run_screenshot(StageCtx& ctx, RunState& run) {
             if (targetCamera.active) {
                 if (haveEntityChest) {
                     camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f,
-                                         0.0f);
+                                         0.0f, ctx.enc());
                 }
             } else if (targetCamera.returning) {
                 camera_target_return(camera, follow, targetCamera, player.position,

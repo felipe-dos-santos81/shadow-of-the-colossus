@@ -172,7 +172,8 @@ void camera_follow(Camera& camera, CameraFollow& follow, Vec3 playerPos, float p
 }
 
 void camera_target_enter(Camera& camera, const CameraFollow& follow, CameraTarget& state,
-                         Vec3 target) {
+                         Vec3 target, const EncounterDesc& desc) {
+    const TargetCamDesc& limits = desc.targetCam;
     state.savedYawOffsetDeg = follow.yawOffsetDeg;
     state.savedPitchOffsetDeg = follow.pitchOffsetDeg;
     state.savedDistance = follow.distance;
@@ -181,14 +182,15 @@ void camera_target_enter(Camera& camera, const CameraFollow& follow, CameraTarge
     state.returnSeconds = 0.0f;
 
     state.active = true;
-    state.distance = std::clamp(state.distance, kTargetDistanceMin, kTargetDistanceMax);
+    state.distance = std::clamp(state.distance < 0.0f ? limits.defaultDistance : state.distance,
+                                limits.distanceMin, limits.distanceMax);
     const bool finite_target =
         std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z);
     state.target = finite_target ? target : camera.target;
 
     camera.target = state.target;
     camera.distance = state.distance;
-    camera.pitch = kTargetDefaultPitchDeg;
+    camera.pitch = limits.defaultPitchDeg;
     // The yaw is kept: the view swings to the entity rather than resetting.
 }
 
@@ -242,33 +244,34 @@ bool camera_target_return(Camera& camera, CameraFollow& follow, CameraTarget& st
 }
 
 void camera_target_toggle(Camera& camera, CameraFollow& follow, CameraTarget& state,
-                          Vec3 target) {
+                          Vec3 target, const EncounterDesc& desc) {
     if (state.active) {
         camera_target_exit(follow, state);
     } else {
-        camera_target_enter(camera, follow, state, target);
+        camera_target_enter(camera, follow, state, target, desc);
     }
 }
 
 void camera_target_update(Camera& camera, CameraTarget& state, Vec3 target, float dragDxPixels,
-                          float dragDyPixels, float wheelDelta) {
+                          float dragDyPixels, float wheelDelta, const EncounterDesc& desc) {
     if (!state.active) {
         return;
     }
+    const TargetCamDesc& limits = desc.targetCam;
     if (std::isfinite(dragDxPixels)) {
         camera.yaw += dragDxPixels * kOrbitDegreesPerPixel;
     }
     if (std::isfinite(dragDyPixels)) {
         camera.pitch += dragDyPixels * kOrbitDegreesPerPixel;
     }
-    camera.pitch = std::clamp(camera.pitch, -kTargetPitchLimitDeg, kTargetPitchLimitDeg);
+    camera.pitch = std::clamp(camera.pitch, -limits.pitchLimitDeg, limits.pitchLimitDeg);
 
     if (std::isfinite(wheelDelta) && wheelDelta != 0.0f) {
         state.distance = std::clamp(
-            state.distance * std::exp(-kZoomPerWheelStep * wheelDelta), kTargetDistanceMin,
-            kTargetDistanceMax);
+            state.distance * std::exp(-kZoomPerWheelStep * wheelDelta), limits.distanceMin,
+            limits.distanceMax);
     }
-    state.distance = std::clamp(state.distance, kTargetDistanceMin, kTargetDistanceMax);
+    state.distance = std::clamp(state.distance, limits.distanceMin, limits.distanceMax);
     camera.distance = state.distance;
 
     if (std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z)) {
@@ -378,7 +381,9 @@ Camera death_blend(const Camera& from, const Camera& to, float u) {
 
 }  // namespace
 
-Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t) {
+Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t,
+                         const EncounterDesc& desc) {
+    const DeathCameraDesc& k = desc.death.camera;
     if (!std::isfinite(t) || !finite_vec3(valus) || !finite_vec3(player)) {
         return base;  // a broken sample: never write NaN into the camera
     }
@@ -387,22 +392,22 @@ Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& play
     // viewing side, offset by the fixed yaw offsets; the follow key re-anchors
     // the base on the player's head so it is a live follow pose.
     Camera pull = base;
-    pull.target = Vec3{valus.x, valus.y + kDeathPullTargetHeight, valus.z};
-    pull.distance = kDeathPullDistance;
+    pull.target = Vec3{valus.x, valus.y + k.pullTargetHeight, valus.z};
+    pull.distance = k.pullDistance;
     pull.yaw = base.yaw;
-    pull.pitch = kDeathPullPitchDeg;
+    pull.pitch = k.pullPitchDeg;
 
     Camera low = base;
-    low.target = Vec3{valus.x, valus.y + kDeathLowTargetHeight, valus.z};
-    low.distance = kDeathLowDistance;
-    low.yaw = base.yaw + kDeathLowYawOffsetDeg;
-    low.pitch = kDeathLowPitchDeg;
+    low.target = Vec3{valus.x, valus.y + k.lowTargetHeight, valus.z};
+    low.distance = k.lowDistance;
+    low.yaw = base.yaw + k.lowYawOffsetDeg;
+    low.pitch = k.lowPitchDeg;
 
     Camera wide = base;
-    wide.target = Vec3{valus.x, valus.y + kDeathWideTargetHeight, valus.z};
-    wide.distance = kDeathWideDistance;
-    wide.yaw = base.yaw + kDeathWideYawOffsetDeg;
-    wide.pitch = kDeathWidePitchDeg;
+    wide.target = Vec3{valus.x, valus.y + k.wideTargetHeight, valus.z};
+    wide.distance = k.wideDistance;
+    wide.yaw = base.yaw + k.wideYawOffsetDeg;
+    wide.pitch = k.widePitchDeg;
 
     Camera follow = base;
     follow.target = Vec3{player.x, player.y + kFollowHeadHeight, player.z};
@@ -412,23 +417,23 @@ Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& play
     if (t <= 0.0f) {
         return base;
     }
-    if (t < kDeathPullSeconds) {
-        return death_blend(base, pull, death_ease(t / kDeathPullSeconds));
+    if (t < k.pullSeconds) {
+        return death_blend(base, pull, death_ease(t / k.pullSeconds));
     }
-    if (t < kDeathLowSeconds) {
+    if (t < k.lowSeconds) {
         return death_blend(
             pull, low,
-            death_ease((t - kDeathPullSeconds) / (kDeathLowSeconds - kDeathPullSeconds)));
+            death_ease((t - k.pullSeconds) / (k.lowSeconds - k.pullSeconds)));
     }
-    if (t < kDeathWideSeconds) {
+    if (t < k.wideSeconds) {
         return death_blend(
             low, wide,
-            death_ease((t - kDeathLowSeconds) / (kDeathWideSeconds - kDeathLowSeconds)));
+            death_ease((t - k.lowSeconds) / (k.wideSeconds - k.lowSeconds)));
     }
-    if (t < kDeathFollowSeconds) {
+    if (t < k.followSeconds) {
         return death_blend(
             wide, follow,
-            death_ease((t - kDeathWideSeconds) / (kDeathFollowSeconds - kDeathWideSeconds)));
+            death_ease((t - k.wideSeconds) / (k.followSeconds - k.wideSeconds)));
     }
     return follow;
 }

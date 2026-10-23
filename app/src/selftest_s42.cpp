@@ -88,7 +88,8 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
                      selftestFlag);
         return 2;
     }
-    if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
+    if (entityClips.stand < 0 || entityClips.reactions.size() < 2 ||
+        entityClips.reactions[0] < 0 || entityClips.reactions[1] < 0 ||
         entityClips.body < 0 || entityClips.death < 0 || entityClips.stompL < 0 ||
         entityClips.stompR < 0 || entityClips.club < 0 || playerClips.gripLoop < 0 ||
         playerClips.gripMove < 0 || playerClips.strike < 0 || playerClips.fall < 0 ||
@@ -194,7 +195,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         // interactive loop: a landed strike cancels the attack first.
         if (driveAttack && encounter.attack != ValusAttack::None &&
             attack_impact_due(encounter.attack, encounter.attackSeconds,
-                              encounter.attackHit)) {
+                              encounter.attackHit, ctx.enc())) {
             encounter.attackHit = true;
             apply_valus_impact(combat, player, frame, tuning, encounter.attack, ctx.enc(),
                                audioOn ? &sfx : nullptr,
@@ -566,7 +567,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
     // --- 4. Stomp: 35 damage, Hurt, then i-frames block a second hit -
     reset_player_combat(player, combat, spawn, spawnYaw, tuning);
     const float stompPoseSeconds =
-        impact_pose_time(kValusStompImpactBegin);
+        impact_pose_time(ctx.enc().attacks[0].impactBegin);
     std::vector<Mat4> stompPalette =
         animation_pose(scene, entityRig, clip_at(entityClips.stompL, "stomp"),
                        stompPoseSeconds);
@@ -602,7 +603,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         if (!stompTelegraphCaptured &&
             encounter.attack == ValusAttack::StompL &&
             encounter.attackSeconds >=
-                kValusStompImpactBegin -
+                ctx.enc().attacks[0].impactBegin -
                     kS42TelegraphLeadFrames * stepSeconds) {
             // The telegraph is the stomp clip itself; this frame is a
             // few steps before the [0.55, 0.70] impact window.
@@ -629,11 +630,11 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
     }
     const int stompDamage = healthBeforeStomp -
                             static_cast<int>(std::lround(combat.health));
-    if (stompDamage != static_cast<int>(std::lround(tuning.stompDamage))) {
+    if (stompDamage != static_cast<int>(std::lround(ctx.enc().attacks[0].damage))) {
         throw std::runtime_error(
             "s42-selftest: the stomp dealt " + std::to_string(stompDamage) +
             " damage, not " + std::to_string(static_cast<int>(
-                                     std::lround(tuning.stompDamage))) +
+                                     std::lround(ctx.enc().attacks[0].damage))) +
             " (was the target inside the direct range?)");
     }
     if (combat.mode != PlayerMode::Hurt) {
@@ -684,7 +685,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
             "s42-selftest: the player did not recover before the club phase (mode " +
             std::string(player_mode_name(combat.mode)) + ")");
     }
-    const float clubPoseSeconds = impact_pose_time(kValusClubImpactBegin);
+    const float clubPoseSeconds = impact_pose_time(ctx.enc().attacks[2].impactBegin);
     std::vector<Mat4> clubPalette =
         animation_pose(scene, entityRig, clip_at(entityClips.club, "club"),
                        clubPoseSeconds);
@@ -707,7 +708,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         combat.modeSeconds = 0.0f;
         combat.invulnSeconds = 0.0f;
         combat.heavyHit = false;
-        combat.health = static_cast<float>(healthBeforeStomp) - tuning.stompDamage;
+        combat.health = static_cast<float>(healthBeforeStomp) - ctx.enc().attacks[0].damage;
     };
     float clubLateralX = clubTip.x - encounter.entityPosition.x;
     float clubLateralZ = clubTip.z - encounter.entityPosition.z;
@@ -759,7 +760,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         stompWaveDamage =
             static_cast<int>(std::lround(healthBeforeWave - combat.health));
         const int expectedWave =
-            static_cast<int>(std::lround(tuning.stompWaveDamage));
+            static_cast<int>(std::lround(ctx.enc().attacks[0].waveDamage));
         if (stompWaveDamage != expectedWave) {
             throw std::runtime_error(
                 "s42-selftest: the stomp dealt " + std::to_string(stompWaveDamage) +
@@ -790,7 +791,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
         step_frame(noInput, /*driveAttack=*/true);
         if (!clubSwingCaptured && encounter.attack == ValusAttack::Club &&
             encounter.attackSeconds >=
-                kValusClubImpactBegin - kS42TelegraphLeadFrames * stepSeconds) {
+                ctx.enc().attacks[2].impactBegin - kS42TelegraphLeadFrames * stepSeconds) {
             // The club's own clip is the telegraph; this frame is a few
             // steps before the [0.45, 0.65] impact window.
             capture_still("club-swing", still_path("club-swing"));
@@ -816,11 +817,11 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
     }
     const int clubDamage =
         healthBeforeClub - static_cast<int>(std::lround(combat.health));
-    if (clubDamage != static_cast<int>(std::lround(tuning.clubDamage))) {
+    if (clubDamage != static_cast<int>(std::lround(ctx.enc().attacks[2].damage))) {
         throw std::runtime_error(
             "s42-selftest: the club dealt " + std::to_string(clubDamage) +
             " damage, not " +
-            std::to_string(static_cast<int>(std::lround(tuning.clubDamage))));
+            std::to_string(static_cast<int>(std::lround(ctx.enc().attacks[2].damage))));
     }
     if (combat.mode != PlayerMode::Hurt) {
         throw std::runtime_error(
@@ -847,7 +848,7 @@ SelftestResult run_s42(StageCtx& ctx, RunState& run) {
             "s42-selftest: the player did not recover before the death phase (mode " +
             std::string(player_mode_name(combat.mode)) + ")");
     }
-    combat.health = tuning.clubDamage;  // the pinned lethal setup
+    combat.health = ctx.enc().attacks[2].damage;  // the pinned lethal setup
     place_grounded(clubTip.x, clubTip.z, "death");
     start_valus_attack(encounter, entity_playback, entityClips, ValusAttack::Club,
                        audioOn ? &sfx : nullptr);

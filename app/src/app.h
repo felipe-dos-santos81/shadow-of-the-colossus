@@ -37,7 +37,7 @@ struct Encounter {
     float cooldownSeconds = 0.0f;
     bool attackHit = false;
     // S6: the club's swing-phase whoosh fired for this attack (once per clip;
-    // see kValusClubSwingSeconds). Reset when the attack starts, is cancelled
+    // see the club row's swingSeconds). Reset when the attack starts, is cancelled
     // or ends, and by the soft reset.
     bool attackSwinged = false;
     float pendingCooldownSeconds = 0.0f;

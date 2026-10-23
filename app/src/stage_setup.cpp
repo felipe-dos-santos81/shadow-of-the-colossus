@@ -516,7 +516,7 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         // play: both must load the frozen eight-entry manifest beside the
         // S6 cue table. The S6 slice's own gate (--s6-selftest) passes
         // includeS6 = true and requires the death and club-swing rows too.
-        if (!audio.load(opts.libraryDir, /*includeS6=*/opts.s6Selftest)) {
+        if (!audio.load(opts.libraryDir, ctx.enc(), /*includeS6=*/opts.s6Selftest)) {
             // The engine (or the cue gate) already printed the reason. A
             // missing curated clip is fatal when the sound is the artifact;
             // interactive play degrades to silence with that one warning.
@@ -612,7 +612,7 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
                          ctx.enc().joints.chest);
             return 2;
         }
-        camera_target_enter(camera, follow, targetCamera, entityChest);
+        camera_target_enter(camera, follow, targetCamera, entityChest, ctx.enc());
     }
 
     // The initial player transform (also the one --selftest renders with):

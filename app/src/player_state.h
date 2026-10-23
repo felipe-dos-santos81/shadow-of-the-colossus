@@ -143,10 +143,8 @@ struct CombatTuning {
     // S4.2 player health (design §7.5).
     float maxHealth = 100.0f;
     float invulnSeconds = 1.0f;      // i-frame window after a hit
-    // Valus's attack damages (his EncounterDesc's attack rows, S11).
-    float stompDamage = encounters::kValus.attacks[0].damage;       // direct stomp
-    float stompWaveDamage = encounters::kValus.attacks[0].waveDamage;  // stomp shockwave
-    float clubDamage = encounters::kValus.attacks[2].damage;        // club swing
+    // The attack damages are the encounter's attack rows (`damage`,
+    // `waveDamage`), read by apply_valus_impact (S11 M-1).
     float mediumHurtSeconds = 0.40f;  // m_fly2, one clip
     float heavyHurtSeconds = 1.23f;   // h_fly1 0.60 s + h_fly_end 0.63 s
 };

@@ -13,7 +13,9 @@ float non_negative_dt(float dt) {
 
 }  // namespace
 
-DeathState step_death(DeathState state, float dt, bool defeated) {
+DeathState step_death(DeathState state, float dt, bool defeated, const EncounterDesc& desc) {
+    const float motion = desc.death.motionSeconds;
+    const float end = desc.death.endSeconds;
     if (state.phase == DeathPhase::Idle) {
         if (!defeated) {
             return state;
@@ -22,7 +24,7 @@ DeathState step_death(DeathState state, float dt, bool defeated) {
         state = DeathState{};
         state.phase = DeathPhase::Motion;
         state.inputLocked = true;
-        state.roots = kDeathRoots;
+        state.roots = desc.death.roots;
         return state;
     }
 
@@ -32,15 +34,15 @@ DeathState step_death(DeathState state, float dt, bool defeated) {
     // Done is terminal and capped, so the claim "the corpse stays" is also a
     // claim that the state stops moving: `total`/`t` would otherwise grow (and
     // lose float precision) for the rest of the session.
-    if (state.total >= kDeathEnd) {
+    if (state.total >= end) {
         state.phase = DeathPhase::Done;
-        state.total = kDeathEnd;
+        state.total = end;
         state.t = 0.0f;
         state.inputLocked = false;
         state.corpseVisible = true;
-    } else if (state.total >= kMotionSeconds) {
+    } else if (state.total >= motion) {
         state.phase = DeathPhase::Collapse;
-        state.t = state.total - kMotionSeconds;
+        state.t = state.total - motion;
         state.inputLocked = true;
         state.corpseVisible = true;
     } else {
@@ -63,9 +65,10 @@ bool death_corpse_visible(const DeathState& state) {
     return state.phase == DeathPhase::Collapse || state.phase == DeathPhase::Done;
 }
 
-bool death_tendrils_active(const DeathState& state) {
+bool death_tendrils_active(const DeathState& state, const EncounterDesc& desc) {
     if (state.phase != DeathPhase::Motion && state.phase != DeathPhase::Tendrils) {
         return false;
     }
-    return state.total >= kDeathTendrilStart && state.total <= kDeathTendrilEnd;
+    return state.total >= desc.death.tendrilStartSeconds &&
+           state.total <= desc.death.tendrilEndSeconds;
 }

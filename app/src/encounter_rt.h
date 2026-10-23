@@ -191,14 +191,15 @@ void apply_death_visibility(Scene& scene, const CorpseAttachment& corpse,
 // Tendrils — the burst overlaps Motion — but the name exists for completeness).
 const char* death_phase_name(DeathPhase phase);
 
-// The cinematic key the camera is on at death-clock time `t`: the segment's
-// destination key (`follow` before the pull and after the return). The
-// `s6-death` line reports it.
-const char* death_camera_key(float t);
+// The cinematic key the camera is on at death-clock time `t` (`desc`'s
+// `death.camera` key times): the segment's destination key (`follow` before the
+// pull and after the return). The `s6-death` line reports it.
+const char* death_camera_key(float t, const EncounterDesc& desc);
 
 // This frame's tendril roots (design §8.2): the hit weakpoint's shell first,
-// the other second — the binary's one-tendril-per-hit-point list, with the
-// shells as the fallback for a hit point the app does not track. Each root's
+// the others after it in table order, up to `death.roots` — the binary's
+// one-tendril-per-hit-point list, with the shells as the fallback for a hit
+// point the app does not track (a body hit starts at shell 0). Each root's
 // outward direction is the shell's direction from the body centre (the curl's
 // initial heading); `seed` is the root's slot, so the two curls differ. `age`
 // is the death clock (the burst begins at 0.4 s); `active` is the machine's
@@ -214,21 +215,22 @@ EffectFrame build_effect_frame(const Scene& scene, std::size_t entityRig,
 // itself queues nothing — the roar is the burst's sound (design §8.4). The test
 // is `total >= kDeathTendrilStart`, not `death_tendrils_active`: a long hitch
 // can jump the clock past the render window's 3.0 s end, and the roar must still
-// fire once (the ribbon window itself stays 0.4-3.0).
-bool death_cue_due(const DeathState& death, bool& fired);
+// fire once (the ribbon window itself stays 0.4-3.0). The burst start is
+// `desc.death.tendrilStartSeconds`.
+bool death_cue_due(const DeathState& death, bool& fired, const EncounterDesc& desc);
 
 // One frame of the death machine and its presentation state (design §8.1/§8.3):
 // advance the clock, drive the pinned one-shot death clip from it, and swap the
 // corpse at Collapse. The caller owns the camera, the tendril frame and the
 // audio (they need this frame's poses and the caller's bookkeeping); the
 // interactive loop and the S6 selftest share this, so a reset/replay runs the
-// same sequence.
+// same sequence. The clip clamp and the timeline are `desc.death`'s.
 void advance_death_frame(DeathState& death, float dt, Playback& entityPlayback, int deathClip,
                          const CorpseAttachment& corpse, const ClubAttachment& club,
-                         Scene& scene, std::size_t entityRig);
+                         Scene& scene, std::size_t entityRig, const EncounterDesc& desc);
 
 // S6: the club whoosh, fired once at the swing phase of an in-progress club
-// attack (`kValusClubSwingSeconds`, the impact's lead — not the telegraph).
+// attack (the club row's `swingSeconds`, the impact's lead — not the telegraph).
 // The app calls this after `advance_valus_attack`; the frozen S5 timeline does
 // not, so its 20-event contract cannot gain a club_swing.
 void maybe_club_swing(Encounter& encounter, SfxQueue* sfx);
@@ -374,8 +376,7 @@ struct PlayerClips {
 // manifest itself named (the entity's own loop).
 struct EntityClips {
     int stand = -1;
-    int head = -1;
-    int arm = -1;
+    std::vector<int> reactions;  // per weakpoint, in the desc's weakpoint order
     int body = -1;
     int death = -1;
     int stompL = -1;
@@ -494,8 +495,8 @@ ValusAttackInput valus_attack_input(const Scene& scene, std::size_t entityRig,
                                     const Encounter& encounter);
 
 // Applies one step's damage to the encounter and routes the entity's reaction:
-// weakpoint 0 (forehead) -> the head reaction, 1 (right arm) -> the arm
-// reaction, any other band -> the generic body reaction. A killing blow
+// weakpoint i -> `clips.reactions[i]` (the desc's weakpoint i; Valus: 0 the
+// forehead, 1 the right arm), any other band -> the generic body reaction. A killing blow
 // supersedes the reaction and starts the death clip. A defeated entity takes
 // no further damage and no second death. A landed strike also cancels Valus's
 // in-progress attack and its pending impact (design §7.4); a whiff never has

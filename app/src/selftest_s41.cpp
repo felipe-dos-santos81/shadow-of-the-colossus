@@ -68,7 +68,8 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
                      "sotc-viewer: --s41-selftest: the manifest has no entity\n");
         return 2;
     }
-    if (entityClips.stand < 0 || entityClips.head < 0 || entityClips.arm < 0 ||
+    if (entityClips.stand < 0 || entityClips.reactions.size() < 2 ||
+        entityClips.reactions[0] < 0 || entityClips.reactions[1] < 0 ||
         entityClips.body < 0 || entityClips.death < 0 || playerClips.gripLoop < 0 ||
         playerClips.gripMove < 0 || playerClips.strike < 0 || playerClips.fall < 0) {
         // The load gate above already refused this case; keep the
@@ -513,7 +514,7 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run) {
             std::to_string(combat.catchSecondsLeft) + " s, not " +
             std::to_string(tuning.catchSeconds) + " s");
     }
-    if (encounter.defeated || entity_playback.index != entityClips.head) {
+    if (encounter.defeated || entity_playback.index != entityClips.reactions[0]) {
         throw std::runtime_error(
             "s41-selftest: the head hit did not play the head reaction");
     }

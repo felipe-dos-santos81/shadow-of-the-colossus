@@ -21,6 +21,9 @@ constexpr std::uint32_t kRideSfxSeed = 8u;          // the variant RNG's fixed s
 struct AudioSeam {
     AudioEngine engine;
     bool enabled = false;       // the manifest and every mapped clip loaded
+    // The encounter whose cues and music the seam plays (S11 M-1): set by
+    // `load`, read only while `enabled`.
+    const EncounterDesc* encounter = nullptr;
     bool log = false;           // --s5-selftest/--s6-selftest: one line per played cue
     // The log line's tag: `s5-event` for the frozen S5 acceptance, `s6-event`
     // for the S6 selftest. The format is otherwise identical (Task 6 parses it).
@@ -46,8 +49,9 @@ struct AudioSeam {
     // and a silent game otherwise) and the slice: `includeS6` false requires the
     // S5 rows only, so the frozen S5 acceptance's eight-entry manifest stays
     // loadable beside the S6 cue table; true requires every row, including the
-    // death and the club swing (Task 5's --s6-selftest).
-    bool load(const std::string& libraryDir, bool includeS6);
+    // death and the club swing (Task 5's --s6-selftest). The encounter rows and
+    // the music are `desc`'s.
+    bool load(const std::string& libraryDir, const EncounterDesc& desc, bool includeS6);
 
     // The one place a queued cue becomes a voice (and an s5-event line).
     void play_event(const SfxEvent& event);

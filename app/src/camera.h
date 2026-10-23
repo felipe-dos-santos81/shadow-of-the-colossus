@@ -1,6 +1,6 @@
 #pragma once
 
-#include "encounters/valus_desc.h"
+#include "encounter_desc.h"
 #include "math3d.h"
 
 // Orbit camera: the eye sits `distance` from `target` at the given yaw and
@@ -82,25 +82,22 @@ void camera_follow(Camera&, CameraFollow&, Vec3 playerPos, float playerYawDeg,
 // --- Entity target framing (S4 Task 5) ---------------------------------------
 //
 // `T` toggles a camera-only framing mode: the orbit's target becomes the
-// entity's chest joint (Bone_MUNE) instead of the player's head. Distance is
-// widened to [22, 30] m — the builder value that fits the 17.7 m body — and
-// pitch to ±80°; drag orbits the chest, the wheel zooms. The mode is camera
+// entity's chest joint (Valus: Bone_MUNE) instead of the player's head. The
+// distance limits, the default distance and pitch and the pitch limit are the
+// encounter's `targetCam` (S11 M-1; Valus: [22, 30] m — the builder value that
+// fits the 17.7 m body — 26 m, 10° and ±80°); drag orbits the chest, the wheel
+// zooms. The mode is camera
 // only: the player controller keeps the same movement basis, now taken from the
 // active (target) camera's yaw via camera_look_yaw(). T-off restores the saved
 // follow offsets/distance and leaves the camera where the orbit had it, so the
 // next camera_follow call eases back without a snap.
 
-// Valus's target camera (his EncounterDesc's `targetCam`, S11).
-inline constexpr float kTargetDistanceMin = encounters::kValus.targetCam.distanceMin;
-inline constexpr float kTargetDistanceMax = encounters::kValus.targetCam.distanceMax;
-inline constexpr float kTargetDefaultDistance = encounters::kValus.targetCam.defaultDistance;
-inline constexpr float kTargetDefaultPitchDeg = encounters::kValus.targetCam.defaultPitchDeg;
-inline constexpr float kTargetPitchLimitDeg = encounters::kValus.targetCam.pitchLimitDeg;
-
 struct CameraTarget {
     bool active = false;
     Vec3 target{};              // the chest point this frame (world space)
-    float distance = kTargetDefaultDistance;
+    // The orbit distance; negative until the first enter seeds the
+    // encounter's `targetCam.defaultDistance`.
+    float distance = -1.0f;
     // The follow state saved when the mode was entered; restored on exit.
     float savedYawOffsetDeg = 0.0f;
     float savedPitchOffsetDeg = 0.0f;
@@ -114,10 +111,12 @@ struct CameraTarget {
 };
 
 // Enters target framing around `target`: saves the follow offsets and distance,
-// sets the orbit target to the chest, restores the target distance (clamped to
-// [22, 30]), pins the framing pitch to 10°, and keeps the current yaw so the
-// view swings to the subject instead of spinning.
-void camera_target_enter(Camera&, const CameraFollow&, CameraTarget&, Vec3 target);
+// sets the orbit target to the chest, restores the target distance (the
+// default on the first entry; clamped to the encounter's limits), pins the
+// framing pitch to the default, and keeps the current yaw so the view swings to
+// the subject instead of spinning.
+void camera_target_enter(Camera&, const CameraFollow&, CameraTarget&, Vec3 target,
+                         const EncounterDesc& desc);
 
 // Leaves target framing: the saved follow offsets/distance are written back
 // into `follow`. The camera is left exactly where the orbit had it; the app
@@ -137,14 +136,16 @@ bool camera_target_return(Camera&, CameraFollow&, CameraTarget&, Vec3 playerPos,
                           float wheelDelta, bool moving, float dtSeconds);
 
 // `T`: enter when inactive, leave when active.
-void camera_target_toggle(Camera&, CameraFollow&, CameraTarget&, Vec3 target);
+void camera_target_toggle(Camera&, CameraFollow&, CameraTarget&, Vec3 target,
+                          const EncounterDesc& desc);
 
 // One frame in target mode (a no-op when inactive): drag orbits the chest at
-// the orbit camera's 0.4°/pixel sensitivity (pitch clamped to ±80°), the wheel
-// zooms multiplicatively within [22, 30] m, and the target follows `target`.
-// Non-finite inputs are ignored, so a hand-driven call never writes NaN.
+// the orbit camera's 0.4°/pixel sensitivity (pitch clamped to the encounter's
+// limit), the wheel zooms multiplicatively within its distance limits, and the
+// target follows `target`. Non-finite inputs are ignored, so a hand-driven call
+// never writes NaN.
 void camera_target_update(Camera&, CameraTarget&, Vec3 target, float dragDxPixels,
-                          float dragDyPixels, float wheelDelta);
+                          float dragDyPixels, float wheelDelta, const EncounterDesc& desc);
 
 // --- Climb camera (S4.1 Task 4) ---------------------------------------------
 //
@@ -219,36 +220,14 @@ void camera_climb_exit(Camera&, CameraClimb&);
 inline constexpr float kFollowHeadHeight = 1.4f;
 static_assert(CameraFollow{}.headHeight == kFollowHeadHeight, "the follow default is unchanged");
 
-// Valus's death cinematic keys (his EncounterDesc's `death.camera`, S11).
-inline constexpr float kDeathPullSeconds = encounters::kValus.death.camera.pullSeconds;   // the pull-back key
-inline constexpr float kDeathLowSeconds = encounters::kValus.death.camera.lowSeconds;     // the low-angle key
-inline constexpr float kDeathWideSeconds = encounters::kValus.death.camera.wideSeconds;   // the corpse-wide key
-inline constexpr float kDeathFollowSeconds = encounters::kValus.death.camera.followSeconds;  // the follow key
-inline constexpr float kDeathPullDistance = encounters::kValus.death.camera.pullDistance;  // the 12 m pull-back
-// The eye 4 m above the entity base.
-inline constexpr float kDeathPullEyeHeight = encounters::kValus.death.camera.pullEyeHeight;
-// The body's midpoint.
-inline constexpr float kDeathPullTargetHeight = encounters::kValus.death.camera.pullTargetHeight;
-// The pitch that puts the eye at kDeathPullEyeHeight: -asin((9 - 4) / 12).
-inline constexpr float kDeathPullPitchDeg = encounters::kValus.death.camera.pullPitchDeg;
-// The tendril band.
-inline constexpr float kDeathLowTargetHeight = encounters::kValus.death.camera.lowTargetHeight;
-inline constexpr float kDeathLowDistance = encounters::kValus.death.camera.lowDistance;
-// Below the target: a low angle.
-inline constexpr float kDeathLowPitchDeg = encounters::kValus.death.camera.lowPitchDeg;
-inline constexpr float kDeathLowYawOffsetDeg = encounters::kValus.death.camera.lowYawOffsetDeg;
-// The corpse on the ground.
-inline constexpr float kDeathWideTargetHeight = encounters::kValus.death.camera.wideTargetHeight;
-inline constexpr float kDeathWideDistance = encounters::kValus.death.camera.wideDistance;
-inline constexpr float kDeathWidePitchDeg = encounters::kValus.death.camera.widePitchDeg;
-inline constexpr float kDeathWideYawOffsetDeg = encounters::kValus.death.camera.wideYawOffsetDeg;
-
 // The pose at death-clock time `t`. `t <= 0` answers `base` exactly, and so
 // does a non-finite `t` or point (a broken sample never writes NaN). The
 // segments ease with a smoothstep, so the pose at each key time is exactly that
 // key and the path is continuous. `valus` is the entity's placement point;
-// `player` anchors the T8 follow key.
-Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t);
+// `player` anchors the T8 follow key. The key times and poses are
+// `desc.death.camera` (S11 M-1; Valus's are the comment above).
+Camera camera_death_pose(const Camera& base, const Vec3& valus, const Vec3& player, float t,
+                         const EncounterDesc& desc);
 
 // --- Wake camera (S7 Task 9, design D9 — authored) ----------------------------
 //

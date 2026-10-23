@@ -21,16 +21,19 @@ float wrap_deg(float degrees) {
 
 // Horizontal distance test, inclusive at the range edge ("within 4.5 m"). The
 // feet and the player both stand on the ground; ignoring y keeps a slope from
-// hiding a stomp that is clearly in reach.
-bool foot_in_stomp_range(Vec3 playerPos, Vec3 foot) {
+// hiding a stomp that is clearly in reach. No row: never in range.
+bool foot_in_stomp_range(Vec3 playerPos, Vec3 foot, const AttackDesc* stomp) {
+    if (stomp == nullptr) {
+        return false;
+    }
     const float dx = playerPos.x - foot.x;
     const float dz = playerPos.z - foot.z;
-    return dx * dx + dz * dz <= kValusStompRangeMeters * kValusStompRangeMeters;
+    return dx * dx + dz * dz <= stomp->reachMeters * stomp->reachMeters;
 }
 
 }  // namespace
 
-ValusAttack select_valus_attack(const ValusAttackInput& input) {
+ValusAttack select_valus_attack(const ValusAttackInput& input, const EncounterDesc& desc) {
     // Only an exactly grounded, unattached, living player is a target. A
     // non-finite cooldown is not ready (the <= test is written to reject NaN).
     if (!input.playerGrounded || input.playerAttached || input.defeated) {
@@ -40,8 +43,10 @@ ValusAttack select_valus_attack(const ValusAttackInput& input) {
         return ValusAttack::None;
     }
 
-    const bool left_in_range = foot_in_stomp_range(input.playerPos, input.footL);
-    const bool right_in_range = foot_in_stomp_range(input.playerPos, input.footR);
+    const bool left_in_range = foot_in_stomp_range(
+        input.playerPos, input.footL, valus_attack_desc(ValusAttack::StompL, desc));
+    const bool right_in_range = foot_in_stomp_range(
+        input.playerPos, input.footR, valus_attack_desc(ValusAttack::StompR, desc));
     if (left_in_range || right_in_range) {
         if (left_in_range && right_in_range) {
             // Both feet: alternate, so a player standing between them sees a
@@ -53,10 +58,14 @@ ValusAttack select_valus_attack(const ValusAttackInput& input) {
 
     // The club: within 14 m and in front of the entity's yaw forward. The dot
     // is measured on the horizontal plane, against the normalized direction.
+    const AttackDesc* club = valus_attack_desc(ValusAttack::Club, desc);
+    if (club == nullptr) {
+        return ValusAttack::None;
+    }
     const float dx = input.playerPos.x - input.entityPos.x;
     const float dz = input.playerPos.z - input.entityPos.z;
     const float distance_squared = dx * dx + dz * dz;
-    if (!(distance_squared <= kValusClubRangeMeters * kValusClubRangeMeters)) {
+    if (!(distance_squared <= club->reachMeters * club->reachMeters)) {
         return ValusAttack::None;  // also rejects NaN
     }
     const float distance = std::sqrt(distance_squared);
@@ -66,36 +75,21 @@ ValusAttack select_valus_attack(const ValusAttackInput& input) {
     const float yaw = input.entityYawDeg * kDegToRad;
     const Vec3 forward{std::sin(yaw), 0.0f, std::cos(yaw)};
     const float facing = (dx * forward.x + dz * forward.z) / distance;
-    return facing > kValusClubFacingDot ? ValusAttack::Club : ValusAttack::None;
+    return facing > club->facingDot ? ValusAttack::Club : ValusAttack::None;
 }
 
-bool attack_impact_due(ValusAttack attack, float clipSeconds, bool alreadyHit) {
+bool attack_impact_due(ValusAttack attack, float clipSeconds, bool alreadyHit,
+                       const EncounterDesc& desc) {
     if (alreadyHit || !std::isfinite(clipSeconds) || clipSeconds < 0.0f) {
         return false;
     }
-    switch (attack) {
-        case ValusAttack::StompL:
-        case ValusAttack::StompR:
-            return clipSeconds >= kValusStompImpactBegin && clipSeconds <= kValusStompImpactEnd;
-        case ValusAttack::Club:
-            return clipSeconds >= kValusClubImpactBegin && clipSeconds <= kValusClubImpactEnd;
-        case ValusAttack::None:
-            break;
-    }
-    return false;
+    const AttackDesc* row = valus_attack_desc(attack, desc);
+    return row != nullptr && clipSeconds >= row->impactBegin && clipSeconds <= row->impactEnd;
 }
 
-float valus_attack_cooldown_seconds(ValusAttack attack) {
-    switch (attack) {
-        case ValusAttack::StompL:
-        case ValusAttack::StompR:
-            return kValusStompCooldownSeconds;
-        case ValusAttack::Club:
-            return kValusClubCooldownSeconds;
-        case ValusAttack::None:
-            break;
-    }
-    return 0.0f;
+float valus_attack_cooldown_seconds(ValusAttack attack, const EncounterDesc& desc) {
+    const AttackDesc* row = valus_attack_desc(attack, desc);
+    return row != nullptr ? row->cooldownSeconds : 0.0f;
 }
 
 bool valus_attack_cancelled(bool landedStrike, ValusAttack attack) {

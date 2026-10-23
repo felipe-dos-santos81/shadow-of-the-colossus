@@ -136,9 +136,9 @@ SelftestResult run_s7(StageCtx& ctx, RunState& run) {
             apply_combat_events(encounter, entity_playback, entityClips, lethal,
                                 /*weakpoint=*/-1, nullptr);
             advance_death_frame(death, stepSeconds, entity_playback, entityClips.death,
-                                corpse, club, scene, entityRig);
-            advance_death_frame(death, kDeathEnd, entity_playback, entityClips.death,
-                                corpse, club, scene, entityRig);
+                                corpse, club, scene, entityRig, ctx.enc());
+            advance_death_frame(death, ctx.enc().death.endSeconds, entity_playback,
+                                entityClips.death, corpse, club, scene, entityRig, ctx.enc());
             return encounter.defeated && death.phase == DeathPhase::Done &&
                    death_corpse_visible(death);
         };

@@ -62,7 +62,8 @@ SelftestResult run_s3(StageCtx& ctx, RunState& run) {
     for (int frame = 0; frame < kSelftestFrames; ++frame) {
         if (targetCamera.active) {
             if (haveEntityChest) {
-                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f,
+                                     ctx.enc());
             }
         } else {
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f, 0.0f,
@@ -80,12 +81,13 @@ SelftestResult run_s3(StageCtx& ctx, RunState& run) {
             haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
                                                    entityChest, ctx.enc());
             if (targetCamera.active && haveEntityChest) {
-                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f,
+                                     ctx.enc());
             }
         }
     }
     if (targetCamera.active && haveEntityChest) {
-        camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+        camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f, ctx.enc());
     }
     apply_player_transform(scene, player_rig_record, player,
                            active_player_lift(scene, playback, player_rig_record));

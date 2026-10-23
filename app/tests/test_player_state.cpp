@@ -27,6 +27,11 @@
 
 namespace {
 
+// Valus's attack damages (his EncounterDesc's attack rows, S11 M-1).
+constexpr float kStompDamage = encounters::kValus.attacks[0].damage;
+constexpr float kStompWaveDamage = encounters::kValus.attacks[0].waveDamage;
+constexpr float kClubDamage = encounters::kValus.attacks[2].damage;
+
 constexpr float kStep = 1.0f / 60.0f;
 
 // A JointLookup over a fixed list; names not in the list answer false, exactly
@@ -966,7 +971,7 @@ TEST_CASE("damage subtracts health, starts i-frames and enters hurt") {
     PlayerCombat combat{};
     CHECK(combat.health == doctest::Approx(tuning.maxHealth));
 
-    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
     CHECK(combat.health == doctest::Approx(65.0f));
     CHECK(combat.mode == PlayerMode::Hurt);
     CHECK(combat.modeSeconds == 0.0f);
@@ -974,7 +979,7 @@ TEST_CASE("damage subtracts health, starts i-frames and enters hurt") {
     CHECK(combat.invulnSeconds == doctest::Approx(tuning.invulnSeconds));
 
     // The i-frame window swallows the second hit whole: no HP, no new state.
-    CHECK_FALSE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK_FALSE(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
     CHECK(combat.health == doctest::Approx(65.0f));
     CHECK(combat.mode == PlayerMode::Hurt);
 }
@@ -987,14 +992,14 @@ TEST_CASE("i-frames tick down in player_step and then a hit lands again") {
     const CombatTuning tuning{};
     PlayerCombat combat{};
 
-    REQUIRE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    REQUIRE(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
     for (int i = 0; i < 60; ++i) {
         player_step(player, combat, input, frame, tuning, kStep);
     }
     CHECK(combat.invulnSeconds == doctest::Approx(0.0f));
     CHECK(combat.mode == PlayerMode::Grounded);
 
-    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
     CHECK(combat.health == doctest::Approx(30.0f));
     CHECK(combat.mode == PlayerMode::Hurt);
 }
@@ -1041,7 +1046,7 @@ TEST_CASE("damage while falling keeps the fall; a non-lethal hit still lands in 
     PlayerCombat combat{};
     combat.mode = PlayerMode::Falling;
 
-    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
     CHECK(combat.mode == PlayerMode::Falling);
     CHECK(combat.health == doctest::Approx(65.0f));
     CHECK_FALSE(combat.pendingDeath);
@@ -1067,7 +1072,7 @@ TEST_CASE("lethal damage while falling sets pendingDeath and resolves to dead on
     combat.mode = PlayerMode::Falling;
     combat.health = 30.0f;
 
-    CHECK(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning));
+    CHECK(player_take_damage(combat, kClubDamage, /*heavy=*/true, tuning));
     CHECK(combat.health == doctest::Approx(0.0f));
     CHECK(combat.mode == PlayerMode::Falling);
     CHECK(combat.pendingDeath);
@@ -1110,7 +1115,7 @@ TEST_CASE("a lethal fall cannot be caught: the grab press is ignored and the lan
     // R7: the lethal hit closes the window with the pending death.
     combat.invulnSeconds = 0.0f;
     combat.health = 30.0f;
-    REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning));
+    REQUIRE(player_take_damage(combat, kClubDamage, /*heavy=*/true, tuning));
     CHECK(combat.health == doctest::Approx(0.0f));
     CHECK(combat.mode == PlayerMode::Falling);
     CHECK(combat.pendingDeath);
@@ -1144,7 +1149,7 @@ TEST_CASE("damage while staggered cancels the stagger into hurt") {
     combat.mode = PlayerMode::Staggered;
     combat.modeSeconds = 0.7f;
 
-    CHECK(player_take_damage(combat, tuning.stompWaveDamage, /*heavy=*/false, tuning));
+    CHECK(player_take_damage(combat, kStompWaveDamage, /*heavy=*/false, tuning));
     CHECK(combat.health == doctest::Approx(85.0f));
     CHECK(combat.mode == PlayerMode::Hurt);
     CHECK(combat.modeSeconds == 0.0f);
@@ -1163,7 +1168,7 @@ TEST_CASE("damage while attached drops the grip and clears its fight state") {
     combat.catchSecondsLeft = 0.2f;
     combat.fallVelocity = -1.0f;
 
-    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+    CHECK(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
     CHECK(combat.mode == PlayerMode::Hurt);
     CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.bandT == doctest::Approx(0.5f));
@@ -1179,14 +1184,14 @@ TEST_CASE("zero health on the ground enters dead and ignores further damage") {
     PlayerCombat combat{};
     combat.health = 10.0f;
 
-    CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/true, tuning));
+    CHECK(player_take_damage(combat, kStompDamage, /*heavy=*/true, tuning));
     CHECK(combat.health == doctest::Approx(0.0f));
     CHECK(combat.mode == PlayerMode::Dead);
     CHECK(combat.modeSeconds == 0.0f);
     CHECK_FALSE(combat.pendingDeath);
     CHECK_FALSE(combat.heavyHit);
 
-    CHECK_FALSE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/false, tuning));
+    CHECK_FALSE(player_take_damage(combat, kClubDamage, /*heavy=*/false, tuning));
     CHECK(combat.health == doctest::Approx(0.0f));
     CHECK(combat.mode == PlayerMode::Dead);
 }
@@ -1402,9 +1407,6 @@ TEST_CASE("the combat tuning pins the design values") {
     CHECK(tuning.damageFull == doctest::Approx(34.0f));
     CHECK(tuning.maxHealth == doctest::Approx(100.0f));
     CHECK(tuning.invulnSeconds == doctest::Approx(1.0f));
-    CHECK(tuning.stompDamage == doctest::Approx(35.0f));
-    CHECK(tuning.stompWaveDamage == doctest::Approx(15.0f));
-    CHECK(tuning.clubDamage == doctest::Approx(45.0f));
     CHECK(tuning.mediumHurtSeconds == doctest::Approx(0.40f));
     CHECK(tuning.heavyHurtSeconds == doctest::Approx(1.23f));
 }
@@ -1436,14 +1438,14 @@ TEST_CASE("damage reports light and heavy hurt flags, and death as died") {
     {
         PlayerCombat combat{};
         StepEvents events;
-        REQUIRE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning,
+        REQUIRE(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning,
                                    &events));
         CHECK(events.hurtLight);
         CHECK_FALSE(events.hurtHeavy);
         CHECK_FALSE(events.died);
 
         StepEvents blocked;
-        CHECK_FALSE(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning,
+        CHECK_FALSE(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning,
                                        &blocked));
         CHECK_FALSE(blocked.hurtLight);
         CHECK_FALSE(blocked.hurtHeavy);
@@ -1454,7 +1456,7 @@ TEST_CASE("damage reports light and heavy hurt flags, and death as died") {
     {
         PlayerCombat combat{};
         StepEvents events;
-        REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning,
+        REQUIRE(player_take_damage(combat, kClubDamage, /*heavy=*/true, tuning,
                                    &events));
         CHECK(events.hurtHeavy);
         CHECK_FALSE(events.hurtLight);
@@ -1465,9 +1467,9 @@ TEST_CASE("damage reports light and heavy hurt flags, and death as died") {
     // clip supersedes it).
     {
         PlayerCombat combat{};
-        combat.health = tuning.clubDamage;
+        combat.health = kClubDamage;
         StepEvents events;
-        REQUIRE(player_take_damage(combat, tuning.clubDamage, /*heavy=*/true, tuning,
+        REQUIRE(player_take_damage(combat, kClubDamage, /*heavy=*/true, tuning,
                                    &events));
         CHECK(combat.mode == PlayerMode::Dead);
         CHECK(events.died);
@@ -1479,7 +1481,7 @@ TEST_CASE("damage reports light and heavy hurt flags, and death as died") {
     // reports through its return value alone.
     {
         PlayerCombat combat{};
-        CHECK(player_take_damage(combat, tuning.stompDamage, /*heavy=*/false, tuning));
+        CHECK(player_take_damage(combat, kStompDamage, /*heavy=*/false, tuning));
         CHECK(combat.mode == PlayerMode::Hurt);
     }
 }

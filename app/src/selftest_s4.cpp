@@ -249,7 +249,8 @@ SelftestResult run_s4(StageCtx& ctx, RunState& run) {
 
         if (targetCamera.active) {
             if (haveEntityChest) {
-                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f);
+                camera_target_update(camera, targetCamera, entityChest, 0.0f, 0.0f, 0.0f,
+                                     ctx.enc());
             }
         } else {
             camera_follow(camera, follow, player.position, player.yawDeg, 0.0f, 0.0f,

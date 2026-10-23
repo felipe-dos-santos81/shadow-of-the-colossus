@@ -120,7 +120,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     // the corpse swap follows the same clock (advance_death_frame).
     if (death_wired && encounter.defeated && entityRig < playbacks.size()) {
         advance_death_frame(death, dt, playbacks[entityRig], entityClips.death,
-                            corpse, club, scene, entityRig);
+                            corpse, club, scene, entityRig, ctx.enc());
     }
     // S7: the return (design §8.4) on the real frame time. The
     // shrine's iteration is the completed load; entering Load in
@@ -201,7 +201,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     }
     // S6: the death roar fires at the tendril burst (0.4 s), not at
     // the defeat — the machine's clock owns the moment.
-    if (death_wired && death_cue_due(death, deathCueFired) && audio_on) {
+    if (death_wired && death_cue_due(death, deathCueFired, ctx.enc()) && audio_on) {
         append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
                              frameSfx);
     }
@@ -267,7 +267,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         if (targetCamera.active) {
             if (haveEntityChest) {
                 camera_target_update(camera, targetCamera, entityChest, drag_dx,
-                                     drag_dy, wheel_delta);
+                                     drag_dy, wheel_delta, ctx.enc());
             }
         } else if (targetCamera.returning) {
             camera_target_return(camera, follow, targetCamera, player.position,
@@ -315,8 +315,8 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     // its pending impact cannot fire. The first frame inside the
     // window consumes it, even when the hit is then ignored.
     if (valus_behavior && encounter.attack != ValusAttack::None &&
-        attack_impact_due(encounter.attack, encounter.attackSeconds,
-                          encounter.attackHit)) {
+        attack_impact_due(encounter.attack, encounter.attackSeconds, encounter.attackHit,
+                          ctx.enc())) {
         encounter.attackHit = true;
         apply_valus_impact(combat, player, frame, tuning, encounter.attack, ctx.enc(),
                            audio_on ? &frameSfx : nullptr,
@@ -333,7 +333,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         if (targetCamera.active) {
             if (haveEntityChest) {
                 camera_target_update(camera, targetCamera, entityChest, drag_dx,
-                                     drag_dy, wheel_delta);
+                                     drag_dy, wheel_delta, ctx.enc());
             }
         } else if (targetCamera.returning) {
             camera_target_return(camera, follow, targetCamera, player.position,
@@ -404,7 +404,7 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
                 deathCameraSet = true;
             }
             camera = camera_death_pose(deathCameraBase, encounter.entityPosition,
-                                       player.position, death.total);
+                                       player.position, death.total, ctx.enc());
         }
         result.effect = build_effect_frame(scene, entityRig, palettes, encounter, death);
     }
@@ -725,7 +725,8 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                         // arena) or its chest did not resolve — otherwise
                         // the camera would park on the zero target.
                         if (entity_target_key_allowed(follow_mode, haveEntityChest)) {
-                            camera_target_toggle(camera, follow, targetCamera, entityChest);
+                            camera_target_toggle(camera, follow, targetCamera, entityChest,
+                                                 ctx.enc());
                         }
                     } else if (event.key.key == SDLK_R) {
                         press_r_key();

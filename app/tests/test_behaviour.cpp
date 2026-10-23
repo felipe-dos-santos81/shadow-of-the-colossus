@@ -75,12 +75,12 @@ constexpr std::array<float, 13> kQClips = {3.0f,   2.0f,   2.0f,   2.0f,   2.0f,
 // state's actions (slice order = ValusAttack - 1). Both shipped weakpoints
 // (0 forehead, 1 right arm) damage in that state.
 constexpr std::array<BehaviourAction, 3> kVActions = {{
-    {1, kValusStompCooldownSeconds},
-    {2, kValusStompCooldownSeconds},
-    {3, kValusClubCooldownSeconds},
+    {1, encounters::kValus.attacks[0].cooldownSeconds},
+    {2, encounters::kValus.attacks[0].cooldownSeconds},
+    {3, encounters::kValus.attacks[2].cooldownSeconds},
 }};
 constexpr std::array<BehaviourStateDesc, 1> kVStates = {
-    {{.clip = 0, .turnRateDegPerSecond = kValusYawSlewDegPerSecond, .actionCount = 3}}};
+    {{.clip = 0, .turnRateDegPerSecond = encounters::kValus.turnDegPerSec, .actionCount = 3}}};
 constexpr std::array<WeakpointGate, 2> kVGates = {{
     {kBehaviourNone, 0, GateKind::Damage, kBehaviourNone},
     {kBehaviourNone, 1, GateKind::Damage, kBehaviourNone},
@@ -308,7 +308,7 @@ TEST_CASE("an action runs its clip, sets its cooldown, and gates the next one") 
     CHECK(rt.actionSeconds == doctest::Approx(1.0f));
     rt = step_behaviour(kValus, rt, 0.5f, kVClips, 0);  // 1.5 s: the 1.333 s club ends
     CHECK(rt.action == kBehaviourNone);
-    CHECK(rt.cooldownSeconds == kValusClubCooldownSeconds);
+    CHECK(rt.cooldownSeconds == encounters::kValus.attacks[2].cooldownSeconds);
     CHECK(behaviour_clip(kValus, rt) == 0);
 
     rt = step_behaviour(kValus, rt, 1.0f, kVClips, 0);  // still cooling down
@@ -330,7 +330,7 @@ TEST_CASE("a damaging hit cancels the action; a transition drops it") {
     CHECK(hit.kind == GateKind::Damage);
     CHECK(hit.runtime.action == kBehaviourNone);
     CHECK(hit.runtime.actionSeconds == 0.0f);
-    CHECK(hit.cancelledCooldownSeconds == kValusStompCooldownSeconds);
+    CHECK(hit.cancelledCooldownSeconds == encounters::kValus.attacks[0].cooldownSeconds);
     CHECK(hit.runtime.cooldownSeconds == 0.0f);  // returned, not set: the app defers it
     CHECK(behaviour_hit(kValus, at(0), 0).cancelledCooldownSeconds == 0.0f);
 
@@ -420,7 +420,7 @@ TEST_CASE("Valus as a one-state machine makes the same decisions as valus.cpp") 
 
         // The yaw slew, then the input (pre-tick cooldown), then the attack step.
         if (w.grounded) {
-            yaw = valus_yaw_slew(yaw, entity, w.player, kValusYawSlewDegPerSecond, dt);
+            yaw = valus_yaw_slew(yaw, entity, w.player, encounters::kValus.turnDegPerSec, dt);
             mYaw = valus_yaw_slew(mYaw, entity, w.player, behaviour_turn_rate(kValus, rt), dt);
         }
         const ValusAttackInput in = input_for(w, cooldown, yaw, leftNext);
@@ -431,7 +431,7 @@ TEST_CASE("Valus as a one-state machine makes the same decisions as valus.cpp") 
         // selection itself is not proven here (test_valus.cpp covers it).
         if (attack == ValusAttack::None) {
             if (reaction < 0.0f) {
-                const ValusAttack chosen = select_valus_attack(in);
+                const ValusAttack chosen = select_valus_attack(in, encounters::kValus);
                 if (chosen != ValusAttack::None) {
                     attack = chosen;
                     attackSeconds = 0.0f;
@@ -440,14 +440,15 @@ TEST_CASE("Valus as a one-state machine makes the same decisions as valus.cpp") 
                 }
             }
         } else if ((attackSeconds += dt) >= attack_clip_seconds(attack)) {
-            cooldown = valus_attack_cooldown_seconds(attack);
+            cooldown = valus_attack_cooldown_seconds(attack, encounters::kValus);
             attack = ValusAttack::None;
             attackSeconds = 0.0f;
         }
 
         int request = kBehaviourNone;
         if (rt.action == kBehaviourNone && mReaction < 0.0f) {
-            request = static_cast<int>(select_valus_attack(mIn)) - 1;  // None -> -1
+            // None -> -1
+            request = static_cast<int>(select_valus_attack(mIn, encounters::kValus)) - 1;
         }
         const int before = rt.action;
         rt = step_behaviour(kValus, rt, dt, kVClips, request);
@@ -468,7 +469,7 @@ TEST_CASE("Valus as a one-state machine makes the same decisions as valus.cpp") 
         }
         if (strike) {
             if (valus_attack_cancelled(true, attack)) {
-                pending = valus_attack_cooldown_seconds(attack);
+                pending = valus_attack_cooldown_seconds(attack, encounters::kValus);
                 attack = ValusAttack::None;
                 attackSeconds = 0.0f;
                 ++cancels;

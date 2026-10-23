@@ -4,16 +4,18 @@
 #include <cmath>
 #include <cstdio>
 
-bool AudioSeam::load(const std::string& libraryDir, bool includeS6) {
+bool AudioSeam::load(const std::string& libraryDir, const EncounterDesc& desc,
+                     bool includeS6) {
     enabled = false;
+    encounter = &desc;
     const std::string manifest = libraryDir + "/audio/audio.manifest";
     if (!engine.load_manifest(manifest, libraryDir)) {
         return false;
     }
     const Sfx missing = missing_cue(
-        [this](const char* clip) { return engine.has(clip); }, includeS6);
+        [this](const char* clip) { return engine.has(clip); }, desc, includeS6);
     if (missing != Sfx::Count) {
-        const SoundCue* cue = cue_for(missing);
+        const SoundCue* cue = cue_for(missing, desc);
         std::fprintf(stderr,
                      "sotc-viewer: audio: cue %s names clip '%s', which %s does not load\n",
                      sfx_name(missing), cue != nullptr ? cue->clip : "?", manifest.c_str());
@@ -23,11 +25,11 @@ bool AudioSeam::load(const std::string& libraryDir, bool includeS6) {
     // The music is not an `Sfx`, so `missing_cue` cannot see it; the score
     // is as mandatory as the fight cues (D5), so gate it here — a manifest
     // without it fails at load, not as "a cue clip was missing at play time".
-    if (!engine.has(kMusicClip)) {
+    if (!engine.has(desc.cues.music)) {
         std::fprintf(
             stderr,
             "sotc-viewer: audio: music cue names clip '%s', which %s does not load\n",
-            kMusicClip, manifest.c_str());
+            desc.cues.music, manifest.c_str());
         engine.reset();
         return false;
     }
@@ -36,9 +38,12 @@ bool AudioSeam::load(const std::string& libraryDir, bool includeS6) {
 }
 
 void AudioSeam::play_event(const SfxEvent& event) {
-    const SoundCue* cue = cue_for(event.id);
-    if (cue == nullptr || !enabled) {
-        return;  // deferred, or audio off: deliberately silent
+    if (!enabled) {
+        return;  // audio off: deliberately silent
+    }
+    const SoundCue* cue = cue_for(event.id, *encounter);
+    if (cue == nullptr) {
+        return;  // deferred: deliberately silent
     }
     if (!engine.has(cue->clip)) {
         if (cue->s6Only && !requireS6) {
@@ -160,16 +165,17 @@ void AudioSeam::start_music() {
     if (!enabled || musicStarted) {
         return;
     }
-    if (!engine.has(kMusicClip)) {
+    const CueDesc& cues = encounter->cues;
+    if (!engine.has(cues.music)) {
         failed = true;
         return;
     }
-    engine.play_music(kMusicClip, kMusicGain);
+    engine.play_music(cues.music, cues.musicGain);
     musicStarted = true;
     musicEverStarted = true;
     if (log) {
         std::printf("%s t=%.3f event=music_start clip=%s gain=%.2f\n", logPrefix, clock,
-                    kMusicClip, kMusicGain);
+                    cues.music, cues.musicGain);
         ++eventCount;
     }
 }
@@ -185,7 +191,7 @@ void AudioSeam::stop_music() {
     musicStarted = false;
     if (log) {
         std::printf("%s t=%.3f event=music_stop clip=%s gain=0.00\n", logPrefix, clock,
-                    kMusicClip);
+                    encounter->cues.music);
         ++eventCount;
     }
 }

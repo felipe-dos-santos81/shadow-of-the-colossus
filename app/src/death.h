@@ -1,6 +1,6 @@
 #pragma once
 
-#include "encounters/valus_desc.h"
+#include "encounter_desc.h"
 
 // Valus's death sequence (S6 Task 2, design §8.1, ruling D3): a pure,
 // headless-testable phase machine, so the sequence's clock, input lock and
@@ -8,7 +8,7 @@
 // the clip playback, the camera and the rendering; everything that answers a
 // question about the death's timeline answers it here.
 //
-//     Idle --defeat--> Motion --kMotionSeconds--> Collapse --total 8.0 s--> Done
+//     Idle --defeat--> Motion --motionSeconds--> Collapse --total 8.0 s--> Done
 //                        \_ tendril burst 0.4-3.0 s _/     (corpse stays)
 //
 // Collapse is then 1.833 s long; the 8.0 s in the diagram is the defeat clock,
@@ -18,10 +18,10 @@
 // maximum input time, 6.166877 s (93 / 15.08056640625), not the 94-frame
 // figure (6.2332 s): the last key sits one frame interval before the count.
 // R8 in `.superpowers/sdd/2026-10-22-s6-the-fall/progress.md` retires the
-// design's 6.233 s. `kMotionSeconds` pins the duration.
+// design's 6.233 s. The table's `death.motionSeconds` pins the duration.
 //
 // Task 5 guidance (the clip is driven from this machine's clock, not a second
-// clock): compute `clipTime = std::min(death.total, kMotionSeconds)` each
+// clock): compute `clipTime = std::min(death.total, desc.death.motionSeconds)` each
 // frame, or skip the clip's own `dt` on the transition frame; the defeat frame
 // deliberately starts `total` at 0 and does not accumulate that frame's `dt`.
 // The glb sampler max (6.1668767929077 s) and the constant are the same float,
@@ -46,32 +46,28 @@ enum class DeathPhase { Idle, Motion, Tendrils, Collapse, Done };
 struct DeathState {
     DeathPhase phase = DeathPhase::Idle;
     float t = 0.0f;      // seconds in the current phase (0 in Idle and Done)
-    float total = 0.0f;  // seconds since the defeat, capped at kDeathEnd in Done
+    float total = 0.0f;  // seconds since the defeat, capped at death.endSeconds in Done
     bool inputLocked = false;
     bool corpseVisible = false;
-    int roots = 0;  // tendril roots: 2 from the defeat until the reset
+    int roots = 0;  // tendril roots: death.roots from the defeat until the reset
 };
 
-// The pinned timeline (design §8.1 and §9), read from Valus's table (S11). The
-// motion duration is the clip's; the tendril start/end and the cinematic end
-// are the builder's calls. Exported so the app and the tests read the same
-// numbers instead of restating them.
-inline constexpr float kDeathTendrilStart = encounters::kValus.death.tendrilStartSeconds;
-inline constexpr float kDeathTendrilEnd = encounters::kValus.death.tendrilEndSeconds;
-inline constexpr float kMotionSeconds = encounters::kValus.death.motionSeconds;  // 93 / 15.08056640625
-inline constexpr float kDeathEnd = encounters::kValus.death.endSeconds;
-inline constexpr int kDeathRoots = encounters::kValus.death.roots;
+// The timeline is the encounter's `death` bundle (S11 M-1): `motionSeconds`
+// (Valus: 6.166877 s, 93 / 15.08056640625), the tendril window
+// [`tendrilStartSeconds`, `tendrilEndSeconds`] (0.4-3.0 s), the cinematic's
+// `endSeconds` (8.0 s) and the `roots` count (2). Every reader takes the
+// encounter's description; nothing here names a colossus.
 
 // One frame. In Idle, a true `defeated` starts the sequence (phase Motion,
-// t = total = 0, input locked, two roots); a false one leaves the state
-// untouched. Once running, `dt` advances `total` (a negative or non-finite
-// `dt` advances nothing) and the phase follows `total`: Motion below
-// `kMotionSeconds`, Collapse below `kDeathEnd`, Done from `kDeathEnd` on.
+// t = total = 0, input locked, `death.roots` roots); a false one leaves the
+// state untouched. Once running, `dt` advances `total` (a negative or
+// non-finite `dt` advances nothing) and the phase follows `total`: Motion below
+// `death.motionSeconds`, Collapse below `death.endSeconds`, Done from there on.
 // A running phase's `t` keeps a long frame's overshoot; Done instead clamps
-// `total` to `kDeathEnd` and `t` to 0, so the terminal state is exactly stable
-// and every further step returns it unchanged. `defeated` is not re-read after
-// the transition; only `reset_death` returns to Idle.
-DeathState step_death(DeathState state, float dt, bool defeated);
+// `total` to `death.endSeconds` and `t` to 0, so the terminal state is exactly
+// stable and every further step returns it unchanged. `defeated` is not re-read
+// after the transition; only `reset_death` returns to Idle.
+DeathState step_death(DeathState state, float dt, bool defeated, const EncounterDesc& desc);
 
 // Idle, unlocked, no corpse, no roots.
 DeathState reset_death();
@@ -79,8 +75,8 @@ DeathState reset_death();
 // Phase-derived, so a state's flags cannot disagree with its phase: Motion and
 // Collapse lock input (Idle and Done do not); Collapse and Done show the
 // corpse; the tendrils are active only during the death motion and while
-// 0.4 s <= total <= 3.0 s. `step_death` mirrors all three into the struct's
-// fields for the app's telemetry.
+// total is in `desc.death`'s tendril window. `step_death` mirrors the first two
+// into the struct's fields for the app's telemetry.
 bool death_locks_input(const DeathState& state);
 bool death_corpse_visible(const DeathState& state);
-bool death_tendrils_active(const DeathState& state);
+bool death_tendrils_active(const DeathState& state, const EncounterDesc& desc);

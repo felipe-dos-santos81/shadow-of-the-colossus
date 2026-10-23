@@ -11,15 +11,19 @@
 #include <string>
 #include <vector>
 
-#include "death.h"
+#include "encounters/valus_desc.h"
 #include "stb_image.h"
 
 namespace {
 
 // The burst window is the death machine's, not a second copy: a change to
-// death.h's timings must not silently desynchronise the effect.
-static_assert(kTendrilStartSeconds == kDeathTendrilStart, "the tendril start must match death.h");
-static_assert(kTendrilEndSeconds == kDeathTendrilEnd, "the tendril end must match death.h");
+// Valus's death timings must not silently desynchronise the effect. (The
+// ribbon's envelope is still Valus's window; another encounter's would need it
+// passed in the EffectFrame.)
+static_assert(kTendrilStartSeconds == encounters::kValus.death.tendrilStartSeconds,
+              "the tendril start must match Valus's death bundle");
+static_assert(kTendrilEndSeconds == encounters::kValus.death.tendrilEndSeconds,
+              "the tendril end must match Valus's death bundle");
 
 // The ribbon's authored envelope (design §8.2): 0.6 m at the wound, tapering to
 // 0.05 m at the tip.

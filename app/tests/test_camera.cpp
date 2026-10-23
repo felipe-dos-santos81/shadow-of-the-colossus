@@ -11,11 +11,35 @@
 
 #include "app.h"
 #include "camera.h"
+#include "encounters/valus_desc.h"
 #include "heightmap.h"
 #include "math3d.h"
 #include "player.h"
 
 namespace {
+
+// Valus's target camera and death cinematic (his EncounterDesc, S11 M-1).
+using encounters::kValus;
+constexpr float kTargetDistanceMin = kValus.targetCam.distanceMin;
+constexpr float kTargetDistanceMax = kValus.targetCam.distanceMax;
+constexpr float kTargetPitchLimitDeg = kValus.targetCam.pitchLimitDeg;
+constexpr DeathCameraDesc kKeys = kValus.death.camera;
+constexpr float kDeathPullSeconds = kKeys.pullSeconds;
+constexpr float kDeathLowSeconds = kKeys.lowSeconds;
+constexpr float kDeathWideSeconds = kKeys.wideSeconds;
+constexpr float kDeathFollowSeconds = kKeys.followSeconds;
+constexpr float kDeathPullDistance = kKeys.pullDistance;
+constexpr float kDeathPullEyeHeight = kKeys.pullEyeHeight;
+constexpr float kDeathPullTargetHeight = kKeys.pullTargetHeight;
+constexpr float kDeathPullPitchDeg = kKeys.pullPitchDeg;
+constexpr float kDeathLowTargetHeight = kKeys.lowTargetHeight;
+constexpr float kDeathLowDistance = kKeys.lowDistance;
+constexpr float kDeathLowPitchDeg = kKeys.lowPitchDeg;
+constexpr float kDeathLowYawOffsetDeg = kKeys.lowYawOffsetDeg;
+constexpr float kDeathWideTargetHeight = kKeys.wideTargetHeight;
+constexpr float kDeathWideDistance = kKeys.wideDistance;
+constexpr float kDeathWidePitchDeg = kKeys.widePitchDeg;
+constexpr float kDeathWideYawOffsetDeg = kKeys.wideYawOffsetDeg;
 
 // matrix * (point, 1) as a clip-space (x, y, z, w).
 std::array<float, 4> clip_space(const Mat4& matrix, Vec3 point) {
@@ -216,7 +240,7 @@ TEST_CASE("the T toggle is inert without an entity chest") {
     CameraTarget target;
 
     if (entity_target_key_allowed(/*followMode=*/true, /*entityChestResolved=*/false)) {
-        camera_target_toggle(camera, follow, target, Vec3{0.0f, 0.0f, 0.0f});
+        camera_target_toggle(camera, follow, target, Vec3{0.0f, 0.0f, 0.0f}, kValus);
     }
     CHECK_FALSE(target.active);
     CHECK(camera.distance == doctest::Approx(4.5f));
@@ -229,7 +253,7 @@ TEST_CASE("the T toggle is inert without an entity chest") {
     // With both preconditions the key enters the mode.
     CHECK(entity_target_key_allowed(/*followMode=*/true, /*chest=*/true));
     if (entity_target_key_allowed(true, true)) {
-        camera_target_toggle(camera, follow, target, Vec3{0.0f, 0.0f, 0.0f});
+        camera_target_toggle(camera, follow, target, Vec3{0.0f, 0.0f, 0.0f}, kValus);
     }
     CHECK(target.active);
 }
@@ -243,8 +267,8 @@ TEST_CASE("the target camera's look yaw is the active camera's movement basis") 
 
     CameraFollow follow;
     CameraTarget target;
-    camera_target_toggle(camera, follow, target, Vec3{0.0f, 5.0f, 0.0f});
-    camera_target_update(camera, target, Vec3{0.0f, 5.0f, 0.0f}, /*dx=*/100.0f, 0.0f, 0.0f);
+    camera_target_toggle(camera, follow, target, Vec3{0.0f, 5.0f, 0.0f}, kValus);
+    camera_target_update(camera, target, Vec3{0.0f, 5.0f, 0.0f}, /*dx=*/100.0f, 0.0f, 0.0f, kValus);
 
     // 30 + 40 = 70: the active camera looks along 70 - 180 = -110.
     CHECK(camera.yaw == doctest::Approx(70.0f));
@@ -275,7 +299,7 @@ TEST_CASE("camera_target_toggle enters target framing and restores the follow st
     CameraTarget target;
 
     CHECK_FALSE(target.active);
-    camera_target_toggle(camera, follow, target, chest);
+    camera_target_toggle(camera, follow, target, chest, kValus);
     CHECK(target.active);
     CHECK(camera.target.x == doctest::Approx(chest.x));
     CHECK(camera.target.y == doctest::Approx(chest.y));
@@ -285,23 +309,23 @@ TEST_CASE("camera_target_toggle enters target framing and restores the follow st
     CHECK(camera.yaw == doctest::Approx(30.0f));       // the view swings, not spins
 
     // Drag orbits the chest; pitch is clamped wider than the follow camera's 60.
-    camera_target_update(camera, target, chest, /*dx=*/100.0f, /*dy=*/0.0f, 0.0f);
+    camera_target_update(camera, target, chest, /*dx=*/100.0f, /*dy=*/0.0f, 0.0f, kValus);
     CHECK(camera.yaw == doctest::Approx(70.0f));
-    camera_target_update(camera, target, chest, 0.0f, 10000.0f, 0.0f);
+    camera_target_update(camera, target, chest, 0.0f, 10000.0f, 0.0f, kValus);
     CHECK(camera.pitch == doctest::Approx(kTargetPitchLimitDeg));
-    camera_target_update(camera, target, chest, 0.0f, -10000.0f, 0.0f);
+    camera_target_update(camera, target, chest, 0.0f, -10000.0f, 0.0f, kValus);
     CHECK(camera.pitch == doctest::Approx(-kTargetPitchLimitDeg));
 
     // The wheel stays inside the widened [22, 30] range.
-    camera_target_update(camera, target, chest, 0.0f, 0.0f, 1000.0f);
+    camera_target_update(camera, target, chest, 0.0f, 0.0f, 1000.0f, kValus);
     CHECK(camera.distance == doctest::Approx(kTargetDistanceMin));
-    camera_target_update(camera, target, chest, 0.0f, 0.0f, -1000.0f);
+    camera_target_update(camera, target, chest, 0.0f, 0.0f, -1000.0f, kValus);
     CHECK(camera.distance == doctest::Approx(kTargetDistanceMax));
 
     const float yaw_before = camera.yaw;
     const float pitch_before = camera.pitch;
     const float distance_before = camera.distance;
-    camera_target_toggle(camera, follow, target, chest);
+    camera_target_toggle(camera, follow, target, chest, kValus);
     CHECK_FALSE(target.active);
     CHECK(follow.yawOffsetDeg == doctest::Approx(18.0f));
     CHECK(follow.pitchOffsetDeg == doctest::Approx(-6.0f));
@@ -330,8 +354,8 @@ TEST_CASE("T-off eases the target back to the player instead of snapping") {
     camera.distance = 4.5f;
     CameraFollow follow;
     CameraTarget target;
-    camera_target_toggle(camera, follow, target, chest);
-    camera_target_toggle(camera, follow, target, chest);
+    camera_target_toggle(camera, follow, target, chest, kValus);
+    camera_target_toggle(camera, follow, target, chest, kValus);
     CHECK_FALSE(target.active);
     CHECK(target.returning);
 
@@ -362,7 +386,7 @@ TEST_CASE("target framing fits a 17.7 m subject") {
     camera.yaw = 0.0f;
     CameraFollow follow;
     CameraTarget target;
-    camera_target_toggle(camera, follow, target, chest);
+    camera_target_toggle(camera, follow, target, chest, kValus);
 
     // The vertical half-FOV at 26 m reaches 26 * tan(30°) = 15.0 m. The real
     // Valus body at t=0 spans y 28.297..45.09 world with its chest at 39.294:
@@ -606,7 +630,7 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     base.distance = 4.5f;
 
     // T0: the follow pose exactly.
-    const Camera t0 = camera_death_pose(base, valus, player, 0.0f);
+    const Camera t0 = camera_death_pose(base, valus, player, 0.0f, kValus);
     CHECK(t0.target.x == doctest::Approx(base.target.x));
     CHECK(t0.target.y == doctest::Approx(base.target.y));
     CHECK(t0.target.z == doctest::Approx(base.target.z));
@@ -618,7 +642,7 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     // T0.4: the pull-back — the eye 12 m out and exactly 4 m above the entity
     // base, tilted up at the body's midpoint so the death is framed, not the
     // legs.
-    const Camera pull = camera_death_pose(base, valus, player, kDeathPullSeconds);
+    const Camera pull = camera_death_pose(base, valus, player, kDeathPullSeconds, kValus);
     CHECK(pull.target.x == doctest::Approx(valus.x));
     CHECK(pull.target.y == doctest::Approx(valus.y + kDeathPullTargetHeight));
     CHECK(pull.target.z == doctest::Approx(valus.z));
@@ -630,7 +654,7 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     CHECK(pull_eye == doctest::Approx(valus.y + kDeathPullEyeHeight).epsilon(0.01));
 
     // T3.0: the low angle — below the tendril band, looking up at it.
-    const Camera low = camera_death_pose(base, valus, player, kDeathLowSeconds);
+    const Camera low = camera_death_pose(base, valus, player, kDeathLowSeconds, kValus);
     CHECK(low.target.x == doctest::Approx(valus.x));
     CHECK(low.target.y == doctest::Approx(valus.y + kDeathLowTargetHeight));
     CHECK(low.distance == doctest::Approx(kDeathLowDistance));
@@ -643,7 +667,7 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     CHECK(low_eye < valus.y + kDeathLowTargetHeight);
 
     // T6.2: the corpse wide — the whole fallen body in frame.
-    const Camera wide = camera_death_pose(base, valus, player, kDeathWideSeconds);
+    const Camera wide = camera_death_pose(base, valus, player, kDeathWideSeconds, kValus);
     CHECK(wide.target.x == doctest::Approx(valus.x));
     CHECK(wide.target.y == doctest::Approx(valus.y + kDeathWideTargetHeight));
     CHECK(wide.distance == doctest::Approx(kDeathWideDistance));
@@ -653,7 +677,7 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     // T8.0 and later: the follow pose again, re-anchored on the player's head.
     for (const float t : {kDeathFollowSeconds, 12.0f}) {
         CAPTURE(t);
-        const Camera back = camera_death_pose(base, valus, player, t);
+        const Camera back = camera_death_pose(base, valus, player, t, kValus);
         CHECK(back.target.x == doctest::Approx(player.x));
         CHECK(back.target.y == doctest::Approx(player.y + kFollowHeadHeight));
         CHECK(back.target.z == doctest::Approx(player.z));
@@ -663,19 +687,20 @@ TEST_CASE("camera_death_pose keys the cinematic path") {
     }
 
     // The segments ease: a mid-segment pose sits strictly between its keys.
-    const Camera mid_pull = camera_death_pose(base, valus, player, 0.5f * kDeathPullSeconds);
+    const Camera mid_pull =
+        camera_death_pose(base, valus, player, 0.5f * kDeathPullSeconds, kValus);
     CHECK(mid_pull.distance > base.distance);
     CHECK(mid_pull.distance < kDeathPullDistance);
-    const Camera mid_low = camera_death_pose(base, valus, player, 4.0f);
+    const Camera mid_low = camera_death_pose(base, valus, player, 4.0f, kValus);
     CHECK(mid_low.distance > kDeathLowDistance);
     CHECK(mid_low.distance < kDeathWideDistance);
 
     // t <= 0 and a non-finite clock/point answer the base pose, never NaN.
-    const Camera before = camera_death_pose(base, valus, player, -1.0f);
+    const Camera before = camera_death_pose(base, valus, player, -1.0f, kValus);
     CHECK(before.distance == doctest::Approx(base.distance));
-    const Camera nan_time = camera_death_pose(base, valus, player, nan);
+    const Camera nan_time = camera_death_pose(base, valus, player, nan, kValus);
     CHECK(nan_time.target.y == doctest::Approx(base.target.y));
-    const Camera nan_valus = camera_death_pose(base, Vec3{nan, nan, nan}, player, 3.0f);
+    const Camera nan_valus = camera_death_pose(base, Vec3{nan, nan, nan}, player, 3.0f, kValus);
     CHECK(nan_valus.distance == doctest::Approx(base.distance));
 }
 

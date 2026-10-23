@@ -23,6 +23,8 @@
 
 namespace {
 
+using encounters::kValus;
+
 std::filesystem::path test_library() {
     const char* value = std::getenv("SOTC_LIB");
     if (value == nullptr || value[0] == '\0') {
@@ -237,7 +239,7 @@ TEST_CASE("the cue table maps the shipped slice and defers the rest") {
 
     for (const Expected& row : expected) {
         CAPTURE(row.name);
-        const SoundCue* cue = cue_for(row.id);
+        const SoundCue* cue = cue_for(row.id, kValus);
         CHECK(std::string(sfx_name(row.id)) == row.name);
         if (row.clip == nullptr) {
             CHECK(cue == nullptr);
@@ -251,12 +253,12 @@ TEST_CASE("the cue table maps the shipped slice and defers the rest") {
 
     // Every id has a distinct name; Count is not a cue.
     CHECK(std::string(sfx_name(Sfx::Count)) == "unknown");
-    CHECK(cue_for(Sfx::Count) == nullptr);
+    CHECK(cue_for(Sfx::Count, kValus) == nullptr);
 }
 
 TEST_CASE("the death and the club swing resolve to the S6 slice") {
-    const SoundCue* death = cue_for(Sfx::ValusDefeat);
-    const SoundCue* swing = cue_for(Sfx::ClubSwing);
+    const SoundCue* death = cue_for(Sfx::ValusDefeat, kValus);
+    const SoundCue* swing = cue_for(Sfx::ClubSwing, kValus);
     REQUIRE(death != nullptr);
     REQUIRE(swing != nullptr);
     CHECK(std::string(death->clip) == "valus.death");
@@ -278,7 +280,8 @@ TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
     // The S5 slice is required of every shipped manifest: the frozen S5
     // acceptance regenerates its eight entries, and the gate must load them
     // beside the S6 cue table.
-    const Sfx missing = missing_cue([&engine](const char* clip) { return engine.has(clip); });
+    const Sfx missing =
+        missing_cue([&engine](const char* clip) { return engine.has(clip); }, kValus);
     CHECK(missing == Sfx::Count);
 
     // The S6 slice is required only of a manifest that carries it: the S5
@@ -287,13 +290,15 @@ TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
     const bool s6_shipped = engine.has("valus.death") && engine.has("valus.club_swing");
     if (s6_shipped) {
         const Sfx missingS6 = missing_cue(
-            [&engine](const char* clip) { return engine.has(clip); }, /*includeS6=*/true);
+            [&engine](const char* clip) { return engine.has(clip); }, kValus,
+            /*includeS6=*/true);
         CHECK(missingS6 == Sfx::Count);
     } else {
         // An eight-entry manifest: asking for the whole slice names the first
         // S6-only row, which is exactly the state the S5 run must tolerate.
         const Sfx missingS6 = missing_cue(
-            [&engine](const char* clip) { return engine.has(clip); }, /*includeS6=*/true);
+            [&engine](const char* clip) { return engine.has(clip); }, kValus,
+            /*includeS6=*/true);
         CHECK(missingS6 == Sfx::ValusDefeat);
         CHECK_FALSE(engine.has("valus.club_swing"));
     }
@@ -303,7 +308,7 @@ TEST_CASE("every mapped cue resolves in the shipped audio manifest") {
     const Sfx rejected =
         missing_cue([&engine](const char* clip) {
             return std::string(clip) != "valus.hurt" && engine.has(clip);
-        });
+        }, kValus);
     CHECK(rejected == Sfx::ValusReaction);
     CHECK(std::string(sfx_name(rejected)) == "valus_reaction");
 }

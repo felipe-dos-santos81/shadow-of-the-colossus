@@ -88,11 +88,12 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
     // boundary (R8). The comparison is relative (1e-5), not equality.
     const float deathDuration =
         entity_playback.clips[static_cast<std::size_t>(entityClips.death)].duration;
-    if (!(std::fabs(deathDuration - kMotionSeconds) <= kMotionSeconds * 1e-5f)) {
+    const float motionSeconds = ctx.enc().death.motionSeconds;
+    if (!(std::fabs(deathDuration - motionSeconds) <= motionSeconds * 1e-5f)) {
         std::fprintf(stderr,
                      "sotc-viewer: --s6-selftest: the death clip is %.6f s, expected "
                      "%.6f s\n",
-                     deathDuration, kMotionSeconds);
+                     deathDuration, motionSeconds);
         return 1;
     }
 
@@ -175,7 +176,7 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
                      "Valus\n");
         return 1;
     }
-    death = step_death(death, stepSeconds, true);
+    death = step_death(death, stepSeconds, true, ctx.enc());
     // The death sequence's clock starts here: from the defeat on the
     // event log's t is the death clock (music_stop at 0.000, the roar
     // at 0.400), which is also what the phase lines print. The defeat
@@ -212,7 +213,7 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
     // is measured.
     const StillDue stills[4] = {
         {"motion", 0.200f, false},
-        {"camera", kDeathPullSeconds, false},
+        {"camera", ctx.enc().death.camera.pullSeconds, false},
         {"tendrils", 1.200f, true},
         {"corpse", 6.200f, false},
     };
@@ -255,13 +256,13 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
     bool done = false;
     for (int frame = 0; frame < kS6MaxDeathFrames; ++frame) {
         advance_death_frame(death, stepSeconds, entity_playback, entityClips.death,
-                            corpse, club, scene, entityRig);
-        if (death_cue_due(death, deathCueFired)) {
+                            corpse, club, scene, entityRig, ctx.enc());
+        if (death_cue_due(death, deathCueFired, ctx.enc())) {
             append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
                                  sfx);
         }
         camera = camera_death_pose(deathBase, encounter.entityPosition, player.position,
-                                   death.total);
+                                   death.total, ctx.enc());
         const std::vector<std::vector<Mat4>> palettes =
             update_all_poses(renderer, scene, playbacks, 0.0f, club);
         apply_player_transform(scene, player_rig_record, player,
@@ -346,10 +347,10 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
                      stillIndex);
         return 1;
     }
-    if (effectRoots != kDeathRoots) {
+    if (effectRoots != ctx.enc().death.roots) {
         std::fprintf(stderr,
                      "sotc-viewer: --s6-selftest: the tendril roots resolved %d of %d\n",
-                     effectRoots, kDeathRoots);
+                     effectRoots, ctx.enc().death.roots);
         return 1;
     }
     if (audio.failed) {
@@ -395,10 +396,10 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
         entity_playback.clips[static_cast<std::size_t>(entityClips.death)].name;
     std::printf("s6-death clip=%s total=%.3f corpse=%d health=%d camera=%s\n",
                 deathClip.c_str(), death.total, death_corpse_visible(death) ? 1 : 0,
-                deathHealth, death_camera_key(death.total));
+                deathHealth, death_camera_key(death.total, ctx.enc()));
     print_status_line(opts, shell.win);
     if (!encounter.defeated || !death_corpse_visible(death) ||
-        death.roots != kDeathRoots || combat.mode == PlayerMode::Dead) {
+        death.roots != ctx.enc().death.roots || combat.mode == PlayerMode::Dead) {
         std::fprintf(stderr,
                      "sotc-viewer: --s6-selftest: the post-death state is wrong "
                      "(defeated %d, corpse %d, roots %d, mode %s)\n",
@@ -454,9 +455,9 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
     armLethal.damageDealt = 100;
     apply_combat_events(encounter, entity_playback, entityClips, armLethal,
                         /*weakpoint=*/1, nullptr);
-    death = step_death(death, stepSeconds, true);
-    for (int frame = 0; frame < 32 && !death_tendrils_active(death); ++frame) {
-        death = step_death(death, stepSeconds, true);
+    death = step_death(death, stepSeconds, true, ctx.enc());
+    for (int frame = 0; frame < 32 && !death_tendrils_active(death, ctx.enc()); ++frame) {
+        death = step_death(death, stepSeconds, true, ctx.enc());
     }
     const std::vector<std::vector<Mat4>> armPalettes =
         update_all_poses(renderer, scene, playbacks, 0.0f, club);
@@ -480,13 +481,13 @@ SelftestResult run_s6(StageCtx& ctx, RunState& run) {
         return std::fabs(a.x - b.x) <= 1e-3f && std::fabs(a.y - b.y) <= 1e-3f &&
                std::fabs(a.z - b.z) <= 1e-3f;
     };
-    if (!death_tendrils_active(death) || armFrame.rootCount != kDeathRoots ||
+    if (!death_tendrils_active(death, ctx.enc()) || armFrame.rootCount != ctx.enc().death.roots ||
         !armResolved || !headResolved || !near(armFrame.roots[0].position, armShell) ||
         !near(armFrame.roots[1].position, headShell)) {
         std::fprintf(stderr,
                      "sotc-viewer: --s6-selftest: the weakpoint-1 death did not put the "
                      "arm shell first (roots %d, burst %d, arm %d, head %d)\n",
-                     armFrame.rootCount, death_tendrils_active(death) ? 1 : 0,
+                     armFrame.rootCount, death_tendrils_active(death, ctx.enc()) ? 1 : 0,
                      armResolved ? 1 : 0, headResolved ? 1 : 0);
         return 1;
     }
