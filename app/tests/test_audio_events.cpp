@@ -6,6 +6,7 @@
 #include <doctest.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <regex>
@@ -332,6 +333,32 @@ TEST_CASE("the audio seam's music is the selected encounter's (S11 M-1)") {
     seam.start_music();
     CHECK(seam.failed);
     CHECK_FALSE(seam.musicStarted);
+}
+
+TEST_CASE("a silent fight: null cues and null music load and play nothing (S11 D10)") {
+    const std::filesystem::path library = test_library();
+    constexpr EncounterDesc kSilent = [] {
+        EncounterDesc desc = kValus;
+        constexpr SoundCue kNone{nullptr, 1.0f, false};
+        desc.cues = CueDesc{kNone, kNone, kNone, kNone, kNone, kNone, kNone, kNone, kNone, kNone,
+                            nullptr, 0.0f};
+        return desc;
+    }();
+    for (const Sfx id : {Sfx::StompStart, Sfx::ValusReaction, Sfx::ValusDefeat, Sfx::ClubSwing}) {
+        CHECK(cue_for(id, kSilent) == nullptr);
+    }
+    // Only the player's own rows are gated.
+    CHECK(missing_cue([](const char* clip) { return std::strncmp(clip, "player.", 7) == 0; },
+                      kSilent, /*includeS6=*/true) == Sfx::Count);
+
+    AudioSeam seam;
+    REQUIRE(seam.load(library.string(), kSilent, /*includeS6=*/true));
+    seam.play_event(SfxEvent{Sfx::ValusReaction, 1.0f, Vec3{}, /*spatial=*/true});
+    seam.start_music();
+    CHECK_FALSE(seam.failed);
+    CHECK_FALSE(seam.musicStarted);
+    seam.stop_music();
+    CHECK_FALSE(seam.failed);
 }
 
 // --- S8 Task 8: the ride cue table -------------------------------------------
