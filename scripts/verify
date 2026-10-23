@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#
+# verify — the regression runner (S10 design D2–D4, rulings §13): every assertion of the frozen
+# scripts/sN-acceptance.sh, run once per changed input against blessed goldens. `--help` lists the
+# options; tools/verify/run.py does the work, tools/verify/sN.sh are the per-milestone adapters.
+#
+#   scripts/verify               every milestone whose stamp changed (+ dotnet test, ctest)
+#   scripts/verify --quick       the inner loop: skip the e2e runs
+#   scripts/verify --dry-run     list every run/check with its stamp decision and the gate coverage
+#   scripts/verify --long        the highest scripts/sN-acceptance.sh (the milestone gate)
+#
+# The machine suspends idle work: the whole run is kept awake.
+
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec caffeinate -dimsu python3 -I "$repo_root/tools/verify/run.py" "$@"

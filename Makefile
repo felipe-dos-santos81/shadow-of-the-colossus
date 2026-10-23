@@ -51,7 +51,8 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake run shrine plain viewer shrine-manifest plain-manifest probe-check accept clean libview
+        bake run shrine plain viewer shrine-manifest plain-manifest probe-check accept clean libview \
+        verify verify-long
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -133,6 +134,12 @@ accept: shrine-manifest plain-manifest accept-s8 ## Run the current milestone's 
 
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s8 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
+
+verify: shrine-manifest plain-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
+	./scripts/verify $(ARGS)
+
+verify-long: shrine-manifest plain-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
+	./scripts/verify --long
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export
 	@./tools/verify/libview.sh "$(BRANCH)"
