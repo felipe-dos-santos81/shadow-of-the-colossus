@@ -57,6 +57,9 @@ struct SceneManifest {
     Vec3 spawnPosition;
     float spawnYawDeg;
     bool hasSpawn;
+    // The `encounter <id>` directive (S11), read only when the caller opts in;
+    // absent means Valus.
+    std::string encounter = "valus";
 };
 
 // Parses a scene manifest. The format is line-oriented: blank lines are
@@ -68,6 +71,7 @@ struct SceneManifest {
 //   backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 //   horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 //   spawn <px> <py> <pz> <yawDeg>
+//   encounter <id>          (only with `acceptEncounter`; at most once)
 // Every number must be a strict, full-string finite float: the whole token has
 // to parse and be finite ("nan", "inf", "1.5x" and "1e999" are refused). The
 // entity's clip is a non-numeric token: it names the clip exactly, and the
@@ -76,5 +80,6 @@ struct SceneManifest {
 //
 // Throws std::runtime_error formatted `<file>:<line>: <reason>` for a
 // malformed line (wrong token count, invalid number, unknown directive), and
-// `<file>: <reason>` when the file cannot be read as a manifest.
-SceneManifest parse_manifest(const std::filesystem::path& path);
+// `<file>: <reason>` when the file cannot be read as a manifest. Without
+// `acceptEncounter` an `encounter` line is an unknown directive, as before S11.
+SceneManifest parse_manifest(const std::filesystem::path& path, bool acceptEncounter = false);
