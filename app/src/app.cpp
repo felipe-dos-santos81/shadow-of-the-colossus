@@ -2489,12 +2489,9 @@ int run_app(const AppOptions& opts) {
             Heightmap raygrid{};
             std::size_t swordMeshBegin = 0, swordMeshEnd = 0;
             const bool follow_mode = !opts.manifestPath.empty();
-            // S10: the run-mode flags (run_flags.h). The manifest is not loaded
-            // yet: audioWanted and valusBehavior read the scene, so they come
-            // from their own calls below, never from this one.
-            const RunFlags flags =
-                run_flags(opts, here, follow_mode, /*hasEntity=*/false,
-                          /*entityRigValid=*/false, return_available);
+            // S10: the run-mode flags (run_flags.h); the scene's own flags
+            // (scene_flags) come after the manifest and playbacks load.
+            const RunFlags flags = run_flags(opts, here, follow_mode, return_available);
             // S6: whether this run wires the death sequence (the interactive game
             // and the --s6-selftest). The frozen scripted timelines (s3/s4/s41/
             // s42/s5), the pinned captures and the plain screenshot runs must not
@@ -2945,8 +2942,8 @@ int run_app(const AppOptions& opts) {
             }
             // S8 (D15): the plain wants its sound too (no entity there).
             const bool audio_wanted =
-                run_flags(opts, here, follow_mode, !manifest.entities.empty(),
-                          /*entityRigValid=*/false, return_available)
+                scene_flags(opts, here, follow_mode, !manifest.entities.empty(),
+                            entityRig < playbacks.size())
                     .audioWanted;
             if (audio_wanted) {
                 // The S5 slice is the load gate for --s5-selftest and interactive
@@ -2957,11 +2954,11 @@ int run_app(const AppOptions& opts) {
                     // The engine (or the cue gate) already printed the reason. A
                     // missing curated clip is fatal when the sound is the artifact;
                     // interactive play degrades to silence with that one warning.
-                    if (opts.s5Selftest || opts.s6Selftest) {
+                    if (flags.audioStrict) {
                         return 1;
                     }
                 }
-                audio.log = opts.s5Selftest || opts.s6Selftest;
+                audio.log = flags.audioStrict;
                 if (opts.s6Selftest) {
                     audio.logPrefix = "s6-event";
                     // The S6 slice's rows are mandatory in this run: a missing one
@@ -2969,7 +2966,7 @@ int run_app(const AppOptions& opts) {
                     audio.requireS6 = true;
                 }
             }
-            if ((opts.s5Selftest || opts.s6Selftest) && !audio.enabled) {
+            if (flags.audioStrict && !audio.enabled) {
                 std::fprintf(stderr, "sotc-viewer: %s: audio is not loaded\n",
                              opts.s6Selftest ? "--s6-selftest" : "--s5-selftest");
                 return 1;
@@ -2995,8 +2992,8 @@ int run_app(const AppOptions& opts) {
             // --entity-time pins the clip for a capture, so behavior is off there.
             // Task 9's s42 timeline opts in with its own fixed steps.
             const bool valus_behavior =
-                run_flags(opts, here, follow_mode, !manifest.entities.empty(),
-                          entityRig < playbacks.size(), return_available)
+                scene_flags(opts, here, follow_mode, !manifest.entities.empty(),
+                            entityRig < playbacks.size())
                     .valusBehavior;
 
             // The composed scene's initial placement: every entity's grounding lift
@@ -8097,7 +8094,7 @@ int run_app(const AppOptions& opts) {
 
                 SDL_Event event;
                 while (SDL_PollEvent(&event)) {
-                    if ((opts.s7E2e || opts.s8E2e || opts.s9E2e) && event.type != SDL_EVENT_QUIT) {
+                    if (flags.scriptedE2e && event.type != SDL_EVENT_QUIT) {
                         continue;  // --s7-e2e/--s8-e2e/--s9-e2e: the script owns the input
                     }
                     switch (event.type) {
@@ -8197,12 +8194,12 @@ int run_app(const AppOptions& opts) {
 
                 const Uint64 now = SDL_GetTicks();
                 // --s7-e2e steps the real loop at the selftests' fixed 1/60 s.
-                const float dt = (opts.s7E2e || opts.s8E2e || opts.s9E2e)
+                const float dt = flags.scriptedE2e
                                      ? kFixedFrameSeconds
                                      : static_cast<float>(now - last_ticks) / 1000.0f;
                 last_ticks = now;
 
-                if (!opts.s7E2e && !opts.s8E2e && !opts.s9E2e) {
+                if (!flags.scriptedE2e) {
                     gamepad.poll();
                 }
                 if (gamepad.pausePressed) {

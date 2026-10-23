@@ -16,7 +16,13 @@ namespace {
 // the two scene facts the app reads off its loaded state:
 // `!manifest.entities.empty()` -> hasEntity and `entityRig < playbacks.size()`
 // -> entityRigValid.
-RunFlags oracle(const AppOptions& opts, StageId here, bool follow_mode, bool hasEntity,
+struct Oracle {
+    RunFlags run;
+    SceneFlags scene;
+    bool notScriptedE2e;  // app.cpp:8205, the negated spelling
+};
+
+Oracle oracle(const AppOptions& opts, StageId here, bool follow_mode, bool hasEntity,
                 bool entityRigValid, bool return_available) {
     // main.cpp:382
     const bool frozen_selftest = opts.selftest || opts.s3Selftest || opts.s4Selftest ||
@@ -60,18 +66,25 @@ RunFlags oracle(const AppOptions& opts, StageId here, bool follow_mode, bool has
     // app.cpp:5101
     const bool s8_wired =
         (interactive_run && !opts.s7E2e) || opts.s8Selftest || opts.s9Selftest;
-    RunFlags f{};
+    Oracle o{};
+    RunFlags& f = o.run;
     f.frozenSelftest = frozen_selftest;
     f.interactiveRun = interactive_run;
     f.deathWired = death_wired;
-    f.audioWanted = audio_wanted;
-    f.valusBehavior = valus_behavior;
     f.returnWired = return_wired;
     f.pumpLoad = pump_load;
     f.s8Wired = s8_wired;
     f.s9Wired = s9_wired;
     f.road = road;
-    return f;
+    // app.cpp:8100, 8200
+    f.scriptedE2e = (opts.s7E2e || opts.s8E2e || opts.s9E2e);
+    // app.cpp:8205
+    o.notScriptedE2e = !opts.s7E2e && !opts.s8E2e && !opts.s9E2e;
+    // app.cpp:2960, 2964, 2972
+    f.audioStrict = opts.s5Selftest || opts.s6Selftest;
+    o.scene.audioWanted = audio_wanted;
+    o.scene.valusBehavior = valus_behavior;
+    return o;
 }
 
 }  // namespace
@@ -101,16 +114,21 @@ TEST_CASE("run_flags reproduces every derived run flag over all inputs") {
             o.noReturn = bit(15);
             const bool follow = bit(16), hasEntity = bit(17), rigValid = bit(18),
                        retAvail = bit(19);
-            const RunFlags want = oracle(o, stage, follow, hasEntity, rigValid, retAvail);
-            const RunFlags got = run_flags(o, stage, follow, hasEntity, rigValid, retAvail);
-            const bool same = got.frozenSelftest == want.frozenSelftest &&
-                              got.interactiveRun == want.interactiveRun &&
-                              got.deathWired == want.deathWired &&
-                              got.audioWanted == want.audioWanted &&
-                              got.valusBehavior == want.valusBehavior &&
-                              got.returnWired == want.returnWired &&
-                              got.pumpLoad == want.pumpLoad && got.s8Wired == want.s8Wired &&
-                              got.s9Wired == want.s9Wired && got.road == want.road;
+            const Oracle want = oracle(o, stage, follow, hasEntity, rigValid, retAvail);
+            const RunFlags got = run_flags(o, stage, follow, retAvail);
+            const SceneFlags scene = scene_flags(o, stage, follow, hasEntity, rigValid);
+            const RunFlags& w = want.run;
+            const bool same = got.frozenSelftest == w.frozenSelftest &&
+                              is_frozen_selftest(o) == w.frozenSelftest &&
+                              got.interactiveRun == w.interactiveRun &&
+                              got.deathWired == w.deathWired &&
+                              got.returnWired == w.returnWired && got.pumpLoad == w.pumpLoad &&
+                              got.s8Wired == w.s8Wired && got.s9Wired == w.s9Wired &&
+                              got.road == w.road && got.scriptedE2e == w.scriptedE2e &&
+                              !got.scriptedE2e == want.notScriptedE2e &&
+                              got.audioStrict == w.audioStrict &&
+                              scene.audioWanted == want.scene.audioWanted &&
+                              scene.valusBehavior == want.scene.valusBehavior;
             if (!same) {
                 INFO("stage=" << static_cast<int>(stage) << " mask=" << m);
                 FAIL("run_flags diverges from the oracle");
