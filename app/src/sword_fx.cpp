@@ -34,6 +34,8 @@ void push_sprite(std::vector<EffectVertex>& out, Vec3 center, Vec3 right, Vec3 u
     push(out, add(add(center, scale(r, -1.0f)), u), 0.0f, 0.0f, alpha);
 }
 
+// log_sdl/create_shader and the upload pattern below copy effect.cpp's private
+// helpers: effect.h/.cpp is frozen (S6), so the sword pass cannot share them.
 void log_sdl(const char* what) {
     std::fprintf(stderr, "sword_fx: %s failed: %s\n", what, SDL_GetError());
 }
@@ -55,14 +57,13 @@ SDL_GPUShader* create_shader(SDL_GPUDevice* device, SDL_GPUShaderStage stage, co
     return shader;
 }
 
-}  // namespace
-
-std::vector<EffectVertex> build_sword_vertices(const SwordFxFrame& frame, const Mat4& viewProj) {
-    std::vector<EffectVertex> out;
+// Fills `out` (cleared first, capacity kept) — the renderer's per-frame path
+// reuses one vector; build_sword_vertices wraps it.
+void build_into(const SwordFxFrame& frame, const Mat4& viewProj, std::vector<EffectVertex>& out) {
+    out.clear();
     if (!frame.active || !(frame.alpha > 0.0f)) {
-        return out;
+        return;
     }
-    out.reserve(kSwordMaxVertices);
 
     // The camera's right/up/forward from the view-projection's rows 0, 1 and 3
     // (row 3 is the perspective's w = the view-space depth along the look).
@@ -94,6 +95,14 @@ std::vector<EffectVertex> build_sword_vertices(const SwordFxFrame& frame, const 
     if (frame.hit) {
         push_sprite(out, frame.hitPoint, right, up, frame.hitSize, frame.alpha);
     }
+}
+
+}  // namespace
+
+std::vector<EffectVertex> build_sword_vertices(const SwordFxFrame& frame, const Mat4& viewProj) {
+    std::vector<EffectVertex> out;
+    out.reserve(kSwordMaxVertices);
+    build_into(frame, viewProj, out);
     return out;
 }
 
@@ -123,6 +132,7 @@ void SwordFxRenderer::release() {
     if (device_ == nullptr) {
         return;
     }
+    if (vertex_transfer_ != nullptr) SDL_ReleaseGPUTransferBuffer(device_, vertex_transfer_);
     if (vertex_buffer_ != nullptr) SDL_ReleaseGPUBuffer(device_, vertex_buffer_);
     if (index_buffer_ != nullptr) SDL_ReleaseGPUBuffer(device_, index_buffer_);
     for (SDL_GPUTexture* texture : textures_) {
@@ -132,6 +142,7 @@ void SwordFxRenderer::release() {
     if (pipeline_ != nullptr) SDL_ReleaseGPUGraphicsPipeline(device_, pipeline_);
     if (vertex_shader_ != nullptr) SDL_ReleaseGPUShader(device_, vertex_shader_);
     if (fragment_shader_ != nullptr) SDL_ReleaseGPUShader(device_, fragment_shader_);
+    vertex_transfer_ = nullptr;
     vertex_buffer_ = index_buffer_ = nullptr;
     textures_ = {};
     sampler_ = nullptr;
@@ -155,6 +166,13 @@ bool SwordFxRenderer::create(SDL_GPUDevice* device, const std::array<TextureCpu,
     vertex_info.size = static_cast<uint32_t>(kSwordMaxVertices * sizeof(EffectVertex));
     vertex_info.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     vertex_buffer_ = SDL_CreateGPUBuffer(device_, &vertex_info);
+    if (vertex_buffer_ == nullptr) log_sdl("SDL_CreateGPUBuffer(sword vertices)");
+    SDL_GPUTransferBufferCreateInfo transfer_info{};
+    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    transfer_info.size = vertex_info.size;
+    vertex_transfer_ = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
+    if (vertex_transfer_ == nullptr) log_sdl("SDL_CreateGPUTransferBuffer(sword vertices)");
+    vertices_.reserve(kSwordMaxVertices);
 
     // The static index list: ten quads (8 lines, the flare, the hit).
     std::array<uint16_t, (kSwordLineQuads + 2) * 6> indices{};
@@ -168,9 +186,10 @@ bool SwordFxRenderer::create(SDL_GPUDevice* device, const std::array<TextureCpu,
     index_info.size = sizeof(indices);
     index_info.usage = SDL_GPU_BUFFERUSAGE_INDEX;
     index_buffer_ = SDL_CreateGPUBuffer(device_, &index_info);
+    if (index_buffer_ == nullptr) log_sdl("SDL_CreateGPUBuffer(sword indices)");
 
-    if (vertex_buffer_ == nullptr || index_buffer_ == nullptr || !create_pipeline(colorFormat) ||
-        !upload_textures(textures) || !upload(indices.data(), sizeof(indices), index_buffer_)) {
+    if (vertex_buffer_ == nullptr || vertex_transfer_ == nullptr || index_buffer_ == nullptr ||
+        !create_pipeline(colorFormat) || !upload_textures(textures) || !upload_indices(indices.data(), sizeof(indices))) {
         std::fprintf(stderr, "sword_fx: the sword pass is unavailable\n");
         release();
         return false;
@@ -264,33 +283,54 @@ bool SwordFxRenderer::create_pipeline(SDL_GPUTextureFormat colorFormat) {
     return true;
 }
 
-// One copy submission and a fence wait (effect.cpp's upload pattern).
-bool SwordFxRenderer::upload(const void* data, uint32_t bytes, SDL_GPUBuffer* buffer) {
+// Maps `transfer`, copies `bytes` into it and uploads them to `buffer`: one
+// copy submission and a fence wait (effect.cpp's upload pattern).
+bool SwordFxRenderer::copy_to(SDL_GPUTransferBuffer* transfer, const void* data, uint32_t bytes,
+                              SDL_GPUBuffer* buffer) {
+    void* mapped = SDL_MapGPUTransferBuffer(device_, transfer, false);
+    if (mapped == nullptr) {
+        log_sdl("SDL_MapGPUTransferBuffer(sword)");
+        return false;
+    }
+    std::memcpy(mapped, data, bytes);
+    SDL_UnmapGPUTransferBuffer(device_, transfer);
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
+    if (cmd == nullptr) {
+        log_sdl("SDL_AcquireGPUCommandBuffer");
+        return false;
+    }
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    if (copy == nullptr) {
+        SDL_CancelGPUCommandBuffer(cmd);
+        log_sdl("SDL_BeginGPUCopyPass(sword)");
+        return false;
+    }
+    const SDL_GPUTransferBufferLocation source{transfer, 0};
+    const SDL_GPUBufferRegion destination{buffer, 0, bytes};
+    SDL_UploadToGPUBuffer(copy, &source, &destination, false);
+    SDL_EndGPUCopyPass(copy);
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    if (fence == nullptr) {
+        log_sdl("SDL_SubmitGPUCommandBufferAndAcquireFence");
+        return false;
+    }
+    const bool waited = SDL_WaitForGPUFences(device_, true, &fence, 1);
+    SDL_ReleaseGPUFence(device_, fence);
+    if (!waited) log_sdl("SDL_WaitForGPUFences");
+    return waited;
+}
+
+// The one-time index upload keeps its own transfer buffer.
+bool SwordFxRenderer::upload_indices(const void* data, uint32_t bytes) {
     SDL_GPUTransferBufferCreateInfo transfer_info{};
     transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     transfer_info.size = bytes;
     SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
     if (transfer == nullptr) {
-        log_sdl("SDL_CreateGPUTransferBuffer");
+        log_sdl("SDL_CreateGPUTransferBuffer(sword indices)");
         return false;
     }
-    bool ok = false;
-    if (void* mapped = SDL_MapGPUTransferBuffer(device_, transfer, false)) {
-        std::memcpy(mapped, data, bytes);
-        SDL_UnmapGPUTransferBuffer(device_, transfer);
-        if (SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_)) {
-            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-            const SDL_GPUTransferBufferLocation source{transfer, 0};
-            const SDL_GPUBufferRegion destination{buffer, 0, bytes};
-            SDL_UploadToGPUBuffer(copy, &source, &destination, false);
-            SDL_EndGPUCopyPass(copy);
-            if (SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd)) {
-                ok = SDL_WaitForGPUFences(device_, true, &fence, 1);
-                SDL_ReleaseGPUFence(device_, fence);
-            }
-        }
-    }
-    if (!ok) log_sdl("buffer upload");
+    const bool ok = copy_to(transfer, data, bytes, index_buffer_);
     SDL_ReleaseGPUTransferBuffer(device_, transfer);
     return ok;
 }
@@ -331,6 +371,12 @@ bool SwordFxRenderer::upload_textures(const std::array<TextureCpu, 4>& source) {
             SDL_UnmapGPUTransferBuffer(device_, transfer);
             if (SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_)) {
                 SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+                if (copy == nullptr) {
+                    SDL_CancelGPUCommandBuffer(cmd);
+                    SDL_ReleaseGPUTransferBuffer(device_, transfer);
+                    log_sdl("SDL_BeginGPUCopyPass(sword texture)");
+                    return false;
+                }
                 SDL_GPUTextureTransferInfo from{};
                 from.transfer_buffer = transfer;
                 from.pixels_per_row = info.width;
@@ -362,13 +408,13 @@ void SwordFxRenderer::update(const SwordFxFrame& frame, const Mat4& viewProj) {
     if (device_ == nullptr) {
         return;
     }
-    const std::vector<EffectVertex> vertices = build_sword_vertices(frame, viewProj);
-    if (vertices.empty() ||
-        !upload(vertices.data(), static_cast<uint32_t>(vertices.size() * sizeof(EffectVertex)),
-                vertex_buffer_)) {
+    build_into(frame, viewProj, vertices_);
+    if (vertices_.empty() ||
+        !copy_to(vertex_transfer_, vertices_.data(),
+                 static_cast<uint32_t>(vertices_.size() * sizeof(EffectVertex)), vertex_buffer_)) {
         return;  // draw() stays a no-op
     }
-    vertex_count_ = static_cast<int>(vertices.size());
+    vertex_count_ = static_cast<int>(vertices_.size());
 }
 
 void SwordFxRenderer::draw(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass, const Mat4& viewProj) {

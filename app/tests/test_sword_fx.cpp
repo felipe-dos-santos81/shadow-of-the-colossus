@@ -158,3 +158,22 @@ TEST_CASE("load_sword_textures reads exactly the given paths") {
         CHECK(std::string(error.what()).find(missing[2]) != std::string::npos);
     }
 }
+
+TEST_CASE("the sprites and the line widths are perpendicular to the camera's forward") {
+    SwordFxFrame frame = fan_frame();
+    frame.hit = true;
+    const Mat4 view_proj = test_view_proj();
+    const Vec3 forward = vec3_normalize(Vec3{view_proj.m[3], view_proj.m[7], view_proj.m[11]});
+    CHECK(forward.z == doctest::Approx(-1.0f));  // the camera at z=12 looks at the origin
+    const std::vector<EffectVertex> v = build_sword_vertices(frame, view_proj);
+    REQUIRE(v.size() == 40);
+    const auto edge = [&](int a, int b) {
+        return Vec3{v[b].px - v[a].px, v[b].py - v[a].py, v[b].pz - v[a].pz};
+    };
+    for (int q = 0; q < 10; ++q) {
+        CHECK(std::fabs(vec3_dot(edge(q * 4, q * 4 + 1), forward)) < 1e-4f);  // the width edge
+    }
+    for (int q = 8; q < 10; ++q) {
+        CHECK(std::fabs(vec3_dot(edge(q * 4, q * 4 + 3), forward)) < 1e-4f);  // the sprite's up edge
+    }
+}

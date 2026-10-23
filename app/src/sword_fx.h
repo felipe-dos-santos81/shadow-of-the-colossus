@@ -74,7 +74,8 @@ public:
 
 private:
     bool create_pipeline(SDL_GPUTextureFormat colorFormat);
-    bool upload(const void* data, uint32_t bytes, SDL_GPUBuffer* buffer);
+    bool copy_to(SDL_GPUTransferBuffer* transfer, const void* data, uint32_t bytes, SDL_GPUBuffer* buffer);
+    bool upload_indices(const void* data, uint32_t bytes);
     bool upload_textures(const std::array<TextureCpu, 4>& textures);
 
     SDL_GPUDevice* device_ = nullptr;
@@ -84,6 +85,8 @@ private:
     SDL_GPUSampler* sampler_ = nullptr;
     std::array<SDL_GPUTexture*, 4> textures_{};
     SDL_GPUBuffer* vertex_buffer_ = nullptr;
+    SDL_GPUTransferBuffer* vertex_transfer_ = nullptr;  // created once, mapped per frame
+    std::vector<EffectVertex> vertices_;  // the reused builder output (capacity 40)
     SDL_GPUBuffer* index_buffer_ = nullptr;
     int vertex_count_ = 0;
 };
