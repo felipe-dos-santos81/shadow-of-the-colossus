@@ -1,9 +1,11 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "door.h"
 #include "ride_points.h"
+#include "road_points.h"
 #include "transition.h"
 #include "valus.h"
 
@@ -217,6 +219,14 @@ struct AppOptions {
     // presses R in the shrine and exits 1 s into the arena. Prints the
     // `s8e2e-*` lines; a failed join exits 1 naming the step.
     bool s8E2e = false;
+    // S9 (D2): the road — the plain + the arena's entrance — is the Plain stage's
+    // manifest in interactive play and the S9 runs (plain.manifest otherwise).
+    std::string roadManifestPath = "out/re/stage/road.manifest";
+    // --s9-selftest / --s9-stills DIR / --s9-e2e (S9 Task 9's timelines; the flag
+    // rules live in main.cpp).
+    bool s9Selftest = false;
+    std::string s9StillsPath;
+    bool s9E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode
@@ -236,16 +246,21 @@ struct DoorRow {
     const ride_points::Door* door;
     StageId to;
 };
+// S8's rows come first; S9's (the road's corridor, the arena's way back) follow
+// and are live only in S9-wired runs: a frozen run passes kS8DoorCount.
 inline constexpr DoorRow kDoors[] = {
     {StageId::Shrine, &ride_points::kDoorShrine, StageId::Plain},  // the shrine's front exit
     {StageId::Plain, &ride_points::kDoorPlain, StageId::Shrine},   // the plain's shrine steps
+    {StageId::Plain, &road_points::kDoorCorridor, StageId::Arena}, // S9: the corridor's dead end
+    {StageId::Arena, &road_points::kDoorArena, StageId::Plain},    // S9: the arena's way back
 };
 inline constexpr int kDoorCount = static_cast<int>(sizeof(kDoors) / sizeof(kDoors[0]));
+inline constexpr int kS8DoorCount = 2;
 
-// The row of a door on `here` whose box the step prev -> now entered (box_entered),
-// or -1. The first row in table order wins.
-inline int door_entered_row(StageId here, Vec3 prev, Vec3 now) {
-    for (int i = 0; i < kDoorCount; ++i) {
+// The row (among the first `rowCount`) of a door on `here` whose box the step
+// prev -> now entered (box_entered), or -1. The first row in table order wins.
+inline int door_entered_row(StageId here, Vec3 prev, Vec3 now, int rowCount = kDoorCount) {
+    for (int i = 0; i < rowCount && i < kDoorCount; ++i) {
         const ride_points::Door& d = *kDoors[i].door;
         if (kDoors[i].from == here &&
             box_entered(prev, now, Vec3{d.min[0], d.min[1], d.min[2]},
@@ -274,6 +289,12 @@ inline DoorState door_stage_start(const DoorState& s, StageId here) {
 // The stage loop (S7 D6): run_app composes one stage per iteration; the
 // iteration ends with a request — quit, or release the scene and load `next`.
 struct StageRequest { bool quit = true; StageId next = StageId::Arena; };
+// Agro's pose where the player left her (S9 D4): position (her floor) and yaw.
+struct HorsePose {
+    Vec3 pos{};
+    float yawDeg = 0.0f;
+};
+
 // What crosses an iteration: the return machine's state, the --s7-selftest's
 // progress, and the first shrine load's mesh count (a reload must match it).
 // `e2eStep`/`e2eFrame` are --s7-e2e's progress (0 the first arena, 1 the
@@ -291,6 +312,9 @@ struct StageCarry {
     // --s8-selftest's progress (0 the plain, 1 the arena after R) and
     // --s8-e2e's (0 the shrine, 1 the plain, 2 the shrine again, 3 the arena).
     int s8Step = 0;
+    // S9 (D4): Agro's pose when the player last left the road by a door (S9-wired
+    // runs only); the next road load places her there. R clears it.
+    std::optional<HorsePose> horse;
 };
 
 // Opens the windowed SDL3 shell and runs it until the user quits (Escape or the

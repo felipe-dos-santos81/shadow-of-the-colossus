@@ -214,7 +214,7 @@ that `walk_line` passes with a worst slope < 9.5° → **4 waypoints** (301, −
 
 ## 6 · The bakes and the audio slice (Task 6) — into the library view only
 
-S9 never writes the base `out/library`; every command runs with `SOTC_LIB` at the branch's view.
+S9 never writes the base `out/library`; every command runs with `SOTC_LIB` at the branch's view. Run `make bake`/`make audio` without LIB/SOTC_LIB only at S9's merge.
 
 ```bash
 export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game

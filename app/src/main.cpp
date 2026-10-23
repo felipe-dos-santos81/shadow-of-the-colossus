@@ -72,6 +72,8 @@ void print_usage(FILE* out) {
                  "                    out/re/stage/shrine.manifest)\n"
                  "  --plain-manifest PATH  the plain's manifest (default\n"
                  "                    out/re/stage/plain.manifest)\n"
+                 "  --road-manifest PATH  the road's manifest: the plain stage in\n"
+                 "                    interactive play (default out/re/stage/road.manifest)\n"
                  "  --no-return       keep S6's end state: no return to the shrine\n"
                  "  --s7-selftest     seed Valus dead, run the return to the shrine, the\n"
                  "                    wake and the shrine probes, R back and reload;\n"
@@ -168,6 +170,14 @@ int main(int argc, char** argv) {
             opts.s8E2e = true;
             continue;
         }
+        if (arg == "--s9-selftest") {
+            opts.s9Selftest = true;
+            continue;
+        }
+        if (arg == "--s9-e2e") {
+            opts.s9E2e = true;
+            continue;
+        }
         if (arg == "--no-return") {
             opts.noReturn = true;
             continue;
@@ -181,7 +191,8 @@ int main(int argc, char** argv) {
                                  arg == "--s6-stills" || arg == "--audio-mixdown" ||
                                  arg == "--stage" || arg == "--shrine-manifest" ||
                                  arg == "--s7-stills" || arg == "--plain-manifest" ||
-                                 arg == "--s8-stills";
+                                 arg == "--s8-stills" || arg == "--road-manifest" ||
+                                 arg == "--s9-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -258,6 +269,10 @@ int main(int argc, char** argv) {
             opts.s7StillsPath = value;
         } else if (arg == "--s8-stills") {
             opts.s8StillsPath = value;
+        } else if (arg == "--road-manifest") {
+            opts.roadManifestPath = value;
+        } else if (arg == "--s9-stills") {
+            opts.s9StillsPath = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -355,7 +370,7 @@ int main(int argc, char** argv) {
     // --manifest too (R returns there) and is an interactive start.
     const bool frozen_selftest = opts.selftest || opts.s3Selftest || opts.s4Selftest ||
                                  opts.s41Selftest || opts.s42Selftest || opts.s5Selftest ||
-                                 opts.s6Selftest || opts.s8Selftest;
+                                 opts.s6Selftest || opts.s8Selftest || opts.s9Selftest;
     if (opts.s7Selftest && opts.manifestPath.empty()) {
         std::fprintf(stderr, "sotc-viewer: --s7-selftest needs --manifest\n");
         print_usage(stderr);
@@ -409,6 +424,38 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "sotc-viewer: --s8-e2e runs alone and starts in the shrine: --stage shrine, "
                      "no selftest, capture, --entity-time or --no-return\n");
+        print_usage(stderr);
+        return 2;
+    }
+    // S9: the selftest starts on the road and runs alone; the e2e is an
+    // interactive run (--stage shrine allowed) with no selftest, capture or
+    // --no-return.
+    if ((opts.s9Selftest || opts.s9E2e) &&
+        (opts.manifestPath.empty() || opts.modelRelPath.empty())) {
+        std::fprintf(stderr, "sotc-viewer: --s9-selftest/--s9-e2e need --manifest and --model\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s9Selftest && (opts.selftest || opts.s3Selftest || opts.s4Selftest ||
+                            opts.s41Selftest || opts.s42Selftest || opts.s5Selftest ||
+                            opts.s6Selftest || opts.s7Selftest || opts.s7E2e || opts.s8Selftest ||
+                            opts.s8E2e || opts.s9E2e)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s9-selftest cannot be combined with another selftest; "
+                     "pass one\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (opts.s9E2e && (frozen_selftest || opts.s7Selftest || opts.s7E2e || opts.s8E2e ||
+                       opts.noReturn || !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s9-e2e runs alone: no selftest, other e2e, capture, "
+                     "--entity-time or --no-return\n");
+        print_usage(stderr);
+        return 2;
+    }
+    if (!opts.s9StillsPath.empty() && !opts.s9Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s9-stills needs --s9-selftest\n");
         print_usage(stderr);
         return 2;
     }

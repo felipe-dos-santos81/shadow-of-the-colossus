@@ -182,7 +182,8 @@ TEST_CASE("door_phase_name spells the enum") {
 }
 
 TEST_CASE("the door table: entry -> row -> arrival reproduces S8's two doors (R16)") {
-    REQUIRE(kDoorCount == 2);
+    REQUIRE(kS8DoorCount == 2);
+    REQUIRE(kDoorCount == 4);  // + S9's corridor and arena doors (rows 2, 3)
     const ride_points::Door& ds = ride_points::kDoorShrine;
     const ride_points::Door& dp = ride_points::kDoorPlain;
     // The shrine's front exit: a step into its box on the shrine.
@@ -255,4 +256,72 @@ TEST_CASE("door_stage_start keeps only a door arrival (R16: R on a door-entry fr
     CHECK(kept.phase == DoorPhase::Load);
     CHECK(kept.row == 0);
     CHECK(kept.inputLocked);
+}
+
+namespace {
+
+bool inside_xz(const ride_points::Door& d, float x, float z) {
+    return x >= d.min[0] && x <= d.max[0] && z >= d.min[2] && z <= d.max[2];
+}
+
+}  // namespace
+
+TEST_CASE("S9: the corridor and arena doors are rows 2 and 3, live only with the S9 rows") {
+    const ride_points::Door& dc = road_points::kDoorCorridor;
+    const ride_points::Door& da = road_points::kDoorArena;
+    // The corridor's dead end on the road (the Plain stage) -> the arena.
+    const Vec3 corridorOut{304.0f, 3.0f, 284.0f}, corridorIn{304.0f, 3.0f, 288.0f};
+    const int rc = door_entered_row(StageId::Plain, corridorOut, corridorIn);
+    REQUIRE(rc == 2);
+    CHECK(kDoors[rc].from == StageId::Plain);
+    CHECK(kDoors[rc].door == &dc);
+    CHECK(kDoors[rc].to == StageId::Arena);
+    // The arena's way back -> the road.
+    const Vec3 arenaOut{305.0f, 29.0f, 313.0f}, arenaIn{305.0f, 29.0f, 309.0f};
+    const int ra = door_entered_row(StageId::Arena, arenaOut, arenaIn);
+    REQUIRE(ra == 3);
+    CHECK(kDoors[ra].from == StageId::Arena);
+    CHECK(kDoors[ra].door == &da);
+    CHECK(kDoors[ra].to == StageId::Plain);
+    // A frozen (S8) run passes the S8 rows only: neither S9 door enters.
+    CHECK(door_entered_row(StageId::Plain, corridorOut, corridorIn, kS8DoorCount) == -1);
+    CHECK(door_entered_row(StageId::Arena, arenaOut, arenaIn, kS8DoorCount) == -1);
+    // S8's own doors still enter under the S8 rows.
+    CHECK(door_entered_row(StageId::Plain, Vec3{301.0f, 0.0f, -250.0f},
+                           Vec3{301.0f, 0.0f, -255.0f}, kS8DoorCount) == 1);
+
+    // Two doors lead into the Plain: the row says which (no doorFrom), and each
+    // arrives at its own spawn.
+    DoorState s = step_door(step_door({}, 0.0f, true, ra, false), kDoorFadeOut, false, -1, false);
+    const DoorRow* a = arriving_door(s, StageId::Plain);
+    REQUIRE(a == &kDoors[ra]);
+    CHECK(a->from == StageId::Arena);
+    CHECK(a->door->arrive[0] == 304.0f);
+    CHECK(a->door->arrive[2] == 282.0f);
+    CHECK(a->door->arriveYawDeg == 180.0f);
+    s = step_door(step_door({}, 0.0f, true, rc, false), kDoorFadeOut, false, -1, false);
+    a = arriving_door(s, StageId::Arena);
+    REQUIRE(a == &kDoors[rc]);
+    CHECK(a->door->arrive[0] == 353.0f);  // the arena spawn
+    CHECK(a->door->arrive[1] == 27.951f);
+    CHECK(a->door->arrive[2] == 345.0f);
+    CHECK(a->door->arriveYawDeg == 49.24f);
+}
+
+TEST_CASE("S9: every box has positive extent; no arrival lands inside a door of its stage") {
+    for (int i = 0; i < kDoorCount; ++i) {
+        const ride_points::Door& d = *kDoors[i].door;
+        for (int k = 0; k < 3; ++k) CHECK(d.max[k] > d.min[k]);
+    }
+    // A spawn inside a box of the stage it lands on would re-fire (in x/z — the
+    // floor snap moves only y).
+    for (int i = 0; i < kDoorCount; ++i) {
+        const ride_points::Door& from = *kDoors[i].door;
+        for (int j = 0; j < kDoorCount; ++j) {
+            if (kDoors[j].from != kDoors[i].to) continue;
+            CAPTURE(i);
+            CAPTURE(j);
+            CHECK_FALSE(inside_xz(*kDoors[j].door, from.arrive[0], from.arrive[2]));
+        }
+    }
 }
