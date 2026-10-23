@@ -84,6 +84,8 @@ constexpr float kS4GroundTolerance = 1e-3f;  // the player's feet vs the heightm
 
 constexpr float kS7Eps = 1e-4f;
 
+constexpr int kS41ApproachFrames = 240;     // walk from S4's stop to the foot band
+
 // What crosses the stages of one run (design §13.9): the process's window,
 // device, renderer and audio engine, the stage to compose next, the carry
 // (StageCarry, app.h) and the per-run latches.
