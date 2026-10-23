@@ -177,9 +177,15 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         // must never raise the heightmap under Valus.
         try {
             // The shrine is a building (floors, a roof, walls): its
-            // ground is layered (design D4/D12); the arena's is not.
+            // ground is layered (design D4/D12); Valus's arena's is not.
+            // S11: a non-Valus arena (arena_02: overhangs, the cave ramp, the
+            // bridge deck — task-9a-report §3) is layered too, over its
+            // ground's own bounds (the scene's reach the player glb's rest
+            // pose at the origin: 409 MB); every earlier stage is unchanged.
+            const bool ownGround = here == StageId::Arena && &ctx.enc() != &encounters::kValus;
             heightmap = build_heightmap(scene, kHeightmapCellSize,
-                                        /*layered=*/here == StageId::Shrine);
+                                        /*layered=*/here == StageId::Shrine || ownGround,
+                                        /*staticBounds=*/ownGround);
             // S8 (D3): the plain's plateau ends in cliffs; its map
             // refuses holes, cliffs and walls of rock.
             heightmap.refuseHoles = here == StageId::Plain;

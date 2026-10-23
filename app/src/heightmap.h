@@ -60,8 +60,11 @@ struct Heightmap {
 //
 // Rigged meshes never rasterize: the player's own body (rig 0) must not become
 // the ground it walks on, and a placed entity (rig 1..) must not raise it
-// either. The grid's bounds are always the scene's own, rigged meshes included:
-// the walkable area is unchanged.
+// either. The grid's bounds are the scene's own, rigged meshes included (the
+// walkable area is unchanged) — unless `staticBounds`: then they are the ground
+// meshes' own XZ extent (S11: arena_02, whose 1 m layered map over the scene's
+// bounds — stretched to the origin by the player glb's rest pose — took 409 MB;
+// every earlier stage keeps the scene bounds, so its map is unchanged).
 //
 // Throws std::runtime_error("no meshes") when the scene has no meshes at all,
 // std::runtime_error("no static meshes") when every mesh is rigged (there is no
@@ -76,7 +79,8 @@ struct Heightmap {
 // one cell of its XZ footprint's outline.
 // ponytail: a steep slope's footprint interior wider than ~4 cells is not
 // flagged; rasterize the interior if the shrine ever has one.
-Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered = false);
+Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered = false,
+                          bool staticBounds = false);
 
 // The ground height under `p`: `p` is clamped into the heightmap's XZ bounds
 // first (a non-finite coordinate clamps to boundsMin, never a NaN index; Y is

@@ -332,7 +332,28 @@ static Heightmap rasterize(const Scene& scene, float cellSize, bool layered, boo
     return heightmap;
 }
 
-Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
+// The world-space bounds of the finite vertices of the static (rig < 0) meshes whose
+// `ground` flag is `ground`; lo > hi (+inf/-inf) when there are none.
+static void static_bounds(const Scene& scene, bool ground, Vec3& lo, Vec3& hi) {
+    const float inf = std::numeric_limits<float>::infinity();
+    lo = Vec3{inf, inf, inf};
+    hi = Vec3{-inf, -inf, -inf};
+    for (const MeshCpu& mesh : scene.meshes) {
+        if (mesh.rig >= 0 || mesh.ground != ground) {
+            continue;
+        }
+        for (const Vertex& v : mesh.vertices) {
+            const Vec3 p = transform_point(mesh.model, Vec3{v.px, v.py, v.pz});
+            if (!is_finite(p)) {
+                continue;
+            }
+            lo = Vec3{std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+            hi = Vec3{std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+        }
+    }
+}
+
+Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered, bool staticBounds) {
     if (!(cellSize > 0.0f) || !std::isfinite(cellSize)) {
         throw std::runtime_error("heightmap cell size must be positive and finite");
     }
@@ -351,6 +372,14 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
         throw std::runtime_error("no static meshes");
     }
 
+    if (staticBounds) {
+        Vec3 lo{};
+        Vec3 hi{};
+        static_bounds(scene, /*ground=*/true, lo, hi);
+        if (lo.x <= hi.x) {
+            return rasterize(scene, cellSize, layered, false, lo, hi);
+        }
+    }
     return rasterize(scene, cellSize, layered, false, scene.boundsMin, scene.boundsMax);
 }
 
@@ -359,22 +388,9 @@ Heightmap build_backdrop_grid(const Scene& scene, float cellSize) {
         throw std::runtime_error("heightmap cell size must be positive and finite");
     }
     // The backdrops' own world-space XZ bounds (finite vertices of static, non-ground meshes).
-    const float inf = std::numeric_limits<float>::infinity();
-    Vec3 lo{inf, inf, inf};
-    Vec3 hi{-inf, -inf, -inf};
-    for (const MeshCpu& mesh : scene.meshes) {
-        if (mesh.rig >= 0 || mesh.ground) {
-            continue;
-        }
-        for (const Vertex& v : mesh.vertices) {
-            const Vec3 p = transform_point(mesh.model, Vec3{v.px, v.py, v.pz});
-            if (!is_finite(p)) {
-                continue;
-            }
-            lo = Vec3{std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
-            hi = Vec3{std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
-        }
-    }
+    Vec3 lo{};
+    Vec3 hi{};
+    static_bounds(scene, /*ground=*/false, lo, hi);
     if (lo.x > hi.x) {
         Heightmap empty{};
         empty.cellSize = cellSize;

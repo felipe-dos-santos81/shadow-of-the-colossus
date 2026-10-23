@@ -261,6 +261,30 @@ TEST_CASE("build_heightmap rasterizes only rig-less (static) meshes") {
     CHECK(hm.boundsMax.y == doctest::Approx(7.0f));  // the entity is in the bounds
 }
 
+TEST_CASE("staticBounds crops the grid to the ground meshes, not a rigged mesh far away") {
+    // S11 (arena_02): the player glb's rest pose at the origin stretches the
+    // scene's bounds; the ground lies at x, z in [100, 110].
+    Scene scene = scene_from_triangles({{100, 3, 100}, {110, 3, 100}, {100, 3, 110}});
+    MeshCpu player;
+    player.vertices = {vertex_at({0, 0, 0}), vertex_at({1, 0, 0}), vertex_at({0, 0, 1})};
+    player.indices = {0, 1, 2};
+    player.rig = 0;
+    scene.meshes.push_back(std::move(player));
+    scene.boundsMin = Vec3{0.0f, 0.0f, 0.0f};
+
+    const Heightmap wide = build_heightmap(scene, 1.0f, /*layered=*/true);
+    const Heightmap own = build_heightmap(scene, 1.0f, /*layered=*/true, /*staticBounds=*/true);
+    CHECK(wide.width == 111);  // the scene's bounds: 0..110
+    CHECK(own.width == 11);    // the ground's: 100..110
+    CHECK(own.height == 11);
+    CHECK(own.boundsMin.x == doctest::Approx(100.0f));
+    CHECK(own.boundsMax.z == doctest::Approx(110.0f));
+    CHECK(own.layers.size() == static_cast<std::size_t>(11 * 11 * kHeightmapLayers));
+    CHECK(heightmap_sample(own, {101, 0, 101}) == doctest::Approx(3.0f));
+    CHECK(heightmap_floor(own, {101, 3, 101}, kFloorStep) ==
+          doctest::Approx(heightmap_floor(wide, {101, 3, 101}, kFloorStep)));
+}
+
 TEST_CASE("an entity placed over a cell changes no ground sample") {
     // The same static ground, with and without a rigged entity covering the
     // whole footprint at a higher Y: every sample must be identical, and both
