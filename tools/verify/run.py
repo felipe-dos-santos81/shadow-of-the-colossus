@@ -12,7 +12,7 @@ with the GPU runs. The runner refuses to run when a frozen script differs from t
 
   --only NAME   a milestone (s3 … s8) or a step (dotnet, ctest, audio); repeatable
   --quick       skip the e2e runs (the inner loop); a quick pass never satisfies a full run's stamp
-  --jobs N      GPU width for the sections without a perf gate (default 1: D4's measurement first)
+  --jobs N      GPU width for the sections without a perf gate (default 1: S10 Task 4 measured, concurrent viewers fail the ±0.2 ms rule — docs/notes/s10-results.md)
   --force       ignore the stamps
   --dry-run     list every step, run and check with its stamp decision, and the gate coverage
   --bless       run every selected section twice, refuse on any unstable line, write the goldens
@@ -518,7 +518,7 @@ class Runner:
         rest = [i for i in todo if i not in perf]
         with concurrent.futures.ThreadPoolExecutor(max(1, self.args.jobs)) as pool:
             list(pool.map(one, rest))
-        if perf:   # perf-gated runs run alone (D4) until Task 4 measures a GPU width
+        if perf:   # perf-gated runs run alone (D4); the GPU width stays 1 (Task 4: concurrent viewers exceed ±0.2 ms)
             for th in self.threads:
                 th.join()
         for item in perf:

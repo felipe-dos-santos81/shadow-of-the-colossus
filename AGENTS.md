@@ -141,7 +141,7 @@ S9 bake.
 
 The machine suspends idle background work. **Every viewer run and every acceptance run must be
 wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Never run two
-acceptances concurrently.
+runs sharing an `out/` directory; the runner parallelises within its own `out/verify/<worktree>/`.
 
 ## Build and test
 
