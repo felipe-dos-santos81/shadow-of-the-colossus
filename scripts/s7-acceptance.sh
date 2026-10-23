@@ -22,7 +22,7 @@
 #      the phase order Idle Hold FadeOut (R) Idle Hold FadeOut Load FadeIn Wake
 #      Free, fade 1.000 at Load and 0.000 at Wake, four s7-load lines (arena,
 #      shrine, arena, shrine; equal shrine mesh counts; each shrine load
-#      inside 60 s), the ground probes (the floor under the feet, not the
+#      inside 15 s), the ground probes (the floor under the feet, not the
 #      roof), the wall probe stops the walk, the 16 idols (slot 1 broken), the
 #      posed Mono, the perf line (<= 16.7 ms, culling active), the status and
 #      the two resets, plus the `s1-status` window/cursor line;
@@ -34,8 +34,8 @@
 #   8. a summary block with every measured number.
 #
 # Every viewer and acceptance run is wrapped in `caffeinate -dimsu`. Never run
-# two acceptances concurrently. The shrine loads take ~25 s each (four loads in
-# the selftest), the S6 chain ~10-15 min.
+# two acceptances concurrently. The shrine loads take ~2 s each (four loads in
+# the selftest, ceiling 15 s), the S6 chain ~10-15 min.
 #
 # Environment:
 #   SOTC_GAME_ROOT  the extracted game tree (required — never silently skipped)
@@ -226,10 +226,10 @@ shrine_meshes="$(field "$load2" meshes)"
   fail "the reloaded shrine has $(field "$load4" meshes) meshes, the first load had $shrine_meshes"
 [[ "$(field "$load3" meshes)" = "$(field "$load1" meshes)" ]] ||
   fail "the reloaded arena has $(field "$load3" meshes) meshes, the first load had $(field "$load1" meshes)"
-# Ruling R11: the ceiling is 60 s (measured 24-26.5 s); load-time caching is the next step.
+# Ruling R15: the ceiling is 15 s (R11 had 60 s for the pre-fix 24-27 s loads; the texture dedup cut them to ~2 s).
 for l in "$load2" "$load4"; do
-  awk -v ms="$(field "$l" ms)" 'BEGIN { exit !(ms <= 60000) }' ||
-    fail "a shrine load took $(field "$l" ms) ms (ceiling 60000)"
+  awk -v ms="$(field "$l" ms)" 'BEGIN { exit !(ms <= 15000) }' ||
+    fail "a shrine load took $(field "$l" ms) ms (ceiling 15000)"
 done
 
 # --- the ground, the wall, the idols, Mono ------------------------------------
