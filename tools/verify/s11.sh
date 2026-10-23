@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# s11.sh — the runner's adapter for S11 (Quadratus, Task 10). Unlike s3…s9 it is no second copy: there is
-# no frozen scripts/s11-acceptance.sh yet (Task 11 writes it and blesses the goldens). Until both exist
-# run.py runs this adapter REPORT-ONLY (run.report_only): its own gates below decide the section, the
-# viewer runs are kept as golden candidates, nothing is diffed.
-#   gpu: the preflight (arena_02.manifest selects Quadratus; his bake), the four flag refusals (exit 2),
-#        the selftest + four 2560x1440 stills (the timeline's gates), the e2e (skipped by --quick): its
+# s11.sh — the runner's adapter for S11 (Quadratus): a second copy of scripts/s11-acceptance.sh's
+# assertions, like s3…s9 (the frozen S9 chain and the build are run.py's; the gates are verbatim).
+#   gpu: the preflight (arena_02.manifest selects Quadratus; his bake), the four flag refusals + the
+#        --stage refusal (exit 2), the selftest + four 2560x1440 stills (the timeline's gates, the perf
+#        budget, the pixel spans), the e2e (skipped by --quick): one arena load and no shrine, and its
 #        lines equal the selftest's, so the interactive loop and the script agree.
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -12,8 +11,16 @@ arena02_manifest="$repo_root/out/re/stage/arena_02.manifest"
 quad_clips_json="$lib/models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.clips.json"
 stills_dir="$out_dir/stills"
 
+need() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
 preflight() {
+  for c in caffeinate awk grep sed tr wc python3 od diff uniq; do
+    need "$c"
+  done
   [[ -n "$game_root" ]] || fail "SOTC_GAME_ROOT is not set"
+  [[ -d "$game_root" ]] || fail "SOTC_GAME_ROOT not found: $game_root"
   [[ -d "$lib" ]] || fail "asset library not found: $lib (set SOTC_LIB)"
   [[ -f "$lib/$player" ]] || fail "player glb not found under the library: $lib/$player"
   [[ -x "$viewer_bin" ]] || fail "viewer not built: $viewer_bin"
@@ -65,6 +72,24 @@ if ! selftest_out="$(caffeinate -dimsu "$viewer" "${base_args[@]}" --s11-selftes
 fi
 printf '%s\n' "$selftest_out"
 
+# field LINE KEY — the value of KEY=… in LINE (assign it to a variable: set -e then stops on a miss).
+field() {
+  local line="$1" key="$2" rest
+  rest="${line#*" $key"=}"
+  [[ "$rest" != "$line" ]] || fail "field $key missing from: $line"
+  printf '%s' "${rest%% *}"
+}
+
+# cmp_ok VALUE OP LIMIT — an awk comparison (OP one of < <= > >=); empty fails.
+cmp_ok() {
+  [[ -n "$1" && -n "$3" ]] || fail "cmp_ok: an empty argument ('$1' '$2' '$3')"
+  [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ && "$3" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] ||
+    fail "cmp_ok: a non-numeric argument ('$1' '$2' '$3')"
+  awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN {
+    if (op == "<") exit !(v < l); if (op == "<=") exit !(v <= l);
+    if (op == ">") exit !(v > l); if (op == ">=") exit !(v >= l); exit 1 }'
+}
+
 one_line() {
   local regex="$1" label="$2" count
   count="$(grep -c -E "$regex" <<<"$selftest_out" || true)"
@@ -73,8 +98,7 @@ one_line() {
 }
 
 # The timeline's events in order (the climb/strike lines in between vary with the route).
-s11_events="$(grep -E '^s11-(load|attack|charge|hoof|grab|sigil|back|shake|death|corpse|reset|perf|status) ' \
-  <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ')"
+s11_events="$(grep -E '^s11-(load|attack|charge|hoof|grab|sigil|back|shake|death|corpse|reset|perf|status) ' <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ')"
 [[ "$s11_events" = "s11-load s11-attack s11-charge s11-hoof s11-grab s11-sigil s11-back s11-shake s11-shake s11-death s11-death s11-death s11-corpse s11-reset s11-perf s11-status " ]] ||
   fail "the s11-* events are '$s11_events' (expected the timeline's order)"
 
@@ -111,15 +135,67 @@ corpse_line="$(one_line '^s11-corpse ' s11-corpse)"
 perf_line="$(one_line '^s11-perf ' s11-perf)"
 [[ "$perf_line" =~ ^s11-perf\ frames=240\ frame_ms=[0-9]+\.[0-9]+\ drawn=[0-9]+\ culled=[0-9]+$ ]] ||
   fail "s11-perf is malformed: $perf_line"
+perf_frame="$(field "$perf_line" frame_ms)"
+cmp_ok "$perf_frame" ">" 0 && cmp_ok "$perf_frame" "<=" 16.7 ||
+  fail "the arena_02 frame costs ${perf_frame} ms (outside the 60 fps budget of 16.7 ms)"
 [[ "$(one_line '^s11-status ' s11-status)" =~ ^s11-status\ phases_done=11\  ]] ||
   fail "the selftest did not reach its last phase (reset)"
 one_line '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' s1-status > /dev/null
 
+# The four stills: one 2560x1440 s1-screenshot line each, PNG magic, > 5000 B, a channel span >= 30.
+span_for() {
+  local want="$1"
+  awk -v want="$want" '
+    /^s1-pixels / { line = $0 }
+    /^s1-screenshot / { if ($2 == "path=" want) { print line; exit } }
+  ' <<<"$selftest_out"
+}
+
+size_for() {
+  local want="$1"
+  awk -v want="$want" '
+    /^s1-screenshot / {
+      if ($2 == "path=" want) {
+        w = $3; h = $4;
+        sub(/^width=/, "", w); sub(/^height=/, "", h);
+        print w, h; exit
+      }
+    }
+  ' <<<"$selftest_out"
+}
+
+check_png() {
+  local name="$1" path="$2" magic bytes pixels_line min_csv max_csv size w h
+  local min_r min_g min_b max_r max_g max_b d largest
+  [[ -f "$path" ]] || fail "$name: no PNG at $path"
+  magic="$(od -An -tx1 -N4 "$path" | tr -d ' \n')"
+  [[ "$magic" = "89504e47" ]] || fail "$name: $path lacks the PNG magic (got $magic)"
+  bytes="$(wc -c < "$path" | tr -d '[:space:]')"
+  [[ "$bytes" -gt 5000 ]] || fail "$name: $path is only $bytes bytes (need > 5000)"
+  size="$(size_for "$path")"
+  [[ -n "$size" ]] || fail "$name: no s1-screenshot line for $path"
+  read -r w h <<<"$size"
+  [[ "$w" = "2560" && "$h" = "1440" ]] || fail "$name: $path is ${w}x${h} (need 2560x1440)"
+  pixels_line="$(span_for "$path")"
+  [[ -n "$pixels_line" ]] || fail "$name: no s1-pixels line for $path"
+  min_csv="${pixels_line#*min=}"; min_csv="${min_csv%% *}"
+  max_csv="${pixels_line#*max=}"; max_csv="${max_csv%% *}"
+  IFS=, read -r min_r min_g min_b <<<"$min_csv"
+  IFS=, read -r max_r max_g max_b <<<"$max_csv"
+  largest=$((max_r - min_r))
+  d=$((max_g - min_g)); if ((d > largest)); then largest=$d; fi
+  d=$((max_b - min_b)); if ((d > largest)); then largest=$d; fi
+  [[ "$largest" -ge 30 ]] || fail "$name: uniform frame (largest channel span $largest < 30): $pixels_line"
+  printf '%s|%s|%s\n' "$path" "$bytes" "$largest"
+}
+
+stills=""
 for name in kneel back head death; do
   path="$stills_dir/$name.png"
   [[ "$(grep -c -E "^s1-screenshot path=$path width=2560 height=1440\$" <<<"$selftest_out" || true)" = "1" ]] ||
     fail "still $name: expected one 2560x1440 s1-screenshot line for $path"
-  [[ -s "$path" ]] || fail "still $name: $path is missing or empty"
+  row="$(check_png "$name" "$path")"
+  stills="${stills}${stills:+ }$row"
 done
 
 if [[ -z "${VERIFY_QUICK:-}" ]]; then   # --quick skips the e2e run
@@ -132,6 +208,10 @@ if [[ -z "${VERIFY_QUICK:-}" ]]; then   # --quick skips the e2e run
   [[ "$(grep -c -E '^s11e2e-done frames=[0-9]+ ' <<<"$e2e_out" || true)" = "1" ]] || fail "no s11e2e-done line"
   grep -q -E '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' <<<"$e2e_out" ||
     fail "the e2e printed no s1-status"
+  # returnWired is off for a non-Valus encounter: the loop loads the arena once and never the shrine.
+  e2e_loads="$(grep -E '^s7-load ' <<<"$e2e_out" | awk '{ print $2 }' | tr '\n' ' ')"
+  [[ "$e2e_loads" = "stage=arena " ]] ||
+    fail "the e2e loaded '$e2e_loads' (expected the arena once: no shrine after his death)"
   # The interactive loop played the selftest's fight: the same lines, the timings aside.
   self_lines="$(grep -E '^s11-' <<<"$selftest_out" | grep -v -E '^s11-(load|perf|status) ' | sed 's/^s11-//')"
   e2e_lines="$(grep -E '^s11e2e-' <<<"$e2e_out" | grep -v -E '^s11e2e-(load|done) ' | sed 's/^s11e2e-//')"

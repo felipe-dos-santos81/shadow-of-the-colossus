@@ -182,15 +182,15 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest road-manifest accept-s9 ## Run the current milestone's acceptance (S9 → S8 → S7 → … → S3)
+accept: shrine-manifest plain-manifest road-manifest arena02-manifest accept-s11 ## Run the current milestone's acceptance (S11 → S9 → S8 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
 verify: shrine-manifest plain-manifest road-manifest arena02-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
 	./scripts/verify $(ARGS)
 
-verify-long: shrine-manifest plain-manifest road-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
+verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
 	./scripts/verify --long
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export

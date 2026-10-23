@@ -22,6 +22,9 @@ MASKS = (
     ("s7e2e-load ", "ms"),
     ("s8-load ", "ms"),
     ("s9-load ", "ms"),       # the road load wall time (the s9 e2e's loads are s7-load lines)
+    ("s11-perf ", "frame_ms"),  # S11 (Task 10's two runs: 8.345 / 8.289)
+    ("s11-load ", "ms"),        # the arena_02 load wall time (1073.7 / 891.6)
+    ("s11e2e-load ", "ms"),     # the same load inside the e2e (952.0 / 869.7)
 )
 MASKED = "<masked>"
 

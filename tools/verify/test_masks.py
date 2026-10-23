@@ -73,6 +73,14 @@ def main():
             "s9-perf frames=240 frame_ms=<masked> drawn=120 culled=40",
         "s9-load stage=plain manifest=road instances=12 backdrops=3 meshes=900 raygrid=64x64 ms=1249.0":
             "s9-load stage=plain manifest=road instances=12 backdrops=3 meshes=900 raygrid=64x64 ms=<masked>",
+        "s11-perf frames=240 frame_ms=8.345 drawn=98 culled=116":
+            "s11-perf frames=240 frame_ms=<masked> drawn=98 culled=116",
+        "s11-load stage=arena encounter=quadratus meshes=214 ground=1111x688 layers=64 return=0 ms=1073.7":
+            "s11-load stage=arena encounter=quadratus meshes=214 ground=1111x688 layers=64 return=0 ms=<masked>",
+        "s11e2e-load stage=arena encounter=quadratus meshes=214 return=0 ms=952.0":
+            "s11e2e-load stage=arena encounter=quadratus meshes=214 return=0 ms=<masked>",
+        "s11-corpse live_body=1 clip=boss_a_death t=5.333 held=1 moved=17.50 yaw=66.68 return=Idle":
+            "s11-corpse live_body=1 clip=boss_a_death t=5.333 held=1 moved=17.50 yaw=66.68 return=Idle",
         "s9-lock k=0.0012 locked=1 ray_m=150.0 hit=1 hit_m=38.0":
             "s9-lock k=0.0012 locked=1 ray_m=150.0 hit=1 hit_m=38.0",
         "s5-event t=2.050 event=music_start clip=music.boss gain=0.45":
