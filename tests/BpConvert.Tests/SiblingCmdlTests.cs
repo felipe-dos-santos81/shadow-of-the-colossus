@@ -40,4 +40,25 @@ public class SiblingCmdlTests : IDisposable
 
         Assert.Equal("x_1234567.cmdl", Path.GetFileName(AquaModelAdapter.FindSiblingCmdl(Path.Combine(_dir, "x.cmsh"))));
     }
+
+    private string PickIn(string cmsh, params string[] siblings)
+    {
+        foreach (var name in siblings.Append(cmsh))
+            File.WriteAllBytes(Path.Combine(_dir, name), []);
+        return Path.GetFileName(AquaModelAdapter.FindSiblingCmdl(Path.Combine(_dir, cmsh)))!;
+    }
+
+    [Fact]
+    public void HexSibling_BeatsAnEarlierSortingNeighbour()
+    {
+        // x_02_cafebabe sorts before x_deadbeef but its suffix is not exactly 8 hex.
+        Assert.Equal("x_deadbeef.cmdl", PickIn("x.cmsh", "x_02_cafebabe.cmdl", "x_deadbeef.cmdl"));
+    }
+
+    [Fact]
+    public void NineHexSuffix_IsNotAUniqueId()
+    {
+        // 9 hex digits fail the exactly-8 rule: the earlier-sorting non-hex sibling (first match) wins.
+        Assert.Equal("x_0_group.cmdl", PickIn("x.cmsh", "x_0_group.cmdl", "x_1deadbeef.cmdl"));
+    }
 }
