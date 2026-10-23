@@ -156,6 +156,24 @@ struct PlainRide {
     RideKeys rideKeysBefore;
 };
 
+// The interactive loop's frame state (S10 Task 6d): what frame_step carries
+// from one frame to the next besides the stage's own state.
+struct FrameState {
+    // The S6 death sequence's own state (design §8.1): the phase machine,
+    // the one-shot burst-cue latch, and the follow pose the cinematic
+    // starts from. All three are reset by R.
+    DeathState death = reset_death();
+    bool deathCueFired = false;
+    bool deathCameraSet = false;
+    Camera deathCameraBase{};
+    // The S5 audio observer's on/off switch for the whole loop: false when
+    // no curated manifest loaded (the game then stays silent).
+    bool audioOn = false;
+    // This frame's rig poses. Hoisted so Valus's attack decision can read
+    // the previous frame's posed feet before this frame's clip is chosen.
+    std::vector<std::vector<Mat4>> palettes;
+};
+
 struct StageCtx {
     explicit StageCtx(RunState& run)
         : opts(run.opts), shell(run.shell), renderer(run.renderer), audio(run.audio),
@@ -242,6 +260,7 @@ struct StageCtx {
     SwordState sword = reset_sword();
     bool sword_wired = false;
     bool swordSearchLatch = false;  // the search cue's lock edge (once per lock)
+    FrameState play;  // the interactive loop's (frame_step's) own state
 
     // One HUD view of the run for every set_hud site (design §7.7). The
     // overlay belongs to an encounter, so a manifest with no entity draws

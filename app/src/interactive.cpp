@@ -52,6 +52,365 @@ constexpr float kS9E2eReinAt = 20.0f;           // m from kAgroStairs: rein (the
 
 }  // namespace
 
+// One interactive frame in manifest mode (S10 Task 6d): the death and return
+// machines, the input lock, Valus's fight, the clips and poses, the plain, the
+// cameras, the player step and the combat, the sword, the doors, the wake and
+// death cameras, the audio and the HUD — in the order the loop always ran
+// them. `in` is the frame's input (the live keys or an e2e script's); the
+// result ends the stage (a request), the run (a script's check), and carries
+// the frame's effect and sword light for the draw.
+FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
+    Renderer& renderer = ctx.renderer;
+    AudioSeam& audio = ctx.audio;
+    StageCarry& carry = ctx.carry;
+    const StageId& here = ctx.here;
+    Scene& scene = ctx.scene;
+    ClubAttachment& club = ctx.club;
+    CorpseAttachment& corpse = ctx.corpse;
+    Heightmap& heightmap = ctx.heightmap;
+    const bool& death_wired = ctx.death_wired;
+    bool& return_wired = ctx.return_wired;
+    const RigCpu& player_rig_record = *ctx.playerRigRecord;
+    Camera& camera = ctx.camera;
+    Vec3& stage_spawn = ctx.stage_spawn;
+    float& stage_spawn_yaw = ctx.stage_spawn_yaw;
+    PlayerState& player = ctx.player;
+    PlayerCombat& combat = ctx.combat;
+    Encounter& encounter = ctx.encounter;
+    const CombatTuning& tuning = ctx.tuning;
+    CameraClimb& climbCamera = ctx.climbCamera;
+    CameraFollow& follow = ctx.follow;
+    CameraTarget& targetCamera = ctx.targetCamera;
+    Vec3& entityChest = ctx.entityChest;
+    bool& haveEntityChest = ctx.haveEntityChest;
+    const std::size_t& entityRig = ctx.entityRig;
+    std::vector<Playback>& playbacks = ctx.playbacks;
+    Playback& playback = *ctx.playbackPtr;
+    EntityClips& entityClips = ctx.entityClips;
+    ReturnTimings& returnTimings = ctx.returnTimings;
+    const bool& manual_clip = ctx.manual_clip;
+    const bool& valus_behavior = ctx.valus_behavior;
+    const bool& s8_wired = ctx.s8_wired;
+    bool& plain_ride = ctx.plain_ride;
+    PlainRide& pr = ctx.pr;
+    SwordState& sword = ctx.sword;
+    bool& sword_wired = ctx.sword_wired;
+    DeathState& death = ctx.play.death;
+    bool& deathCueFired = ctx.play.deathCueFired;
+    bool& deathCameraSet = ctx.play.deathCameraSet;
+    Camera& deathCameraBase = ctx.play.deathCameraBase;
+    const bool& audio_on = ctx.play.audioOn;
+    std::vector<std::vector<Mat4>>& palettes = ctx.play.palettes;
+    FrameResult result;
+    const float dt = in.dt;
+    const float drag_dx = in.dragDx;
+    const float drag_dy = in.dragDy;
+    const float wheel_delta = in.wheel;
+    const bool climb_recenter = in.climbRecenter;
+    // The stage still runs: no quit, R or script exit earlier this frame, and
+    // no Load yet in this one.
+    bool live = in.live;
+
+    // S6: the death sequence's clock runs on the real frame time.
+    // The defeat transition happens later in this frame (in
+    // apply_combat_events), so the machine starts on the next frame
+    // with total = 0 and does not accumulate the defeat frame's dt
+    // (death.h's pinned rule). While it runs, the machine's clock
+    // drives the one-shot death clip and gates the player input;
+    // the corpse swap follows the same clock (advance_death_frame).
+    if (death_wired && encounter.defeated && entityRig < playbacks.size()) {
+        advance_death_frame(death, dt, playbacks[entityRig], entityClips.death,
+                            corpse, club, scene, entityRig);
+    }
+    // S7: the return (design §8.4) on the real frame time. The
+    // shrine's iteration is the completed load; entering Load in
+    // the arena ends the iteration with the request for it (this
+    // frame still draws, white).
+    if (return_wired) {
+        const ReturnState before = carry.ret;
+        carry.ret = step_return(carry.ret, dt, returnTimings,
+                                death.phase == DeathPhase::Done,
+                                /*loadDone=*/here == StageId::Shrine);
+        // A quit (Escape, the close button) this frame wins
+        // over the stage request.
+        if (live && return_wants_load(before, carry.ret)) {
+            result.request = StageRequest{false, StageId::Shrine};
+            live = false;
+        }
+    }
+    // The one input seam (FrameInput): the keyboard and gamepad or a script's;
+    // --s7-e2e decides its own here, once the machines have stepped.
+    PlayerInput input = in.input;
+    const RideKeys rideKeys = in.rideKeys;  // S8: the plain's held ride keys
+    const bool swordHeld = in.swordHeld;    // S9: C / the left shoulder, held
+    if (in.afterMachines) {
+        in.afterMachines(input);
+    }
+    // S6 D7: the death cinematic locks the body — movement, grab
+    // and strike are ignored while the camera runs; R, M and Escape
+    // are handled above and stay live. Control returns in Done.
+    // S7: the return locks it from FadeOut through Wake.
+    const bool inputLocked = death_locks_input(death) || carry.ret.inputLocked ||
+                             carry.door.inputLocked;
+    // S8: on the plain the ride owns the body while mounted (no
+    // player_step, no mode clip) and the whistle holds it still.
+    const bool rideOwnsBody =
+        plain_ride && (pr.ride.phase != RidePhase::OnFoot || pr.whistleClip >= 0);
+    if (inputLocked || rideOwnsBody) {
+        input = PlayerInput{};
+    }
+    // S9: on foot a raised sword owns the clip and turns the move
+    // input into a facing (zero speed; the camera aims the beam).
+    const bool swordFoot = sword_wired && sword_locks_movement(sword);
+    if (swordFoot) {
+        const float ahead = (input.forward ? 1.0f : 0.0f) - (input.back ? 1.0f : 0.0f);
+        const float side = (input.right ? 1.0f : 0.0f) - (input.left ? 1.0f : 0.0f);
+        if (ahead != 0.0f || side != 0.0f) {
+            // player_update's basis and turn rate (540 deg/s, its dt clamp).
+            const float cy = camera_look_yaw(camera) * kDegToRad;
+            const float want =
+                std::atan2(std::sin(cy) * ahead - std::cos(cy) * side,
+                           std::cos(cy) * ahead + std::sin(cy) * side) / kDegToRad;
+            const float turn = 540.0f * std::clamp(dt, 0.0f, 0.05f);
+            player.yawDeg = std::remainder(
+                player.yawDeg +
+                    std::clamp(std::remainder(want - player.yawDeg, 360.0f), -turn, turn),
+                360.0f);
+        }
+        input = PlayerInput{};
+    }
+    const bool moving = input.forward || input.back || input.left || input.right;
+    if (in.afterLock) {
+        if (const std::optional<int> code = in.afterLock(inputLocked, moving)) {
+            result.exitCode = code;
+            return result;
+        }
+    }
+
+    // The encounter's one-shot clock, then Valus's own fight state
+    // (R8), then the clip choice (from the mode the previous step
+    // left) and this frame's poses: the target camera, the collision
+    // proxy and the climb attach point all read the palettes drawn
+    // today. Valus reads the previous palette's posed feet; the
+    // model transform is already this frame's, because the yaw step
+    // below runs before the joint query.
+    SfxQueue frameSfx;  // S5: this frame's cues, drained once below
+    if (entityRig < playbacks.size() && !encounter.defeated) {
+        advance_encounter_reaction(playbacks[entityRig], encounter,
+                                   entityClips.stand, dt);
+    }
+    // S6: the death roar fires at the tendril burst (0.4 s), not at
+    // the defeat — the machine's clock owns the moment.
+    if (death_wired && death_cue_due(death, deathCueFired) && audio_on) {
+        append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
+                             frameSfx);
+    }
+    if (valus_behavior) {
+        const float valus_dt = std::clamp(dt, 0.0f, kMaxCombatStepSeconds);
+        // He turns only for an exactly grounded, living target: while
+        // the player is on him the body holds still, or the climber
+        // would slide around the band and the route would move.
+        if (combat.mode == PlayerMode::Grounded && !encounter.defeated) {
+            encounter.entityYawDeg = valus_yaw_slew(
+                encounter.entityYawDeg, encounter.entityPosition,
+                player.position, kValusYawSlewDegPerSecond, valus_dt);
+        }
+        update_entity_transform(scene, encounter, entityRig);
+        const ValusAttackInput attack_input = valus_attack_input(
+            scene, entityRig, palettes, player, combat, encounter);
+        advance_valus_attack(encounter, playbacks[entityRig], entityClips,
+                             attack_input, valus_dt,
+                             audio_on ? &frameSfx : nullptr);
+        // S6: the club's mid-swing whoosh (the telegraph already
+        // sounded at the clip's start).
+        maybe_club_swing(encounter, audio_on ? &frameSfx : nullptr);
+    }
+    // S7: while waking the wake clips own the player's clip.
+    const bool wakeFrame = ctx.waking();
+    if (wakeFrame) {
+        ctx.pose_wake();
+        if (in.onWake) {
+            in.onWake();
+        }
+    } else if (!rideOwnsBody) {
+        ctx.leave_wake();
+        if (swordFoot) {
+            // The sword's clip at the machine's clock (last frame's step).
+            playback.index = clip_index_named(playback, sword.clip);
+            playback.time = sword.clipTime;
+            playback.pinned = true;
+            playback.playing = false;
+        } else {
+            update_combat_clips(playback, scene, combat, input, manual_clip);
+        }
+    }
+    palettes = update_all_poses(renderer, scene, playbacks, dt, club);
+    if (plain_ride) {
+        ctx.plain_step(dt, rideKeys, inputLocked, palettes);
+    }
+    const bool riding = plain_ride && pr.ride.phase != RidePhase::OnFoot;
+    // The follow camera's subject: Agro while mounted (D13).
+    const Vec3 followPos = riding ? pr.horsePos : player.position;
+    const float followYaw = riding ? pr.horseYaw : player.yawDeg;
+    const bool followMoving = riding ? pr.ride.speed != 0.0f : moving;
+    if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
+        haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
+                                               entityChest);
+    }
+
+    // While gripping, the climb orbit owns the camera: it is updated
+    // after the step, on this frame's attach point. Otherwise the
+    // camera runs before player_update (its yaw is the movement
+    // basis, and in target mode that is the orbit around the chest).
+    const bool attached_before = mode_is_attached(combat.mode);
+    if (!attached_before) {
+        if (targetCamera.active) {
+            if (haveEntityChest) {
+                camera_target_update(camera, targetCamera, entityChest, drag_dx,
+                                     drag_dy, wheel_delta);
+            }
+        } else if (targetCamera.returning) {
+            camera_target_return(camera, follow, targetCamera, player.position,
+                                 player.yawDeg, drag_dx, drag_dy, wheel_delta,
+                                 moving, dt);
+        } else {
+            camera_follow(camera, follow, followPos, followYaw, drag_dx, drag_dy,
+                          wheel_delta, followMoving, dt);
+        }
+    }
+
+    // The player step: the state machine runs the Grounded
+    // controller + capsule resolver in the S3/S4 order, or recomputes
+    // the attach point from this frame's entity palette. Once the
+    // corpse has replaced the body (S6, design §8.3) the frame
+    // carries no live entity: nothing to walk into, climb or strike.
+    const PlayerFrame frame =
+        player_frame_of(scene, entityRig, palettes, heightmap,
+                        camera_look_yaw(camera),
+                        /*entityLive=*/!death_corpse_visible(death));
+    const int weakpoint = combat.weakpoint;  // detach() clears it
+    const Vec3 positionBefore = player.position;
+    // S8 (D8): no player_step while mounted — the ride places him.
+    StepEvents events{};
+    if (!riding) {
+        events = player_step(player, combat, input, frame, tuning, dt);
+    }
+    if (audio_on) {
+        append_player_sfx(events, player.position, frameSfx);
+    }
+    if (in.lethalHit) {
+        // An e2e script's one lethal hit, landed as a strike lands.
+        events.damageDealt = 100;
+    }
+    if (events.damageDealt > 0 && entityRig < playbacks.size()) {
+        apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
+                            weakpoint, audio_on ? &frameSfx : nullptr);
+    }
+    if (in.lethalHit && !encounter.defeated) {
+        result.exitCode = in.lethalMissed();
+        return result;
+    }
+    // Valus's impact runs after the player's step: a strike that
+    // landed this frame has already cancelled the attack above, so
+    // its pending impact cannot fire. The first frame inside the
+    // window consumes it, even when the hit is then ignored.
+    if (valus_behavior && encounter.attack != ValusAttack::None &&
+        attack_impact_due(encounter.attack, encounter.attackSeconds,
+                          encounter.attackHit)) {
+        encounter.attackHit = true;
+        apply_valus_impact(combat, player, frame, tuning, encounter.attack,
+                           audio_on ? &frameSfx : nullptr,
+                           audio_on ? &events : nullptr);
+    }
+
+    if (mode_is_attached(combat.mode)) {
+        update_climb_camera(camera, climbCamera, player, combat, frame, drag_dx,
+                            drag_dy, wheel_delta, climb_recenter, dt);
+    } else if (climbCamera.active) {
+        camera_climb_exit(camera, climbCamera);
+        // The camera was held by the climb orbit this frame: run one
+        // follow step now so the view eases back without a snap.
+        if (targetCamera.active) {
+            if (haveEntityChest) {
+                camera_target_update(camera, targetCamera, entityChest, drag_dx,
+                                     drag_dy, wheel_delta);
+            }
+        } else if (targetCamera.returning) {
+            camera_target_return(camera, follow, targetCamera, player.position,
+                                 player.yawDeg, drag_dx, drag_dy, wheel_delta,
+                                 moving, dt);
+        } else {
+            camera_follow(camera, follow, followPos, followYaw, drag_dx, drag_dy,
+                          wheel_delta, followMoving, dt);
+        }
+    }
+
+    if (!riding) {
+        apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
+    }
+    // S9 (D5-D7): the sword in the hand, its beam, the shade and the
+    // lock, the machine, the cues and the light — after the rig's
+    // model is final for this frame (on foot or in the saddle).
+    // The scripted look (--s9-e2e: onto Valus's chest from the last frame's
+    // tip), after the follow camera, before the sword aims.
+    if (in.lookAlong) {
+        camera_look_along(camera, *in.lookAlong);
+    }
+    if (sword_wired) {
+        result.probe = ctx.sword_frame(dt, swordHeld, inputLocked, palettes, result.sword);
+    }
+    // S8 (D14): the doors — the shrine's front exit and the
+    // plain's shrine steps — fire on entry, on foot, through the
+    // door machine; its Load ends the iteration for the other
+    // stage (this frame still draws, faded).
+    // R16: only while the stage still runs (R or Escape this frame
+    // ended it), from the kDoors rows of this stage.
+    if (s8_wired && ctx.door_frame(dt, positionBefore, riding, inputLocked, live)) {
+        result.request = StageRequest{false, kDoors[carry.door.row].to};
+        live = false;
+    }
+    if (wakeFrame) {
+        camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, ctx.wake_clock(),
+                                  returnTimings.wake);
+    }
+    if (audio_on) {
+        // Cues were pushed in time order (step, reaction, impact,
+        // hurt); drain once, then the mix advances.
+        audio.play_all(frameSfx);
+        if (events.damageDealt > 0) {
+            audio.start_music();
+        }
+        // D5: the score stops on Valus's defeat and on the R reset,
+        // never on Wander's death — it runs through the death clip.
+        if (encounter.defeated) {
+            audio.stop_music();
+        }
+        audio.update(dt, player.position, camera_look_yaw(camera));
+    }
+    // S6: the cinematic camera while the death runs (D5/D7), then
+    // this frame's tendril burst. The corpse swap runs with the
+    // machine at the top of the frame (advance_death_frame); the
+    // camera override comes last: it owns the view through Motion
+    // and Collapse, and Done hands it back to the follow camera.
+    if (death_wired && encounter.defeated) {
+        if (death_locks_input(death)) {
+            if (!deathCameraSet) {
+                // The pose the cinematic starts from: this frame's
+                // camera — the follow pose in the ordinary defeat,
+                // the climb/target pose if that owned the view on
+                // the first locked frame.
+                deathCameraBase = camera;
+                deathCameraSet = true;
+            }
+            camera = camera_death_pose(deathCameraBase, encounter.entityPosition,
+                                       player.position, death.total);
+        }
+        result.effect = build_effect_frame(scene, entityRig, palettes, encounter, death);
+    }
+    renderer.set_hud(ctx.hud_state(/*visible=*/true));
+    return result;
+}
+
 // The interactive loop (and, through it, the --s7/--s8/--s9-e2e scripts): one
 // stage until Escape/the close button (exitCode 0), a script's verdict, or a
 // stage request (`next`; the scene is released).
@@ -72,16 +431,12 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
     const RunFlags& flags = ctx.flags;
     const bool& death_wired = ctx.death_wired;
     bool& return_wired = ctx.return_wired;
-    const RigCpu& player_rig_record = *ctx.playerRigRecord;
     Camera& camera = ctx.camera;
-    Vec3& stage_spawn = ctx.stage_spawn;
-    float& stage_spawn_yaw = ctx.stage_spawn_yaw;
     const DoorRow* const arrival = ctx.arrival;
     const bool& door_arrival = ctx.door_arrival;
     PlayerState& player = ctx.player;
     PlayerCombat& combat = ctx.combat;
     Encounter& encounter = ctx.encounter;
-    const CombatTuning& tuning = ctx.tuning;
     CameraClimb& climbCamera = ctx.climbCamera;
     CameraFollow& follow = ctx.follow;
     CameraTarget& targetCamera = ctx.targetCamera;
@@ -92,10 +447,6 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
     std::vector<Playback>& playbacks = ctx.playbacks;
     Playback& playback = *ctx.playbackPtr;
     EntityClips& entityClips = ctx.entityClips;
-    ReturnTimings& returnTimings = ctx.returnTimings;
-    const bool& manual_clip = ctx.manual_clip;
-    const bool& valus_behavior = ctx.valus_behavior;
-    const bool& s8_wired = ctx.s8_wired;
     bool& plain_ride = ctx.plain_ride;
     PlainRide& pr = ctx.pr;
     SwordState& sword = ctx.sword;
@@ -117,22 +468,15 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
     // never SDL_CaptureMouse) — the cursor stays visible and free.
     bool running = true;
     bool climb_recenter = false;
-    // The S6 death sequence's own state (design §8.1): the phase machine,
-    // the one-shot burst-cue latch, and the follow pose the cinematic
-    // starts from. All three are reset by R.
-    DeathState death = reset_death();
-    bool deathCueFired = false;
-    bool deathCameraSet = false;
-    Camera deathCameraBase{};
-    // The S5 audio observer's on/off switch for the whole loop: false when
-    // no curated manifest loaded (the game then stays silent).
-    const bool audio_on = audio.enabled;
+    // The frame state (FrameState, stage_ctx.h): the death machine and its
+    // latches, the audio switch, the poses.
+    DeathState& death = ctx.play.death;
+    bool& deathCueFired = ctx.play.deathCueFired;
+    bool& deathCameraSet = ctx.play.deathCameraSet;
+    ctx.play.audioOn = audio.enabled;
     GamepadInput gamepad;
     open_first_gamepad(gamepad);
-    // This frame's rig poses. Hoisted so Valus's attack decision can read
-    // the previous frame's posed feet before this frame's clip is chosen.
-    std::vector<std::vector<Mat4>> palettes =
-        update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f, club);
+    ctx.play.palettes = update_all_poses(renderer, scene, playbacks, /*dt=*/0.0f, club);
     std::deque<Uint64> frame_ticks;  // frame arrival times within the last second
     Uint64 last_title_update = SDL_GetTicks();
     Uint64 last_ticks = SDL_GetTicks();
@@ -1075,401 +1419,150 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                     }
                 }
             }
-            // S6: the death sequence's clock runs on the real frame time.
-            // The defeat transition happens later in this frame (in
-            // apply_combat_events), so the machine starts on the next frame
-            // with total = 0 and does not accumulate the defeat frame's dt
-            // (death.h's pinned rule). While it runs, the machine's clock
-            // drives the one-shot death clip and gates the player input;
-            // the corpse swap follows the same clock (advance_death_frame).
-            if (death_wired && encounter.defeated && entityRig < playbacks.size()) {
-                advance_death_frame(death, dt, playbacks[entityRig], entityClips.death,
-                                    corpse, club, scene, entityRig);
-            }
-            // S7: the return (design §8.4) on the real frame time. The
-            // shrine's iteration is the completed load; entering Load in
-            // the arena ends the iteration with the request for it (this
-            // frame still draws, white).
-            if (return_wired) {
-                const ReturnState before = carry.ret;
-                carry.ret = step_return(carry.ret, dt, returnTimings,
-                                        death.phase == DeathPhase::Done,
-                                        /*loadDone=*/here == StageId::Shrine);
-                // A quit (Escape, the close button) this frame wins
-                // over the stage request.
-                if (running && return_wants_load(before, carry.ret)) {
-                    request = StageRequest{false, StageId::Shrine};
-                    running = false;
-                }
-            }
-            // --s7-e2e watches the transitions the loop just made (until
-            // its R) and expects the lock from FadeOut through Wake.
-            bool e2eExpectLocked = false;
-            bool e2eHitNow = false;
-            if (opts.s7E2e && carry.e2eStep < 2) {
-                if (death.phase != e2e.death) {
-                    e2e_print_death();
-                }
-                if (carry.ret.phase != e2e.ret) {
-                    e2e_print_return();
-                }
-                if (carry.ret.phase == ReturnPhase::Free) {
-                    e2e.freeSeconds += dt;
-                }
-                const ReturnPhase phase = carry.ret.phase;
-                e2eExpectLocked = phase == ReturnPhase::FadeOut ||
-                                  phase == ReturnPhase::Load ||
-                                  phase == ReturnPhase::FadeIn || phase == ReturnPhase::Wake;
-                e2eHitNow = here == StageId::Arena && !e2e.hit &&
-                            e2e.stageSeconds + kS7Eps >= kS7E2eLeadSeconds;
-            }
+            // The frame's input (FrameInput): the keyboard and gamepad, or an e2e
+            // script's keys, look and lethal hit; --s7-e2e's mid-frame checks are hooks.
             const auto deadzoned = [](float value) {
                 return std::fabs(value) > kS41StickDeadzone ? value : 0.0f;
             };
-            // The one input seam: the keyboard and gamepad, or under
-            // --s7-e2e the script's (empty, except a held W while the
-            // return should lock it — the lock below must eat it).
-            PlayerInput input;
-            RideKeys rideKeys;  // S8: the plain's held ride keys
-            bool swordHeld = false;  // S9: C / the left shoulder, held
-            if (opts.s7E2e) {
-                input.forward = e2eExpectLocked;
-            } else if (opts.s8E2e) {
-                input = s8In;
-                rideKeys = s8Keys;
+            FrameInput in;
+            in.dt = dt;
+            in.live = running;
+            if (opts.s8E2e) {
+                in.input = s8In;
+                in.rideKeys = s8Keys;
             } else if (opts.s9E2e) {
-                input = s9In;
-                rideKeys = s9Keys;
-                swordHeld = s9Held;
-            } else {
+                in.input = s9In;
+                in.rideKeys = s9Keys;
+                in.swordHeld = s9Held;
+            } else if (!opts.s7E2e) {
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 // S8 (G4): W kicks, S reins, A/D steer, E mounts and
                 // dismounts, Q whistles; the gamepad's left stick forward
                 // kicks, back reins, X steers, south mounts, north whistles.
-                rideKeys.kick =
+                in.rideKeys.kick =
                     keys[SDL_SCANCODE_W] || gamepad.leftY < -kStickPressThreshold;
-                rideKeys.rein =
+                in.rideKeys.rein =
                     keys[SDL_SCANCODE_S] || gamepad.leftY > kStickPressThreshold;
-                rideKeys.mount = keys[SDL_SCANCODE_E] || gamepad.south;
-                rideKeys.whistle = keys[SDL_SCANCODE_Q] || gamepad.north;
+                in.rideKeys.mount = keys[SDL_SCANCODE_E] || gamepad.south;
+                in.rideKeys.whistle = keys[SDL_SCANCODE_Q] || gamepad.north;
                 const float steerKeys = (keys[SDL_SCANCODE_D] ? 1.0f : 0.0f) -
                                         (keys[SDL_SCANCODE_A] ? 1.0f : 0.0f);
-                rideKeys.steer = std::clamp(steerKeys + gamepad.leftX, -1.0f, 1.0f);
-                input.forward = keys[SDL_SCANCODE_W] || deadzoned(gamepad.leftY) < 0.0f;
-                input.back = keys[SDL_SCANCODE_S] || deadzoned(gamepad.leftY) > 0.0f;
-                input.left = keys[SDL_SCANCODE_A] || deadzoned(gamepad.leftX) < 0.0f;
-                input.right = keys[SDL_SCANCODE_D] || deadzoned(gamepad.leftX) > 0.0f;
-                input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
-                input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
-                input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
-                swordHeld = keys[SDL_SCANCODE_C] || gamepad.raise;
+                in.rideKeys.steer = std::clamp(steerKeys + gamepad.leftX, -1.0f, 1.0f);
+                in.input.forward = keys[SDL_SCANCODE_W] || deadzoned(gamepad.leftY) < 0.0f;
+                in.input.back = keys[SDL_SCANCODE_S] || deadzoned(gamepad.leftY) > 0.0f;
+                in.input.left = keys[SDL_SCANCODE_A] || deadzoned(gamepad.leftX) < 0.0f;
+                in.input.right = keys[SDL_SCANCODE_D] || deadzoned(gamepad.leftX) > 0.0f;
+                in.input.run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
+                in.input.grab = keys[SDL_SCANCODE_E] || gamepad.grab;
+                in.input.strike = keys[SDL_SCANCODE_J] || gamepad.strike;
+                in.swordHeld = keys[SDL_SCANCODE_C] || gamepad.raise;
             }
-            // S6 D7: the death cinematic locks the body — movement, grab
-            // and strike are ignored while the camera runs; R, M and Escape
-            // are handled above and stay live. Control returns in Done.
-            // S7: the return locks it from FadeOut through Wake.
-            const bool inputLocked = death_locks_input(death) || carry.ret.inputLocked ||
-                                     carry.door.inputLocked;
-            // S8: on the plain the ride owns the body while mounted (no
-            // player_step, no mode clip) and the whistle holds it still.
-            const bool rideOwnsBody =
-                plain_ride && (pr.ride.phase != RidePhase::OnFoot || pr.whistleClip >= 0);
-            if (inputLocked || rideOwnsBody) {
-                input = PlayerInput{};
-            }
-            // S9: on foot a raised sword owns the clip and turns the move
-            // input into a facing (zero speed; the camera aims the beam).
-            const bool swordFoot = sword_wired && sword_locks_movement(sword);
-            if (swordFoot) {
-                const float ahead = (input.forward ? 1.0f : 0.0f) - (input.back ? 1.0f : 0.0f);
-                const float side = (input.right ? 1.0f : 0.0f) - (input.left ? 1.0f : 0.0f);
-                if (ahead != 0.0f || side != 0.0f) {
-                    // player_update's basis and turn rate (540 deg/s, its dt clamp).
-                    const float cy = camera_look_yaw(camera) * kDegToRad;
-                    const float want =
-                        std::atan2(std::sin(cy) * ahead - std::cos(cy) * side,
-                                   std::cos(cy) * ahead + std::sin(cy) * side) / kDegToRad;
-                    const float turn = 540.0f * std::clamp(dt, 0.0f, 0.05f);
-                    player.yawDeg = std::remainder(
-                        player.yawDeg +
-                            std::clamp(std::remainder(want - player.yawDeg, 360.0f), -turn, turn),
-                        360.0f);
-                }
-                input = PlayerInput{};
-            }
-            const bool moving = input.forward || input.back || input.left || input.right;
-            if (opts.s7E2e && carry.e2eStep < 2) {
-                if (e2eExpectLocked && moving) {
-                    return e2e_fail(std::string("input is not locked in ") +
-                                    return_phase_name(carry.ret.phase));
-                }
-                if (carry.ret.phase == ReturnPhase::Free && inputLocked) {
-                    return e2e_fail("input is still locked at Free");
-                }
-                if (inputLocked && !e2e.lockPrinted && here == StageId::Arena) {
-                    std::printf("s7e2e-input frame=%d locked=1\n", carry.e2eFrame);
-                    e2e.lockPrinted = true;
-                }
-                if (!inputLocked && !e2e.unlockPrinted &&
-                    carry.ret.phase == ReturnPhase::Free) {
-                    std::printf("s7e2e-input frame=%d locked=0\n", carry.e2eFrame);
-                    e2e.unlockPrinted = true;
-                }
-            }
-
             // The right stick feeds the cameras' drag channel; clamp the
             // frame time so a hitch cannot fling the view.
             const float stick_dt = std::clamp(dt, 0.0f, 0.05f);
             drag_dx += deadzoned(gamepad.rightX) * kS41StickPixelsPerSecond * stick_dt;
             drag_dy += deadzoned(gamepad.rightY) * kS41StickPixelsPerSecond * stick_dt;
-
-            // The encounter's one-shot clock, then Valus's own fight state
-            // (R8), then the clip choice (from the mode the previous step
-            // left) and this frame's poses: the target camera, the collision
-            // proxy and the climb attach point all read the palettes drawn
-            // today. Valus reads the previous palette's posed feet; the
-            // model transform is already this frame's, because the yaw step
-            // below runs before the joint query.
-            SfxQueue frameSfx;  // S5: this frame's cues, drained once below
-            if (entityRig < playbacks.size() && !encounter.defeated) {
-                advance_encounter_reaction(playbacks[entityRig], encounter,
-                                           entityClips.stand, dt);
-            }
-            // S6: the death roar fires at the tendril burst (0.4 s), not at
-            // the defeat — the machine's clock owns the moment.
-            if (death_wired && death_cue_due(death, deathCueFired) && audio_on) {
-                append_encounter_sfx(EncounterSfx::ValusDefeat, encounter.entityPosition,
-                                     frameSfx);
-            }
-            if (valus_behavior) {
-                const float valus_dt = std::clamp(dt, 0.0f, kMaxCombatStepSeconds);
-                // He turns only for an exactly grounded, living target: while
-                // the player is on him the body holds still, or the climber
-                // would slide around the band and the route would move.
-                if (combat.mode == PlayerMode::Grounded && !encounter.defeated) {
-                    encounter.entityYawDeg = valus_yaw_slew(
-                        encounter.entityYawDeg, encounter.entityPosition,
-                        player.position, kValusYawSlewDegPerSecond, valus_dt);
-                }
-                update_entity_transform(scene, encounter, entityRig);
-                const ValusAttackInput attack_input = valus_attack_input(
-                    scene, entityRig, palettes, player, combat, encounter);
-                advance_valus_attack(encounter, playbacks[entityRig], entityClips,
-                                     attack_input, valus_dt,
-                                     audio_on ? &frameSfx : nullptr);
-                // S6: the club's mid-swing whoosh (the telegraph already
-                // sounded at the clip's start).
-                maybe_club_swing(encounter, audio_on ? &frameSfx : nullptr);
-            }
-            // S7: while waking the wake clips own the player's clip.
-            const bool wakeFrame = ctx.waking();
-            if (wakeFrame) {
-                ctx.pose_wake();
-                if (opts.s7E2e && carry.ret.phase == ReturnPhase::Wake &&
-                    playback.index != e2e.wakeClip) {
-                    e2e.wakeClip = playback.index;
-                    ++e2e.wakeClips;
-                    std::printf("s7e2e-wake clip=%s t=%.3f\n",
-                                playback.clips[static_cast<std::size_t>(playback.index)]
-                                    .name.c_str(),
-                                ctx.wake_clock());
-                }
-            } else if (!rideOwnsBody) {
-                ctx.leave_wake();
-                if (swordFoot) {
-                    // The sword's clip at the machine's clock (last frame's step).
-                    playback.index = clip_index_named(playback, sword.clip);
-                    playback.time = sword.clipTime;
-                    playback.pinned = true;
-                    playback.playing = false;
-                } else {
-                    update_combat_clips(playback, scene, combat, input, manual_clip);
-                }
-            }
-            palettes = update_all_poses(renderer, scene, playbacks, dt, club);
-            if (plain_ride) {
-                ctx.plain_step(dt, rideKeys, inputLocked, palettes);
-            }
-            const bool riding = plain_ride && pr.ride.phase != RidePhase::OnFoot;
-            // The follow camera's subject: Agro while mounted (D13).
-            const Vec3 followPos = riding ? pr.horsePos : player.position;
-            const float followYaw = riding ? pr.horseYaw : player.yawDeg;
-            const bool followMoving = riding ? pr.ride.speed != 0.0f : moving;
-            if (entityRig < scene.rigs.size() && entityRig < palettes.size()) {
-                haveEntityChest = entity_chest_position(scene, entityRig, palettes[entityRig],
-                                                       entityChest);
-            }
-
-            // While gripping, the climb orbit owns the camera: it is updated
-            // after the step, on this frame's attach point. Otherwise the
-            // camera runs before player_update (its yaw is the movement
-            // basis, and in target mode that is the orbit around the chest).
-            const bool attached_before = mode_is_attached(combat.mode);
-            if (!attached_before) {
-                if (targetCamera.active) {
-                    if (haveEntityChest) {
-                        camera_target_update(camera, targetCamera, entityChest, drag_dx,
-                                             drag_dy, wheel_delta);
+            in.dragDx = drag_dx;
+            in.dragDy = drag_dy;
+            in.wheel = wheel_delta;
+            in.climbRecenter = climb_recenter;
+            // --s7-e2e watches the transitions the machines just made (until its R),
+            // holds W while the return should lock it (the lock must eat it) and
+            // expects the lock from FadeOut through Wake.
+            bool e2eExpectLocked = false;
+            if (opts.s7E2e) {
+                in.afterMachines = [&](PlayerInput& input) {
+                    if (carry.e2eStep < 2) {
+                        if (death.phase != e2e.death) {
+                            e2e_print_death();
+                        }
+                        if (carry.ret.phase != e2e.ret) {
+                            e2e_print_return();
+                        }
+                        if (carry.ret.phase == ReturnPhase::Free) {
+                            e2e.freeSeconds += dt;
+                        }
+                        const ReturnPhase phase = carry.ret.phase;
+                        e2eExpectLocked = phase == ReturnPhase::FadeOut ||
+                                          phase == ReturnPhase::Load ||
+                                          phase == ReturnPhase::FadeIn || phase == ReturnPhase::Wake;
                     }
-                } else if (targetCamera.returning) {
-                    camera_target_return(camera, follow, targetCamera, player.position,
-                                         player.yawDeg, drag_dx, drag_dy, wheel_delta,
-                                         moving, dt);
-                } else {
-                    camera_follow(camera, follow, followPos, followYaw, drag_dx, drag_dy,
-                                  wheel_delta, followMoving, dt);
-                }
+                    input.forward = e2eExpectLocked;
+                };
+                in.afterLock = [&](bool inputLocked, bool moving) -> std::optional<int> {
+                    if (carry.e2eStep < 2) {
+                        if (e2eExpectLocked && moving) {
+                            return e2e_fail(std::string("input is not locked in ") +
+                                            return_phase_name(carry.ret.phase));
+                        }
+                        if (carry.ret.phase == ReturnPhase::Free && inputLocked) {
+                            return e2e_fail("input is still locked at Free");
+                        }
+                        if (inputLocked && !e2e.lockPrinted && here == StageId::Arena) {
+                            std::printf("s7e2e-input frame=%d locked=1\n", carry.e2eFrame);
+                            e2e.lockPrinted = true;
+                        }
+                        if (!inputLocked && !e2e.unlockPrinted &&
+                            carry.ret.phase == ReturnPhase::Free) {
+                            std::printf("s7e2e-input frame=%d locked=0\n", carry.e2eFrame);
+                            e2e.unlockPrinted = true;
+                        }
+                    }
+                    return std::nullopt;
+                };
+                in.onWake = [&]() {
+                    if (carry.ret.phase == ReturnPhase::Wake && playback.index != e2e.wakeClip) {
+                        e2e.wakeClip = playback.index;
+                        ++e2e.wakeClips;
+                        std::printf("s7e2e-wake clip=%s t=%.3f\n",
+                                    playback.clips[static_cast<std::size_t>(playback.index)]
+                                        .name.c_str(),
+                                    ctx.wake_clock());
+                    }
+                };
             }
-
-            // The player step: the state machine runs the Grounded
-            // controller + capsule resolver in the S3/S4 order, or recomputes
-            // the attach point from this frame's entity palette. Once the
-            // corpse has replaced the body (S6, design §8.3) the frame
-            // carries no live entity: nothing to walk into, climb or strike.
-            const PlayerFrame frame =
-                player_frame_of(scene, entityRig, palettes, heightmap,
-                                camera_look_yaw(camera),
-                                /*entityLive=*/!death_corpse_visible(death));
-            const int weakpoint = combat.weakpoint;  // detach() clears it
-            const Vec3 positionBefore = player.position;
-            // S8 (D8): no player_step while mounted — the ride places him.
-            StepEvents events{};
-            if (!riding) {
-                events = player_step(player, combat, input, frame, tuning, dt);
-            }
-            if (audio_on) {
-                append_player_sfx(events, player.position, frameSfx);
-            }
-            // --s9-e2e's: 1 s into the arena entered through the corridor.
+            // The scripts' one lethal hit: --s7-e2e's 1 s into the arena, --s9-e2e's
+            // 1 s into the arena entered through the corridor.
+            const bool e2eHitNow = opts.s7E2e && carry.e2eStep < 2 && here == StageId::Arena &&
+                                   !e2e.hit && e2e.stageSeconds + kS7Eps >= kS7E2eLeadSeconds;
             const bool s9HitNow = opts.s9E2e && here == StageId::Arena && !s9e.hit &&
                                   s9e.seconds + kS7Eps >= kS7E2eLeadSeconds;
             if (e2eHitNow || s9HitNow) {
-                // --s7-e2e's one lethal hit, landed as a strike lands.
-                events.damageDealt = 100;
+                in.lethalHit = true;
                 if (s9HitNow) {
                     s9e.hit = true;
+                    in.lethalMissed = [&]() { return s9e_fail("the lethal hit did not defeat Valus"); };
                 } else {
                     e2e.hit = true;
+                    in.lethalMissed = [&]() { return e2e_fail("the lethal hit did not defeat Valus"); };
                 }
             }
-            if (events.damageDealt > 0 && entityRig < playbacks.size()) {
-                apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
-                                    weakpoint, audio_on ? &frameSfx : nullptr);
-            }
-            if (e2eHitNow && !encounter.defeated) {
-                return e2e_fail("the lethal hit did not defeat Valus");
-            }
-            if (s9HitNow && !encounter.defeated) {
-                return s9e_fail("the lethal hit did not defeat Valus");
-            }
-            // Valus's impact runs after the player's step: a strike that
-            // landed this frame has already cancelled the attack above, so
-            // its pending impact cannot fire. The first frame inside the
-            // window consumes it, even when the hit is then ignored.
-            if (valus_behavior && encounter.attack != ValusAttack::None &&
-                attack_impact_due(encounter.attack, encounter.attackSeconds,
-                                  encounter.attackHit)) {
-                encounter.attackHit = true;
-                apply_valus_impact(combat, player, frame, tuning, encounter.attack,
-                                   audio_on ? &frameSfx : nullptr,
-                                   audio_on ? &events : nullptr);
-            }
-
-            if (mode_is_attached(combat.mode)) {
-                update_climb_camera(camera, climbCamera, player, combat, frame, drag_dx,
-                                    drag_dy, wheel_delta, climb_recenter, dt);
-            } else if (climbCamera.active) {
-                camera_climb_exit(camera, climbCamera);
-                // The camera was held by the climb orbit this frame: run one
-                // follow step now so the view eases back without a snap.
-                if (targetCamera.active) {
-                    if (haveEntityChest) {
-                        camera_target_update(camera, targetCamera, entityChest, drag_dx,
-                                             drag_dy, wheel_delta);
-                    }
-                } else if (targetCamera.returning) {
-                    camera_target_return(camera, follow, targetCamera, player.position,
-                                         player.yawDeg, drag_dx, drag_dy, wheel_delta,
-                                         moving, dt);
-                } else {
-                    camera_follow(camera, follow, followPos, followYaw, drag_dx, drag_dy,
-                                  wheel_delta, followMoving, dt);
-                }
-            }
-
-            if (!riding) {
-                apply_player_transform(scene, player_rig_record, player, ctx.player_lift());
-            }
-            // S9 (D5-D7): the sword in the hand, its beam, the shade and the
-            // lock, the machine, the cues and the light — after the rig's
-            // model is final for this frame (on foot or in the saddle).
-            // --s9-e2e: the scripted look onto Valus's chest (from the last
-            // frame's tip), after the follow camera, before the sword aims.
+            // --s9-e2e: the look onto Valus's chest from the last frame's tip.
             if (opts.s9E2e && s9e.aim) {
                 const Vec3 chest = valus_chest();
-                camera_look_along(camera, vec3_normalize(Vec3{chest.x - s9e.probe.tip.x,
-                                                              chest.y - s9e.probe.tip.y,
-                                                              chest.z - s9e.probe.tip.z}));
+                in.lookAlong = vec3_normalize(Vec3{chest.x - s9e.probe.tip.x,
+                                                   chest.y - s9e.probe.tip.y,
+                                                   chest.z - s9e.probe.tip.z});
             }
-            if (sword_wired) {
-                s9e.probe = ctx.sword_frame(dt, swordHeld, inputLocked, palettes, swordFrame);
-                if (swordFrame.active) {
-                    swordFramePtr = &swordFrame;
-                }
+            const FrameResult result = frame_step(ctx, in);
+            if (result.exitCode) {
+                return *result.exitCode;
             }
-            // S8 (D14): the doors — the shrine's front exit and the
-            // plain's shrine steps — fire on entry, on foot, through the
-            // door machine; its Load ends the iteration for the other
-            // stage (this frame still draws, faded).
-            // R16: only while the stage still runs (R or Escape this frame
-            // ended it), from the kDoors rows of this stage.
-            if (s8_wired && ctx.door_frame(dt, positionBefore, riding, inputLocked, running)) {
-                request = StageRequest{false, kDoors[carry.door.row].to};
+            if (result.request) {
+                request = *result.request;
                 running = false;
             }
-            if (wakeFrame) {
-                camera = camera_wake_pose(stage_spawn, stage_spawn_yaw, ctx.wake_clock(),
-                                          returnTimings.wake);
+            if (result.probe) {
+                s9e.probe = *result.probe;
             }
-            if (audio_on) {
-                // Cues were pushed in time order (step, reaction, impact,
-                // hurt); drain once, then the mix advances.
-                audio.play_all(frameSfx);
-                if (events.damageDealt > 0) {
-                    audio.start_music();
-                }
-                // D5: the score stops on Valus's defeat and on the R reset,
-                // never on Wander's death — it runs through the death clip.
-                if (encounter.defeated) {
-                    audio.stop_music();
-                }
-                audio.update(dt, player.position, camera_look_yaw(camera));
+            effectFrame = result.effect;
+            if (effectFrame.active) {
+                effectFramePtr = &effectFrame;
             }
-            // S6: the cinematic camera while the death runs (D5/D7), then
-            // this frame's tendril burst. The corpse swap runs with the
-            // machine at the top of the frame (advance_death_frame); the
-            // camera override comes last: it owns the view through Motion
-            // and Collapse, and Done hands it back to the follow camera.
-            if (death_wired && encounter.defeated) {
-                if (death_locks_input(death)) {
-                    if (!deathCameraSet) {
-                        // The pose the cinematic starts from: this frame's
-                        // camera — the follow pose in the ordinary defeat,
-                        // the climb/target pose if that owned the view on
-                        // the first locked frame.
-                        deathCameraBase = camera;
-                        deathCameraSet = true;
-                    }
-                    camera = camera_death_pose(deathCameraBase, encounter.entityPosition,
-                                               player.position, death.total);
-                }
-                effectFrame =
-                    build_effect_frame(scene, entityRig, palettes, encounter, death);
-                if (effectFrame.active) {
-                    effectFramePtr = &effectFrame;
-                }
+            swordFrame = result.sword;
+            if (swordFrame.active) {
+                swordFramePtr = &swordFrame;
             }
-            renderer.set_hud(ctx.hud_state(/*visible=*/true));
         } else {
             update_all_poses(renderer, scene, playbacks, dt, club);
         }
