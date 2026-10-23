@@ -32,6 +32,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -2078,6 +2079,10 @@ int run_app(const AppOptions& opts) {
             carry.ret.phase = ReturnPhase::Free;
         }
         bool first_stage = true;
+        // R16: cleared (once, with one warning) when interactive play finds the
+        // shrine manifest or the wake clips missing; the run then plays on
+        // without the return, as --no-return would.
+        bool return_available = true;
         for (;;) {
             // The stage's manifest: --manifest for the arena, the shrine's own
             // composed manifest for the shrine.
@@ -2123,15 +2128,16 @@ int run_app(const AppOptions& opts) {
                 !opts.selftest && !opts.s3Selftest && !opts.s4Selftest && !opts.s41Selftest &&
                 !opts.s42Selftest && !opts.s5Selftest && !opts.s6Selftest && !opts.s7Selftest &&
                 !opts.entityTimeSet && opts.screenshotPath.empty();
-            const bool return_wired =
-                follow_mode && (opts.s7Selftest || (interactive_run && !opts.noReturn));
+            bool return_wired = follow_mode && return_available &&
+                                (opts.s7Selftest || (interactive_run && !opts.noReturn));
             if (follow_mode) {
                 // The manifest is user data: a malformed line is a usage error
                 // (exit 2) carrying the file and line, never a crash.
                 try {
                     manifest = parse_manifest(stage_manifest_path);
                 } catch (const std::exception& error) {
-                    std::fprintf(stderr, "sotc-viewer: %s\n", error.what());
+                    std::fprintf(stderr, "sotc-viewer: %s%s\n", error.what(),
+                                 shrine ? " (compose it with `make shrine-manifest`)" : "");
                     return 2;
                 }
                 if (opts.entityTimeSet && manifest.entities.empty()) {
@@ -2395,12 +2401,27 @@ int run_app(const AppOptions& opts) {
             // S7: the return's timings. Hold, fade out and fade in are the
             // shrine's authored flow; Wake is the two baked wake clips played
             // back to back (ruling R5), so their loaded durations are the truth.
-            // A run that steps the machine refuses a player glb without them.
+            // --s7-selftest and --s7-e2e refuse a player glb without them;
+            // interactive play (R16) warns once and plays on without the return.
             ReturnTimings returnTimings{kShrineHoldSeconds, kShrineFadeOutSeconds,
                                         kShrineFadeInSeconds, 0.0f};
             int wakeFirst = -1;
             int wakeSecond = -1;
             float wakeFirstSeconds = 0.0f;
+            if (return_wired && !opts.s7Selftest && !opts.s7E2e) {
+                std::error_code ec;
+                const std::string warning = return_unavailable_warning(
+                    opts.shrineManifestPath,
+                    std::filesystem::is_regular_file(opts.shrineManifestPath, ec),
+                    opts.modelRelPath,
+                    clip_index_named(playback, kWakeClipFirst) >= 0 &&
+                        clip_index_named(playback, kWakeClipSecond) >= 0);
+                if (!warning.empty()) {
+                    std::fputs(warning.c_str(), stderr);
+                    return_available = false;
+                    return_wired = false;
+                }
+            }
             if (return_wired) {
                 if (!require_named_clip(playback, opts.modelRelPath, kWakeClipFirst) ||
                     !require_named_clip(playback, opts.modelRelPath, kWakeClipSecond)) {
@@ -6182,7 +6203,9 @@ int run_app(const AppOptions& opts) {
                         carry.ret = step_return(carry.ret, dt, returnTimings,
                                                 death.phase == DeathPhase::Done,
                                                 /*loadDone=*/shrine);
-                        if (return_wants_load(before, carry.ret)) {
+                        // A quit (Escape, the close button) this frame wins
+                        // over the stage request.
+                        if (running && return_wants_load(before, carry.ret)) {
                             request = StageRequest{false, StageId::Shrine};
                             running = false;
                         }
