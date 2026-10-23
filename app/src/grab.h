@@ -40,13 +40,18 @@ const char* weakpoint_material_name(int weakpoint);
 // joint is absent (another rig, or a malformed skeleton).
 using JointLookup = std::function<bool(std::string_view, Vec3&)>;
 
+// The band's radius at parameter `t` (clamped to [0, 1]): `radius` at boneA,
+// `radiusB` at boneB, linear between (S11 taper, Quadratus's back); a band with
+// no taper (radiusB < 0, every Valus band) answers `radius` everywhere.
+float band_radius_at(const ClimbBand& band, float t);
+
 // The band's world-space segment. Returns false, writing nothing, when either
 // joint is missing, a position is not finite, or the segment has zero length.
 bool climb_band_segment(const ClimbBand& band, const JointLookup& lookup, Vec3& a, Vec3& b);
 
 // The point on the climbing surface at parameter `t` (clamped to [0, 1] along
 // the segment): the axis point plus the horizontal radial direction from
-// `hint` scaled by `band.radius + kPlayerCapsuleRadius`. `normal` is that
+// `hint` scaled by `band_radius_at(band, t) + kPlayerCapsuleRadius`. `normal` is that
 // unit radial (horizontal, +X when `hint` sits on the axis). Returns false and
 // writes nothing for missing joints, non-finite input, a degenerate segment,
 // or a negative/non-finite radius.
@@ -80,8 +85,8 @@ ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
 inline constexpr float kSurfaceWalkMaxAngleDeg = 60.0f;
 
 // The feet on the band's top at parameter `t` (clamped to [0, 1]) and arc
-// offset `across` (clamped to +-radius * kSurfaceWalkMaxAngleDeg): the axis
-// point plus `radius` along `normal`, the unit surface normal there. Returns
+// offset `across` (clamped to +-r * kSurfaceWalkMaxAngleDeg, r the radius at
+// t): the axis point plus r along `normal`, the unit surface normal there. Returns
 // false and writes nothing for missing joints, a degenerate segment, a band
 // parallel to `up` (no top), a non-positive radius, or non-finite input.
 bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,

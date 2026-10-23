@@ -62,6 +62,7 @@ struct PlayerCombat {
     float regenDelay = 0.0f;         // s left before ground regen resumes
     ClimbBandId band = ClimbBandId::None;
     float bandT = 0.5f;              // normalized position along the band
+    float bandAcross = 0.0f;         // S11 surface walk: metres of arc off a horizontal band's top
     int weakpoint = -1;              // the attached band's weakpoint, -1 none
     bool strikeHit = false;          // this swing has emitted its one damage event
     bool grabWasDown = false;        // rising-edge memory for the grab key
@@ -147,6 +148,10 @@ struct CombatTuning {
     // `waveDamage`), read by apply_valus_impact (S11 M-1).
     float mediumHurtSeconds = 0.40f;  // m_fly2, one clip
     float heavyHurtSeconds = 1.23f;   // h_fly1 0.60 s + h_fly_end 0.63 s
+
+    // S11 surface walk (design D9): the pace on a horizontal band (authored:
+    // the player's own walk, player.h's 2.2 m/s).
+    float surfaceWalkSpeed = 2.2f;
 };
 
 // What one step changed. `damageDealt` is the amount of the single damage event
@@ -202,6 +207,15 @@ struct StepEvents {
 // The attach point is recomputed from `frame.jointWorld` every attached step
 // and written to `position`, with `yawDeg` facing the surface; the heightmap
 // and the capsule resolver are not touched.
+//
+// S11 surface walk (design D9): on a `horizontal` band (Quadratus's back) the
+// player stands on its top instead of hanging: forward/back walk `bandT` and the
+// lateral axis walks `bandAcross` (grab.h's surface_walk_step, at
+// `surfaceWalkSpeed`), handing over to `up`/`down` at the band's ends like a
+// climb; the attach point is surface_walk_point and `yawDeg` faces along the
+// band (boneA -> boneB). Standing is not gripping (authored, the game's
+// behaviour): Grabbing/Climbing there drain nothing and regenerate at
+// `staminaRegen`; a strike's charge and a shake still drain. E stays held.
 //
 // Falling: integrates vertical velocity at 9.8 m/s² downward, keeps XZ, and
 // lands when `position.y` reaches the ground sample (the ground is only used

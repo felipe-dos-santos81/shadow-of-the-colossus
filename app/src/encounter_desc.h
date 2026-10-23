@@ -56,6 +56,9 @@ struct ClimbBand {
     int branch = ClimbBandId::None;
     bool horizontal = false;  // S11 surface walk: stood on and walked, not hung from
     const char* name = "none";
+    // S11 taper: the radius at boneB, linear from `radius` at boneA (< 0 = no
+    // taper: `radius` throughout). grab.h's band_radius_at reads it.
+    float radiusB = -1.0f;
 };
 
 // --- The rest of the description ----------------------------------------------

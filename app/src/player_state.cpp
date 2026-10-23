@@ -81,6 +81,7 @@ void orbit_about_segment(PlayerState& player, Vec3 a, Vec3 b, float bandRadius,
 void select_band(PlayerCombat& combat, const PlayerFrame& frame, ClimbBandId band, float t) {
     combat.band = band;
     combat.bandT = std::clamp(std::isfinite(t) ? t : 0.5f, 0.0f, 1.0f);
+    combat.bandAcross = 0.0f;
     combat.weakpoint = climb_band(frame.bands, band).weakpoint;
 }
 
@@ -127,6 +128,7 @@ void detach(PlayerCombat& combat, StepEvents& events, bool brokeGrip, float catc
     // the fall, and a mid-charge break was never a hit. attach_band clears it.
     combat.band = ClimbBandId::None;
     combat.bandT = 0.5f;
+    combat.bandAcross = 0.0f;
     combat.weakpoint = -1;
     if (brokeGrip) {
         events.gripBroke = true;
@@ -140,11 +142,22 @@ void detach(PlayerCombat& combat, StepEvents& events, bool brokeGrip, float catc
 bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame) {
     Vec3 point{};
     Vec3 normal{};
-    if (!climb_surface_point(climb_band(frame.bands, combat.band), frame.jointWorld, combat.bandT,
-                             player.position, point, normal)) {
+    const ClimbBand& band = climb_band(frame.bands, combat.band);
+    // climb_attach_point is climb_surface_point, bit for bit, on every band but
+    // a horizontal one (S11's surface walk).
+    if (!climb_attach_point(band, frame.jointWorld, combat.bandT, combat.bandAcross,
+                            player.position, point, normal)) {
         return false;
     }
     player.position = point;
+    if (band.horizontal) {
+        Vec3 a{};
+        Vec3 b{};
+        if (climb_band_segment(band, frame.jointWorld, a, b)) {
+            player.yawDeg = std::atan2(b.x - a.x, b.z - a.z) / kDegToRad;  // along the band
+        }
+        return true;
+    }
     player.yawDeg = std::atan2(-normal.x, -normal.z) / kDegToRad;
     return true;
 }
@@ -212,6 +225,7 @@ namespace {
 void clear_fight_attachment(PlayerCombat& combat) {
     combat.band = ClimbBandId::None;
     combat.bandT = 0.5f;
+    combat.bandAcross = 0.0f;
     combat.weakpoint = -1;
     combat.charge = 0.0f;
     combat.strikeHit = false;
@@ -339,12 +353,36 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                     combat.mode = wanted;
                     combat.modeSeconds = 0.0f;
                 }
+                // S11: a horizontal band is walked on its top (surface_walk_step),
+                // handing over at its ends like a climb.
+                if (band.horizontal) {
+                    float t = combat.bandT;
+                    if (moving && surface_walk_step(band, frame.jointWorld, axis, lateral,
+                                                    tuning.surfaceWalkSpeed, dt, t,
+                                                    combat.bandAcross)) {
+                        ClimbBandId next = ClimbBandId::None;
+                        if (axis > 0.0f && t >= 1.0f) {
+                            next = next_climbable_band(frame, band.up, /*ascending=*/true);
+                            if (next != ClimbBandId::None) {
+                                select_band(combat, frame, next, 0.0f);
+                            }
+                        } else if (axis < 0.0f && t <= 0.0f) {
+                            next = next_climbable_band(frame, band.down, /*ascending=*/false);
+                            if (next != ClimbBandId::None) {
+                                select_band(combat, frame, next, 1.0f);
+                            }
+                        }
+                        if (next == ClimbBandId::None) {
+                            combat.bandT = t;
+                        }
+                    }
+                }
                 // One segment resolution serves both the orbit and the climb; an
                 // idle hang leaves write_surface to resolve the band as before.
                 Vec3 a{};
                 Vec3 b{};
-                const bool resolved =
-                    moving && climb_band_segment(band, frame.jointWorld, a, b);
+                const bool resolved = moving && !band.horizontal &&
+                                      climb_band_segment(band, frame.jointWorld, a, b);
                 if (lateral != 0.0f && resolved) {
                     orbit_about_segment(player, a, b, band.radius, lateral,
                                         tuning.climbSpeed, dt);
@@ -413,7 +451,13 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             }
 
             float rate = 0.0f;
-            if (combat.mode == PlayerMode::Grabbing) {
+            // S11: standing on a horizontal band is not gripping (authored).
+            const bool standing = climb_band(frame.bands, combat.band).horizontal &&
+                                  combat.mode != PlayerMode::Striking;
+            if (standing) {
+                const float stamina = std::isfinite(combat.stamina) ? combat.stamina : 0.0f;
+                combat.stamina = std::min(kMaxStamina, stamina + tuning.staminaRegen * dt);
+            } else if (combat.mode == PlayerMode::Grabbing) {
                 rate = tuning.staminaHang;
             } else if (combat.mode == PlayerMode::Climbing) {
                 rate = tuning.staminaClimb;
@@ -597,8 +641,8 @@ void update_climb_camera(Camera& camera, CameraClimb& climb, const PlayerState& 
     }
     Vec3 point{};
     Vec3 normal{};
-    if (!climb_surface_point(climb_band(frame.bands, combat.band), frame.jointWorld, combat.bandT,
-                             player.position, point, normal)) {
+    if (!climb_attach_point(climb_band(frame.bands, combat.band), frame.jointWorld, combat.bandT,
+                            combat.bandAcross, player.position, point, normal)) {
         normal = Vec3{};
     }
     camera_climb_enter(camera, climb, player.position, normal);

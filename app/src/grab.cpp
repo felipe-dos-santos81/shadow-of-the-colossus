@@ -26,7 +26,7 @@ float length(Vec3 v) { return std::sqrt(vec3_dot(v, v)); }
 // Closest distance between segments [p1, q1] and [p2, q2] (Ericson,
 // Real-Time Collision Detection, 5.1.9). All inputs are finite and both
 // segments have non-zero length at the call site.
-float segment_segment_distance(Vec3 p1, Vec3 q1, Vec3 p2, Vec3 q2) {
+float segment_segment_distance(Vec3 p1, Vec3 q1, Vec3 p2, Vec3 q2, float* tOut = nullptr) {
     const Vec3 d1 = sub(q1, p1);
     const Vec3 d2 = sub(q2, p2);
     const Vec3 r = sub(p1, p2);
@@ -65,6 +65,9 @@ float segment_segment_distance(Vec3 p1, Vec3 q1, Vec3 p2, Vec3 q2) {
 
     const Vec3 closest_1 = add(p1, scale(d1, s));
     const Vec3 closest_2 = add(p2, scale(d2, t));
+    if (tOut != nullptr) {
+        *tOut = t;  // the parameter on the second segment
+    }
     return length(sub(closest_1, closest_2));
 }
 
@@ -99,6 +102,14 @@ const char* weakpoint_material_name(std::span<const WeakpointDesc> weakpoints, i
 
 const char* weakpoint_material_name(int weakpoint) {
     return weakpoint_material_name(encounters::kValus.weakpoints, weakpoint);
+}
+
+float band_radius_at(const ClimbBand& band, float t) {
+    if (!(band.radiusB >= 0.0f)) {
+        return band.radius;
+    }
+    const float u = std::isfinite(t) ? std::clamp(t, 0.0f, 1.0f) : 0.0f;
+    return band.radius + (band.radiusB - band.radius) * u;
 }
 
 bool climb_band_segment(const ClimbBand& band, const JointLookup& lookup, Vec3& a, Vec3& b) {
@@ -155,7 +166,7 @@ bool climb_surface_point(const ClimbBand& band, const JointLookup& lookup, float
     }
 
     const Vec3 candidate =
-        add(axis, scale(radial, band.radius + kPlayerCapsuleRadius));
+        add(axis, scale(radial, band_radius_at(band, u) + kPlayerCapsuleRadius));
     if (!is_finite(candidate) || !is_finite(radial)) {
         return false;
     }
@@ -185,11 +196,14 @@ ClimbBandId nearest_climb_band(std::span<const ClimbBand> bands, const JointLook
         if (!climb_band_segment(band, lookup, a, b)) {
             continue;
         }
-        const float axis_distance = segment_segment_distance(playerPos, playerTop, a, b);
+        float bandT = 0.0f;
+        const float axis_distance = segment_segment_distance(playerPos, playerTop, a, b, &bandT);
         // Surface-to-surface: pull both capsule radii out of the centreline
-        // distance. Keeping it unclamped makes an overlapping band rank by how
-        // close its axis is, which is the band the player stands on.
-        const float surface_distance = axis_distance - kPlayerCapsuleRadius - band.radius;
+        // distance (a tapered band's radius at the closest point). Keeping it
+        // unclamped makes an overlapping band rank by how close its axis is,
+        // which is the band the player stands on.
+        const float surface_distance =
+            axis_distance - kPlayerCapsuleRadius - band_radius_at(band, bandT);
         if (surface_distance < best_surface_distance) {
             best_surface_distance = surface_distance;
             best = i;
@@ -211,7 +225,9 @@ namespace {
 
 float unit_or_zero(float v) { return std::isfinite(v) ? std::clamp(v, -1.0f, 1.0f) : 0.0f; }
 
-float max_across(const ClimbBand& band) { return band.radius * kSurfaceWalkMaxAngleDeg * kDegToRad; }
+float max_across(const ClimbBand& band, float t) {
+    return band_radius_at(band, t) * kSurfaceWalkMaxAngleDeg * kDegToRad;
+}
 
 }  // namespace
 
@@ -236,11 +252,15 @@ bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float 
     const Vec3 top = scale(top_raw, 1.0f / top_length);
     const Vec3 right = vec3_cross(forward, top);
 
-    const float limit = max_across(band);
-    const float angle = std::clamp(across, -limit, limit) / band.radius;
+    const float radius = band_radius_at(band, t);
+    if (!(radius > 0.0f)) {
+        return false;
+    }
+    const float limit = max_across(band, t);
+    const float angle = std::clamp(across, -limit, limit) / radius;
     const Vec3 n = add(scale(top, std::cos(angle)), scale(right, std::sin(angle)));
     const Vec3 axis = add(a, scale(ab, std::clamp(t, 0.0f, 1.0f)));
-    const Vec3 candidate = add(axis, scale(n, band.radius));
+    const Vec3 candidate = add(axis, scale(n, radius));
     if (!is_finite(candidate) || !is_finite(n)) {
         return false;
     }
@@ -264,11 +284,11 @@ bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float a
         return true;
     }
     const float next_t = t + unit_or_zero(along) * step / length(sub(b, a));
-    const float limit = max_across(band);
     const float next_across = across + unit_or_zero(lateral) * step;
     if (std::isfinite(next_t)) {
         t = std::clamp(next_t, 0.0f, 1.0f);
     }
+    const float limit = max_across(band, t);
     if (std::isfinite(next_across) && std::isfinite(limit)) {
         across = std::clamp(next_across, -limit, limit);
     }

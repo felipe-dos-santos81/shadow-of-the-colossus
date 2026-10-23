@@ -307,9 +307,16 @@ enum : int {
 // lifted hoof (the hoof gate), never by a climber on the band.
 // The back: Weak_point2 -> KUBI, horizontal (stood on). Its surface is a slope
 // (+17° standing, +35° in the rear kneel, C§5), so the band is TAPERED: 1.5 m
-// at the rear (the back sigil end) to 6.3 m at KUBI (measured mesh-top above the
-// axis 1.2–1.9 / 6.1–6.6 m, C§5). `radius` holds the rear value; the front one
-// is kBandTaper below until ClimbBand carries a second radius (Task 10).
+// at the rear (the back sigil end) to 6.3 m at KUBI (`radiusB`; measured
+// mesh-top above the axis 1.2–1.9 / 6.1–6.6 m, C§5).
+// The rump: the back sigil (weakpoint_05, skinned to HARA) sits on the rump's
+// REAR face, 0.9–1.4 m behind the MATA -> Weak_point2 axis and 1–3 m below
+// Weak_point2 (measured: stand / down_b_l_loop, Task 10's probe), facing up and
+// back (normal (-0.2, 0.7, -0.7)): below the back's top, out of a standing
+// strike's reach. So the rump carries the back sigil and its radius is the rear
+// face's, 1.6 m (authored: a strike from the rear face reaches the shell in
+// stand and both rear kneels; the MATA p99 4.26–4.32 m is the hips' width — a
+// climber orbiting to the flank sinks into the hips, a recorded gap).
 inline constexpr std::array<ClimbBand, B::Count> kBands{{
     {.boneA = "Bone_B_TOE_L", .boneB = "Bone_SUNE_L", .radius = 2.5f, .up = B::RearLeftShin,
      .down = ClimbBandId::None, .weakpoint = -1, .name = "rear_left_hoof"},
@@ -317,10 +324,10 @@ inline constexpr std::array<ClimbBand, B::Count> kBands{{
      .down = B::RearLeftHoof, .weakpoint = -1, .name = "rear_left_shin"},
     {.boneA = "Bone_MOMO_L", .boneB = "Bone_MATA_L", .radius = 3.0f, .up = B::Rump,
      .down = B::RearLeftShin, .weakpoint = -1, .name = "rear_left_thigh"},
-    {.boneA = "Bone_MATA_L", .boneB = "Weak_point2", .radius = 4.3f, .up = B::Back,
-     .down = B::RearLeftThigh, .weakpoint = -1, .name = "rump"},
+    {.boneA = "Bone_MATA_L", .boneB = "Weak_point2", .radius = 1.6f, .up = B::Back,
+     .down = B::RearLeftThigh, .weakpoint = W::BackSigil, .name = "rump"},
     {.boneA = "Weak_point2", .boneB = "Bone_KUBI", .radius = 1.5f, .up = B::Neck, .down = B::Rump,
-     .weakpoint = W::BackSigil, .horizontal = true, .name = "back"},
+     .weakpoint = W::BackSigil, .horizontal = true, .name = "back", .radiusB = 6.3f},
     {.boneA = "Bone_KUBI", .boneB = "Bone_HEAD", .radius = 6.0f, .up = B::Head, .down = B::Back,
      .weakpoint = -1, .name = "neck"},
     {.boneA = "Bone_HEAD", .boneB = "OptBone_Look", .radius = 3.0f, .up = ClimbBandId::None,
@@ -332,13 +339,6 @@ inline constexpr std::array<ClimbBand, B::Count> kBands{{
     {.boneA = "Bone_MOMO_R", .boneB = "Bone_MATA_R", .radius = 3.0f, .up = B::Rump,
      .down = B::RearRightShin, .weakpoint = -1, .name = "rear_right_thigh"},
 }};
-
-struct BandTaper {
-    int band;
-    float radiusA;  // at boneA
-    float radiusB;  // at boneB
-};
-inline constexpr BandTaper kBandTaper{.band = B::Back, .radiusA = 1.5f, .radiusB = 6.3f};
 
 // --- Shake-off ----------------------------------------------------------------
 
@@ -580,8 +580,7 @@ constexpr bool quadratus_links_valid() {
             return false;
         }
     }
-    return state(q::kShakeRule.state) && state(q::kHoldLastFrameState) &&
-           band(q::kBandTaper.band);
+    return state(q::kShakeRule.state) && state(q::kHoldLastFrameState);
 }
 
 static_assert(behaviour_valid(kQuadratus.behaviour));

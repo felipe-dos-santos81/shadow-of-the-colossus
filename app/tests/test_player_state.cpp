@@ -1409,6 +1409,7 @@ TEST_CASE("the combat tuning pins the design values") {
     CHECK(tuning.invulnSeconds == doctest::Approx(1.0f));
     CHECK(tuning.mediumHurtSeconds == doctest::Approx(0.40f));
     CHECK(tuning.heavyHurtSeconds == doctest::Approx(1.23f));
+    CHECK(tuning.surfaceWalkSpeed == doctest::Approx(2.2f));
 }
 
 TEST_CASE("the right arm band carries weakpoint 1") {
@@ -1814,4 +1815,101 @@ TEST_CASE("update_climb_camera resolves the band in the frame's table, not Valus
     camera_climb_enter(expected, expectedClimb, player.position, Vec3{1.0f, 0.0f, 0.0f});
     CHECK(camera.yaw == doctest::Approx(expected.yaw));
     CHECK(camera.yaw != doctest::Approx(123.0f));
+}
+
+// --- S11 surface walk on a horizontal band (design D9) ------------------------
+
+namespace {
+
+// A post (band 0, vertical, x = z = 0, y 0 -> 4) up onto a deck (band 1,
+// horizontal, y 4, z 0 -> 10) whose radius tapers 1 -> 3 m along z.
+inline constexpr std::array<ClimbBand, 2> kDeckBands{{
+    {.boneA = "POST_A", .boneB = "POST_B", .radius = 0.5f, .up = 1, .down = -1, .weakpoint = -1,
+     .name = "post"},
+    {.boneA = "POST_B", .boneB = "DECK_B", .radius = 1.0f, .up = -1, .down = 0, .weakpoint = -1,
+     .horizontal = true, .name = "deck", .radiusB = 3.0f},
+}};
+
+PlayerFrame deck_frame(const Heightmap& ground) {
+    PlayerFrame frame = frame_of(ground, lookup_of({{"POST_A", Vec3{0.0f, 0.0f, 0.0f}},
+                                                    {"POST_B", Vec3{0.0f, 4.0f, 0.0f}},
+                                                    {"DECK_B", Vec3{0.0f, 4.0f, 10.0f}}}));
+    frame.bands = kDeckBands;
+    return frame;
+}
+
+// Climbs the post to its top and over onto the deck.
+void onto_deck(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame) {
+    player.position = Vec3{1.0f, 0.0f, 0.0f};
+    PlayerInput input{};
+    input.grab = true;
+    player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    REQUIRE(combat.band == 0);
+    input.forward = true;
+    for (int i = 0; i < 400 && combat.band == 0; ++i) {
+        player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    }
+    REQUIRE(combat.band == 1);
+}
+
+}  // namespace
+
+TEST_CASE("climbing a band's top onto a horizontal band stands on its top, facing along it") {
+    Heightmap ground = flat_heightmap();
+    const PlayerFrame frame = deck_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    onto_deck(player, combat, frame);
+    CHECK(combat.bandT == doctest::Approx(0.0f));
+    CHECK(combat.bandAcross == 0.0f);
+    CHECK(player.position.x == doctest::Approx(0.0f));
+    CHECK(player.position.y == doctest::Approx(5.0f));  // 4 + the 1 m rear radius
+    CHECK(player.position.z == doctest::Approx(0.0f));
+    CHECK(player.yawDeg == doctest::Approx(0.0f));  // facing +z, along the deck
+}
+
+TEST_CASE("walking a horizontal band moves t at the surface pace on the taper, and rests") {
+    Heightmap ground = flat_heightmap();
+    const PlayerFrame frame = deck_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    onto_deck(player, combat, frame);
+    combat.stamina = 50.0f;
+    PlayerInput input{};
+    input.grab = true;
+    input.forward = true;
+    for (int i = 0; i < 60; ++i) {
+        player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    }
+    CHECK(combat.mode == PlayerMode::Climbing);
+    CHECK(combat.band == 1);
+    CHECK(combat.bandT == doctest::Approx(0.22f).epsilon(0.01));  // 2.2 m of 10
+    CHECK(player.position.z == doctest::Approx(2.2f).epsilon(0.01));
+    CHECK(player.position.y == doctest::Approx(4.0f + 1.0f + 2.0f * 0.22f).epsilon(0.01));
+    CHECK(combat.stamina == doctest::Approx(75.0f).epsilon(0.01));  // standing regenerates
+
+    // D walks across the top to the 60 deg limit of the radius there.
+    input.forward = false;
+    input.right = true;
+    for (int i = 0; i < 300; ++i) {
+        player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    }
+    const float r = 1.0f + 2.0f * combat.bandT;
+    CHECK(combat.bandAcross == doctest::Approx(r * 60.0f * kDegToRad).epsilon(0.001));
+    CHECK(player.position.y == doctest::Approx(4.0f + r * 0.5f).epsilon(0.001));  // cos 60
+}
+
+TEST_CASE("walking back off a horizontal band's start hands over to the band below") {
+    Heightmap ground = flat_heightmap();
+    const PlayerFrame frame = deck_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    onto_deck(player, combat, frame);
+    PlayerInput input{};
+    input.grab = true;
+    input.back = true;
+    player_step(player, combat, input, frame, CombatTuning{}, kStep);
+    CHECK(combat.band == 0);
+    CHECK(combat.bandT == doctest::Approx(1.0f));
+    CHECK(combat.bandAcross == 0.0f);
 }

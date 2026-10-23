@@ -483,3 +483,28 @@ TEST_CASE("a surface walk step rejects a non-positive or NaN radius") {
         CHECK(across == 0.25f);
     }
 }
+
+TEST_CASE("a tapered band's radius runs linearly from boneA to boneB") {
+    ClimbBand band = back_band();  // r 2 at A (0, 10, 0), B (0, 10, 10)
+    CHECK(band_radius_at(band, 0.5f) == 2.0f);  // no taper: the radius throughout
+    band.radiusB = 6.0f;
+    CHECK(band_radius_at(band, 0.0f) == doctest::Approx(2.0f));
+    CHECK(band_radius_at(band, 0.25f) == doctest::Approx(3.0f));
+    CHECK(band_radius_at(band, 1.0f) == doctest::Approx(6.0f));
+    CHECK(band_radius_at(band, 7.0f) == doctest::Approx(6.0f));  // clamped
+
+    Vec3 point{};
+    Vec3 normal{};
+    REQUIRE(surface_walk_point(band, kBackJoints, 0.75f, 0.0f, Vec3{0, 1, 0}, point, normal));
+    CHECK(point.y == doctest::Approx(15.0f));  // 10 + 5
+    REQUIRE(climb_surface_point(band, kBackJoints, 0.75f, Vec3{9, 10, 7.5f}, point, normal));
+    CHECK(point.x == doctest::Approx(5.0f + kPlayerCapsuleRadius));
+
+    // The grab measures the radius at the closest point: on top of the wide end
+    // (feet 16.5 m, 6.5 above the axis) is within reach; the narrow end's 2 m
+    // would leave it 4.15 m off.
+    const std::array<ClimbBand, 1> bands{band};
+    CHECK(nearest_climb_band(bands, kBackJoints, Vec3{0.0f, 16.5f, 10.0f}, 0.9f) == 0);
+    CHECK(nearest_climb_band(bands, kBackJoints, Vec3{0.0f, 16.5f, 0.0f}, 0.9f) ==
+          ClimbBandId::None);
+}
