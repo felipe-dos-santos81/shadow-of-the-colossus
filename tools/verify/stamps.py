@@ -13,6 +13,8 @@ GITLINK = "@gitlink"    # the PSO2-Aqua-Library submodule SHA recorded in the in
 LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, audio/, textures/vfx/ PNGs
 LIBPATH = "@libpath"    # the library's realpath only (where the audio decode writes)
 LIBAUDIO = "@libaudio"  # the library's audio/audio.manifest content (8/10/34 entries: who decoded last)
+LIBGEO = "@libgeo"      # @lib without audio/: what the probes and the preflight read (the decode
+                        # rewrites audio/, so a probes stamp taken before it stays valid after it)
 
 # The input classes (D3 + ruling §13.5). A section of an adapter hashes its class, the adapter, its
 # frozen script, its goldens and the runner's own code (VERIFY).
@@ -23,9 +25,13 @@ CLASSES = {
     "audio": ["tools/re/audio/**", "src/**", LIBPATH, LIBAUDIO],
     "probes": ["tools/re/stage/**", "tools/re/anb/**", "tools/re/s6/**",
                "tools/re/s7/shrine_placements.json", "tools/re/s8/placements.json", "tools/re/s9/**",
-               "out/re/stage/*.manifest", "out/re/stage/arena_paths.txt", LIB],
-    "gpu": ["app/**", "out/re/stage/*.manifest", "tools/re/s7/**", "tools/re/s8/**", "tools/re/s9/**", LIB],
+               "out/re/stage/*.manifest", "out/re/stage/arena_paths.txt", LIBGEO],
+    "gpu": ["app/**", "out/re/stage/*.manifest", "tools/re/stage/**", "tools/re/s7/**", "tools/re/s8/**",
+            "tools/re/s9/**", LIB],
 }
+# An audio *section* also runs s9's preflight (Wander's clips, the sword PNGs, the placements, the
+# manifests); the runner's decode step does not.
+AUDIO_SECTION = [LIBGEO, "tools/re/s9/placements.json", "out/re/stage/*.manifest"]
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",
           "tools/verify/stamps.py"]
 SKIP_DIRS = {"build", "bin", "obj", "__pycache__", ".git"}
@@ -67,9 +73,9 @@ class Stamper:
         elif pattern == LIBAUDIO:
             path = os.path.join(self.lib, "audio", "audio.manifest")
             yield (LIBAUDIO, _file_sha(path) if os.path.isfile(path) else "absent")
-        elif pattern == LIB:
+        elif pattern in (LIB, LIBGEO):
             yield (LIBPATH, _sha(os.path.realpath(self.lib).encode()))
-            yield (LIB, self._lib_fingerprint())
+            yield (pattern, self._lib_fingerprint(audio=pattern == LIB))
         elif pattern.endswith("/**"):
             base = os.path.join(root, pattern[:-3])
             for dirpath, dirs, files in os.walk(base):
@@ -83,7 +89,7 @@ class Stamper:
                 if os.path.isfile(path):
                     yield (os.path.relpath(path, root), _file_sha(path))
 
-    def _lib_fingerprint(self):
+    def _lib_fingerprint(self, audio=True):
         real = os.path.realpath(self.lib)
         h = hashlib.sha256()
         for dirpath, dirs, files in os.walk(real):
@@ -95,6 +101,8 @@ class Stamper:
             # textures/ is not.
             if dirpath == os.path.join(real, "textures"):
                 dirs[:] = [d for d in dirs if d == "vfx"]
+            if dirpath == real and not audio:
+                dirs[:] = [d for d in dirs if d != "audio"]
             dirs[:] = sorted(dirs)
             for name in sorted(files):
                 path = os.path.join(dirpath, name)
@@ -121,4 +129,6 @@ class Stamper:
                "tools/verify/golden/%s/%s/**" % (milestone, section)]
         if section == "gpu":   # s5/s6/s8 gpu read their own map's decode (manifest names, cues)
             own.append("tools/re/audio/%s_map.json" % milestone)
+        if section == "audio":
+            own += AUDIO_SECTION
         return self.stamp(CLASSES[section] + VERIFY + own, "%s.%s" % (milestone, section))

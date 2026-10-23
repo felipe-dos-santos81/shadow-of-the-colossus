@@ -21,6 +21,11 @@ def by(*classes):
     return {k for k in ALL if k.split(".")[-1] in classes}
 
 
+# the audio sections (not the runner's decode step) run s9's preflight: the clips, the sword PNGs,
+# the placements and the manifests
+AUDIO_SECTIONS = {k for k in ALL if k.endswith(".audio")}
+
+
 # file -> the steps whose stamp must change when only that file changes
 CASES = {
     "src/BpConvert.Core/Audio/AudioConverter.cs": by("dotnet", "audio"),
@@ -38,21 +43,22 @@ CASES = {
     "app/src/shrine_points.h": by("ctest", "gpu"),
     "app/src/ride_points.h": by("ctest", "gpu"),
     "app/src/road_points.h": by("ctest", "gpu"),
-    "out/re/stage/encounter.manifest": by("probes", "gpu"),
-    "tools/re/stage/probe.py": by("probes"),
+    "out/re/stage/encounter.manifest": by("probes", "gpu") | AUDIO_SECTIONS,
+    "tools/re/stage/probe.py": by("probes", "gpu"),   # s9.gpu re-composes the road
     "tools/re/anb/probe.py": by("probes"),
     "tools/re/s6/s6_asset_gate.py": by("probes"),
     "tools/re/s7/shrine_placements.json": by("probes", "gpu"),
     "tools/re/s8/placements.json": by("probes", "gpu"),
     "tools/re/s8/ride_points.py": by("gpu"),
-    "tools/re/s9/placements.json": by("probes", "gpu"),
+    "tools/re/s9/placements.json": by("probes", "gpu") | AUDIO_SECTIONS,
     "tools/re/s9/road_points.py": by("probes", "gpu"),
     "out/re/stage/arena_paths.txt": by("probes"),
-    "lib/models/a/a.glb": by("ctest", "probes", "gpu"),
-    "lib/models/a/a.clips.json": by("ctest", "probes", "gpu"),
-    "lib/audio/audio.manifest": by("ctest", "probes", "gpu", "audio"),
-    "lib/audio/s5/valus_hurt.wav": by("ctest", "probes", "gpu"),
-    "lib/textures/vfx/common/beam/_ps4/vertical_solid_beams_01_pfx.png": by("ctest", "probes", "gpu"),
+    "lib/models/a/a.glb": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
+    "lib/models/a/a.clips.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
+    # the probes read no audio: the runner's decode never makes them re-run
+    "lib/audio/audio.manifest": by("ctest", "gpu", "audio"),
+    "lib/audio/s5/valus_hurt.wav": by("ctest", "gpu"),
+    "lib/textures/vfx/common/beam/_ps4/vertical_solid_beams_01_pfx.png": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     "tools/verify/common.sh": {k for k in ALL if "." in k},
     "tools/verify/s3.sh": {"s3.gpu"},
     "scripts/s4-acceptance.sh": {"s4.probes", "s4.gpu"},
