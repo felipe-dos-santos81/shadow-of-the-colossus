@@ -1,4 +1,4 @@
-# S9 — the RE/data gate: the road's reach, the doors, Valus, the sun, the sword (2026-10-23, Task 0)
+# S9 — the RE/data gate: the road's reach, the doors, Valus, the sun, the sword, the probes (2026-10-23, Task 0)
 
 | gate | verdict | what S9 adopts |
 |---|---|---|
@@ -10,11 +10,12 @@
 | Step 3 the sword | **PASS** (measured) | `wander_sword.glb` in the library (blade local z −0.580…+0.121); `OptBone_sword` = joint node 296 of Wander's skin (child of `Bone_HAND_A_R`); tip = local (0, 0, −0.58) |
 | Step 3 textures | **PASS** (data; flare labelled) | three distinct atlases, single images (frame 1×1); the hit atlas is the flare's |
 | Step 3 clips | **PASS** (data) | 30/50/29 and 35/60/25 frames at 30 fps = the `.anb` durations |
-| Step 4 probes | **PENDING** | waits for Task 3's ray grid (`heightmap_node`/`ray_march`/`build_backdrop_grid`); `probes.source` = `pending-task-3`, values null |
+| Step 4 probes | **PASS** (authored points, measured marches) | `sunlit` (335, −4.534, 233.5) clear for 300 m, beam hits at 37.5 m; `shade` (304, 2.925, 284) blocked at 17.5 m; `stairs_foot` (304, −3.603, 238); `entrance_top` (304, 2.434, 273); `agro_stairs` (330, −5.234, 228) yaw 20.11, sunlit, beam 43.5/44.5 m; `e2e_route` 4 waypoints, 487 m, legs < 10° |
 
 The output is `tools/re/s9/placements.json`, composed and checked by `tools/re/s9/placements.py`
-(every check prints `ok`/`FAIL`, exit 1 on a failure; it reuses `tools/re/s8/placements.py`'s grid
-reader and `tools/re/anb/parse2.py`). Static work only; the game tree and the shared library were
+(every check prints `ok`/`FAIL`, exit 1 on a failure — 44 checks; it reuses `tools/re/s8/placements.py`'s grid
+reader and `tools/re/anb/parse2.py`; Step 4's marches run `tools/re/s9/probes.cpp`, built against the app's
+`heightmap_node`/`ray_march`/`build_backdrop_grid`). Static work only; the game tree and the shared library were
 read, never written; the one bake went to a scratch `--out`.
 
 ```bash
@@ -31,15 +32,19 @@ $SCR/reach plain "$SOTC_LIB" 353 27.951 345 $SCR/arena.bin $(grep '^instance' ou
 #  -> plain grid 493x504 nodes @1.0 m, bounds x -0.6..490.4 z -0.1..502.3, spawn node (354,345) h 27.971 (array 0 only is used)
 dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out $SCR/lib --force \
   --under models/shadow/characters/wander/_cmn/wander.cmsh --clips player_a_hoist_sword_start,player_a_hoist_sword_loop,player_a_hoist_sword_end,player_a_uma_hoist_sword_start,player_a_uma_hoist_sword_loop,player_a_uma_hoist_sword_end
-python3 -I tools/re/s9/placements.py $SCR $SCR/lib/models/shadow/characters/wander/_cmn/wander.glb
+c++ -std=c++20 -O2 -Iapp/src -Iapp/third_party tools/re/s9/probes.cpp app/src/asset_io.cpp \
+  app/src/manifest.cpp app/src/heightmap.cpp app/src/anim.cpp app/src/player.cpp app/src/collision.cpp -o $SCR/probes
+#  (reads out/re/stage/road.manifest, Task 1's composition: the plain + the six entrance glbs as ground,
+#   27 shrine backdrops + arena_01.glb as backdrops) -> ground 952x1040, backdrop grid 217x831 x 216.1..431.4 z -439.0..390.0
+python3 -I tools/re/s9/placements.py $SCR $SCR/lib/models/shadow/characters/wander/_cmn/wander.glb $SCR/probes
 ```
 
 Validate the JSON (both doors and arrivals, Valus, the sun, the sword, four textures, six clips,
-the probes — pending accepted; exit 0 + `OK`):
+every probe filled; exit 0 + `OK`):
 
 ```bash
-python3 -I -c "import json;d=json.load(open('tools/re/s9/placements.json'));C,A=d['door_corridor'],d['door_arena'];assert C['stage']=='plain' and A['stage']=='arena' and all(len(b[k])==3 for b in (C,A) for k in ('min','max')) and all(b['min'][i]<b['max'][i] for b in (C,A) for i in range(3));assert C['arrive_arena']=={'p':[353,27.951,345],'yaw_deg':49.24} and len(A['arrive_road']['p'])==3 and A['arrive_road']['yaw_deg']==180;assert all(b['source'] for b in (C,A));V=d['valus'];assert V['feet']==[382,28.369,370] and V['chest_lift']==10.93 and V['source']=='data';S=d['sun'];assert S['dir']==[0.4,0.8,0.6] and S['normalized']==[0.371391,0.742781,0.557086] and S['shade_m']==300 and S['source']=='authored';W=d['sword'];assert W['glb'].endswith('/wander_sword.glb') and W['bone']=='OptBone_sword' and W['tip']==[0,0,-0.58] and W['source'];T=d['textures'];assert all(T[k].endswith('.png') and T['sources'][k].endswith('.cptx') for k in ('lines','overlay','flare','hit')) and T['frame']==[1,1];K=d['clips'];assert K=={'player_a_hoist_sword_start':30,'player_a_hoist_sword_loop':50,'player_a_hoist_sword_end':29,'player_a_uma_hoist_sword_start':35,'player_a_uma_hoist_sword_loop':60,'player_a_uma_hoist_sword_end':25,'fps':30};P=d['probes'];pk=('sunlit','shade','stairs_foot','entrance_top','agro_stairs','e2e_route');assert all(k in P for k in pk) and (P['source']=='pending-task-3' and all(P[k] is None for k in pk) or all(P[k] for k in pk));R=d['road_reach'];assert R['nodes']>500000 and 296<=R['z_max']<297 and R['corridor']['x']==[300,308];print('OK doors=2 arrivals=2 valus sun sword textures=4 clips=6 probes=%s road_reach=%d'%(P.get('source','set'),R['nodes']))"
-# -> OK doors=2 arrivals=2 valus sun sword textures=4 clips=6 probes=pending-task-3 road_reach=509579
+python3 -I -c "import json;d=json.load(open('tools/re/s9/placements.json'));C,A=d['door_corridor'],d['door_arena'];assert C['stage']=='plain' and A['stage']=='arena' and all(len(b[k])==3 for b in (C,A) for k in ('min','max')) and all(b['min'][i]<b['max'][i] for b in (C,A) for i in range(3));assert C['arrive_arena']=={'p':[353,27.951,345],'yaw_deg':49.24} and len(A['arrive_road']['p'])==3 and A['arrive_road']['yaw_deg']==180;assert all(b['source'] for b in (C,A));V=d['valus'];assert V['feet']==[382,28.369,370] and V['chest_lift']==10.93 and V['source']=='data';S=d['sun'];assert S['dir']==[0.4,0.8,0.6] and S['normalized']==[0.371391,0.742781,0.557086] and S['shade_m']==300 and S['source']=='authored';W=d['sword'];assert W['glb'].endswith('/wander_sword.glb') and W['bone']=='OptBone_sword' and W['tip']==[0,0,-0.58] and W['source'];T=d['textures'];assert all(T[k].endswith('.png') and T['sources'][k].endswith('.cptx') for k in ('lines','overlay','flare','hit')) and T['frame']==[1,1];K=d['clips'];assert K=={'player_a_hoist_sword_start':30,'player_a_hoist_sword_loop':50,'player_a_hoist_sword_end':29,'player_a_uma_hoist_sword_start':35,'player_a_uma_hoist_sword_loop':60,'player_a_uma_hoist_sword_end':25,'fps':30};P=d['probes'];pk=('sunlit','shade','stairs_foot','entrance_top','agro_stairs','e2e_route');assert all(P[k] for k in pk) and P['source']!='pending-task-3' and len(P['sunlit']['p'])==3 and isinstance(P['sunlit']['yaw_away_deg'],(int,float)) and len(P['shade']['p'])==3 and len(P['stairs_foot'])==3 and len(P['entrance_top'])==3 and len(P['agro_stairs']['p'])==3 and isinstance(P['agro_stairs']['yaw_deg'],(int,float)) and len(P['e2e_route'])>=2 and all(len(w)==2 for w in P['e2e_route']) and P['e2e_route'][-1]==[P['stairs_foot'][0],P['stairs_foot'][2]];R=d['road_reach'];assert R['nodes']>500000 and 296<=R['z_max']<297 and R['corridor']['x']==[300,308];print('OK doors=2 arrivals=2 valus sun sword textures=4 clips=6 probes=6 route=%d road_reach=%d'%(len(P['e2e_route']),R['nodes']))"
+# -> OK doors=2 arrivals=2 valus sun sword textures=4 clips=6 probes=6 route=4 road_reach=509579
 ```
 
 **Conventions of the JSON.** One frame: the world (the plain and the arena share it; every
@@ -48,7 +53,7 @@ axis-aligned `min`/`max`, fired by `box_entered` on the feet. An arrival `p` car
 under it (the bilinear node height, as `heightmap_sample`). Keys beyond the brief's schema are
 additive provenance: `door_*.box_source/arrive_source/reach`, `valus.chest`, `sun.shader`,
 `sword.hand_bone/blade_z/note`, `textures.emitters/note`, `clips_measured`,
-`road_reach.ground/overhang`.
+`road_reach.ground/overhang`, `probes.*.shade_hit_m/beam_hit_m`, `probes.sources/tip_lift_m`.
 
 ---
 
@@ -149,15 +154,60 @@ S6 atlases' grid came from theirs).
 The design's "30/50/29 f, 30 fps" are these durations in 30 fps frames; the baked clips carry the
 `.anb` keys (16/26/16, 19/31/14 at ~15 fps). `clips_measured` records both.
 
-## 4 · Step 4 — the probes: PENDING
+## 4 · Step 4 — the probes: PASS (authored points, measured marches)
 
-Waits for Task 3's ray grid. `placements.json` keeps `probes` with `"source": "pending-task-3"`
-and null `sunlit`, `shade`, `stairs_foot`, `entrance_top`, `agro_stairs`, `e2e_route`; the
-validation above accepts that state (and the filled one). The march numbers (hit distances, shade
-lengths) are appended here when Step 4 runs.
+`tools/re/s9/probes.cpp` composes `out/re/stage/road.manifest` with the app's `compose_scene`,
+builds the ground (`build_heightmap`, 1 m, unlayered) and the backdrop ray grid
+(`build_backdrop_grid`, 1 m), and answers marches with `ray_march` at **step 0.5 m** (cellSize/2) and
+a unit direction, ground and backdrop combined with `std::fmin` (ruling B4). A march's `t` is
+quantised to the step: recorded values carry **±1.0 m** (step + 0.5). No fill, no clamp: a hole or an
+out-of-bounds sample is no hit. The sun direction is `normalize(0.4, 0.8, 0.6)` (`kSunDir`); the
+shade march is 300 m; the beam march runs to Valus's chest (382, 39.299, 370) for 150 m. The tip
+is the ground (bilinear) + 2.0 m on foot, + 3.5 m mounted (authored). Each point is checked on its
+1 m ring (the point and its 8 neighbours at ±1 m), so a probe never sits on a march's edge.
+
+| probe | point (y = ground) | slope | march (ground / backdrop → fmin) |
+|---|---|---:|---|
+| `sunlit` | (335, −4.534, 233.5), `yaw_away_deg` −161.0 (Valus's chest bears 19.0°) | 7.65° | shade: none within 300 m (all 9 ring nodes); beam: 37.5 / none → **37.5 m** (ring 35.5–40.5) |
+| `shade` | (304, 2.925, 284) — the corridor floor, 2.00 m outside `door_corridor` | 10.05° | shade: **17.5** / none → **17.5 m** (ring 12.0–23.0), the road's ground grid (the entrance set) |
+| `stairs_foot` | (304, −3.603, 238) — the approach's last < 10° ground before the stairs' ramp (z 243–250 is 10–13°) | 8.94° | — |
+| `entrance_top` | (304, 2.434, 273) — the corridor floor at the stairs' top, 13.00 m short of `door_corridor` | 0.30° | — |
+| `agro_stairs` | (330, −5.234, 228), `yaw_deg` 20.11 (toward the chest) | 7.37° | tip +2.0: sunlit (ring); beam 43.5 / 79.5 → **43.5 m**; tip +3.5: sunlit (ring); beam 44.5 / 79.0 → **44.5 m** |
+
+`sunlit` is 20.2 m from the stairs' box (x 297–323, z 249.8–279). Near the
+stairs' foot the ground grid shades the tip: the points checked at x 295–325, z 225–238 all block
+the shade march at 60–82 m, and the sunlit points found there lie at x ≥ 330. Every beam's first hit is
+the ground grid; the backdrop grid (`arena_01.glb`) answers too from `agro_stairs` (79 m), farther.
+
+Walks (the D3 rule, `s8.walk_line`): `stairs_foot → entrance_top` 35.0 m ok (it climbs the stairs, worst
+24.3°); `entrance_top → (304, 290)` (into `door_corridor`) 17.0 m ok; `agro_stairs → stairs_foot`
+27.9 m ok, worst 9.5°.
+
+`e2e_route` — from S8's plain arrival (301, −245) to `stairs_foot`: Dijkstra over the road walk's
+reached nodes (8-neighbour, the D3 rise/drop, node slope < 9.5°, 493 m), then greedy straight legs
+that `walk_line` passes with a worst slope < 9.5° → **4 waypoints** (301, −245) → (290.9, −231.3) →
+(304.9, −49.3) → (304, 238), **487 m** in legs of 17 / 183 / 287 m, worst slopes 9.48 / 9.43 / 8.94°
+(past each leg's first 1.5 m: the arrival itself, the shrine steps' foot, is 11.09°).
+
+## 4a · Notes for the later tasks
+
+- **For Task 8's stills check (explicit item): the raised blade lies nearly flat.** In
+  `player_a_hoist_sword_loop` the blade runs model +X (direction ≈ (0.98, 0.11…0.14, −0.11…−0.19)),
+  the tip at (0.47, 1.42, 0.28), the hand at (−0.12, 1.31, 0.33), only 0.07–0.09 m above the
+  pommel. The tip choice (the −0.58 end, 0.607 m from the hand vs 0.102 m) is unambiguous and the beam
+  follows the aim, not the blade; the stills must still show the sword in the raised hand, on the
+  hand, pointing where the clip puts it — check `wander_sword.glb`'s attachment to `OptBone_sword`
+  visually.
+- The hit texture is the flare's: `sword_reaction.cprt:flare_radial_ring` binds the same
+  `soft_glow_01_falloff_pfx` as `sword_line.cprt:flare_center`, so the four roles are three distinct PNGs.
+- The corridor floor's measured y max is **5.77** (node (307.89, 292.69), the east wall's foot), not the
+  design's ≈ 5.6; `door_corridor`'s y (2.2–8.3) covers it.
+- The six clip numbers (30/50/29, 35/60/25 at 30 fps) are **durations**; the baked glb clips carry the
+  `.anb` keys (16/26/16, 19/31/14 at ≈ 15 fps) — never read them as key counts.
 
 ## 5 · Files
 
 - `tools/re/s9/placements.py` — the composer/checker (stdlib; reuses `tools/re/s8/placements.py`, `tools/re/anb/parse2.py`).
+- `tools/re/s9/probes.cpp` — the Step 4 march harness (scratch-built against the read-only app sources).
 - `tools/re/s9/placements.json` — its output.
 - Scratch (not committed): `road.bin`, `arena.bin`, the Wander bake, the three decoded atlases.

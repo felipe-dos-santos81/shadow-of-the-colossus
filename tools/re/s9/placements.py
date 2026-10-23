@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S9 gate (W2): compose and verify tools/re/s9/placements.json.
 
-  placements.py <reach-dir> <wander-glb> [--out tools/re/s9/placements.json]
+  placements.py <reach-dir> <wander-glb> <probes-bin> [--out tools/re/s9/placements.json]
 
 <reach-dir> holds two dumps of tools/re/s8/reach.cpp `plain` (the app's own heightmap code,
 unlayered 1 m map; array 0 = node heights, array 1 = the D3 refuseHoles walk):
@@ -14,10 +14,13 @@ same unlayered map without refuseHoles, so every in-bounds move is walkable ther
 arena walk is done here over arena.bin's array 0 (its array 1 is not the arena's rule).
 
 <wander-glb> is a scratch bake of wander.cmsh with the six raise clips (the sword tip).
+<probes-bin> is tools/re/s9/probes.cpp built against the app sources: raw-node marches
+(heightmap_node / ray_march, step 0.5 m, unit dir) through out/re/stage/road.manifest's ground
+and its backdrop ray grid (build_backdrop_grid), combined with fmin (Step 4).
 The script re-measures, checks every placement (asserts; exit 1 on a failed check), prints
 the evidence lines and writes the JSON. Authored values are constants below, labelled.
 Frame: world (the plain/arena frame, identity instances). Yaw: the app's +Y yaw in degrees
-(0 faces +Z, 90 faces +X). Step 4's probes wait for Task 3's ray grid (`pending-task-3`).
+(0 faces +Z, 90 faces +X).
 
 Stdlib only; reads the library ($SOTC_LIB), the game tree ($SOTC_GAME_ROOT) read-only.
 """
@@ -27,7 +30,9 @@ import json
 import math
 import os
 import re
+import heapq
 import struct
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +80,19 @@ TEXTURES = [("lines", "sword_line", "sword_beam_base", "textures/vfx/common/beam
             ("flare", "sword_line", "flare_center", "textures/vfx/common/glows/_ps4/soft_glow_01_falloff_pfx"),
             ("hit", "sword_reaction", "flare_radial_ring", "textures/vfx/common/glows/_ps4/soft_glow_01_falloff_pfx")]
 FRAME = [1, 1]   # measured: the decoded atlases are single images (512x512, 512x512, 256x256)
+# Step 4 — the probes (authored positions; every one checked by raw-node marches below).
+ROAD_MANIFEST = os.path.join(REPO, "out", "re", "stage", "road.manifest")
+ARRIVE_PLAIN = (301.0, -245.0)                       # S8 door_shrine's plain arrival (the shrine steps' foot)
+SUNLIT = (335.0, 233.5)                              # east of the stairs' foot, past the entrance walls' shade
+SHADE = (304.0, 284.0)                               # the corridor floor under the cliff, outside door_corridor
+STAIRS_FOOT = (304.0, 238.0)                         # the approach's last < 10 deg node before the stairs' ramp
+ENTRANCE_TOP = (304.0, 273.0)                        # the corridor floor at the stairs' top
+AGRO_STAIRS = (330.0, 228.0)                         # Agro's start for the mounted raise / the e2e lock
+TIP_FOOT, TIP_MOUNTED = 2.0, 3.5                     # the raised tip above the ground (authored)
+SHADE_STEP = 0.5                                     # ray_march step (ruling B4); hit t is +-(step + 0.5) m
+BEAM_M = 150.0
+SLOPE_MAX = 10.0
+ROUTE_SLOPE = 9.5                                    # the route's search margin under SLOPE_MAX
 
 
 # ---------------------------------------------------------------- helpers
@@ -169,6 +187,75 @@ def sword_tip(wander_glb):
     return g.nodes[hand]["name"], frames, worst
 
 
+def marches(probes_bin, lib, queries):
+    """Run the harness on (kind, origin[, target, len]) queries; [(ground, backdrop, fmin)]."""
+    lines = ["S %f %f %f" % q[1] if q[0] == "S" else "R %f %f %f %f %f %f %f" % (q[1] + q[2] + (q[3],))
+             for q in queries]
+    r = subprocess.run([probes_bin, lib, ROAD_MANIFEST], input="\n".join(lines) + "\n",
+                       capture_output=True, text=True, check=True)
+    return [tuple(float(v) for v in ln.split()) for ln in r.stdout.splitlines()]
+
+
+def yaw_to(a, b):
+    return round(math.degrees(math.atan2(b[0] - a[0], b[2] - a[2])), 2)
+
+
+def leg_worst(g, a, b):
+    """The worst slope along a leg past its first 1.5 m (the start's own slope is the arrival's)."""
+    d = math.hypot(b[0] - a[0], b[1] - a[1])
+    a2 = (a[0] + (b[0] - a[0]) * 1.5 / d, a[1] + (b[1] - a[1]) * 1.5 / d) if d > 1.5 else b
+    return s8.walk_line(g, a2, b)[2] if d > 2.5 else g.slope_deg(*b)
+
+
+def route(g, a, b, smax):
+    """Dijkstra over the road walk's reached nodes (8-neighbour, D3 rise/drop, node slope < smax),
+    then greedy straight legs that s8.walk_line passes with a worst slope < smax."""
+    sa, sb = g.ij(*a), g.ij(*b)
+    memo = {}
+
+    def ok(n):
+        if n not in memo:
+            y = g.at(1, *n)
+            memo[n] = not math.isnan(y) and g.slope_deg(g.x0 + n[0] * g.step, g.z0 + n[1] * g.step) < smax
+        return memo[n]
+    dist, prev, q = {sa: 0.0}, {}, [(0.0, sa)]
+    while q:
+        d, n = heapq.heappop(q)
+        if n == sb:
+            break
+        if d > dist[n]:
+            continue
+        y0 = g.at(0, *n)
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                m = (n[0] + di, n[1] + dj)
+                if m == n or not ok(m):
+                    continue
+                y1 = g.at(0, *m)
+                if y1 - y0 > 1.0 or y0 - y1 > 1.5:
+                    continue
+                nd = d + math.hypot(di, dj)
+                if nd < dist.get(m, 1e30):
+                    dist[m], prev[m] = nd, n
+                    heapq.heappush(q, (nd, m))
+    path = [sb]
+    while path[-1] != sa:
+        path.append(prev[path[-1]])
+    pts = [(g.x0 + i * g.step, g.z0 + j * g.step) for i, j in reversed(path)]
+    pts[0], pts[-1] = a, b
+    out, k = [a], 0
+    while k < len(pts) - 1:
+        m = len(pts) - 1
+        while m > k + 1:
+            w = s8.walk_line(g, pts[k], pts[m])
+            if w[1] == "ok" and leg_worst(g, pts[k], pts[m]) < smax:
+                break
+            m -= 1
+        out.append(pts[m])
+        k = m
+    return dist[sb], [(round(x, 1), round(z, 1)) for x, z in out[:-1]] + [b]
+
+
 def glb_json(path):
     d = open(path, "rb").read()
     return json.loads(d[20:20 + struct.unpack_from("<I", d, 12)[0]])
@@ -192,10 +279,10 @@ def main(argv):
         k = args.index("--out")
         out = args[k + 1]
         del args[k:k + 2]
-    if len(args) != 2:
+    if len(args) != 3:
         sys.stderr.write(__doc__)
         return 2
-    rdir, wander_glb = args
+    rdir, wander_glb, probes_bin = args
     lib = os.environ.get("SOTC_LIB") or DEFAULT_LIB
     game = os.environ.get("SOTC_GAME_ROOT") or DEFAULT_GAME
     road = Grid(os.path.join(rdir, "road.bin"), 2)
@@ -288,6 +375,79 @@ def main(argv):
         check(round(dur * 30) == f30, "clip %-32s %2d keys @ %.4f fps = %.4f s = %d frames @ 30" % (name, info["frames"], fps, dur, f30))
         clip_measured[name] = {"keys": info["frames"], "fps": round(fps, 4), "seconds": round(dur, 4)}
 
+    # Step 4 — the probes: raw-node marches through the road's ground and the backdrop ray grid.
+    chest = (VALUS_FEET[0], VALUS_FEET[1] + 10.93, VALUS_FEET[2])
+    sun_d = tuple(v / n for v in SUN)
+
+    def at(xz, lift=0.0):
+        return (xz[0], road.bilinear(0, *xz) + lift, xz[1])
+
+    def ring(xz):
+        return [(xz[0] + a, xz[1] + b) for a in (-1, 0, 1) for b in (-1, 0, 1)]
+    for name, xz in (("sunlit", SUNLIT), ("shade", SHADE), ("stairs_foot", STAIRS_FOOT),
+                     ("entrance_top", ENTRANCE_TOP), ("agro_stairs", AGRO_STAIRS)):
+        check(not math.isnan(road.node(1, *xz)), "probe %-12s %s: reached by the road walk, ground %.3f, slope %.2f deg"
+              % (name, xz, road.bilinear(0, *xz), road.slope_deg(*xz)))
+    qs = []
+    for xz, lift in [(p, TIP_FOOT) for p in ring(SUNLIT)] + [(p, TIP_FOOT) for p in ring(SHADE)] + \
+                    [(p, h) for h in (TIP_FOOT, TIP_MOUNTED) for p in ring(AGRO_STAIRS)]:
+        o = at(xz, lift)
+        qs += [("S", o), ("R", o, chest, BEAM_M)]
+    res = marches(probes_bin, lib, qs)
+    sh = [res[k] for k in range(0, len(res), 2)]
+    bm = [res[k] for k in range(1, len(res), 2)]
+    tol = SHADE_STEP + 0.5
+    f = lambda v: "none" if math.isnan(v) else "%.1f" % v  # noqa: E731
+    beam_c = bm[4]
+    check(all(math.isnan(t[2]) for t in sh[0:9]) and all(not math.isnan(t[2]) and t[2] <= BEAM_M for t in bm[0:9]),
+          "sunlit %s tip +%.0f m: shade march none within %.0f m (all 9 nodes of the 1 m ring); beam to the chest hits "
+          "ground %s / backdrop %s -> %s m (+-%.1f; ring %s..%s)" % (SUNLIT, TIP_FOOT, SHADE_M, f(beam_c[0]), f(beam_c[1]),
+          f(beam_c[2]), tol, f(min(t[2] for t in bm[0:9])), f(max(t[2] for t in bm[0:9]))))
+    check(all(not math.isnan(t[2]) for t in sh[9:18]),
+          "shade %s tip +%.0f m: shade march blocked at ground %s / backdrop %s -> %s m (ring %s..%s)"
+          % (SHADE, TIP_FOOT, f(sh[13][0]), f(sh[13][1]), f(sh[13][2]), f(min(t[2] for t in sh[9:18])),
+             f(max(t[2] for t in sh[9:18]))))
+    check(box_dist(at(SHADE), *door_c) > 0, "shade: outside door_corridor (%.2f m)" % box_dist(at(SHADE), *door_c))
+    for k0, lift in ((18, TIP_FOOT), (27, TIP_MOUNTED)):
+        c = bm[k0 + 4]
+        check(all(math.isnan(t[2]) for t in sh[k0:k0 + 9]) and all(not math.isnan(t[2]) for t in bm[k0:k0 + 9])
+              and road.slope_deg(*AGRO_STAIRS) <= SLOPE_MAX,
+              "agro_stairs %s tip +%.1f m: sunlit (ring), slope %.2f deg; beam hits ground %s / backdrop %s -> %s m"
+              % (AGRO_STAIRS, lift, road.slope_deg(*AGRO_STAIRS), f(c[0]), f(c[1]), f(c[2])))
+    check(box_dist(at(ENTRANCE_TOP), *door_c) > 0 and CORRIDOR["x"][0] <= ENTRANCE_TOP[0] <= CORRIDOR["x"][1],
+          "entrance_top %s: on the corridor floor (y %.3f), %.2f m short of door_corridor"
+          % (ENTRANCE_TOP, road.bilinear(0, *ENTRANCE_TOP), box_dist(at(ENTRANCE_TOP), *door_c)))
+    for a, b, what in ((STAIRS_FOOT, ENTRANCE_TOP, "stairs_foot -> entrance_top"),
+                       (ENTRANCE_TOP, (304.0, 290.0), "entrance_top -> door_corridor"),
+                       (AGRO_STAIRS, STAIRS_FOOT, "agro_stairs -> stairs_foot")):
+        m_, why, worst = s8.walk_line(road, a, b)
+        check(why == "ok", "%s: %.1f m straight, %s (worst slope %.1f deg)" % (what, m_, why, worst))
+    rlen, wps = route(road, ARRIVE_PLAIN, STAIRS_FOOT, ROUTE_SLOPE)
+    legs = [s8.walk_line(road, a, b) for a, b in zip(wps, wps[1:])]
+    worst = [leg_worst(road, a, b) for a, b in zip(wps, wps[1:])]
+    check(all(w[1] == "ok" for w in legs) and max(worst) < SLOPE_MAX,
+          "e2e_route %d waypoints, %.0f m (the search's %.0f m): legs %s m; worst slopes past each leg's first 1.5 m %s "
+          "(the arrival itself, the shrine steps' foot, is %.2f deg)" % (len(wps), sum(w[0] for w in legs), rlen,
+          ["%.0f" % w[0] for w in legs], ["%.2f" % w for w in worst], road.slope_deg(*ARRIVE_PLAIN)))
+    probes = {
+        "sunlit": {"p": [round(v, 3) for v in at(SUNLIT)], "yaw_away_deg": round((yaw_to(at(SUNLIT), chest) + 360) % 360 - 180, 2),
+                   "shade_hit_m": None, "beam_hit_m": beam_c[2]},
+        "shade": {"p": [round(v, 3) for v in at(SHADE)], "shade_hit_m": sh[13][2]},
+        "stairs_foot": [round(v, 3) for v in at(STAIRS_FOOT)],
+        "entrance_top": [round(v, 3) for v in at(ENTRANCE_TOP)],
+        "agro_stairs": {"p": [round(v, 3) for v in at(AGRO_STAIRS)], "yaw_deg": yaw_to(at(AGRO_STAIRS), chest),
+                        "beam_hit_m": {"tip_2": bm[22][2], "tip_3_5": bm[31][2]}},
+        "e2e_route": [list(w) for w in wps],
+        "source": "authored|measured",
+        "sources": {"sunlit": "authored p (y = ground), yaw_away measured toward Valus's chest + 180; marches measured",
+                    "shade": "authored p (y = ground); march measured", "stairs_foot": "authored (y = ground)",
+                    "entrance_top": "authored (y = ground)",
+                    "agro_stairs": "authored p (y = ground), yaw measured toward Valus's chest; marches measured",
+                    "e2e_route": "measured (Dijkstra over the road walk, slope < 9.5 deg, then straight legs)",
+                    "marches": "tools/re/s9/probes.cpp: ray_march step 0.5 m, unit dir, ground fmin backdrop; t +-1.0 m"},
+        "tip_lift_m": {"foot": TIP_FOOT, "mounted": TIP_MOUNTED},
+    }
+
     doc = {
         "door_corridor": {"stage": "plain", "min": list(door_c[0]), "max": list(door_c[1]),
                           "arrive_arena": {"p": list(ARENA_SPAWN), "yaw_deg": ARENA_YAW}, "source": "authored|data",
@@ -315,8 +475,7 @@ def main(argv):
                              "hit = sword_reaction's atlas, the same glow"},
         "clips": dict(CLIPS30, fps=30),
         "clips_measured": clip_measured,
-        "probes": {"source": "pending-task-3", "sunlit": None, "shade": None, "stairs_foot": None,
-                   "entrance_top": None, "agro_stairs": None, "e2e_route": None},
+        "probes": probes,
         "road_reach": {"nodes": nodes, "z_max": round(zmax, 2),
                        "corridor": {"x": list(CORRIDOR["x"]), "z": list(CORRIDOR["z"]), "y": [round(cy[0], 2), round(cy[1], 2)]},
                        "ground": "plain.manifest's 7 instance glbs + " + ", ".join(os.path.basename(e)[:-4] for e in ENTRANCE),

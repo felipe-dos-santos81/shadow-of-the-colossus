@@ -175,13 +175,78 @@
   }
  },
  "probes": {
-  "source": "pending-task-3",
-  "sunlit": null,
-  "shade": null,
-  "stairs_foot": null,
-  "entrance_top": null,
-  "agro_stairs": null,
-  "e2e_route": null
+  "sunlit": {
+   "p": [
+    335.0,
+    -4.534,
+    233.5
+   ],
+   "yaw_away_deg": -161.0,
+   "shade_hit_m": null,
+   "beam_hit_m": 37.5
+  },
+  "shade": {
+   "p": [
+    304.0,
+    2.925,
+    284.0
+   ],
+   "shade_hit_m": 17.5
+  },
+  "stairs_foot": [
+   304.0,
+   -3.603,
+   238.0
+  ],
+  "entrance_top": [
+   304.0,
+   2.434,
+   273.0
+  ],
+  "agro_stairs": {
+   "p": [
+    330.0,
+    -5.234,
+    228.0
+   ],
+   "yaw_deg": 20.11,
+   "beam_hit_m": {
+    "tip_2": 43.5,
+    "tip_3_5": 44.5
+   }
+  },
+  "e2e_route": [
+   [
+    301.0,
+    -245.0
+   ],
+   [
+    290.9,
+    -231.3
+   ],
+   [
+    304.9,
+    -49.3
+   ],
+   [
+    304.0,
+    238.0
+   ]
+  ],
+  "source": "authored|measured",
+  "sources": {
+   "sunlit": "authored p (y = ground), yaw_away measured toward Valus's chest + 180; marches measured",
+   "shade": "authored p (y = ground); march measured",
+   "stairs_foot": "authored (y = ground)",
+   "entrance_top": "authored (y = ground)",
+   "agro_stairs": "authored p (y = ground), yaw measured toward Valus's chest; marches measured",
+   "e2e_route": "measured (Dijkstra over the road walk, slope < 9.5 deg, then straight legs)",
+   "marches": "tools/re/s9/probes.cpp: ray_march step 0.5 m, unit dir, ground fmin backdrop; t +-1.0 m"
+  },
+  "tip_lift_m": {
+   "foot": 2.0,
+   "mounted": 3.5
+  }
  },
  "road_reach": {
   "nodes": 509579,
