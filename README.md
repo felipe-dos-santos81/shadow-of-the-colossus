@@ -26,8 +26,9 @@ make accept                         # the S8 acceptance (runs S7 → S6 → S5 �
 ```
 
 `make run`, `make shrine`, `make plain` and `make accept` compose the shrine and plain manifests
-(`make shrine-manifest`, `make plain-manifest`) when they are missing. Without it, or without the wake clips from `make bake`, `make run` warns once and
-plays without the return to the shrine (`--no-return` does the same on purpose).
+(`make shrine-manifest`, `make plain-manifest`) when they are missing. Without the shrine manifest,
+or without the wake clips from `make bake`, `make run` warns once and plays without the return to
+the shrine (`--no-return` does the same on purpose).
 
 The game data is read from `../SOTC-extract/extracted/game/` (`GAME_ROOT=` overrides it) and is never
 modified. Converted assets live in the gitignored `out/` tree.

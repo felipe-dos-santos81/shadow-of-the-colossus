@@ -27,7 +27,7 @@ whether nothing pops between gaits. Those are for the user's eye, ear and hands 
 | Repo / branch | `sotc-native`, branch `s8-agro`. The code head measured is `47824a4` (the seatRest fix over Task 9's `4d0a13f`). |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
 | Library (gitignored) | `SOTC_LIB=<repo>/out/library`, shared. Wander has 43 clips (17 + 26 ride clips appended). Agro has 20 (the S4.2 kick at index 0 + 19 riding clips). |
-| Plain manifest (gitignored) | `out/re/stage/plain.manifest`, sha256 `3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d`. It holds 7 plain-set instances, 27 cathedral `backdrop` lines at (300, 0.071, −300), 1 `horse` (agro.glb) and the spawn (301, −7.14, −210, yaw 0). Totals: 3,541 meshes and 1,916,318 vertices. The scratch re-compose is byte-identical. |
+| Plain manifest (gitignored) | `out/re/stage/plain.manifest`, sha256 `3a2a9b3bdd7481ad71e5165957ac669b4ee47cfe26299a5100e1cf008048b06d`. It holds 7 plain-set instances, 27 cathedral `backdrop` lines at (300, 0.071, −300), 1 `horse` (agro.glb) and the spawn (301, −7.14, −210, yaw 0). Totals: 3,541 meshes and 1,916,318 vertices (glTF primitives over the 7 + 27 + 1 glbs). The viewer's `s8-load … meshes=3553` is these 3,541 plus the 12 primitives of the player model `wander.glb` (`--model`), which the manifest's totals do not count (measured: `wander.glb` holds 12 meshes of 1 primitive each; S7's shrine is 3,551 + 12 = 3,563 the same way). The scratch re-compose is byte-identical. |
 | Audio manifest (gitignored) | `out/library/audio/audio.manifest`, 34 entries (the S6 ten + 24 S8 event-variants), sha256 `775096a3…0edd` |
 | Acceptance script | **`scripts/s8-acceptance.sh`** (bash 3.2; also checked under `/bin/bash` 3.2.57) |
 | Run log (gitignored) | `out/s8-acceptance-run.log`, which ends `s8-acceptance: PASS —` |
@@ -137,7 +137,7 @@ The gates the script applies:
   - The step-9 loop that drives this walk calls `player_step` directly and **skips the normal frame order**: no clip choice, no pose update, no `plain_step`.
   - It proves the heightmap's refusal for the on-foot controller, not a full interactive frame.
 - **`s8-reset ride=OnFoot` is always true on the arena's fresh iteration**, because the ride state belongs to the plain's iteration. The checks that carry weight are door Idle, return Idle, Valus and the player at 100, and that `R` was pressed while mounted at the gallop. `s8e2e-reset` also checks death Idle and Valus not defeated.
-- **Perf: 8.366 ms/frame** (240 timed frames plus render, facing the shrine backdrop, 1,720 drawn and 1,833 culled). This is probably vsync at 120 Hz, as S7's 8.3 ms is. R6's roof-garden cut was not needed.
+- **Perf: 8.366 ms/frame** (240 timed frames plus render, facing the shrine backdrop, 1,720 drawn and 1,833 culled). R6's roof-garden cut was not needed.
 
 ## 4 · The end-to-end run (`--stage shrine --s8-e2e`)
 
@@ -250,6 +250,7 @@ The four stills are in `out/s8/stills/`. Each is 2560×1440 with the PNG magic, 
   - there is **no anti-tunnelling at 14.7 m/s** on long frames, the same as for the player.
 - **Wall brushes cost a gait** (R15). A sustained refusal stops her (R11).
 - **The cliff edge reads as an invisible wall** (D3). There is no fall in S8.
+- **Backing into a wall plays `back` in place** (R17). R11's `blocked_rein` adds a rein only in a moving gait (Walk/Trot/Gallop); at Back it adds nothing, so a refused back-up keeps the `back` loop running while she does not move.
 - The dismount needs a stand or walk; the rider reins in first. There is no back mount.
 - `s8-gait` and `s8-steer` prove the wiring, not the data (§3.1). The step-9 on-foot edge loop skips the frame order (§3.1).
 - The e2e drives the loop with scripted keys at a fixed step. The physical keys, the gamepad and wall-clock frame times are still the user's walk to check.
@@ -301,6 +302,8 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 | 13 | back into the shrine | walk into the shrine steps | a fade back into the shrine | ☐ |
 | 14 | `R` from anywhere | press `R` mounted, mid-mount, mid-door-fade and on foot on the plain | the arena in its opening state | ☐ |
 | 15 | window, cursor, fps | move the mouse; watch the title | a 1280×720 window, the cursor free, the fps in the ≥ 60 class on the plain | ☐ |
+| 16 | the mounted camera's zoom (R17) | scroll the wheel while riding; then dismount | known: the mounted distance is written every frame, so the wheel does not zoom while riding, and the dismount resets the distance to 4.5 m — judge whether that is acceptable | ☐ |
+| 17 | a dismount inside a door box (R17) | dismount on the shrine steps inside `door_plain`'s box | known: the door does not fire (doors fire on entry only); walking out of the box and back in takes it | ☐ |
 
 **Deferred — do not mark these as failures:** foliage, the bridle, jumps, mounted combat, the moving
 mount, the call voice, music while riding, the arena wall at the stairs, and the low-confidence hoof picks.
