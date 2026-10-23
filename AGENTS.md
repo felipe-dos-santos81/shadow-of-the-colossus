@@ -19,8 +19,8 @@ the wake clips are data (R1/R3 PASS). The shrine is silent. `--no-return` keeps 
 S6 walk. The proof is `--s7-selftest --s7-stills out/s7/stills` (25 `s7-*` lines + five 2560×1440
 stills); the acceptance script is `scripts/s7-acceptance.sh` (it runs the frozen S6 chain first), and
 the recorded numbers are in `docs/notes/s7-results.md`. Known gaps: Dormin's voice and light, the
-statue break animation, the cutscene cameras, the bridge and garden walk, the coarse wall mask, and the
-~25 s shrine load (load-time caching is the next step). The user's walk is still the user's to fill in.
+statue break animation, the cutscene cameras, the bridge and garden walk, the coarse wall mask. The shrine
+loads in 1.79–1.90 s (the arena 0.65 s) and the window pumps events during a load. The user's walk is still the user's to fill in.
 
 **Milestone S6 "The fall" — implemented; scripted acceptance green, user walk PENDING.**
 Valus's death is now a sequence instead of a freeze: his health 0 starts a phase machine
@@ -135,7 +135,7 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 
 After the death sequence the game returns to the shrine (`--no-return` keeps the S6 end state;
 `--stage shrine` starts there; `--shrine-manifest PATH` overrides `out/re/stage/shrine.manifest`).
-The shrine load takes ~25 s with the window unresponsive. The S7 proof:
+The shrine load takes 1.79–1.90 s and the window keeps pumping events during it. The S7 proof:
 
 ```bash
 caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \

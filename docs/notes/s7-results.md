@@ -16,7 +16,7 @@ the walls and the floor feel solid are the user's eye and hands (§11).
 
 | | |
 |---|---|
-| Date | 2026-10-22 local (−03); the recorded run is stamped `2026-10-23T00:06:32Z`–`00:18:57Z` (12 min 25 s) |
+| Date | 2026-10-22 local (−03); the recorded run is stamped `2026-10-23T00:35:31Z`–`00:43:32Z` (8 min 1 s), re-measured after the load fix (`dd14055`, `6b54c08`, `a32e276`) |
 | Machine | Apple M3 Max, macOS 27.0.1, arm64; 1280×720 points → 2560×1440 px captures |
 | Repo / branch | `sotc-native`, branch `s7-shrine`; the code base is `ee1fe08` (the return, wired and proven) |
 | Game tree (read-only) | `SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game` |
@@ -38,16 +38,16 @@ caffeinate -dimsu ./scripts/s7-acceptance.sh   # exit 0; everything below is fro
 ```
 
 - **Builds.** `dotnet build BpConvert.sln`, `dotnet publish src/BpConvert.Cli`, app `cmake` Release.
-- **Suites.** `dotnet test` **146 passed, 0 failed** (49 s); `ctest` **2/2** (unit 11.64 s,
-  windowed 0.19 s).
+- **Suites.** `dotnet test` **146 passed, 0 failed** (49 s); `ctest` **2/2** (unit 6.51 s,
+  windowed 0.17 s).
 - **The frozen S6 acceptance** ran unchanged and printed its own `PASS —` (the unchanged S4.2 render
-  path at **8.52 ms/frame**, marginal, ~117.4 fps); it took 9 min 53 s with its nested chain. Its
+  path at **8.75 ms/frame**, marginal, ~114.3 fps); it took 6 min 44 s with its nested chain. Its
   own s6 outputs are not re-asserted.
 - **Manifests.** The arena compose into the scratch path hashes to the pinned
   `088e6218…c1d0`; the shrine compose is byte-identical to `out/re/stage/shrine.manifest`;
   `check-cwks` 13/13, `check-manifest` (arena) pass, `check-encounter` 22/22,
   `check-manifest --stage shrine` 12/12 (`gate: MET` on each).
-- **The timeline.** `--s7-selftest --s7-stills out/s7/stills` exited 0 in 80 s with exactly **25**
+- **The timeline.** `--s7-selftest --s7-stills out/s7/stills` exited 0 in 11 s with exactly **25**
   `s7-*` lines (10 phase, 4 load, 2 reset, 4 ground, wall, idols, mono, perf, status), §2–§6.
 - **The JSON cross-check** (ruling R1): the printed wall segment equals the JSON's probe; the
   `app/src/shrine_points.h` constants equal the JSON's four probes, the three flow timings and the
@@ -120,18 +120,21 @@ heights (lying 0.10 m, kneeling 0.55 m at the cut04 → cut05 boundary, standing
 
 | # | line | meshes | ms |
 |---|---|---|---|
-| 1 | `s7-load stage=arena instances=30` | 142 | 11,712.8 |
-| 2 | `s7-load stage=shrine instances=51` | 3,563 | 27,196.5 |
-| 3 | `s7-load stage=arena instances=30` | 142 | 9,126.7 |
-| 4 | `s7-load stage=shrine instances=51` | 3,563 | 26,604.6 |
+| 1 | `s7-load stage=arena instances=30` | 142 | 656.7 |
+| 2 | `s7-load stage=shrine instances=51` | 3,563 | 1,787.4 |
+| 3 | `s7-load stage=arena instances=30` | 142 | 647.9 |
+| 4 | `s7-load stage=shrine instances=51` | 3,563 | 1,897.2 |
 
 Ruling R10: four lines, not three — the selftest loads the arena, the shrine, the arena again after
 the shrine's `R`, and the shrine again. The two shrine mesh counts are equal (3,563 scene meshes; the
-manifest's glbs hold 3,551 glTF meshes), and so are the arena's (142). Ruling R11: the shrine
-load ceiling is **60 s** (`ms ≤ 60000`); the 24–26.5 s measured earlier and the 26.6–27.2 s here
-leave no margin under the design's default 30 s — about 21 s of it is `compose_scene` over 3,563
-meshes / 474 textures. **Load-time work (texture/glb caching) is the next step.** The window does not
-pump events during the load (§10).
+manifest's glbs hold 3,551 glTF meshes), and so are the arena's (142). Ruling R15: the shrine
+load ceiling is **15 s** (`ms ≤ 15000`); the measured shrine loads are 1.79 s and 1.90 s. History
+(ruling R11 had set 60 s): before the fix the shrine loaded in 24–27 s, because `compose_scene`
+decoded the PNGs of each glb separately — 474 PNG references of which 151 are unique; commits
+`dd14055` (share decoded textures across the scene), `6b54c08` (decode the PNGs in parallel up
+front) and `a32e276` (keep the window pumping events during a stage load) fixed it. The shrine
+scene now holds 151 textures (`s1-scene meshes=3563 … textures=151`), the arena 87. The window
+pumps events during the load.
 
 ## 5 · The ground, the wall, the idols, Mono
 
@@ -161,14 +164,14 @@ approximation; the hall floor measures 8.999).
 
 ## 6 · Performance and status
 
-- `s7-perf frames=240 frame_ms=8.348 drawn=170 culled=3393` — the 240-frame play view at the spawn
-  in the shrine: **8.348 ms/frame** (≤ 16.7), **170 meshes drawn, 3,393 culled** of 3,563.
+- `s7-perf frames=240 frame_ms=12.492 drawn=170 culled=3393` — the 240-frame play view at the spawn
+  in the shrine: **12.492 ms/frame** (≤ 16.7), **170 meshes drawn, 3,393 culled** of 3,563.
 - `s7-status stage=shrine phase=Free lock=0`.
 - `s7-reset stage=arena phase=Idle death=Idle valus=100 player=100` twice (`R` mid-fade, `R` from the
   shrine), both exact.
 - `s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3` — windowed, the cursor never
   captured.
-- The frozen S4.2 render path in the S6 regression: 8.52 ms/frame marginal.
+- The frozen S4.2 render path in the S6 regression: 8.75 ms/frame marginal.
 
 ## 7 · The stills
 
@@ -215,7 +218,11 @@ the wake clips and their pelvis heights, the spawn position (`cathedral_int.sgpr
 - **R5 (amended)** — the Wake is the baked clips' duration, 11.669 s, not Task 0's 15.456 s.
 - **R6** — the spawn band is [8.5, 12.5], not 9–11 (the data spawn is 8.998).
 - **R10** — four `s7-load` lines, not three.
-- **R11** — the shrine load ceiling 60 s, not 30 s.
+- **R11** — the shrine load ceiling 60 s, not 30 s (superseded by R15).
+- **R14** — cross-glb texture dedup changes the informational `s1-scene … textures=` count of composed
+  scenes (shrine 151, arena 87); the shared textures are the same PNG bytes.
+- **R15** — with the load at 1.79–1.90 s, the shrine load ceiling tightens from 60 s to 15 s
+  (`ms ≤ 15000`).
 - **R12** — `kHeightmapLayers` 64, not 8.
 - **R13** — `fade.png` at fade 0.6 and the probes follow the floor walked from the spawn.
 - **R1** — the app parses no JSON: the timings and probes are `constexpr` in `shrine_points.h`, and
@@ -232,8 +239,8 @@ the wake clips and their pelvis heights, the spawn position (`cathedral_int.sgpr
 - **The wall mask is coarse (1 m).** The wall probe stops the walk at x = 8.54 against a face at
   x ≈ 9.33, ≈0.8 m short; thin geometry between nodes can be missed. The band and steepness are
   builder knobs.
-- **The shrine load is ≈25 s** (26.6–27.2 s here), the window does not pump events during it and may
-  beachball. Texture/glb caching is the next step.
+- **The shrine load is 1.79–1.90 s** (the arena 0.65 s); the window pumps events during a stage
+  load (`a32e276`), so it does not stall.
 - **A possible few-centimetre pop at Wake → Free**: the wake plants the pose's lowest joint on the
   floor, then the standing clip takes over; the walk (§11, item 3) judges it.
 - The ground probe follows the floor but ignores walls, so its label overstates the walk's physics;
@@ -260,7 +267,7 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 
 | # | check | do this | expected | result |
 |---|---|---|---|---|
-| 1 | the hold and the fade | defeat Valus (or watch the S6 sequence) and wait | after the death sequence the corpse holds (control kept), then the screen fades to white and the shrine loads (≈25 s, the window may stall) | ☐ |
+| 1 | the hold and the fade | defeat Valus (or watch the S6 sequence) and wait | after the death sequence the corpse holds (control kept), then the screen fades to white and the shrine loads (1.8–1.9 s measured) | ☐ |
 | 2 | the fade-in | watch the load end | the shrine fades in from white | ☐ |
 | 3 | the wake | watch Wander rise | Wander wakes in front of the altar (lying → kneeling → standing), the camera starts low on him and ends behind him facing the altar; no float or sink, and no visible pop when control returns | ☐ |
 | 4 | Mono on the altar | look at the altar | Mono lies on the altar | ☐ |
@@ -276,8 +283,7 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 shrine); run the S6 walk (`docs/notes/s6-results.md` §11) with it.
 
 **Deferred — do not mark as failures:** Dormin's voice and light, the statue break animation, the
-cutscene cameras, the bridge, the garden walk, the shrine's sound, the coarse (1 m) wall mask, the
-~25 s load.
+cutscene cameras, the bridge, the garden walk, the shrine's sound, the coarse (1 m) wall mask.
 
 **Verdict: PENDING — the user's eye and hands.** S7's done-line closes only when this table is
 filled and passes; nothing in §1–§10 claims it.
