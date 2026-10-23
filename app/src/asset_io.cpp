@@ -806,6 +806,12 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     for (const ManifestEntity& entity : manifest.entities) {
         glbs.push_back(entity.placement.glbRelPath);
     }
+    for (const ManifestHorse& horse : manifest.horses) {
+        glbs.push_back(horse.placement.glbRelPath);
+    }
+    for (const ManifestInstance& backdrop : manifest.backdrops) {
+        glbs.push_back(backdrop.glbRelPath);
+    }
     for (const ManifestPosed& posed : manifest.posed) {
         glbs.push_back(posed.glb);
     }
@@ -885,6 +891,54 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
                 }
             }
             throw std::runtime_error(message);
+        }
+    }
+
+    // The horse: its own rig like an entity's (skeleton and clips kept, no clip
+    // required), recorded as Scene::horseRig and never an encounter entity.
+    for (const ManifestHorse& horse : manifest.horses) {
+        progress();
+        const GlbPlacement placement{
+            .model = mat4_from_trs(horse.placement.position, horse.placement.rotation,
+                                   horse.placement.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+            .includeRig = true,
+        };
+        try {
+            load_glb_into(scene, libraryDir, horse.placement.glbRelPath, placement, have_bounds,
+                          &decoded);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error("compose_scene: horse \"" + horse.placement.glbRelPath +
+                                     "\": " + error.what());
+        }
+        if (scene.horseRig < 0) {
+            scene.horseRig = static_cast<int>(scene.rigs.size()) - 1;
+        }
+    }
+
+    // Backdrops: static meshes (rig = -1) that are drawn but never ground, and
+    // stay out of the scene bounds (the heightmap grid is sized by them).
+    for (const ManifestInstance& backdrop : manifest.backdrops) {
+        progress();
+        const Vec3 saved_min = scene.boundsMin;
+        const Vec3 saved_max = scene.boundsMax;
+        const bool saved_have = have_bounds;
+        const std::size_t mesh_begin = scene.meshes.size();
+        const GlbPlacement placement{
+            .model = mat4_from_trs(backdrop.position, backdrop.rotation, backdrop.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+        };
+        try {
+            load_glb_into(scene, libraryDir, backdrop.glbRelPath, placement, have_bounds, &decoded);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error("compose_scene: backdrop \"" + backdrop.glbRelPath +
+                                     "\": " + error.what());
+        }
+        scene.boundsMin = saved_min;
+        scene.boundsMax = saved_max;
+        have_bounds = saved_have;
+        for (std::size_t m = mesh_begin; m < scene.meshes.size(); ++m) {
+            scene.meshes[m].ground = false;
         }
     }
 

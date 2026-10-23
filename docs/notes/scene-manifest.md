@@ -20,6 +20,8 @@ line. The directives, verbatim:
 instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
 posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
+backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 spawn <px> <py> <pz> <yawDeg>
 ```
 
@@ -45,10 +47,18 @@ spawn <px> <py> <pz> <yawDeg>
   posed vertices. A missing glb or a clip the glb lacks is a load error naming the path
   (and the clip). Posed props are appended after the entities, so rig and mesh ranges
   of the player and entities are unchanged.
+- `backdrop` — the S8 addition: an `instance` that is drawn but never ground. Static
+  meshes (`rig = -1`) with `MeshCpu::ground = false`; `build_heightmap` skips them, and they
+  stay out of the scene bounds (the heightmap grid is sized by those), so a distant
+  backdrop cannot stretch the walkable map. Loaded after the entities.
+- `horse` — the S8 addition: Agro. Placement as an `instance`'s, no clip. Like an `entity` it
+  keeps its skeleton and clips as its own rig (index after the player and any entities,
+  `Scene::horseRig`; `-1` when the manifest has none), but it is never an encounter entity —
+  the app drives it. A model that cannot be loaded is a load error naming the path.
 - `spawn` — where the player starts: position and facing yaw in degrees. Optional; without
   it `hasSpawn` is false and the app falls back to the scene bounds' centre.
 
-Token counts are exact (12 for `instance`, 13 for `entity`, 14 for `posed`, 5 for `spawn`), and unknown
+Token counts are exact (12 for `instance`, `backdrop` and `horse`, 13 for `entity`, 14 for `posed`, 5 for `spawn`), and unknown
 directives fail loudly. A malformed line throws `std::runtime_error` formatted
 `<file>:<line>: <reason>`.
 

@@ -43,6 +43,9 @@ struct MeshCpu {
     // scene that never touches it draws exactly as before. Collision, bounds
     // and the heightmap read the mesh lists, not this flag.
     bool visible = true;
+    // False for a manifest `backdrop` mesh: drawn, but build_heightmap never
+    // rasterizes it into the ground. Every other mesh is ground (if static).
+    bool ground = true;
 };
 
 // One decoded PNG, RGBA8, top-down (glTF image origin).
@@ -127,6 +130,8 @@ struct Scene {
     Vec3 boundsMin, boundsMax;
     std::vector<RigCpu> rigs;
     std::size_t playerRig = 0;  // index into rigs; 0 after a load
+    // The manifest `horse`'s rig (after the player and any entities), -1 when none.
+    int horseRig = -1;
 };
 
 // The rig at `rigIndex`. An index that is no rig of this scene (a default-

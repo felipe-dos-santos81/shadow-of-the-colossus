@@ -193,7 +193,7 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
     // must never rasterize into the surface they stand on.
     std::size_t static_count = 0;
     for (const MeshCpu& mesh : scene.meshes) {
-        if (mesh.rig < 0) {
+        if (mesh.rig < 0 && mesh.ground) {
             ++static_count;
         }
     }
@@ -222,8 +222,8 @@ Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered) {
     const auto for_each_triangle = [&](auto&& visit) {
         for (std::size_t mesh_index = 0; mesh_index < scene.meshes.size(); ++mesh_index) {
             const MeshCpu& mesh = scene.meshes[mesh_index];
-            if (mesh.rig >= 0) {
-                continue;  // a rigged mesh (player or entity): never ground
+            if (mesh.rig >= 0 || !mesh.ground) {
+                continue;  // a rigged mesh (player or entity) or a backdrop: never ground
             }
             for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
                 const std::size_t i0 = mesh.indices[t];

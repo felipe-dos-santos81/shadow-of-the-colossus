@@ -1515,3 +1515,67 @@ TEST_CASE("compose_scene reports progress before each glb it loads") {
     CHECK(calls >= 3);
     CHECK(calls <= 4);
 }
+
+TEST_CASE("compose_scene loads a horse as its own rig after the entities") {
+    TempFixtureDir dir;
+    const std::string agro = "models/shadow/characters/agro/_cmn/agro.glb";
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\n" +
+                 colossus_entity_line() + "horse " + agro + " 5 0 0 0 0 0 1 1 1 1\n");
+
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+
+    // Rigs: the player, the entity, then the horse.
+    REQUIRE(scene.rigs.size() == 3);
+    CHECK(scene.horseRig == 2);
+    const RigCpu& horse = scene.rigs[2];
+    CHECK_FALSE(horse.dynamic);
+    REQUIRE(horse.animations.size() >= 1);
+    CHECK(horse.animations[0].name == "horse_a_add_horse_kick");
+    REQUIRE(horse.meshEnd > horse.meshBegin);
+    for (std::size_t m = horse.meshBegin; m < horse.meshEnd; ++m) {
+        CHECK(scene.meshes[m].rig == 2);
+        CHECK(scene.meshes[m].ground);
+    }
+
+    // The same manifest without a horse has none, and the entity keeps rig 1.
+    const SceneManifest plain = parsed_manifest(
+        dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\n" +
+                 colossus_entity_line());
+    const Scene without = compose_scene(test_library(), plain, kWanderGlb);
+    CHECK(without.horseRig == -1);
+    CHECK(without.rigs.size() == 2);
+    for (const MeshCpu& mesh : without.meshes) {
+        CHECK(mesh.ground);
+    }
+}
+
+TEST_CASE("compose_scene loads a backdrop as static, non-ground meshes outside the bounds") {
+    TempFixtureDir dir;
+    const Scene base = compose_scene(
+        test_library(),
+        parsed_manifest(dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\n"),
+        kWanderGlb);
+
+    const SceneManifest manifest = parsed_manifest(
+        dir, std::string("instance ") + kPlankGlb + " 0 0 0 0 0 0 1 1 1 1\nbackdrop " + kPlankGlb +
+                 " 300 0.071 -300 0 0 0 1 1 1 1\n");
+    const Scene scene = compose_scene(test_library(), manifest, kWanderGlb);
+
+    // Load order: the instance, the player (12), then the backdrop's one mesh.
+    REQUIRE(scene.meshes.size() == base.meshes.size() + 1);
+    CHECK(scene.horseRig == -1);
+    CHECK(scene.rigs.size() == 1);
+    const MeshCpu& backdrop = scene.meshes.back();
+    CHECK(backdrop.rig == -1);
+    CHECK_FALSE(backdrop.ground);
+    CHECK(backdrop.model.m[12] == doctest::Approx(300.0f));
+    CHECK(backdrop.model.m[14] == doctest::Approx(-300.0f));
+    // The backdrop's far corner does not stretch the scene (and so the heightmap) bounds.
+    CHECK(scene.boundsMin.x == doctest::Approx(base.boundsMin.x));
+    CHECK(scene.boundsMax.x == doctest::Approx(base.boundsMax.x));
+    CHECK(scene.boundsMin.z == doctest::Approx(base.boundsMin.z));
+    CHECK(scene.boundsMax.z == doctest::Approx(base.boundsMax.z));
+    // Everything else stays ground.
+    CHECK(scene.meshes.front().ground);
+}
