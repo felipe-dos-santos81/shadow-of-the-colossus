@@ -189,7 +189,7 @@ if ! audition_out="$(python3 "$audition" --root "$game_root" --map "$audio_map" 
   printf '%s\n' "$audition_out" >&2
   fail "the S8 audition gate failed"
 fi
-audition_line="$(printf '%s\n' "$audition_out" | grep -m1 -E '^AUDITION PASSED: 34 cue\(s\)' || true)"
+audition_line="$(grep -m1 -E '^AUDITION PASSED: 34 cue\(s\)' <<<"$audition_out" || true)"
 [[ -n "$audition_line" ]] || fail "the audition gate did not report 34 passing cues"
 printf '%s\n' "$audition_line"
 
@@ -231,6 +231,9 @@ fi
 printf '%s\n' "$selftest_out"
 printf '%s\n' "$selftest_out" > "$selftest_txt"
 
+# field LINE KEY — the value of KEY=… in LINE. Assign it to a variable first
+# (x="$(field …)"): set -e then stops the script when it is missing; used as an
+# argument inside "$(…)" its failure would be lost.
 field() {
   local line="$1" key="$2" rest
   rest="${line#*"$key"=}"
@@ -246,12 +249,14 @@ one_line() {
   local regex="$1" label="$2" count line
   count="$(line_count "$regex")"
   [[ "$count" = "1" ]] || fail "$label: expected exactly one line, found $count"
-  line="$(printf '%s\n' "$selftest_out" | grep -m1 -E "$regex")" || fail "$label: missing"
+  line="$(grep -m1 -E "$regex" <<<"$selftest_out")" || fail "$label: missing"
   printf '%s' "$line"
 }
 
 # within VALUE EXPECTED FRACTION — |value - expected| <= fraction x |expected|.
+# An empty argument is a failure, never a vacuous pass.
 within() {
+  [[ -n "$1" && -n "$2" && -n "$3" ]] || fail "within: an empty argument ('$1' '$2' '$3')"
   awk -v v="$1" -v e="$2" -v f="$3" 'BEGIN { d = v - e; if (d < 0) d = -d; a = e < 0 ? -e : e; exit !(d <= f * a) }'
 }
 
@@ -268,7 +273,9 @@ awk -v ms="$load_ms" 'BEGIN { exit !(ms <= 15000) }' || fail "the plain load too
 
 whistle_line="$(one_line '^s8-whistle ' "s8-whistle")"
 whistle_arrived="$(field "$whistle_line" arrived)"
-[[ "$(field "$whistle_line" neigh)" = "1" ]] || fail "Agro did not neigh: $whistle_line"
+whistle_dist="$(field "$whistle_line" dist)"
+whistle_neigh="$(field "$whistle_line" neigh)"
+[[ "$whistle_neigh" = "1" ]] || fail "Agro did not neigh: $whistle_line"
 awk -v d="$whistle_arrived" 'BEGIN { exit !(d <= 3.5) }' || fail "Agro arrived $whistle_arrived m away (ceiling 3.5)"
 
 mount_line="$(one_line '^s8-mount ' "s8-mount")"
@@ -278,17 +285,20 @@ mount_line="$(one_line '^s8-mount ' "s8-mount")"
 gait_rows=""
 for gait in Walk Trot Gallop; do
   gline="$(one_line "^s8-gait gait=$gait " "s8-gait $gait")"
-  within "$(field "$gline" speed)" "$(field "$gline" expected)" 0.05 ||
+  gspeed="$(field "$gline" speed)"
+  gexpected="$(field "$gline" expected)"
+  within "$gspeed" "$gexpected" 0.05 ||
     fail "the $gait loop speed is off by more than 5 %: $gline"
-  gait_rows="${gait_rows}${gait_rows:+, }${gait} $(field "$gline" speed) m/s (expected $(field "$gline" expected))"
+  gait_rows="${gait_rows}${gait_rows:+, }${gait} ${gspeed} m/s (expected ${gexpected})"
 done
 gait_order="$(printf '%s\n' "$selftest_out" | grep -E '^s8-gait ' | awk '{ print $2 }' | tr '\n' ' ')"
 [[ "$gait_order" = "gait=Walk gait=Trot gait=Gallop " ]] || fail "the gait order is '$gait_order'"
 
 steer_line="$(one_line '^s8-steer ' "s8-steer")"
 steer_rate="$(field "$steer_line" yaw_rate)"
-[[ "$(field "$steer_line" expected)" = "-45.00" ]] ||
-  fail "s8-steer expected=$(field "$steer_line" expected) (D10's gallop rate, right = -45.00)"
+steer_expected="$(field "$steer_line" expected)"
+[[ "$steer_expected" = "-45.00" ]] ||
+  fail "s8-steer expected=$steer_expected (D10's gallop rate, right = -45.00)"
 within "$steer_rate" -45.00 0.05 || fail "the gallop yaw rate is off by more than 5 %: $steer_line"
 
 stop_line="$(one_line '^s8-stop ' "s8-stop")"
@@ -299,15 +309,20 @@ back_line="$(one_line '^s8-back ' "s8-back")"
 back_speed="$(field "$back_line" speed)"
 
 edge_ride_line="$(one_line '^s8-edge-ride ' "s8-edge-ride")"
-[[ "$(field "$edge_ride_line" blocked)" = "1" ]] || fail "the ridden edge is not blocked: $edge_ride_line"
-[[ "$(field "$edge_ride_line" clips)" = "walk_start,walk,run_n_start,run_n,run_n_stop,stand1" ]] ||
+edge_ride_blocked="$(field "$edge_ride_line" blocked)"
+edge_ride_clips="$(field "$edge_ride_line" clips)"
+edge_ride_stopped="$(field "$edge_ride_line" stopped)"
+[[ "$edge_ride_blocked" = "1" ]] || fail "the ridden edge is not blocked: $edge_ride_line"
+[[ "$edge_ride_clips" = "walk_start,walk,run_n_start,run_n,run_n_stop,stand1" ]] ||
   fail "the ridden edge did not stop through run_n_stop (R11): $edge_ride_line"
 
 dismount_line="$(one_line '^s8-dismount ' "s8-dismount")"
 [[ "$dismount_line" = "s8-dismount side=R" ]] || fail "s8-dismount is '$dismount_line' (expected side=R)"
 
 edge_line="$(one_line '^s8-edge ' "s8-edge")"
-[[ "$(field "$edge_line" blocked)" = "1" ]] || fail "the on-foot edge is not blocked: $edge_line"
+edge_blocked="$(field "$edge_line" blocked)"
+edge_stopped="$(field "$edge_line" stopped)"
+[[ "$edge_blocked" = "1" ]] || fail "the on-foot edge is not blocked: $edge_line"
 
 rider_line="$(one_line '^s8-rider ' "s8-rider")"
 rider_offset="$(field "$rider_line" offset)"
@@ -321,7 +336,9 @@ audio_hooves="$(field "$audio_line" hooves)"
   fail "s8-audio counts are implausible: $audio_line"
 
 perf_line="$(one_line '^s8-perf ' "s8-perf")"
-[[ "$(field "$perf_line" frames)" = "240" ]] || fail "s8-perf frames=$(field "$perf_line" frames) (expected 240)"
+perf_frames="$(field "$perf_line" frames)"
+perf_drawn="$(field "$perf_line" drawn)"
+[[ "$perf_frames" = "240" ]] || fail "s8-perf frames=$perf_frames (expected 240)"
 perf_frame="$(field "$perf_line" frame_ms)"
 awk -v ms="$perf_frame" 'BEGIN { exit !(ms > 0.0 && ms <= 16.7) }' ||
   fail "the plain frame costs ${perf_frame} ms (outside the 60 fps budget of 16.7 ms)"
@@ -361,7 +378,8 @@ e2e_loads="$(e2e_lines '^s7-load ' | awk '{ print $2 }' | sed 's/stage=//' | tr 
 while IFS= read -r l; do
   [[ "$l" =~ ^s7-load\ stage=[a-z]+\ instances=[0-9]+\ meshes=[0-9]+\ ms=[0-9]+\.[0-9]$ ]] ||
     fail "a malformed e2e load line: $l"
-  awk -v ms="$(field "$l" ms)" 'BEGIN { exit !(ms <= 15000) }' || fail "an e2e load took too long: $l"
+  l_ms="$(field "$l" ms)"
+  awk -v ms="$l_ms" 'BEGIN { exit !(ms <= 15000) }' || fail "an e2e load took too long: $l"
 done < <(e2e_lines '^s7-load ')
 e2e_ride="$(e2e_lines '^s8e2e-ride ')"
 [[ "$e2e_ride" =~ ^s8e2e-ride\ gallop_m=[0-9]+\.[0-9]$ ]] || fail "s8e2e-ride is malformed: '$e2e_ride'"
@@ -418,15 +436,15 @@ PY
 
 span_for() {
   local want="$1"
-  printf '%s\n' "$selftest_out" | awk -v want="$want" '
+  awk -v want="$want" '
     /^s1-pixels / { line = $0 }
     /^s1-screenshot / { if ($2 == "path=" want) { print line; exit } }
-  '
+  ' <<<"$selftest_out"
 }
 
 size_for() {
   local want="$1"
-  printf '%s\n' "$selftest_out" | awk -v want="$want" '
+  awk -v want="$want" '
     /^s1-screenshot / {
       if ($2 == "path=" want) {
         w = $3; h = $4;
@@ -434,7 +452,7 @@ size_for() {
         print w, h; exit
       }
     }
-  '
+  ' <<<"$selftest_out"
 }
 
 check_png() {
@@ -487,6 +505,6 @@ printf 's8-acceptance: e2e          %s\n' "$(e2e_lines '^(s8e2e-|s7-load )' | tr
 printf 's8-acceptance: stills       %s\n' "$stills"
 printf 's8-acceptance: s7 regress   %s\n' "$(printf '%s\n' "$s7_pass_line" | cut -c1-160)"
 printf 's8-acceptance: PASS — build, both suites, the frozen S7 acceptance green (S6 → S5 → S4.2 → S4.1 → S4 → S3 inside it), the S8 decode (34 manifest entries = the map'"'"'s cue events; the audition gate 34 cues non-silent), the arena compose at sha %s…, the shrine and plain composes byte-identical (sha %s…, %s…), the five probe checks green; the plain load %s ms; the whistle from %s m, Agro at %s m with the neigh; the left mount (stand_ride_l); %s; the gallop yaw rate %s °/s (expected -45.00); the stop run_stop1,2,3; the back-up %s m/s; the ridden edge stopped at %s through run_n_stop (R11); the right dismount; the on-foot edge stopped at %s; the rider within %s m of the seated rest (R13); %s ride audio events (%s hooves); plain frame %s ms (drawn %s, culled %s); the reset exact; the end-to-end run (shrine → door → plain → whistle, mount, gallop %s m, stop, dismount → door → shrine → R → arena) green; ride_points.h regenerated byte-identical; four stills 2560x1440; windowed, cursor free\n' \
-  "${arena_sha:0:8}" "${shrine_sha:0:8}" "${plain_sha:0:8}" "$load_ms" "$(field "$whistle_line" dist)" "$whistle_arrived" \
-  "$gait_rows" "$steer_rate" "$back_speed" "$(field "$edge_ride_line" stopped)" "$(field "$edge_line" stopped)" \
-  "$rider_offset" "$audio_events" "$audio_hooves" "$perf_frame" "$(field "$perf_line" drawn)" "$perf_culled" "$e2e_gallop"
+  "${arena_sha:0:8}" "${shrine_sha:0:8}" "${plain_sha:0:8}" "$load_ms" "$whistle_dist" "$whistle_arrived" \
+  "$gait_rows" "$steer_rate" "$back_speed" "$edge_ride_stopped" "$edge_stopped" \
+  "$rider_offset" "$audio_events" "$audio_hooves" "$perf_frame" "$perf_drawn" "$perf_culled" "$e2e_gallop"
