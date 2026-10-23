@@ -313,10 +313,10 @@ enum : int {
 // REAR face, 0.9–1.4 m behind the MATA -> Weak_point2 axis and 1–3 m below
 // Weak_point2 (measured: stand / down_b_l_loop, Task 10's probe), facing up and
 // back (normal (-0.2, 0.7, -0.7)): below the back's top, out of a standing
-// strike's reach. So the rump carries the back sigil and its radius is the rear
-// face's, 1.6 m (authored: a strike from the rear face reaches the shell in
-// stand and both rear kneels; the MATA p99 4.26–4.32 m is the hips' width — a
-// climber orbiting to the flank sinks into the hips, a recorded gap).
+// strike's reach. So the rump carries the back sigil, and the band is TAPERED:
+// 4.3 m at MATA (measured: the hips, MATA p99 4.26–4.32 m — where the thighs
+// hand over) to 1.6 m at Weak_point2 (`radiusB`, authored: the rear face at the
+// sigil, 0.9–1.4 m behind the axis; a strike from there reaches the shell).
 inline constexpr std::array<ClimbBand, B::Count> kBands{{
     {.boneA = "Bone_B_TOE_L", .boneB = "Bone_SUNE_L", .radius = 2.5f, .up = B::RearLeftShin,
      .down = ClimbBandId::None, .weakpoint = -1, .name = "rear_left_hoof"},
@@ -324,8 +324,8 @@ inline constexpr std::array<ClimbBand, B::Count> kBands{{
      .down = B::RearLeftHoof, .weakpoint = -1, .name = "rear_left_shin"},
     {.boneA = "Bone_MOMO_L", .boneB = "Bone_MATA_L", .radius = 3.0f, .up = B::Rump,
      .down = B::RearLeftShin, .weakpoint = -1, .name = "rear_left_thigh"},
-    {.boneA = "Bone_MATA_L", .boneB = "Weak_point2", .radius = 1.6f, .up = B::Back,
-     .down = B::RearLeftThigh, .weakpoint = W::BackSigil, .name = "rump"},
+    {.boneA = "Bone_MATA_L", .boneB = "Weak_point2", .radius = 4.3f, .up = B::Back,
+     .down = B::RearLeftThigh, .weakpoint = W::BackSigil, .name = "rump", .radiusB = 1.6f},
     {.boneA = "Weak_point2", .boneB = "Bone_KUBI", .radius = 1.5f, .up = B::Neck, .down = B::Rump,
      .weakpoint = W::BackSigil, .horizontal = true, .name = "back", .radiusB = 6.3f},
     {.boneA = "Bone_KUBI", .boneB = "Bone_HEAD", .radius = 6.0f, .up = B::Head, .down = B::Back,

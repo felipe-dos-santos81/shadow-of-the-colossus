@@ -297,3 +297,12 @@ TEST_CASE("a stomp chain's impact opens once at its window and its end sets the 
     CHECK(fight.rt.cooldownSeconds > 0.0f);
     CHECK(fight.rt.cooldownSeconds < 5.0f);
 }
+
+// Task 10's table change, pinned: the rump carries the back sigil and tapers from
+// the hips (4.3 m, measured) to the rear face at the sigil (1.6 m, authored); the
+// back is the horizontal band tapering 1.5 -> 6.3 m (measured).
+static_assert(q::kBands[q::B::Rump].weakpoint == q::W::BackSigil);
+static_assert(q::kBands[q::B::Rump].radius == 4.3f && q::kBands[q::B::Rump].radiusB == 1.6f);
+static_assert(q::kBands[q::B::Back].horizontal && q::kBands[q::B::Back].radius == 1.5f &&
+              q::kBands[q::B::Back].radiusB == 6.3f);
+static_assert(!q::kBands[q::B::Rump].horizontal);
