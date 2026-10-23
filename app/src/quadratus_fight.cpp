@@ -180,23 +180,23 @@ QuadDecision quadratus_decide(const QuadSituation& s) {
         const int side = s.bearingDeg >= 0.0f ? 0 : 1;  // kAttacks: 0 left, 1 right
         const AttackDesc& attack = q::kAttacks[static_cast<std::size_t>(side)];
         if (s.cooldownSeconds <= 0.0f && facing <= std::acos(attack.facingDot) / kDegToRad &&
-            s.distance <= attack.reachMeters) {
+            s.distance <= attack.reachMeters && s.distance >= kQuadAttackMinMeters) {
             return side == 0 ? QuadDecision::AttackL : QuadDecision::AttackR;
         }
-        if (facing > q::kTurnTriggerDeg) {  // data: ±30°
+        if (facing > q::kTurnTriggerDeg && s.distance > kQuadTurnMinMeters) {  // data: ±30°
             return s.bearingDeg > 0.0f ? QuadDecision::TurnL : QuadDecision::TurnR;
         }
-        if (s.distance > kQuadApproachMeters) {
+        if (s.distance > kQuadWalkStartMeters) {
             return QuadDecision::Walk;
         }
         return QuadDecision::None;
     }
     if (s.state == q::S::Walk && s.walkCycleEnded) {
+        if (s.distance <= kQuadWalkStopMeters) {
+            return QuadDecision::WalkEnd;
+        }
         if (facing > q::kTurnTriggerDeg) {
             return s.bearingDeg > 0.0f ? QuadDecision::WalkTurnL : QuadDecision::WalkTurnR;
-        }
-        if (s.distance <= kQuadApproachMeters) {
-            return QuadDecision::WalkEnd;
         }
     }
     return QuadDecision::None;
@@ -361,6 +361,7 @@ int quadratus_open_sigil(const QuadratusFight& fight, const Encounter& encounter
 QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Playback& entity,
                                  const EntityClips& clips, int weakpoint, float damage) {
     QuadratusHit out;
+    out.weakpoint = weakpoint;
     if (encounter.defeated || !(damage > 0.0f)) {
         return out;  // nothing counts in Death, and a post-death hit is ignored
     }
@@ -403,6 +404,47 @@ QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Pl
     return out;
 }
 
+bool quadratus_hoof_window(const QuadratusFight& fight, const Encounter& encounter,
+                           const Scene& scene, std::size_t entityRig,
+                           const std::vector<Mat4>& palette, const Heightmap& ground,
+                           const PlayerState& player, const PlayerCombat& combat,
+                           const WeakpointProxyLookup& proxy, std::size_t row, float* lift) {
+    if (lift != nullptr) {
+        *lift = std::numeric_limits<float>::quiet_NaN();
+    }
+    if (row >= q::kHooves.size()) {
+        return false;
+    }
+    const q::HoofDesc& hoofRow = q::kHooves[row];
+    // quadratus_motion's Hoof order (fl, fr, rl, rr) by the row's toe bone.
+    const std::string_view joint = hoofRow.joint;
+    const Hoof hoof = joint == "Bone_TOE_L"     ? Hoof::FrontLeft
+                      : joint == "Bone_TOE_R"   ? Hoof::FrontRight
+                      : joint == "Bone_B_TOE_L" ? Hoof::RearLeft
+                                                : Hoof::RearRight;
+    Mat4 toe{};
+    if (!rig_bone_world(scene, entityRig, palette, hoofRow.joint, toe)) {
+        return false;
+    }
+    const float floor = heightmap_floor(
+        ground, Vec3{toe.m[12], encounter.entityPosition.y + 1.0f, toe.m[14]}, kQuadGroundStep);
+    const HoofSole& sole = fight.soles[static_cast<std::size_t>(hoof)];
+    if (lift != nullptr) {
+        *lift = quadratus_hoof_lift(sole, toe, floor);
+    }
+    // The stab's sword reaches past the body capsule (kQuadStabReachMeters).
+    const WeakpointProxyLookup reach = [&proxy](int weakpoint, Vec3& centre, float& radius) {
+        if (!proxy || !proxy(weakpoint, centre, radius)) {
+            return false;
+        }
+        radius += kQuadStabReachMeters;
+        return true;
+    };
+    return quadratus_hoof_kneels(sole, toe, floor,
+                                 quadratus_hoof_blocked(fight.rt.state, mode_is_attached(combat.mode)),
+                                 player.position, hoofRow.weakpoint, reach, hoofRow.liftMeters);
+}
+
 QuadratusStab quadratus_ground_stab(QuadratusFight& fight, Encounter& encounter, const Scene& scene,
                                     std::size_t entityRig, const std::vector<Mat4>& palette,
                                     const Heightmap& ground, const PlayerState& player,
@@ -418,30 +460,16 @@ QuadratusStab quadratus_ground_stab(QuadratusFight& fight, Encounter& encounter,
     }
     out.started = true;
     fight.stabSeconds = 0.0f;
-    const bool blocked = quadratus_hoof_blocked(fight.rt.state, mode_is_attached(combat.mode));
     for (std::size_t i = 0; i < q::kHooves.size(); ++i) {
-        const q::HoofDesc& hoofRow = q::kHooves[i];
-        // quadratus_motion's Hoof order (fl, fr, rl, rr) by the row's toe bone.
-        const Hoof hoof = std::string_view(hoofRow.joint) == "Bone_TOE_L"     ? Hoof::FrontLeft
-                          : std::string_view(hoofRow.joint) == "Bone_TOE_R"   ? Hoof::FrontRight
-                          : std::string_view(hoofRow.joint) == "Bone_B_TOE_L" ? Hoof::RearLeft
-                                                                              : Hoof::RearRight;
-        Mat4 toe{};
-        if (!rig_bone_world(scene, entityRig, palette, hoofRow.joint, toe)) {
-            continue;
-        }
-        const float floor = heightmap_floor(
-            ground, Vec3{toe.m[12], encounter.entityPosition.y + 1.0f, toe.m[14]}, kQuadGroundStep);
-        const HoofSole& sole = fight.soles[static_cast<std::size_t>(hoof)];
-        out.lift[i] = quadratus_hoof_lift(sole, toe, floor);
-        if (out.hoof < 0 && quadratus_hoof_kneels(sole, toe, floor, blocked, player.position,
-                                                  hoofRow.weakpoint, proxy, hoofRow.liftMeters)) {
-            const BehaviourHit hit = behaviour_hit(table(), fight.rt, hoofRow.weakpoint);
+        const bool kneels = quadratus_hoof_window(fight, encounter, scene, entityRig, palette, ground,
+                                                  player, combat, proxy, i, &out.lift[i]);
+        if (out.hoof < 0 && kneels) {
+            const BehaviourHit hit = behaviour_hit(table(), fight.rt, q::kHooves[i].weakpoint);
             if (hit.kind == GateKind::Transition) {
                 fight.rt = hit.runtime;
                 fight.chain = -1;
                 fight.lastTime = 0.0f;
-                out.hoof = hoofRow.weakpoint;
+                out.hoof = q::kHooves[i].weakpoint;
             }
         }
     }

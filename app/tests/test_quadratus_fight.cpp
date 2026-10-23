@@ -106,7 +106,11 @@ TEST_CASE("he stomps a grounded player within the ±20° front gate and 25 m, on
     CHECK(quadratus_decide(grounded(q::S::Stand, 25.0f, 20.0f)) == QuadDecision::None);
     CHECK(quadratus_decide(grounded(q::S::Stand, 0.0f, 20.0f, 2.0f)) == QuadDecision::None);
     CHECK(quadratus_decide(grounded(q::S::Stand, 0.0f, 28.0f)) == QuadDecision::None);
-    CHECK(quadratus_decide(grounded(q::S::Stand, 0.0f, 40.0f)) == QuadDecision::Walk);
+    CHECK(quadratus_decide(grounded(q::S::Stand, 0.0f, 8.0f)) == QuadDecision::None);  // under him
+    CHECK(quadratus_decide(grounded(q::S::Stand, 0.0f, 40.0f)) == QuadDecision::None);
+    CHECK(quadratus_decide(grounded(q::S::Stand, 0.0f, 61.0f)) == QuadDecision::Walk);
+    // Under his belly the bearing is noise: no turn.
+    CHECK(quadratus_decide(grounded(q::S::Stand, 120.0f, 1.5f)) == QuadDecision::None);
     // The ±30° turn trigger (data), a left turn for a positive bearing.
     CHECK(quadratus_decide(grounded(q::S::Stand, 31.0f, 10.0f)) == QuadDecision::TurnL);
     CHECK(quadratus_decide(grounded(q::S::Stand, -120.0f, 10.0f)) == QuadDecision::TurnR);
@@ -120,15 +124,16 @@ TEST_CASE("he stomps a grounded player within the ±20° front gate and 25 m, on
 }
 
 TEST_CASE("he leaves the walk only at a cycle's end: a turn or the stop") {
-    QuadSituation s = grounded(q::S::Walk, 45.0f, 50.0f);
+    QuadSituation s = grounded(q::S::Walk, 45.0f, 80.0f);
     CHECK(quadratus_decide(s) == QuadDecision::None);
     s.walkCycleEnded = true;
     CHECK(quadratus_decide(s) == QuadDecision::WalkTurnL);
     s.bearingDeg = -45.0f;
     CHECK(quadratus_decide(s) == QuadDecision::WalkTurnR);
     s.bearingDeg = 0.0f;
-    s.distance = 20.0f;
-    CHECK(quadratus_decide(s) == QuadDecision::WalkEnd);
+    CHECK(quadratus_decide(s) == QuadDecision::None);  // on he walks
+    s.distance = 50.0f;
+    CHECK(quadratus_decide(s) == QuadDecision::WalkEnd);  // a cycle short of his reach
 }
 
 TEST_CASE("a rider is shaken in the first 5 s of each 20 s cycle, never in a stab's pause") {

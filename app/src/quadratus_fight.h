@@ -26,9 +26,19 @@
 // Labels: data / measured / authored as in quadratus.h; every authored value
 // below is to be tuned on the user's walk.
 
-// Authored: he walks toward a grounded player farther than this (his stomp
-// reaches 25 m — the attack row — so he closes to just outside it).
-inline constexpr float kQuadApproachMeters = 30.0f;
+// Authored: he walks toward a grounded player farther than kQuadWalkStartMeters
+// and stops at a walk cycle's end once within kQuadWalkStopMeters — a cycle
+// carries 20 m and walk_end 6.4 m (measured, C§1), so he halts about 25-30 m
+// out, at the edge of his stomp's 25 m reach (the attack row), and the player
+// closes the rest.
+inline constexpr float kQuadWalkStartMeters = 60.0f;
+inline constexpr float kQuadWalkStopMeters = 50.0f;
+// Authored: no turn for a player within this of his origin (under his belly the
+// bearing is noise).
+inline constexpr float kQuadTurnMinMeters = 2.0f;
+// Authored: no stomp at a player nearer than this — the stomp lands 24 m ahead
+// (measured, C§4); within it the player stands under his chest.
+inline constexpr float kQuadAttackMinMeters = 12.0f;
 // Authored: the most his ground origin rises or sinks in one frame of travel
 // (heightmap_floor's step for a 14.5 m-tall body).
 inline constexpr float kQuadGroundStep = 2.0f;
@@ -137,6 +147,7 @@ void quadratus_fight_struck(QuadratusFight& fight);
 // blow that empties the last share defeats him: the death clip starts, the
 // machine enters Death.
 struct QuadratusHit {
+    int weakpoint = -1;  // the struck weakpoint (-1: no hit this frame)
     GateKind kind = GateKind::Ignore;
     bool sealed = false;  // a Damage row on a sigil that is not open yet
     float damage = 0.0f;
@@ -147,6 +158,25 @@ QuadratusHit quadratus_fight_hit(QuadratusFight& fight, Encounter& encounter, Pl
 
 // The open sigil's weakpoint (kSigilOrder), -1 once every share is spent.
 int quadratus_open_sigil(const QuadratusFight& fight, const Encounter& encounter);
+
+// Authored: the ground stab's sword reaches this far past the player's body
+// capsule (the hoof rule's strike_reaches_shell gets the sole's shell radius plus
+// it). The hoof's own collision capsule (r 2.5, the cgpr B field) holds the
+// player 2.85 m off its axis, and the sole's shell radius is 2.4-2.8 m, so
+// without the blade's reach no stab lands (measured in the selftest's trace:
+// 3.0 m at best against 2.7 m); the recon's windows assumed it (clips.md §3).
+inline constexpr float kQuadStabReachMeters = 0.6f;
+
+// Whether a stab now at the player's feet would kneel him by kHooves[row]: the
+// hoof rule (quadratus_hoof_kneels, the blocked rule above) on the toe bone posed
+// from `palette`, the ground under it, the shell radius plus the stab's reach.
+// `lift`, when given, receives the sole's lift (NaN unposed).
+bool quadratus_hoof_window(const QuadratusFight& fight, const Encounter& encounter,
+                           const Scene& scene, std::size_t entityRig,
+                           const std::vector<Mat4>& palette, const Heightmap& ground,
+                           const PlayerState& player, const PlayerCombat& combat,
+                           const WeakpointProxyLookup& proxy, std::size_t row,
+                           float* lift = nullptr);
 
 // The ground stab (the hoof rule): a strike press while Grounded starts the stab
 // clip and, on its first frame, tests every hoof with quadratus_hoof_kneels
