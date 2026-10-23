@@ -42,7 +42,7 @@ walking, the sky and weak-point beams, the sword glow, skirts drawn opaque, the 
 low-confidence shimmer pick. **S9's bake (Wander 49 clips, the sword PNGs, the 36-entry audio, the 10
 cmdl-fix glbs) was promoted to the base `out/library` at S9's merge (the `s9-road` view is deleted).** The user's walk is still the user's to fill in.
 
-**Milestone S8 "Agro" — implemented; scripted acceptance green, user walk PENDING.**
+**Milestone S8 "Agro" — implemented; scripted acceptance green; the user's walk ACCEPTED (2026-10-23, "make plain is ok").**
 The shrine's front door (an authored trigger box, entry only; `app/src/door.h`: FadeOut 1.0 s → Load →
 FadeIn 1.5 s) now leads onto the plain: a third stage `plain` (`out/re/stage/plain.manifest`, composed by
 `probe.py compose --stage plain`: the `levels/home` ground, 27 cathedral-exterior `backdrop` lines and
@@ -60,7 +60,7 @@ stop → dismount → door → `R`); the acceptance script is `scripts/s8-accept
 chain first, then decodes the S8 map itself), and the recorded numbers are in `docs/notes/s8-results.md`.
 The plain loads in 0.88–0.89 s and draws at 8.37 ms/frame. Known gaps: foliage, the bridle, jumps, mounted
 combat, the moving mount, the call voice, music while riding, the arena wall at the entrance stairs,
-low-confidence hoof picks. The user's walk is still the user's to fill in.
+low-confidence hoof picks.
 
 **Milestone S7 "Return to the Shrine" — implemented; scripted acceptance green, user walk PENDING.**
 After the death sequence reaches `Done` the interactive game now returns to the shrine: a transition

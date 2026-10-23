@@ -5,7 +5,7 @@ front door onto the plain, whistle for Agro, mount from either side, ride at wal
 the game's own clips and measured speeds, steer, rein in, back up, dismount; walk back into the
 shrine; `R` returns to the arena from anywhere.
 
-**Status: the app/converter acceptance is PASS (script). The user's walk is PENDING.**
+**Status: the app/converter acceptance is PASS (script). The user's walk is ACCEPTED (2026-10-23, §10).**
 `scripts/s8-acceptance.sh` runs green end to end (exit 0). It covers:
 - both builds and both suites;
 - the **frozen S7 acceptance first**, which runs S6 → S5 → S4.2 → S4.1 → S4 → S3;
@@ -271,7 +271,7 @@ The unit suite (388 cases) carries the S8 cases from Tasks 2–9:
 - the `door` machine;
 - the 34-entry audio manifest.
 
-## 10 · The user's walk — PENDING
+## 10 · The user's walk — ACCEPTED (user, 2026-10-23)
 
 The scripted pass cannot judge the ride's feel, the sound or the look. Run from the repo root and fill
 the cells:
@@ -308,8 +308,9 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 **Deferred — do not mark these as failures:** foliage, the bridle, jumps, mounted combat, the moving
 mount, the call voice, music while riding, the arena wall at the stairs, and the low-confidence hoof picks.
 
-**Verdict: PENDING.** S8's done-line closes only when the user has filled this table and every check passes.
-Nothing in §1–§9 claims it.
+**Verdict: ACCEPTED.** On 2026-10-23 the user played it with `make plain` and reported, verbatim: "make plain
+is ok". That is an overall sign-off; the user did not report the rows one by one, so the cells above stay
+unticked. S8's done-line is closed on the user's word.
 
 ## 11 · Evidence files (all gitignored)
 
