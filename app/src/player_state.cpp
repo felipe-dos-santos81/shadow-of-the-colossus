@@ -306,6 +306,10 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 detach(combat, events, /*brokeGrip=*/false, 0.0f);
                 break;
             }
+            if (frame.shake.forceRelease) {
+                detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
+                break;
+            }
 
             if (strikePressed && (combat.mode == PlayerMode::Grabbing ||
                                   combat.mode == PlayerMode::Climbing)) {
@@ -409,6 +413,9 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             } else if (combat.mode == PlayerMode::Striking && !combat.strikeHit &&
                        input.strike) {
                 rate = tuning.staminaStrike;
+            }
+            if (std::isfinite(frame.shake.staminaDrain) && frame.shake.staminaDrain > 0.0f) {
+                rate += frame.shake.staminaDrain;
             }
             if (rate > 0.0f) {
                 drain_stamina(combat, rate, dt);

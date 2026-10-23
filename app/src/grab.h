@@ -38,6 +38,7 @@ struct ClimbBand {
     ClimbBandId down;   // next band towards the feet; Count at the bottom
     int weakpoint;      // -1 none, 0 forehead, 1 right arm
     ClimbBandId branch = ClimbBandId::Count;  // W+lateral fork at the top; Count none
+    bool horizontal = false;  // S11 surface walk: stood on and walked, not hung from
 };
 
 // The band record for `id`. `Count` (and any out-of-range cast) answers a
@@ -78,3 +79,41 @@ bool climb_surface_point(const ClimbBand& band, const JointLookup& lookup, float
 // earlier band in table order.
 ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
                                float maxSurfaceDistance);
+
+// --- S11 surface walk (design D9) ---------------------------------------------
+//
+// A band flagged `horizontal` (Quadratus's back) is a floor, not a wall: the
+// player stands on its top and walks along it (`t`, as a climb) and across it
+// (`across`, metres of arc around the axis from the top, positive to the right
+// of a walker facing boneA -> boneB). The band's frame is its bone axis and the
+// `up` hint made perpendicular to it (Gram-Schmidt), so a band that tilts — the
+// rear kneel turns the back into a slope — tilts its top normal with it.
+// ponytail: JointLookup carries positions only, so the bone's roll is not seen;
+// pass the posed bone's own up as `up` if the back ever rolls under the feet.
+
+// The arc limit either side of the top; past it the surface is a wall (the
+// heightmap's kWallSteepness is cos 60°).
+inline constexpr float kSurfaceWalkMaxAngleDeg = 60.0f;
+
+// The feet on the band's top at parameter `t` (clamped to [0, 1]) and arc
+// offset `across` (clamped to +-radius * kSurfaceWalkMaxAngleDeg): the axis
+// point plus `radius` along `normal`, the unit surface normal there. Returns
+// false and writes nothing for missing joints, a degenerate segment, a band
+// parallel to `up` (no top), a non-positive radius, or non-finite input.
+bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,
+                        Vec3 up, Vec3& point, Vec3& normal);
+
+// One surface-walk step: `along` and `lateral` (each clamped to [-1, 1]) move
+// `t` by along * speed * dt / segmentLength (clamped to [0, 1]; the chain
+// hand-over at an end is the caller's) and `across` by lateral * speed * dt
+// (clamped as above). A non-finite or non-positive dt, or a non-finite input,
+// moves nothing. Returns false, changing nothing, when the band's segment
+// cannot be formed (the caller's grip break).
+bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float along,
+                       float lateral, float speed, float dt, float& t, float& across);
+
+// The attach point for any band: a horizontal band's surface_walk_point (up is
+// world +Y; `hint` unused), every other band's climb_surface_point (`across`
+// unused) — the existing climb, bit for bit.
+bool climb_attach_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,
+                        Vec3 hint, Vec3& point, Vec3& normal);
