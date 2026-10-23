@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -740,4 +741,102 @@ TEST_CASE("the master gain keeps a music+SFX sum under 0.99") {
                     engine.last_error());
     const AudioClip full = read_mixdown(dir.path() / "full.wav");
     CHECK(peak(full) == doctest::Approx(AudioEngine::kMasterGain).epsilon(0.001));
+}
+
+// --- S9 Task 4: the stop path --------------------------------------------------
+
+namespace {
+
+// FNV-1a over the mixdown's bytes: a bit-exact fingerprint of the frozen mix.
+std::uint64_t file_fnv1a(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    REQUIRE(in.good());
+    std::uint64_t hash = 1469598103934665603ull;
+    char c;
+    while (in.get(c)) {
+        hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+    }
+    return hash;
+}
+
+// Music + a looping ambience-like SFX + a one-shot, mixed for 2 s (the shape of
+// the frozen S5/S6 event sequences). `stop_probe` runs after the plays.
+std::uint64_t frozen_mix_hash(const TempDir& dir, const char* out,
+                              const std::function<void(AudioEngine&)>& stop_probe) {
+    write_tone_wav(dir, "audio/test/score.wav", 0.5f, 0.3f, 2);
+    write_tone_wav(dir, "audio/test/hum.wav", 0.1f, 0.2f, 1);
+    write_tone_wav(dir, "audio/test/hit.wav", 0.4f, 0.4f, 1);
+    const std::filesystem::path manifest =
+        write_manifest(dir, {{"score", "audio/test/score.wav", 2, 24000, 1},
+                             {"hum", "audio/test/hum.wav", 1, 4800, 1},
+                             {"hit", "audio/test/hit.wav", 1, 19200, 0},
+                             {"never", "audio/test/hit.wav", 1, 19200, 0}});
+    AudioEngine engine;
+    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                    engine.last_error());
+    engine.play_music("score", 0.45f);
+    engine.play("hum", Vec3{3.0f, 0.0f, 4.0f}, 0.5f);
+    engine.play_ui("hit", 0.8f);
+    stop_probe(engine);
+    REQUIRE_MESSAGE(engine.render_mixdown((dir.path() / out).string(), 2), engine.last_error());
+    return file_fnv1a(dir.path() / out);
+}
+
+}  // namespace
+
+TEST_CASE("the frozen mix of an existing event sequence is bit-identical") {
+    const TempDir dir;
+    const std::uint64_t hash = frozen_mix_hash(dir, "frozen.wav", [](AudioEngine&) {});
+    // Captured on the mixer before `stop(name)` existed.
+    CHECK_MESSAGE(hash == 7124517829957060768ull, "hash=", hash);
+}
+
+TEST_CASE("a stop that matches nothing leaves the frozen mix bit-identical") {
+    const TempDir dir;
+    const std::uint64_t hash = frozen_mix_hash(dir, "stopped.wav", [](AudioEngine& engine) {
+        engine.stop("never");    // loaded, not playing
+        engine.stop("missing");  // not in the manifest
+    });
+    CHECK(hash == 7124517829957060768ull);
+}
+
+TEST_CASE("stop ends every voice of a looping clip and spares the rest") {
+    const TempDir dir;
+    write_tone_wav(dir, "audio/test/shimmer.wav", 0.1f, 0.3f, 1);
+    write_tone_wav(dir, "audio/test/other.wav", 2.0f, 0.3f, 1);
+    write_tone_wav(dir, "audio/test/score.wav", 2.0f, 0.3f, 1);
+    const std::filesystem::path manifest =
+        write_manifest(dir, {{"shimmer", "audio/test/shimmer.wav", 1, 4800, 1},
+                             {"other", "audio/test/other.wav", 1, 96000, 0},
+                             {"score", "audio/test/score.wav", 1, 96000, 1}});
+    AudioEngine engine;
+    REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), dir.path().string()),
+                    engine.last_error());
+
+    engine.play_ui("shimmer");
+    engine.play_ui("shimmer");
+    CHECK(engine.active_voices() == 2);
+    engine.stop("shimmer");
+    CHECK_FALSE(engine.is_playing("shimmer"));
+    CHECK(engine.active_voices() == 0);
+
+    // Another clip's voice and the music survive; a stop of a name that is not
+    // playing changes nothing.
+    engine.play_music("score");
+    engine.play_ui("other");
+    engine.play_ui("shimmer");
+    engine.stop("shimmer");
+    CHECK(engine.is_playing("other"));
+    CHECK(engine.is_playing("score"));
+    CHECK(engine.active_voices() == 2);
+    engine.stop("shimmer");
+    engine.stop("missing");
+    CHECK(engine.active_voices() == 2);
+
+    // The music slot is untouched even when the stopped name is the music clip.
+    engine.stop("score");
+    CHECK(engine.is_playing("score"));
+    engine.stop("other");
+    CHECK_FALSE(engine.is_playing("other"));
+    CHECK(engine.active_voices() == 1);
 }

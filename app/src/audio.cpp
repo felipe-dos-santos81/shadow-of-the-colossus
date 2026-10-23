@@ -326,6 +326,18 @@ void AudioEngine::stop_music() {
     // and `reset` still drop the queue when an immediate silence is required.
 }
 
+void AudioEngine::stop(const std::string& name) {
+    const AudioClip* clip = find_clip(name);
+    if (clip == nullptr) {
+        return;
+    }
+    for (std::size_t i = kFirstSfxSlot; i < static_cast<std::size_t>(kMaxVoices); ++i) {
+        if (voices_[i].active && voices_[i].clip == clip) {
+            stop_slot(i);
+        }
+    }
+}
+
 void AudioEngine::play_ambience(const std::string& name, float gain) {
     const AudioClip* clip = find_clip(name);
     if (clip == nullptr || clip->frames() == 0) {
