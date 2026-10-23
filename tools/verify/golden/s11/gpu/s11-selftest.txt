@@ -1,0 +1,2 @@
+# run: --library <LIB> --model models/shadow/characters/wander/_cmn/wander.glb --s11-selftest
+sotc-viewer: --s11-selftest/--s11-e2e need --manifest and --model

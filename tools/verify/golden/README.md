@@ -12,6 +12,11 @@ runs that agreed byte for byte after normalisation — no mask beyond the timing
 (design §13.3: goldens come from fresh runs on the pinned commit, never from files under the shared
 `out/`). Evidence: `.superpowers/sdd/2026-10-23-s10-s11-acceleration/task-1-bless-report.md`.
 
+**S11** (`s11/`) was blessed alone (`scripts/verify --bless --only s11`) on the commit that added
+`scripts/s11-acceptance.sh`, which became the `PIN` (so that script is frozen too); the s3–s9 goldens
+are byte-identical to the S9 blessing. Two blesses (four fresh runs) agreed byte for byte with three
+new timing masks (`s11-load`/`s11e2e-load` `ms`, `s11-perf` `frame_ms`). Evidence: `task-11-report.md`.
+
 ## How to bless (on a clean pinned commit; nothing else running on the machine)
 
 1. Check out the pinned commit clean (`git status` empty; `scripts/` must equal `HEAD`).

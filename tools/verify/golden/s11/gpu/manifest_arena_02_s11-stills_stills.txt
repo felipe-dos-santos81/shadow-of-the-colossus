@@ -1,0 +1,2 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/arena_02.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s11-stills <OUT>/s11/gpu/stills
+sotc-viewer: --s11-stills needs --s11-selftest
