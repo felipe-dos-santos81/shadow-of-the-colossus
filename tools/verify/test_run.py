@@ -59,7 +59,7 @@ class Fake(run.Runner):
                     "s1-screenshot path=%s/stills/fade.png width=2560 height=1440\n"
                     % (self.p(m, section), Fake.line if (m, section) == ("s7", "gpu") else "s3-status ok",
                        Fake.counter, self.p(m, section)))
-        if section == "gpu" and m in ("s7", "s8") and not self.args.quick:
+        if section == "gpu" and m in ("s7", "s8", "s9") and not self.args.quick:
             with open(os.path.join(cand, "e2e.txt"), "w") as f:
                 f.write("# run: --%s-e2e\ns7e2e-status stage=shrine\n" % m)
         return True, 0.0, ""
@@ -101,7 +101,7 @@ def main():
         assert "verify: s7 PASS" in log and "verify: dotnet PASS" in log, log
         ev = Fake.events
         assert ev.index("decode") < ev.index("ctest-start"), "ctest reads the library: after the decode %s" % ev
-        perf = [ev.index(k) for k in ("s4.gpu", "s41.gpu", "s42.gpu", "s6.gpu", "s7.gpu", "s8.gpu")]
+        perf = [ev.index(k) for k in ("s4.gpu", "s41.gpu", "s42.gpu", "s6.gpu", "s7.gpu", "s8.gpu", "s9.gpu")]
         assert ev.index("ctest-end") < min(perf), "the perf-gated sections run alone: %s" % ev
 
         rc, log, calls = go(out)
@@ -117,7 +117,7 @@ def main():
         rc, log, calls = go(out, "quick", "force")
         assert rc == 0, "quick skips the e2e goldens: %s" % log
         rc, log, calls = go(out)
-        assert calls == ["s7.gpu", "s8.gpu"], "only the sections with e2e runs owe a full run: %s" % calls
+        assert calls == ["s7.gpu", "s8.gpu", "s9.gpu"], "only the sections with e2e runs owe a full run: %s" % calls
 
         # the CLI: republished when the dotnet stamp moved, refused when the dotnet build failed
         r = Fake(argparse.Namespace(only=[], quick=False, jobs=1, force=False, dry_run=False, bless=False, long=False))
@@ -132,11 +132,11 @@ def main():
         r.dotnet_failed = True
         assert not r.ensure_cli(), "a failed dotnet build never feeds the audio sections"
 
-        # a frozen script without an adapter refuses the run (S9's script arrives before s9.sh)
+        # a frozen script without an adapter refuses the run (as S9's did before s9.sh)
         real = run.adapters
-        run.adapters = lambda: [a for a in real() if a != "s8"]
+        run.adapters = lambda: [a for a in real() if a != "s9"]
         rc, log, calls = go(out)
-        assert rc == 1 and calls == [] and "s8-acceptance.sh has no adapter" in log, log
+        assert rc == 1 and calls == [] and "s9-acceptance.sh has no adapter" in log, log
         run.adapters = real
 
         Fake.line = "s7-status stage=shrine phase=Free lock=%d"

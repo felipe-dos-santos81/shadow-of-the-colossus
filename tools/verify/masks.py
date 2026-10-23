@@ -17,9 +17,11 @@ MASKS = (
     ("s6-perf ", "frame_ms"),
     ("s7-perf ", "frame_ms"),
     ("s8-perf ", "frame_ms"),
+    ("s9-perf ", "frame_ms"),
     ("s7-load ", "ms"),       # the arena/shrine/plain load wall time (also inside the s8 e2e)
     ("s7e2e-load ", "ms"),
     ("s8-load ", "ms"),
+    ("s9-load ", "ms"),       # the road load wall time (the s9 e2e's loads are s7-load lines)
 )
 MASKED = "<masked>"
 

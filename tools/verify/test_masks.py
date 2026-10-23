@@ -69,6 +69,12 @@ def main():
             "s7-load stage=shrine instances=51 meshes=3563 ms=<masked>",
         "s7e2e-load stage=arena meshes=142 ms=564.3": "s7e2e-load stage=arena meshes=142 ms=<masked>",
         "s8-load stage=plain instances=9 meshes=88 ms=901.0": "s8-load stage=plain instances=9 meshes=88 ms=<masked>",
+        "s9-perf frames=240 frame_ms=8.365 drawn=120 culled=40":
+            "s9-perf frames=240 frame_ms=<masked> drawn=120 culled=40",
+        "s9-load stage=plain manifest=road instances=12 backdrops=3 meshes=900 raygrid=64x64 ms=1249.0":
+            "s9-load stage=plain manifest=road instances=12 backdrops=3 meshes=900 raygrid=64x64 ms=<masked>",
+        "s9-lock k=0.0012 locked=1 ray_m=150.0 hit=1 hit_m=38.0":
+            "s9-lock k=0.0012 locked=1 ray_m=150.0 hit=1 hit_m=38.0",
         "s5-event t=2.050 event=music_start clip=music.boss gain=0.45":
             "s5-event t=2.050 event=music_start clip=music.boss gain=0.45",
     }

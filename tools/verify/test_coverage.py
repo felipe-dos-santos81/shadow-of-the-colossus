@@ -17,8 +17,9 @@ import run  # noqa: E402
 
 # Frozen scripts before the runner's scope (S1's model viewer, M0's converter, RE-0) are not adapted.
 NOT_ADAPTED = {"m0", "re0", "s1"}
-# The viewer runs each frozen script makes (§13.1: ≈27 across s3–s7, plus s8's).
-RUNS = {"s3": 4, "s4": 8, "s41": 3, "s42": 4, "s5": 2, "s6": 1, "s7": 2, "s8": 2}
+# The viewer runs each frozen script makes (§13.1: ≈27 across s3–s7, plus s8's; s9's 8 = six flag
+# refusals + the selftest + the e2e).
+RUNS = {"s3": 4, "s4": 8, "s41": 3, "s42": 4, "s5": 2, "s6": 1, "s7": 2, "s8": 2, "s9": 8}
 
 
 def plumbing():
@@ -43,7 +44,7 @@ b="$(caffeinate -dimsu "$viewer" --library L --manifest /x/enc.manifest --model 
 "$viewer" --library L --manifest m --frames 240 > /dev/null
 status=0; "$viewer" --library L --fail > /dev/null || status=$?
 [[ "$status" = 3 ]]
-for m in s3 s4 s41 s6 s7 s8; do python3 -m py_compile "$(heredoc_py "$m" 1)"; done
+for m in s3 s4 s41 s6 s7 s8 s9; do python3 -m py_compile "$(heredoc_py "$m" 1)"; done
 """ % (run.HERE, stub)
         subprocess.run(["bash", "-c", script], env=env, check=True)
         calls = open(os.path.join(tmp, "calls")).read().count("call")

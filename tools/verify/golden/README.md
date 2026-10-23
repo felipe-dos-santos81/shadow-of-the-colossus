@@ -13,7 +13,7 @@ pinned commit, never from files under the shared `out/`).
 ## How to bless (once, on main after S9 merges; nothing else running on the machine)
 
 1. Check out the pinned commit clean (`git status` empty; `scripts/` must equal `HEAD`).
-2. `make shrine-manifest plain-manifest`, then `SOTC_LIB=<the library or a libview> make verify ARGS=--bless`.
+2. `make shrine-manifest plain-manifest road-manifest`, then `SOTC_LIB=<the library with the S9 bake> make verify ARGS=--bless`.
    This runs every section twice (VERIFY_RUN is cleared between the passes, so nothing is replayed),
    diffs the two normalised outputs, and writes `<sN>/<section>/*.txt` and `PIN` only if they agree.
 3. On `UNSTABLE — <file>: -… | +…`: add the moving field to `MASKS` in `../masks.py` with a comment
