@@ -163,8 +163,9 @@ int quadratus_open_sigil(const QuadratusFight& fight, const Encounter& encounter
 // wander_sword.glb later): the ground stab's sword reaches this far past the
 // player's body capsule (the hoof rule's strike_reaches_shell gets the sole's
 // shell radius plus it). Only the ground stab uses it — the one strike made by a
-// player a collision capsule holds off; attached strikes have no pushout. The hoof's own collision capsule (r 2.5, the cgpr B field) holds the
-// player 2.85 m off its axis, and the sole's shell radius is 2.4-2.8 m, so
+// player a collision capsule holds off; attached strikes have no pushout. The
+// hoof's own collision capsule (r 2.5, the cgpr B field) holds the player
+// 2.85 m off its axis, and the sole's shell radius is 2.4-2.8 m, so
 // without the blade's reach no stab lands (measured in the selftest's trace:
 // 3.0 m at best against 2.7 m); the recon's windows assumed it (clips.md §3).
 inline constexpr float kQuadBladeReachMeters = 0.6f;
