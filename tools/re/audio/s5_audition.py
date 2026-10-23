@@ -59,7 +59,14 @@ class AuditionError(RuntimeError):
 CORE_EVENTS_S5 = ("valus.telegraph", "valus.impact", "valus.hurt",
                   "player.swing", "player.hit", "player.hurt", "player.death")
 CORE_EVENTS_S6 = CORE_EVENTS_S5 + ("valus.death", "valus.club_swing")
-CORE_EVENTS_BY_MILESTONE = {"s5": CORE_EVENTS_S5, "s6": CORE_EVENTS_S6}
+# S8 (D15): one event per variant; a variant row carries `variant_of` = its base event.
+CORE_EVENTS_S8 = CORE_EVENTS_S6 + (
+    tuple(f"agro.hoof_walk.{i}" for i in range(10)) + ("agro.hoof_trot",) +
+    tuple(f"agro.hoof_gallop.{i}" for i in range(5)) + ("agro.neigh",) +
+    tuple(f"player.whistle.{i}" for i in range(3)) + ("agro.mount", "player.kick") +
+    tuple(f"player.stop_horse.{i}" for i in range(2)))
+CORE_EVENTS_BY_MILESTONE = {"s5": CORE_EVENTS_S5, "s6": CORE_EVENTS_S6,
+                            "s8": CORE_EVENTS_S8}
 DEFAULT_MILESTONE = "s5"
 
 
@@ -480,9 +487,13 @@ def main(argv=None):
         seen_events[event] = cue
         name = cue.get("name")
         if name:
-            if name in seen_names:
+            # Variant rows (S8, D15) share their base sound-request name; a
+            # name shared without a common `variant_of` is still a duplicate.
+            variant_of = cue.get("variant_of")
+            if name in seen_names and not (
+                    variant_of and seen_names[name][1] == variant_of):
                 problems.append(f"duplicate cue name {name!r}")
-            seen_names[name] = event
+            seen_names[name] = (event, variant_of)
     deferred_events = {d.get("event") for d in deferred}
     for event in required:
         cue = seen_events.get(event)

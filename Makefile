@@ -19,14 +19,33 @@ VIEWER    = $(AWAKE) app/build/sotc-viewer --library "$(LIB)" \
             --model models/shadow/characters/wander/_cmn/wander.glb
 ENCOUNTER = out/re/stage/encounter.manifest
 SHRINE    = out/re/stage/shrine.manifest
-# The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, then
-# the two S7 wake cuts (docs/notes/s7-recon.md §6). The order is the clip index.
+# The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, the
+# two S7 wake cuts (docs/notes/s7-recon.md §6), then the 26 S8 ride clips
+# (docs/notes/s8-recon.md). The order is the clip index.
 WANDER_CLIPS = player_a_stand player_a_walk player_a_run player_a_grip_stand_crouch \
                player_a_grip_loop player_a_grip_move_f1 player_a_grip_move_f2 \
                player_a_grip_float_u_hi_attack player_a_atk1 player_a_damage_m_fly2 \
                player_a_fall_damage_to_death player_a_damage_h_fly1 player_a_damage_h_fly_end \
                player_a_fall_damage_start player_a_fall_damage_end \
-               player_a_home_boss01_cut04 player_a_home_boss01_cut05
+               player_a_home_boss01_cut04 player_a_home_boss01_cut05 \
+               player_a_uma_stand1_player player_a_uma_walk_start player_a_uma_walk \
+               player_a_uma_walk_stop player_a_uma_run_n_start player_a_uma_run_n \
+               player_a_uma_run_n_stop player_a_uma_run_n_from_walk \
+               player_a_uma_run_start player_a_uma_run player_a_uma_run_from_run_n \
+               player_a_uma_run_stop1 player_a_uma_run_stop2 player_a_uma_run_stop3 \
+               player_a_uma_back_start player_a_uma_back player_a_uma_back_stop \
+               player_a_uma_neigh player_a_uma_neigh_end player_a_uma_stand_ride_l \
+               player_a_uma_stand_ride_r player_a_uma_stand_getoff_l_start \
+               player_a_uma_stand_getoff_r_start player_a_uma_stand_getoff_fall \
+               player_a_whistle player_a_whistle_near
+# Agro's clips: the S4.2 kick first (index 0, pinned by name), then the 19 S8 riding clips.
+AGRO_CLIPS = horse_a_add_horse_kick horse_a_uma_stand1 horse_a_uma_walk_start \
+             horse_a_uma_walk horse_a_uma_walk_stop horse_a_uma_run_n_start \
+             horse_a_uma_run_n horse_a_uma_run_n_stop horse_a_uma_run_n_from_walk \
+             horse_a_uma_run_start horse_a_uma_run horse_a_uma_run_from_run_n \
+             horse_a_uma_run_stop1 horse_a_uma_run_stop2 horse_a_uma_run_stop3 \
+             horse_a_uma_back_start horse_a_uma_back horse_a_uma_back_stop \
+             horse_a_uma_neigh horse_a_uma_neigh_end
 comma := ,
 space := $(subst ,, )
 
@@ -51,14 +70,16 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 	$(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" --under models --under characters \
 		--ext cmsh --jobs $(JOBS) $(if $(force),--force)
 
-audio: publish ## Decode the curated audio slice (the S6 map, 10 cues)
-	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s6_map.json --force
+audio: publish ## Decode the curated audio slice (the S8 map, 34 entries)
+	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s8_map.json --force
 
-bake: publish ## Bake the animation clips: Mono's pose and Wander's 17 clips (rewrites both glbs)
+bake: publish ## Bake the animation clips: Mono's pose, Wander's 43 clips and Agro's 20 (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/wander/_cmn/wander.cmsh --force --clips $(subst $(space),$(comma),$(strip $(WANDER_CLIPS)))
+	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
+		--under models/shadow/characters/agro/_cmn/agro.cmsh --force --clips $(subst $(space),$(comma),$(strip $(AGRO_CLIPS)))
 
 inspect: publish ## Inspect one source container (f=models/.../wander.cmsh)
 	$(CLI) inspect "$(GAME_ROOT)/$(f)"

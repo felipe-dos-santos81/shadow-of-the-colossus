@@ -538,6 +538,44 @@ TEST_CASE("agro carries its baked kick clip") {
     CHECK(!player_rig(scene).animations[0].channels.empty());
 }
 
+namespace {
+// The 19 riding gaits/transitions, in the order the S8 bake appends them (Agro: after the kick).
+constexpr const char* kRideStems[19] = {
+    "stand1", "walk_start", "walk", "walk_stop", "run_n_start", "run_n", "run_n_stop",
+    "run_n_from_walk", "run_start", "run", "run_from_run_n", "run_stop1", "run_stop2",
+    "run_stop3", "back_start", "back", "back_stop", "neigh", "neigh_end"};
+}
+
+TEST_CASE("S8: agro carries the kick at 0 then the 19 riding clips, by name") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/agro/_cmn/agro.glb");
+    const auto& clips = player_rig(scene).animations;
+    REQUIRE(clips.size() == 20);
+    CHECK(clips[0].name == "horse_a_add_horse_kick");
+    for (int i = 0; i < 19; ++i) {
+        CHECK(clips[1 + i].name == std::string("horse_a_uma_") + kRideStems[i]);
+        CHECK(!clips[1 + i].channels.empty());
+    }
+}
+
+TEST_CASE("S8: wander carries the 26 ride clips at 17..42, after the wake cuts") {
+    auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
+    const auto& clips = player_rig(scene).animations;
+    check_wander_s2s6_clips(clips);
+    REQUIRE(clips.size() == 43);
+    CHECK(clips[15].name == "player_a_home_boss01_cut04");
+    CHECK(clips[16].name == "player_a_home_boss01_cut05");
+    for (int i = 0; i < 19; ++i) {
+        const std::string stem = i == 0 ? "stand1_player" : kRideStems[i];
+        CHECK(clips[17 + i].name == "player_a_uma_" + stem);
+    }
+    const char* tail[7] = {"player_a_uma_stand_ride_l", "player_a_uma_stand_ride_r",
+                           "player_a_uma_stand_getoff_l_start", "player_a_uma_stand_getoff_r_start",
+                           "player_a_uma_stand_getoff_fall", "player_a_whistle",
+                           "player_a_whistle_near"};
+    for (int i = 0; i < 7; ++i) CHECK(clips[36 + i].name == tail[i]);
+    for (int i = 17; i < 43; ++i) CHECK(!clips[i].channels.empty());
+}
+
 TEST_CASE("S7: wander carries the wake clips after its S2-S6 set, mono her death loop") {
     auto scene = load_scene(test_library(), "models/shadow/characters/wander/_cmn/wander.glb");
     const auto& clips = player_rig(scene).animations;

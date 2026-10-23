@@ -627,8 +627,9 @@ TEST_CASE("the shipped audio manifest loads every entry") {
     REQUIRE_MESSAGE(engine.load_manifest(manifest.string(), library.string()),
                     engine.last_error());
     // The entry count is the library's slice: eight after the frozen S5
-    // acceptance, ten after the S6 converter. Anything else is drift, so pin
-    // both states and check the S6 rows are present exactly when it is ten.
+    // acceptance, ten after the S6 converter, 34 after the S8 converter
+    // (the S6 ten + 24 event-variants). Anything else is drift, so pin the
+    // three states and check the S6 rows are present exactly when it is not eight.
     std::size_t entries = 0;
     {
         std::ifstream in(manifest);
@@ -640,13 +641,21 @@ TEST_CASE("the shipped audio manifest loads every entry") {
             }
         }
     }
-    const bool slice_size_ok = entries == 8 || entries == 10;
+    const bool slice_size_ok = entries == 8 || entries == 10 || entries == 34;
     REQUIRE_MESSAGE(slice_size_ok,
-                    ("expected the S5 eight or the S6 ten manifest entries, found " +
+                    ("expected the S5 eight, the S6 ten or the S8 34 manifest entries, found " +
                      std::to_string(entries))
                         .c_str());
     CHECK(engine.clip_count() == static_cast<int>(entries));
-    if (entries == 10) {
+    if (entries == 34) {
+        for (const char* name : {"agro.hoof_walk.0", "agro.hoof_walk.9", "agro.hoof_trot",
+                                 "agro.hoof_gallop.0", "agro.hoof_gallop.4", "agro.neigh",
+                                 "player.whistle.0", "player.whistle.2", "agro.mount",
+                                 "player.kick", "player.stop_horse.0", "player.stop_horse.1"}) {
+            CHECK_MESSAGE(engine.has(name), name);
+        }
+    }
+    if (entries >= 10) {
         CHECK_MESSAGE(engine.has("valus.death"), "valus.death");
         CHECK_MESSAGE(engine.has("valus.club_swing"), "valus.club_swing");
     } else {

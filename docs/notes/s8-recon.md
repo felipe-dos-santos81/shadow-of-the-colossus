@@ -258,3 +258,26 @@ D13 (camera distances 6/7/9 m, +1.2 m mounted head height) stand as `source: aut
 | `tools/re/s8/root_z.py` | `tables` (the `.anb` root series) and `footfalls` (hoof FK on a scratch bake); stdlib |
 | `tools/re/s8/placements.py` | composes and checks `placements.json` (the walks, Agro/probes, backdrops by bounds, the tables); stdlib |
 | `tools/re/s8/placements.json` | the gate output (paths, numbers, record names — no game content) |
+
+## 6 · The shared-library bakes and the audio slice (Task 7)
+
+The S8 clips go into the **shared** library (`make bake`; the Makefile's `WANDER_CLIPS` and
+`AGRO_CLIPS` are the clip order, which is the clip index):
+
+```bash
+export SOTC_GAME_ROOT=/Users/felipe.dos.santos/Downloads/sotc/SOTC-extract/extracted/game SOTC_LIB=$PWD/out/library
+make bake    # = mono (unchanged), then:
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" \
+  --under models/shadow/characters/wander/_cmn/wander.cmsh --force --clips <WANDER_CLIPS, comma-joined>
+dotnet exec out/bin/bp-convert.dll convert --root "$SOTC_GAME_ROOT" --out "$SOTC_LIB" \
+  --under models/shadow/characters/agro/_cmn/agro.cmsh --force --clips <AGRO_CLIPS, comma-joined>
+```
+
+* `wander.glb`: 43 clips = the 17 S2-S7 clips (indices unchanged) + the 26 ride clips at 17..42
+  (the 19 `player_a_uma_*` in Agro's order, `stand1` -> `player_a_uma_stand1_player`, then
+  `stand_ride_l/r`, `stand_getoff_l_start/r_start/fall`, `player_a_whistle`, `player_a_whistle_near`).
+* `agro.glb`: 20 clips = `horse_a_add_horse_kick` (index 0) + the 19 `horse_a_uma_*` at 1..19.
+* Audio: `make audio` decodes `tools/re/audio/s8_map.json` (the S6 ten + 24 event-variants, every
+  S8 row `method: audition`, rows of one cue sharing a request `name` and a `variant_of`) into a
+  34-entry `audio.manifest`; `s5_audition.py --check` gates it (`milestone: "s8"`).
+  `scripts/s6-acceptance.sh` leaves the S6 ten, so re-run `make audio` after any S7/S6 acceptance.
