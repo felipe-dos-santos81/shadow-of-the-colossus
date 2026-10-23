@@ -66,7 +66,7 @@ run_log="$repo_root/out/s11-acceptance-run.log"
 s9_log="$repo_root/out/s11-s9-regression.log"
 
 stamp() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
-fail() { echo "s11-acceptance: $*" >&2; exit 1; }
+fail() { echo "s11-acceptance: FAIL — $*" >&2; exit 1; }
 
 mkdir -p "$repo_root/out"
 exec > >(tee "$run_log") 2>&1
@@ -179,7 +179,7 @@ one_line() {
 }
 
 # The timeline's events in order (the climb/strike lines in between vary with the route).
-s11_events="$(grep -E '^s11-(load|attack|charge|hoof|grab|sigil|back|shake|death|corpse|reset|perf|status) ' <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ')"
+s11_events="$(grep -E '^s11-(load|attack|charge|hoof|grab|sigil|back|shake|death|corpse|reset|perf|status) ' <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ' || true)"
 [[ "$s11_events" = "s11-load s11-attack s11-charge s11-hoof s11-grab s11-sigil s11-back s11-shake s11-shake s11-death s11-death s11-death s11-corpse s11-reset s11-perf s11-status " ]] ||
   fail "the s11-* events are '$s11_events' (expected the timeline's order)"
 
@@ -200,13 +200,13 @@ back_line="$(one_line '^s11-back ' s11-back)"
 [[ "$(one_line '^s11-shake survived=' s11-shake)" =~ ^s11-shake\ survived=1\ band=back\  ]] ||
   fail "the shake was not survived on his back"
 # The sigil order: every strike on the back sigil comes before the first on the head's; none is sealed.
-strikes="$(grep -E '^s11-strike ' <<<"$selftest_out" | sed 's/.*weakpoint=\([^ ]*\) .*/\1/' | uniq | tr '\n' ' ')"
+strikes="$(grep -E '^s11-strike ' <<<"$selftest_out" | sed 's/.*weakpoint=\([^ ]*\) .*/\1/' | uniq | tr '\n' ' ' || true)"
 [[ "$strikes" = "weakpoint_05 weakpoint_04 " ]] || fail "the sigils were not struck back then head: '$strikes'"
 ! grep -q -E '^s11-strike .* gate=(sealed|ignore|transition) ' <<<"$selftest_out" ||
   fail "a strike was sealed or ignored"
 [[ "$(grep -E '^s11-strike ' <<<"$selftest_out" | tail -1)" =~ \ health=0\ killed=1\  ]] ||
   fail "the last strike did not kill him"
-deaths="$(grep -E '^s11-death ' <<<"$selftest_out" | sed 's/^s11-death phase=\([A-Za-z]*\) .*/\1/' | tr '\n' ' ')"
+deaths="$(grep -E '^s11-death ' <<<"$selftest_out" | sed 's/^s11-death phase=\([A-Za-z]*\) .*/\1/' | tr '\n' ' ' || true)"
 [[ "$deaths" = "Motion Collapse Done " ]] || fail "the death phases are '$deaths'"
 corpse_line="$(one_line '^s11-corpse ' s11-corpse)"
 [[ "$corpse_line" =~ ^s11-corpse\ live_body=1\ clip=boss_a_death\ t=5\.333\ held=1\ moved=17\.[0-9]+\ .*\ return=Idle$ ]] ||
@@ -293,12 +293,15 @@ printf '%s\n' "$e2e_out"
 grep -q -E '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' <<<"$e2e_out" ||
   fail "the e2e printed no s1-status"
 # returnWired is off for a non-Valus encounter: the loop loads the arena once and never the shrine.
-e2e_loads="$(grep -E '^s7-load ' <<<"$e2e_out" | awk '{ print $2 }' | tr '\n' ' ')"
+e2e_loads="$(grep -E '^s7-load ' <<<"$e2e_out" | awk '{ print $2 }' | tr '\n' ' ' || true)"
 [[ "$e2e_loads" = "stage=arena " ]] ||
   fail "the e2e loaded '$e2e_loads' (expected the arena once: no shrine after his death)"
+e2e_load_line="$(grep -m1 -E '^s11e2e-load ' <<<"$e2e_out" || true)"
+[[ "$e2e_load_line" =~ ^s11e2e-load\ stage=arena\ encounter=quadratus\ meshes=[0-9]+\ ground=[0-9]+x[0-9]+\ layers=64\ .*\ return=0\ ms=[0-9]+\.[0-9]$ ]] ||
+  fail "s11e2e-load is malformed (Quadratus's arena, a layered ground, no return): $e2e_load_line"
 # The interactive loop played the selftest's fight: the same lines, the timings aside.
-self_lines="$(grep -E '^s11-' <<<"$selftest_out" | grep -v -E '^s11-(load|perf|status) ' | sed 's/^s11-//')"
-e2e_lines="$(grep -E '^s11e2e-' <<<"$e2e_out" | grep -v -E '^s11e2e-(load|done) ' | sed 's/^s11e2e-//')"
+self_lines="$(grep -E '^s11-' <<<"$selftest_out" | grep -v -E '^s11-(load|perf|status) ' | sed 's/^s11-//' || true)"
+e2e_lines="$(grep -E '^s11e2e-' <<<"$e2e_out" | grep -v -E '^s11e2e-(load|done) ' | sed 's/^s11e2e-//' || true)"
 [[ -n "$self_lines" && "$self_lines" = "$e2e_lines" ]] ||
   fail "the e2e's lines differ from the selftest's: $(diff <(printf '%s\n' "$self_lines") <(printf '%s\n' "$e2e_lines") | head -6 | tr '\n' ' ')"
 printf '%s
@@ -324,7 +327,7 @@ status_line="$(one_line '^s11-status ' s11-status)"
 status_frames="$(field "$status_line" frames)"
 status_seconds="$(field "$status_line" seconds)"
 e2e_done="$(grep -m1 -E '^s11e2e-done ' <<<"$e2e_out")"
-e2e_load_ms="$(field "$(grep -m1 -E '^s11e2e-load ' <<<"$e2e_out")" ms)"
+e2e_load_ms="$(field "$e2e_load_line" ms)"
 total_seconds=$((SECONDS - started))
 printf 's11-acceptance: library      %s\n' "$lib"
 printf 's11-acceptance: manifest     %s\n' "$arena02_manifest"
