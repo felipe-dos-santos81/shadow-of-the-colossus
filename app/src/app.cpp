@@ -55,22 +55,10 @@
 
 namespace {
 
-// --- S4 encounter self-test (Task 6) ---------------------------------------
-
-
-// --- S4.1 climb/fight self-test and input ----------------------------------
+// --- The interactive input (S4.1) and the e2e scripts' budgets ----------------
 
 constexpr float kS41StickDeadzone = 0.25f;  // gamepad axis deadzone
 constexpr float kS41StickPixelsPerSecond = 900.0f;  // right stick -> drag pixels
-
-// --- S4.2 acceptance timeline (--s42-selftest) ------------------------------
-
-
-// --- S6 death wiring and self-test (Task 5) ---------------------------------
-
-
-// --- S7 return and self-test (Task 9) ---------------------------------------
-
 
 // --s7-e2e (Task 13): the script's three waits, and a generous budget for
 // each stage (the arena's 1 + 8 + 2 + 1 s, the shrine's 1.5 + ~11.8 + 1 s).
@@ -78,7 +66,6 @@ constexpr float kS7E2eLeadSeconds = 1.0f;  // arena before the hit; Free and are
 constexpr int kS7E2eMaxStageFrames = 3600;  // 60 s at 1/60 s
 constexpr float kS7E2eFloorTolerance = 0.05f;  // the feet vs heightmap_floor at Free
 
-// --- S8: the plain, Agro and riding (design D10-D15) --------------------------
 // --s8-e2e (Task 9, authored): the walk/ride script's tolerances and budgets.
 constexpr int kS8E2eMaxStageFrames = 5400;    // 90 s at 1/60 s per stage
 constexpr float kS8E2eArrive = 0.15f;         // m: a scripted walk's waypoint reached
@@ -93,6 +80,7 @@ constexpr float kS8E2eGallopSeconds = 5.0f;
 constexpr std::array<std::array<float, 2>, 3> kS8E2eShrineRoute{
     {{2.57f, 21.5f}, {2.57f, 24.5f}, {0.07f, 28.25f}}};
 constexpr float kS8E2eGallopMin = 60.0f;      // m: run_start 16.5 m + 3.4 s x 14.7 m/s = 66.5
+// --s9-e2e (Task 9, authored): its budget and the ride's distances.
 constexpr int kS9E2eMaxStageFrames = 12000;     // 200 s at 1/60 s per stage
 constexpr float kS9E2eWaypoint = 12.0f;         // m: a ridden waypoint passed
 constexpr float kS9E2eReinAt = 20.0f;           // m from kAgroStairs: rein (the stop slides ~14 m)
@@ -259,114 +247,15 @@ int run_app(const AppOptions& opts) {
             SwordState& sword = ctx.sword;
             bool& sword_wired = ctx.sword_wired;
 
-            if (opts.s41Selftest) {
-                const SelftestResult result = run_s41(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
+            // The scripted paths (selftests.h): each ends the run or names the
+            // next stage; none of them asked = the interactive loop below.
+            const SelftestResult scripted = run_selftests(ctx, run);
+            if (scripted.exitCode) {
+                return *scripted.exitCode;
             }
-
-            if (opts.s42Selftest || opts.s5Selftest) {
-                const SelftestResult result = run_s42(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.s7Selftest) {
-                const SelftestResult result = run_s7(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.s8Selftest) {
-                const SelftestResult result = run_s8(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.s9Selftest) {
-                const SelftestResult result = run_s9(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.s6Selftest) {
-                const SelftestResult result = run_s6(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.s4Selftest) {
-                const SelftestResult result = run_s4(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.s3Selftest) {
-                const SelftestResult result = run_s3(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (opts.selftest) {
-                const SelftestResult result = run_selftest(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
-            }
-
-            if (!opts.screenshotPath.empty()) {
-                const SelftestResult result = run_screenshot(ctx, run);
-                if (result.exitCode) {
-                    return *result.exitCode;
-                }
-                if (result.next) {
-                    stage = *result.next;
-                    continue;
-                }
+            if (scripted.next) {
+                stage = *scripted.next;
+                continue;
             }
 
             // Interactive: left-drag orbits (single-model mode) or turns the follow

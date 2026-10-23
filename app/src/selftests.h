@@ -37,3 +37,72 @@ SelftestResult run_s41(StageCtx& ctx, RunState& run);
 SelftestResult run_s42(StageCtx& ctx, RunState& run);
 SelftestResult run_s8(StageCtx& ctx, RunState& run);
 SelftestResult run_s9(StageCtx& ctx, RunState& run);
+
+// The scripted paths in run_app's order (design §13.9's list, explicitly): the
+// first that ends the run or switches the stage wins; a path that falls through
+// hands on to the next, and none = the interactive loop. (The s4 pin runs in
+// stage_setup.)
+inline SelftestResult run_selftests(StageCtx& ctx, RunState& run) {
+    const AppOptions& opts = run.opts;
+    if (opts.s41Selftest) {
+        const SelftestResult result = run_s41(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s42Selftest || opts.s5Selftest) {
+        const SelftestResult result = run_s42(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s7Selftest) {
+        const SelftestResult result = run_s7(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s8Selftest) {
+        const SelftestResult result = run_s8(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s9Selftest) {
+        const SelftestResult result = run_s9(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s6Selftest) {
+        const SelftestResult result = run_s6(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s4Selftest) {
+        const SelftestResult result = run_s4(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.s3Selftest) {
+        const SelftestResult result = run_s3(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (opts.selftest) {
+        const SelftestResult result = run_selftest(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    if (!opts.screenshotPath.empty()) {
+        const SelftestResult result = run_screenshot(ctx, run);
+        if (result.exitCode || result.next) {
+            return result;
+        }
+    }
+    return {};
+}
