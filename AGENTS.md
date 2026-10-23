@@ -6,6 +6,18 @@ This file is workspace guidance and is tracked with the project.
 
 ## Status (2026-10-23)
 
+**Milestone S10 "The fast loop" — implemented; no game change, so no user walk.**
+Tooling and a refactor, every frozen output unchanged. `scripts/verify` (`make verify`; `tools/verify/`)
+re-runs each milestone's selftests once against 83 blessed goldens (`tools/verify/golden/`, `PIN` = the
+bless commit; timing fields masked, paths normalised) and skips any step whose content-hash stamp is
+unchanged: measured cold 285.7 s, warm 1.4 s, one milestone (`--only s9`) 94.5 s, against 782 s for the
+frozen chain (`make verify-long`, which agrees with it). `make libview BRANCH=<name>` gives a branch its
+own clone of the library. `make census` rebuilds `tools/re/census/census.json` (the 16 colossi,
+`docs/notes/colossi-census.md`). `app/src/app.cpp` (9,275 lines) is split into 24 files (`app.cpp` is 151
+lines; file map in `docs/notes/s10-results.md`) and `run_flags` replaces the five run-flag truth tables.
+GPU width stays 1: three concurrent viewers read up to +2.05 ms over the 8.22 ms solo marginal.
+Numbers: `docs/notes/s10-results.md`.
+
 **Milestone S9 "The road to Valus" — implemented; scripted acceptance green, user walk PENDING.**
 Interactive play's plain is now the **road** (`out/re/stage/road.manifest`, `probe.py compose --stage
 road`: S8's plain + the arena's six entrance glbs as ground + `arena_01.glb` as a backdrop): the entrance
@@ -28,8 +40,7 @@ the 0.9 m × raise camera shoulder shift, the 90° × raise grip standing in for
 additive layer, the sun, the cue timings. Known gaps: the climb, the moving/additive raises, raised
 walking, the sky and weak-point beams, the sword glow, skirts drawn opaque, the black sky, the
 low-confidence shimmer pick. **S9's bake (Wander 49 clips, the sword PNGs, the 36-entry audio, the 10
-cmdl-fix glbs) lives in the library view `out/libviews/s9-road` until S9's merge promotes it to the
-base.** The user's walk is still the user's to fill in.
+cmdl-fix glbs) was promoted to the base `out/library` at S9's merge (the `s9-road` view is deleted).** The user's walk is still the user's to fill in.
 
 **Milestone S8 "Agro" — implemented; scripted acceptance green, user walk PENDING.**
 The shrine's front door (an authored trigger box, entry only; `app/src/door.h`: FadeOut 1.0 s → Load →
@@ -109,10 +120,12 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 
 | Path | Contents |
 |---|---|
-| `app/` | the native viewer (`app/src/`), shaders, headless tests, `app/README.md` (controls/options) |
+| `app/` | the native viewer (`app/src/`: `app.cpp` is the shell, then `stage_ctx`/`stage_setup`, one `selftest_sN.cpp` per milestone, `interactive`, `encounter_rt`, `capture`, `audio_seam`, `gamepad_input`, `run_flags`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6`/`s7`/`s8` are invoked unchanged as later milestones' regressions |
-| `docs/notes/` | RE records and per-milestone results notes (`s9-results.md` is this milestone's; `s9-recon.md` is its RE gates) |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`); `s3`/`s4`/`s41`/`s42`/`s5`/`s6`/`s7`/`s8` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
+| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`), `libview.sh`, `golden/` (83 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
+| `tools/re/census/` | `census.py` and `census.json`: the 16 colossi (`make census`) |
+| `docs/notes/` | RE records and per-milestone results notes (`s10-results.md` is this milestone's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
 | `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
@@ -133,17 +146,24 @@ the tests at the view, so a branch's re-bakes and audio decodes never touch the 
 is cloned, no symlinks (the converter rewrites every referenced texture PNG on a bake and would write
 through). Delete a view with `rm -rf out/libviews/<name>` when the branch is done.
 
-S9 works in `out/libviews/s9-road` (`export SOTC_LIB=<repo>/out/libviews/s9-road`): its bake (Wander's
-49 clips, the four sword PNGs, the 36-entry audio manifest, the sibling-`.cmdl` fix: 10 sources rebaked, 8 glbs changed)
-is promoted to the base `out/library` at S9's merge, after `main`'s pins (Wander `== 43`, audio 8/10/34)
-are relaxed with the user's OK. Until then `scripts/s9-acceptance.sh` refuses a base library without the
-S9 bake.
+S9's bake (Wander's 49 clips, the four sword PNGs, the 36-entry audio manifest, the sibling-`.cmdl` fix:
+10 sources rebaked, 8 glbs changed) was promoted to the base `out/library` at S9's merge; the `s9-road` view
+is deleted. A branch that re-bakes starts a view of its own (`make libview BRANCH=<name>`).
 
 The machine suspends idle background work. **Every viewer run and every acceptance run must be
 wrapped in `caffeinate -dimsu`**; an unwrapped 1-frame run has taken 907 s. Never run two
 runs sharing an `out/` directory; the runner parallelises within its own `out/verify/<worktree>/`.
 
 ## Build and test
+
+**The gate rule.** `make verify` (`scripts/verify`) is the **per-task gate**: run it after every task's
+change and before reporting it done. It runs only the steps whose inputs changed (`make verify
+ARGS="--quick"` skips the e2e runs for the inner loop, `ARGS="--only s7"` one milestone, `ARGS=--dry-run`
+lists the decisions). `make verify-long` (`scripts/verify --long`, the highest frozen
+`scripts/sN-acceptance.sh`, ~13 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
+(`ARGS=--bless`, clean tree, nothing else running) only for a deliberate output change; a new milestone
+adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git worktree needs
+`git submodule update --init --recursive` before dotnet or verify works in it.
 
 `make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make plain`, `make
 accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 49 clips (the 15 S2–S6 clips,
@@ -254,7 +274,7 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 ## Acceptance
 
 ```bash
-export SOTC_LIB=<repo>/out/libviews/s9-road   # until S9's merge promotes the bake to out/library
+export SOTC_LIB=<repo>/out/library
 caffeinate -dimsu ./scripts/s9-acceptance.sh   # S9 + S8 (which runs S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
