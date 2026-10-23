@@ -15,98 +15,91 @@ s2-anim clip=player_a_atk1 joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_walk joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
-s11e2e-climb band=rear_left_hoof t=0.00 stamina=100.0 state=DownBLLoop at=25.7
-s11e2e-grab band=rear_left_hoof state=DownBLLoop stamina=100.0 at=25.7
+s11e2e-climb band=rear_left_hoof t=0.00 stamina=100.0 state=DownBLLoop at=26.1
+s11e2e-grab band=rear_left_hoof state=DownBLLoop stamina=100.0 at=26.1
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rear_left_shin t=0.00 stamina=86.6 state=DownBLLoop at=29.1
-s11e2e-climb band=rear_left_thigh t=0.00 stamina=74.9 state=DownBLLoop at=32.0
-s11e2e-climb band=rump t=0.00 stamina=56.3 state=DownBLLoop at=36.7
-s11e2e-climb band=back t=0.00 stamina=39.8 state=DownBLEnd at=40.9
-s11e2e-climb band=rump t=1.00 stamina=39.7 state=DownBLEnd at=40.9
-s11e2e-climb band=back t=0.00 stamina=30.2 state=DownBLEnd at=43.4
+s11e2e-climb band=rear_left_shin t=0.00 stamina=86.6 state=DownBLLoop at=29.5
+s11e2e-climb band=rear_left_thigh t=0.00 stamina=74.9 state=DownBLLoop at=32.4
+s11e2e-climb band=rump t=0.00 stamina=56.3 state=DownBLLoop at=37.1
+s11e2e-climb band=back t=0.00 stamina=40.6 state=DownBLEnd at=41.1
+s11e2e-climb band=rump t=1.00 stamina=40.5 state=DownBLEnd at=41.1
+s11e2e-climb band=back t=0.00 stamina=36.4 state=DownBLEnd at=42.3
+s11e2e-climb band=rump t=1.00 stamina=37.2 state=DownBLEnd at=42.3
+s11e2e-climb band=back t=0.00 stamina=34.4 state=DownBLEnd at=43.2
+s11e2e-climb band=rump t=1.00 stamina=34.3 state=DownBLEnd at=43.2
+s11e2e-climb band=back t=0.00 stamina=34.6 state=DownBLEnd at=43.2
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s11e2e-climb band=rump t=1.00 stamina=37.3 state=RiseReturnB at=44.6
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s11e2e-strike weakpoint=weakpoint_05 band=rump gate=damage damage=34 health=186 killed=0 at=45.5
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s11e2e-climb band=rump t=0.94 stamina=30.0 state=RiseReturnB at=45.5
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rump t=1.00 stamina=96.4 state=RiseReturnB at=46.1
-s11e2e-climb band=back t=0.00 stamina=96.7 state=RiseReturnB at=46.1
-s11e2e-climb band=rump t=1.00 stamina=97.5 state=RiseReturnB at=46.2
-s11e2e-climb band=back t=0.00 stamina=97.9 state=RiseReturnB at=46.2
-s11e2e-climb band=rump t=1.00 stamina=98.2 state=RiseReturnB at=46.2
-s11e2e-climb band=back t=0.00 stamina=98.5 state=RiseReturnB at=46.3
-s11e2e-climb band=rump t=1.00 stamina=98.9 state=RiseReturnB at=46.3
-s11e2e-climb band=back t=0.00 stamina=99.2 state=RiseReturnB at=46.4
-s11e2e-climb band=rump t=1.00 stamina=99.5 state=RiseReturnB at=46.4
-s11e2e-climb band=back t=0.00 stamina=99.8 state=RiseReturnB at=46.5
-s11e2e-climb band=rump t=1.00 stamina=99.9 state=RiseReturnB at=46.5
-s11e2e-climb band=back t=0.00 stamina=100.0 state=RiseReturnB at=46.5
-s11e2e-climb band=rump t=1.00 stamina=99.9 state=RiseReturnB at=46.6
-s11e2e-climb band=back t=0.00 stamina=94.7 state=RiseReturnB at=48.0
-s11e2e-climb band=rump t=1.00 stamina=94.6 state=RiseReturnB at=48.0
-s11e2e-climb band=back t=0.00 stamina=95.0 state=RiseReturnB at=48.1
-s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_05 band=back gate=damage damage=34 health=186 killed=0 at=49.7
-s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rump t=1.00 stamina=92.7 state=RiseReturnB at=49.8
-s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_05 band=rump gate=damage damage=34 health=152 killed=0 at=50.7
-s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rump t=0.94 stamina=85.3 state=Stand at=50.7
-s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rump t=0.90 stamina=78.0 state=Stand at=51.7
+s11e2e-climb band=back t=0.00 stamina=29.5 state=RiseReturnB at=45.8
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_05 band=rump gate=damage damage=34 health=118 killed=0 at=52.8
+s11e2e-strike weakpoint=weakpoint_05 band=back gate=damage damage=34 health=152 killed=0 at=50.0
 s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rump t=0.91 stamina=69.9 state=Stand at=52.8
+s11e2e-climb band=rump t=1.00 stamina=92.7 state=RefuseShoulder at=50.1
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_05 band=rump gate=damage damage=8 health=110 killed=0 at=53.8
-s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=rump t=0.95 stamina=62.6 state=Stand at=53.8
-s11e2e-sigil done=back strikes=5 health=110 at=53.8
+s11e2e-climb band=back t=0.00 stamina=93.1 state=RefuseShoulder at=50.1
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
-s11e2e-climb band=back t=0.00 stamina=62.2 state=Stand at=54.0
-s11e2e-back band=back t=0.45 across=0.00 feet_y=20.85 standing=1 stamina=100.0 state=Stand at=57.9
-s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s11e2e-shake start state=RefuseShoulder band=back stamina=100.0 at=65.9
-s11e2e-shake survived=1 band=back low=58.5 stamina=80.2 at=74.6
-s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
-s11e2e-climb band=neck t=0.00 stamina=99.9 state=Stand at=79.4
-s11e2e-climb band=head t=0.00 stamina=81.5 state=Stand at=84.0
 s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=34 health=76 killed=0 at=84.9
+s11e2e-strike weakpoint=weakpoint_05 band=back gate=damage damage=34 health=118 killed=0 at=56.5
 s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=neck t=1.00 stamina=74.2 state=Stand at=84.9
+s11e2e-climb band=rump t=1.00 stamina=92.7 state=Stand at=56.5
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s11e2e-climb band=head t=0.00 stamina=74.1 state=Stand at=84.9
-s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=34 health=42 killed=0 at=85.9
+s11e2e-strike weakpoint=weakpoint_05 band=rump gate=damage damage=8 health=110 killed=0 at=57.4
 s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=neck t=1.00 stamina=66.8 state=Stand at=85.9
+s11e2e-climb band=rump t=0.96 stamina=85.3 state=Stand at=57.5
+s11e2e-sigil done=back strikes=5 health=110 at=57.5
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s11e2e-climb band=head t=0.00 stamina=66.7 state=Stand at=85.9
 s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s11e2e-climb band=back t=0.00 stamina=85.2 state=Stand at=57.6
+s11e2e-back band=back t=0.45 across=0.00 feet_y=20.72 standing=1 stamina=100.0 state=Stand at=61.5
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s11e2e-shake start state=RefuseShoulder band=back stamina=100.0 at=66.3
+s11e2e-shake survived=1 band=back low=58.5 stamina=80.2 at=75.0
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s11e2e-climb band=neck t=0.00 stamina=99.9 state=Stand at=79.8
+s11e2e-climb band=head t=0.00 stamina=81.5 state=Stand at=84.4
 s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=34 health=8 killed=0 at=86.9
+s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=34 health=76 killed=0 at=85.3
 s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
-s11e2e-climb band=neck t=1.00 stamina=59.4 state=Stand at=86.9
+s11e2e-climb band=neck t=1.00 stamina=74.2 state=Stand at=85.3
 s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
-s11e2e-climb band=head t=0.00 stamina=59.3 state=Stand at=86.9
+s11e2e-climb band=head t=0.00 stamina=74.1 state=Stand at=85.3
 s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
 s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
-s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=8 health=0 killed=1 at=87.8
+s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=34 health=42 killed=0 at=86.3
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s11e2e-climb band=neck t=1.00 stamina=66.8 state=Stand at=86.3
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s11e2e-climb band=head t=0.00 stamina=66.7 state=Stand at=86.3
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=34 health=8 killed=0 at=87.3
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s11e2e-climb band=neck t=1.00 stamina=59.4 state=Stand at=87.3
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s11e2e-climb band=head t=0.00 stamina=59.3 state=Stand at=87.3
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s11e2e-strike weakpoint=weakpoint_04 band=head gate=damage damage=8 health=0 killed=1 at=88.2
 s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
 s11e2e-death phase=Motion total=0.000 state=Death
 s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
 s11e2e-death phase=Collapse total=5.333 state=Death
 s11e2e-death phase=Done total=8.000 state=Death
-s11e2e-corpse live_body=1 clip=boss_a_death t=5.333 held=1 moved=17.50 yaw=66.68 return=Idle
+s11e2e-corpse live_body=1 clip=boss_a_death t=5.333 held=1 moved=17.50 yaw=94.56 return=Idle
 s11e2e-reset health=220 defeated=0 state=Stand at_base=1 player_hp=100 mode=grounded death=Idle open=weakpoint_05
-s11e2e-done frames=5751 seconds=95.9
+s11e2e-done frames=5775 seconds=96.3
 s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3
