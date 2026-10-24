@@ -23,9 +23,9 @@ belly sigil; `knight_death` holds its last frame, no return to the shrine; `R` r
 (graph / sidecar / R-decode / authored) is `docs/notes/s12-results.md` §7; the R1–R5 gates are
 `docs/notes/s12-recon.md`. The proof is `--s12-selftest --s12-stills out/s12/stills` and `--s12-e2e`
 (manifest arena_03); the acceptance script is `scripts/s12-acceptance.sh` (the frozen S11 chain first);
-`tools/verify/s12.sh` has blessed goldens. **His bake (62 `knight_a_*` clips + the sidecar) and the graph live
-in the view `out/libviews/s12-gaius` until the merge promotes them** (R-K; `make bake` now includes
-`bake-knight` and `behaviour`, R-C) — until then `test_knight` fails against the base library.
+`tools/verify/s12.sh` has blessed goldens. His bake (62 `knight_a_*` clips + the sidecar) and the graph
+were promoted to the base `out/library` at S12's merge (R-K; `make bake` includes `bake-knight` and `behaviour`,
+R-C); the `s12-gaius` view is deleted. **Next: S13** — `docs/superpowers/specs/2026-10-24-s13-phaedra-systems-design.md`.
 Known gaps: no additive layer (no flinch, §13.7), no armour break, opaque water, silent (D10), the blade
 grab instead of a walk-on, a 0.05 ride margin, `KNIGHT_PLAYER_OUT` never fires, the y-34 backstop unproven,
 the belly route and the else-edge reading authored. **Audio needs a desktop (Aqua) session**: from a
