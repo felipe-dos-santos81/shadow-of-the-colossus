@@ -79,11 +79,13 @@ enum : int { TailStart, TailLoop, TailEnd, Back, Withers, NeckLow, NeckHigh, Hea
 //
 // The entry (D10, authored): E grabs the tail at its low end only while she crouches to
 // peep (`watch_*`). The S12 fields carry one window per band, so the tail is three bands
-// on one surface, one per watch clip. Each window = the clip's frames (15 fps) where the
-// tail tip (Bone_TAIL) is at most 3.73 m above her ground — the player capsule top 1.7 +
-// its radius 0.35 + the tail radius 0.78 + CombatTuning::grabRange 0.9 (measured per
-// frame: watch_start reaches it at f23 (3.56 m) and ends 1.68 m down; watch_loop 1.67–1.90
-// m throughout; watch_end leaves it after f17 (3.65 m; f18 3.75)). carryFraction 1.0
+// on one surface, one per watch clip. Each window = the clip's frames where the tail tip
+// (Bone_TAIL) is at most 3.73 m above her ground — the player capsule top 1.7 + its radius
+// 0.35 + the tail radius 0.78 + CombatTuning::grabRange 0.9 (measured per frame at the
+// clips' own 15 fps: watch_start reaches it at f23 (3.56 m) and ends 1.68 m down;
+// watch_loop 1.67–1.90 m throughout; watch_end leaves it after f17 (3.65 m; f18 3.75)).
+// The windows are written in the runtime's frame convention, 30 fps (kWindowFps, ruling
+// R-AD): the 15 fps bounds doubled — watch_start [46, end), watch_end [0, 36). carryFraction 1.0
 // (authored): a window closing (watch_start -> watch_loop -> watch_end -> stand) never
 // drops a rider — he keeps the tail and climbs to the back as usual. The back's `down` is
 // None (authored): the tail is an entry, not a way down.
@@ -100,9 +102,9 @@ constexpr ClimbBand tail_window(const char* clip, int from, int to) {
 }
 
 inline constexpr std::array<ClimbBand, B::Count> kBands{{
-    tail_window("kirin_a_watch_start", 23, -1),
+    tail_window("kirin_a_watch_start", 46, -1),
     tail_window("kirin_a_watch_loop", 0, -1),
-    tail_window("kirin_a_watch_end", 0, 18),
+    tail_window("kirin_a_watch_end", 0, 36),
     {.boneA = "Bone_MATA_L", .boneB = "Bone_MUNE", .radius = 1.86f, .up = B::Withers,
      .down = ClimbBandId::None, .weakpoint = -1, .horizontal = true, .name = "back"},
     {.boneA = "Bone_MUNE", .boneB = "Bone_KUBI", .radius = 2.29f, .up = B::NeckLow,
@@ -123,8 +125,10 @@ inline constexpr std::array<ClimbBand, B::Count> kBands{{
 inline constexpr std::array<int, B::Count> kBandRegion{
     {0x1e0, 0x1e0, 0x1e0, 0x1a0, 0x60, 0x20, 0x20, 0x10}};
 
-// The clips' frame rate: the windows above are frames at this rate (data, KI §2).
-inline constexpr float kClipFps = 15.0f;
+// The frame rate band windows are counted at: the runtime's convention (interactive.cpp:
+// entityFrame = floor(clip time × 30); ruling R-AD), whatever the clip's own rate — hers
+// are 15 fps (data, KI §2), so a 15 fps frame f is window frame 2f.
+inline constexpr float kWindowFps = 30.0f;
 
 // --- Collision ----------------------------------------------------------------
 

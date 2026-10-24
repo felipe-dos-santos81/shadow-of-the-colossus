@@ -189,11 +189,11 @@ TEST_CASE("kirin: every material and clip her table names is in her glb") {
         CHECK(rig.clips.count(name) == 1);
     }
     CHECK(rig.clips.at(kKirin.death.clip) == doctest::Approx(kKirin.death.motionSeconds).epsilon(1e-4));
-    // Each window's frames lie inside its clip (15 fps).
+    // Each window's frames lie inside its clip (window frames: 30 fps, ruling R-AD).
     for (const ClimbBand& band : kKirin.bands) {
         if (band.enableClip == nullptr) continue;
         CAPTURE(band.enableClip);
-        const int last = static_cast<int>(std::lround(rig.clips.at(band.enableClip) * k::kClipFps));
+        const int last = static_cast<int>(std::lround(rig.clips.at(band.enableClip) * k::kWindowFps));
         CHECK(band.enableFrom <= last);
         CHECK(band.enableTo <= last);
     }
@@ -204,15 +204,7 @@ TEST_CASE("kirin: every material and clip her table names is in her glb") {
 
 TEST_CASE("kirin: the band chain tail -> back -> withers -> neck low -> neck high -> head") {
     namespace b = k::B;
-    const auto in_range = [](int i) { return i == ClimbBandId::None || (i >= 0 && i < b::Count); };
-    for (const ClimbBand& band : kKirin.bands) {
-        CAPTURE(band.name);
-        CHECK(in_range(band.up));
-        CHECK(in_range(band.down));
-        CHECK(in_range(band.branch));
-        CHECK(in_range(band.carryTo));
-        CHECK((band.weakpoint == -1 || (band.weakpoint >= 0 && band.weakpoint < k::W::Count)));
-    }
+    CHECK(encounters::kirin_links_valid());  // links, targets and windows in range
     for (int tail : {b::TailStart, b::TailLoop, b::TailEnd}) {
         CHECK(kKirin.bands[tail].up == b::Back);
         CHECK_FALSE(kKirin.bands[tail].horizontal);  // hung
@@ -267,16 +259,21 @@ TEST_CASE("kirin: the strike targets — the head sigil's pool of 160, the neck 
 }
 
 TEST_CASE("kirin: the tail is grabbed only while she crouches (watch_*)") {
-    for (int f = 0; f < 31; ++f) {
+    for (int f = 0; f <= 60; ++f) {  // watch_loop / walk / stand: 2.0 s = 60 window frames
         CAPTURE(f);
         CHECK(tail_enabled("kirin_a_watch_loop", f));
         CHECK_FALSE(tail_enabled("kirin_a_walk", f));
         CHECK_FALSE(tail_enabled("kirin_a_stand", f));
     }
+    // 30 fps window frames (ruling R-AD): the measured 15 fps f23 / f18 doubled.
     CHECK_FALSE(tail_enabled("kirin_a_watch_start", 0));   // still standing
-    CHECK(tail_enabled("kirin_a_watch_start", 45));        // down
+    CHECK_FALSE(tail_enabled("kirin_a_watch_start", 45));  // 3.56 m not yet reached
+    CHECK(tail_enabled("kirin_a_watch_start", 46));
+    CHECK(tail_enabled("kirin_a_watch_start", 90));        // down, the clip's last frame
     CHECK(tail_enabled("kirin_a_watch_end", 0));           // still down
-    CHECK_FALSE(tail_enabled("kirin_a_watch_end", 40));    // up again
+    CHECK(tail_enabled("kirin_a_watch_end", 35));
+    CHECK_FALSE(tail_enabled("kirin_a_watch_end", 36));    // rising past reach
+    CHECK_FALSE(tail_enabled("kirin_a_watch_end", 80));    // up again
     for (int tail : {k::B::TailStart, k::B::TailLoop, k::B::TailEnd}) {
         const ClimbBand& band = kKirin.bands[tail];
         CHECK(band.grabEntryLowEnd);
