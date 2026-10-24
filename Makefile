@@ -252,7 +252,7 @@ behaviour: ## Export the 16 colossus mode graphs from out/re/eboot.elf to LIB/be
 	@test -f out/re/eboot.elf || { echo "out/re/eboot.elf is missing: run scripts/re0-acceptance.sh first" >&2; exit 1; }
 	@for b in $(BEHAVIOUR_BOSSES); do python3 -I tools/re/scr/graph_export.py export $$b "$(LIB)/behaviour/$$b.graph.json" || exit 1; done
 
-# S13 (Phaedra): each target fails until the task that fills it lands (Task 1 contracts).
+# S13 (Phaedra): her routes, the arena's terrain, the coverage report, her bake and arena.
 routes: ## Export the .path route graphs to LIB/behaviour/{kirin,knight,minotaur}.route.json (S13 Task 7; read-only on the game tree)
 	@for s in kirin knight minotaur; do python3 -I tools/re/path/route_export.py "$(GAME_ROOT)/cp3shadow/path/pathdata/$$s.path" "$(LIB)/behaviour/$$s.route.json" || exit 1; done
 
@@ -274,14 +274,14 @@ arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena; th
 phaedra: app arena04-manifest ## Fight Phaedra on arena_04 (hide in a tunnel, Q whistles; E grabs her tail while she peeps; R resets)
 	$(VIEWER) --manifest out/re/stage/arena_04.manifest
 
-accept-s13: ## Run the S13 acceptance (S13 Task 17)
-	@echo "not yet (S13 Task 17)" >&2; exit 1
+accept-s13: arena04-manifest ## Run the S13 acceptance (S13 → S12 → S11 → S9 → … → S3; SOTC_LIB = a library with the S13 exports)
+	$(AWAKE) ./scripts/s13-acceptance.sh
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest accept-s12 ## Run the current milestone's acceptance (S12 → S11 → S9 → S8 → … → S3)
+accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest accept-s13 ## Run the current milestone's acceptance (S13 → S12 → S11 → S9 → S8 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11, -s12 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11, -s12, -s13 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
 verify: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")

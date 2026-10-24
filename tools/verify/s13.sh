@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# s13.sh — the runner's adapter for S13 (Phaedra): its own gates until Task 17's frozen
-# scripts/s13-acceptance.sh exists (report-only until the goldens are blessed).
-#   gpu: the preflight (arena_04.manifest selects Phaedra; her bake; the KIRIN export's 15/84/97/314
-#        counts; her routes, terrain and events sidecar valid), the four flag refusals + the --stage
+# s13.sh — the runner's adapter for S13 (Phaedra): a second copy of scripts/s13-acceptance.sh's
+# assertions, like s3…s12 (the frozen S12 chain and the build are run.py's; the gates are verbatim).
+#   gpu: the preflight (arena_04.manifest selects Phaedra; her bake; the 16 colossus exports, KNIGHT's
+#        13/53/40/171 with control_defs and KIRIN's 15/84/97/314; her routes, terrain and events
+#        sidecar valid; the coverage report with KIRIN 0 missing), the four flag refusals + the --stage
 #        refusal (exit 2), the selftest + four 2560x1440 stills (the timeline's gates, the coverage,
 #        the perf budget, the pixel spans), the e2e (skipped by --quick): one arena load and no
 #        shrine, and its lines equal the selftest's.
@@ -13,9 +14,12 @@ kirin_dir="$lib/models/shadow/characters/colossus_04_kirin/_cmn"
 kirin_clips_json="$kirin_dir/c04_kirin.clips.json"
 kirin_events_json="$kirin_dir/c04_kirin.events.json"
 kirin_graph_json="$lib/behaviour/KIRIN.graph.json"
+knight_graph_json="$lib/behaviour/KNIGHT.graph.json"
 kirin_route_json="$lib/behaviour/kirin.route.json"
 arena04_terrain_json="$lib/stage/arena_04.terrain.json"
 stills_dir="$out_dir/stills"
+coverage_dump="$VERIFY_RUN/scr_registry.dump"
+coverage_md="$out_dir/coverage.md"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
@@ -59,6 +63,27 @@ e = json.load(open(sys.argv[1]))
 sys.exit(0 if e["format"] == "sotc-objanim-events/1" and e["skeleton"] == "kirin_a" and e["frame"] == "glb"
          and "kirin_walk_dmg" in e["spawned"] and "kirin_a_watch_start" in e["clips"] else 1)' "$kirin_events_json" ||
     fail "$kirin_events_json is not a valid kirin_a sidecar (format/skeleton/frame, the walk damage spawn: make bake-kirin)"
+  # All 16 colossi exported (spec D2): <lib>/behaviour/<BOSS>.graph.json, sotc-scr-graph/0, its own boss.
+  python3 -I -c 'import json, os, sys
+bosses = "MINOTOUR_A MAMMOTH KNIGHT KIRIN YAMORI_B BUDDHA MINOTOUR_B BIRD KAME EEL MINOTOUR_C LEO NARGA POSEIDON SNAKE CERBERUS_R".split()
+path = lambda b: os.path.join(sys.argv[1], b + ".graph.json")
+ok = lambda b: os.path.isfile(path(b)) and json.load(open(path(b)))["format"] == "sotc-scr-graph/0" and json.load(open(path(b)))["boss"] == b
+sys.exit(0 if all(ok(b) for b in bosses) else 1)' "$lib/behaviour" ||
+    fail "$lib/behaviour lacks one of the 16 colossus graphs (sotc-scr-graph/0, one per boss: make behaviour)"
+  # Gaius's counts are S12's (spec §13.1: the new keys are additive).
+  python3 -I -c 'import json, sys
+g = json.load(open(sys.argv[1]))
+n = (len(g["modes"]), len(g["conditions"]), sum(len(m["transitions"]) for m in g["modes"]), len(g["motion_graph"]))
+sys.exit(0 if g["format"] == "sotc-scr-graph/0" and g["boss"] == "KNIGHT" and n == (13, 53, 40, 171) and g["control_defs"] else 1)' "$knight_graph_json" ||
+    fail "$knight_graph_json is not KNIGHT's S13 export (13 modes, 53 conditions, 40 transitions, 171 motion edges, control_defs: make behaviour)"
+  # make coverage: the per-boss interpreter report over the 16 exports; Phaedra's graph has 0 missing.
+  "$build_dir/scr_registry_dump" > "$coverage_dump" &&
+    python3 -I "$repo_root/tools/re/scr/coverage.py" "$lib/behaviour" "$coverage_dump" "$coverage_md" ||
+    fail "the coverage report failed (make coverage: $build_dir/scr_registry_dump, tools/re/scr/coverage.py)"
+  [[ "$(grep -c -E '^\| [A-Z_]+ \| [0-9]+/[0-9]+/[0-9]+ \| ' "$coverage_md" || true)" = "16" ]] ||
+    fail "$coverage_md does not have one row per colossus (16)"
+  grep -q -E '^\| KIRIN \| ([0-9]+/[0-9]+/0 \| ){4}0 \|$' "$coverage_md" ||
+    fail "KIRIN's graph uses an item the interpreter does not know: $(grep -E '^\| KIRIN ' "$coverage_md" || true)"
 }
 
 section_gpu() {
