@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "kirin.h"
 #include "knight.h"
 #include "quadratus.h"
 #include "valus_desc.h"
@@ -10,7 +11,8 @@
 // A colossus adds its table's header and one row.
 inline constexpr const EncounterDesc* kEncounters[] = {&encounters::kValus,
                                                        &encounters::kQuadratus,
-                                                       &encounters::kKnight};
+                                                       &encounters::kKnight,
+                                                       &encounters::kKirin};
 
 // The table whose id is `id` exactly, or nullptr (the caller's load error).
 inline const EncounterDesc* find_encounter(std::string_view id) {
