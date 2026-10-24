@@ -169,6 +169,9 @@ bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame&
         }
         return true;
     }
+    // A hung band never reads bandAcross: clear it, so a band the slope gate flips back
+    // to walkable (the blade during the lift) starts on its top, not at a stale offset.
+    combat.bandAcross = 0.0f;
     player.yawDeg = std::atan2(-normal.x, -normal.z) / kDegToRad;
     return true;
 }
