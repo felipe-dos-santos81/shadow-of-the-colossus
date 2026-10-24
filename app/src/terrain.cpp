@@ -86,10 +86,21 @@ float num(const Json& j) {
     return static_cast<float>(j.number);
 }
 
+// A JSON integer in [0, max], kept as a double until the cast (masks must not pass through
+// float); anything else is a load error naming the triangle.
+uint32_t whole(const Json* j, const char* key, size_t tri, double max) {
+    if (!j || j->kind != Json::Number || j->number != std::floor(j->number) || j->number < 0.0 ||
+        j->number > max)
+        throw std::runtime_error(std::string("terrain: ") + key + " of triangle " + std::to_string(tri) +
+                                 " is not an integer in range");
+    return static_cast<uint32_t>(j->number);
+}
+
 void read_tris(const Json& doc, const char* key, bool hasClass, std::vector<Tri>& out) {
     const Json* arr = doc.get(key);
     if (!arr || arr->kind != Json::Array) throw std::runtime_error(std::string("terrain: missing array ") + key);
-    for (const Json& e : arr->array) {
+    for (size_t n = 0; n < arr->array.size(); ++n) {
+        const Json& e = arr->array[n];
         const Json* v = e.get("v");
         const Json* owner = e.get("owner");
         const Json* cls = e.get("class");
@@ -102,8 +113,8 @@ void read_tris(const Json& doc, const char* key, bool hasClass, std::vector<Tri>
                 throw std::runtime_error(std::string("terrain: bad vertex in ") + key);
             for (int c = 0; c < 3; ++c) t.v[k][c] = num(p.array[c]);
         }
-        t.owner = static_cast<uint32_t>(num(*owner));
-        t.cls = hasClass ? static_cast<int>(num(*cls)) : 0;
+        t.owner = whole(owner, "owner", n, 4294967295.0);
+        t.cls = hasClass ? static_cast<int>(whole(cls, "class", n, 127.0)) : 0;  // data: 7-bit class mask
         out.push_back(t);
     }
 }

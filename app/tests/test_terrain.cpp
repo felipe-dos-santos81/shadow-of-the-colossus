@@ -41,6 +41,23 @@ TEST_CASE("terrain: rejects a bad document") {
     CHECK_FALSE(terrain_load("not json", m, err));
 }
 
+TEST_CASE("terrain: class and owner are exact integers") {
+    auto doc = [](const char* owner) {
+        return std::string(R"({"format":"sotc-terrain/0","stage_tris":[{"v":[[0,0,0],[10,0,0],[0,0,10]],"class":3,"owner":)") +
+               owner + R"(}],"boss_ground":[]})";
+    };
+    TerrainMap m;
+    std::string err;
+    REQUIRE(terrain_load(doc("62914560"), m, err));  // 0x3c00000
+    CHECK(terrain_at(m, {2, 0, 2}).owner == 0x3c00000u);
+    REQUIRE(terrain_load(doc("4294967295"), m, err));  // > 2^24: a float would round it
+    CHECK(terrain_at(m, {2, 0, 2}).owner == 0xffffffffu);
+    CHECK_FALSE(terrain_load(doc("4194304.5"), m, err));
+    CHECK(err.find("triangle 0") != std::string::npos);
+    CHECK_FALSE(terrain_load(doc("4294967296"), m, err));
+    CHECK_FALSE(terrain_load(doc("-1"), m, err));
+}
+
 TEST_CASE("terrain: window and highest-surface rule on a synthetic tile") {
     const char* doc = R"({"format":"sotc-terrain/0","stage_tris":[
       {"v":[[0,0,0],[10,0,0],[0,0,10]],"class":3,"owner":0},
