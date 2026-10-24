@@ -9,9 +9,11 @@ constexpr float kLayerFps = 30.0f;  // binary DAT_0126dac4: the layer clock is d
 // (actor +0x534 × +0x6f8): read as 1. guess
 constexpr float kLayerRate = 1.0f;
 
-int playing_slot(const AddLayers& layers, int clip) {
+// The slot playing `clip` (over reference `ref`; -2: any), or -1.
+int playing_slot(const AddLayers& layers, int clip, int ref = -2) {
     for (std::size_t i = 0; i < layers.slot.size(); ++i) {
-        if (layers.slot[i].state != AddLayer::Free && layers.slot[i].clip == clip) {
+        if (layers.slot[i].state != AddLayer::Free && layers.slot[i].clip == clip &&
+            (ref == -2 || layers.slot[i].ref == ref)) {
             return static_cast<int>(i);
         }
     }
@@ -61,7 +63,7 @@ void additive_request(AddLayers& layers, const std::vector<AddEdge>& edges, std:
         if (edge.from < 0 || edge.orient != orient) {
             continue;
         }
-        const int s = playing_slot(layers, edge.from);
+        const int s = playing_slot(layers, edge.from, edge.fromRef);  // the from motion-def: clip and ref
         if (s < 0) {
             continue;
         }

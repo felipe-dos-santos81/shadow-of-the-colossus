@@ -125,8 +125,8 @@ struct Loader {
             case Json::Number: a.num = v.number; break;
             case Json::String: {
                 const std::string& s = v.string;
-                if (s.rfind("0x", 0) == 0) {
-                    a.num = static_cast<double>(hex(v, at));
+                if (s.rfind("0x", 0) == 0) {  // a q-slot word: 64 bits (the terrain class masks are 0x7f << 48)
+                    a.num = static_cast<double>(word(v, at));
                 } else if ((a.cond = index_of(condKeys, s)) >= 0 || (a.actions = index_of(actKeys, s)) >= 0) {
                     a.text = s;
                 } else {
@@ -360,6 +360,12 @@ struct Loader {
             if (const Json* r = opt(e, "ref")) {
                 edge.ref = index_of(clipNames, r->string);
                 if (edge.ref < 0) fail("motion_graph: ref clip " + r->string + " is not in the clip names");
+            }
+            if (const Json* fr = e.get("from_ref")) {  // S13 Task 14: null -> -1; absent -> -2 (any)
+                edge.fromRef = fr->kind == Json::Null ? -1 : index_of(clipNames, text(fr));
+                if (edge.fromRef < 0 && fr->kind != Json::Null) {
+                    fail("motion_graph: from_ref clip " + text(fr) + " is not in the clip names");
+                }
             }
             if (const Json* sp = opt(e, "speed")) edge.speed = flag(*sp, "motion_graph") != 0.0;
             edge.blendOut = num_or(opt(e, "blend_out"), "motion_graph");

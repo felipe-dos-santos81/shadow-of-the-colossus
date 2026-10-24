@@ -323,6 +323,13 @@ TEST_CASE("the anger model: KIRIN's {decay 1, a 0, b 0}, a kind-1 hit after ange
     w.hit = false;
     scr_boss_step(withA, b.reg, rt, w, 1.0f);
     CHECK(rt.anger == 50.0f);
+    // ... but still clamps to [0, 100] (binary FUN_0082aef0 skips only the add and the decay; S13 Task 14).
+    rt.anger = 150.0f;
+    scr_boss_step(withA, b.reg, rt, w, 1.0f);
+    CHECK(rt.anger == 100.0f);
+    rt.anger = -5.0f;
+    scr_boss_step(withA, b.reg, rt, w, 1.0f);
+    CHECK(rt.anger == 0.0f);
 }
 
 TEST_CASE("KNIGHT's exported attackdata plus the sidecar's ATTAIN cylinders equal S12's kAttack") {

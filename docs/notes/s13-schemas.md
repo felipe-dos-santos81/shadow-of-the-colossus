@@ -71,6 +71,7 @@ Words (`mask`, `value`) are `"0x…"` strings (u64); `-1` is accepted for all on
 | `motion_graph[]` | `ref` | motion-def +0x98 | clip name or null | `ScrMotionEdge::ref` (clip index; a missing clip is a load error) |
 | | `speed` | +0x60 bit 1 | bool | `speed` |
 | | `blend_out` | +0x218 | frames | `blendOut` |
+| | `from_ref` | the `from` motion-def's +0x98 | clip name or null | `fromRef` (−1 null; −2 when absent: any). Two motion-defs can play one clip (KIRIN's neck dummy and swing start); the additive from-rows tell them apart by it (S13 Task 14) |
 | `root` | `kind` | +0x00 (guess, census16 Open) | number | `ScrRoot::kind` |
 
 The loader also refuses a mode whose `locomotion.kind` is not in `ScrRegistry::kinds` (D4).

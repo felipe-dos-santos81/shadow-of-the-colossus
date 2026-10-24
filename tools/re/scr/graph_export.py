@@ -9,7 +9,7 @@ predicates and actions by function address ("0x832610", ruling R-G).
   graph_export.py export BOSS OUT.json [--elf PATH]      BOSS: any of the 16 colossi (tools/re/census/census.json)
 
 S13 (docs/notes/s13-schemas.md) adds, all optional keys of the same `/0` format: control_defs, dprelate, attackdata,
-more slowstatus fields, edge ref/speed/blend_out and root kind. Recon: .superpowers/sdd/2026-10-23-s13-recon/
+more slowstatus fields, edge ref/speed/blend_out/from_ref and root kind. Recon: .superpowers/sdd/2026-10-23-s13-recon/
 {graph,census16,additive}.
 """
 import json, os, sys
@@ -338,10 +338,14 @@ def export(boss):
             m = resolve(e, 0x20); m = m[2] if m else None       # the target motion-def (additive recon adddefs.py, binary)
             rf = resolve(m, 0x98) if m else None               # a motion-def, or another type (LEO's jump-velocity-def): then none
             rf = ref(rf) if rf and tn(rf) == "motion-def" else None
+            fm = resolve(e, 0); fm = fm[2] if fm else None       # the from motion-def: its +0x98 tells two defs of one
+            frf = resolve(fm, 0x98) if fm else None            # clip apart (KIRIN's neck dummy vs swing start, binary)
+            frf = ref(frf) if frf and tn(frf) == "motion-def" else None
             edges.append({"table": name, "from": fr.get("clip") if isinstance(fr, dict) else fr, "orient": hname(resolve(e, 0x10)),
                           "to": to.get("clip") if isinstance(to, dict) else to, "p30": round(f(e + 0x30), 3), "p34": round(f(e + 0x34), 3),
                           # S13: +0x98 reference motion, +0x60 bit 1 speed-scaled, +0x218 blend-out frames
                           "ref": rf.get("clip") if isinstance(rf, dict) else rf, "speed": bool(m and u(m + 0x60) & 2),
+                          "from_ref": frf.get("clip") if isinstance(frf, dict) else frf,
                           "blend_out": round(f(m + 0x218), 4) if m else 0.0})
     control_defs = {k: [cdef(e) for e in cdef_records(h)] for k, h in sorted(cdefs.items())}
     dprelate = {k: [{"mask": q_word(e + 8), "value": q_word(e + 0x10), "object": hname(resolve(e, 0x18)),

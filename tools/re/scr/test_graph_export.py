@@ -122,7 +122,7 @@ class GraphExport(unittest.TestCase):
                 for k in SLOW_ADDED:
                     if m["locomotion"]: m["locomotion"].pop(k, None)
             for e in g["motion_graph"]:
-                for k in ("ref", "speed", "blend_out"): e.pop(k, None)
+                for k in ("ref", "speed", "blend_out", "from_ref"): e.pop(k, None)
             return g
         self.assertTrue(os.path.isfile(S12_KNIGHT), "%s missing" % S12_KNIGHT)
         with open(S12_KNIGHT) as fh:
@@ -143,6 +143,12 @@ class GraphExport(unittest.TestCase):
         refs = {e["ref"] for e in k["motion_graph"] if e["table"] == "KIRIN_ADD" and e["to"] == "kirin_a_add_neck_down_2_loop"}
         self.assertEqual(refs, {"kirin_a_add_neck_refuse_start"})
         self.assertTrue(any(e["speed"] for e in k["motion_graph"]))
+        # S13 Task 14: two motion-defs play neck_refuse_start (the Always rows' neck dummy, no +0x98; the swing start,
+        # +0x98 itself): the from-rows name which by from_ref, the dummy's block first (data, adddefs.json)
+        swing = [e["from_ref"] for e in k["motion_graph"] if e["table"] == "KIRIN_ADD"
+                 and e["from"] == "kirin_a_add_neck_refuse_start" and e["orient"].endswith("'Swing'")]
+        self.assertEqual(swing, [None, "kirin_a_add_neck_refuse_start"])
+        self.assertTrue(all(e["from_ref"] is None for e in k["motion_graph"] if e["from"] is None))
 
     def test_control_defs(self):
         for b, extra in (("KNIGHT", set()), ("KIRIN", {0x04, 0x4c})):

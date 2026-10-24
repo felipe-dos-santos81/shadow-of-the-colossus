@@ -39,7 +39,7 @@ constexpr float kSwingRise = 1.0f;           // §13.3 stand-in (authored): a ri
 constexpr float kTurnDeg = 30.0f;            // §13.1 FALLBACK (R1): turn past ±30°, else walk
 constexpr float kSteerDeg = 3.0f;            // R1 decode: DAT_0128d284 = 0.05236 rad (steer and arrival)
 // The MOVE_BACK sector: Gaius's (data: KNIGHT_MOVE_BACK r 75, 90° wide, yawed 180°; t44 default),
-// used for any slowstatus judge (+78) — another boss's own volume is not read (a gap).
+// used for a slowstatus judge (+78) whose sector scr_move_back_bind did not bind (S13 Task 14).
 constexpr float kMoveBackRadius = 75.0f;
 constexpr float kMoveBackHalfDeg = 45.0f;
 constexpr float kNoFacing = 1e-3f;           // authored: a face point this close (m) to his root has no bearing
@@ -273,11 +273,16 @@ void a_turn_to_player(const ScrAction& a, ScrCtx& ctx) {
 
 // --- Locomotion and the attack runner (R1) ---
 
+// The MOVE_BACK sector behind him (radius 0: none).
+struct BackSector {
+    float radius = 0.0f, halfDeg = 0.0f;
+};
+
 // The slowleg's request for one frame toward `target` (R1 move codes): arrived -> brake
 // when facing within 3°, else turn in place; a target in the MOVE_BACK sector -> back
 // (rows with MOVE_BACK only; the undecoded sign test read as "behind him", authored);
 // past ±30° -> turn in place, else walk (§13.1 FALLBACK); steer past 3° (R1 decode).
-void gait(ScrRuntime& rt, const ScrWorld& w, const Vec3& target, bool arrived, float faceDeg, bool moveBack,
+void gait(ScrRuntime& rt, const ScrWorld& w, const Vec3& target, bool arrived, float faceDeg, BackSector back,
           ScrStepOut& out) {
     if (arrived) {
         rt.steerDeg = 0.0f;
@@ -288,7 +293,7 @@ void gait(ScrRuntime& rt, const ScrWorld& w, const Vec3& target, bool arrived, f
     const float b = bearing_to(w, target);
     rt.steerDeg = b;
     const float dist = std::hypot(target.x - w.bossPosition.x, target.z - w.bossPosition.z);
-    if (moveBack && std::fabs(b) >= 180.0f - kMoveBackHalfDeg && dist <= kMoveBackRadius) {
+    if (back.radius > 0.0f && std::fabs(b) >= 180.0f - back.halfDeg && dist <= back.radius) {
         scr_request(out, kScrCtrlBackward);
         return;
     }
@@ -308,7 +313,7 @@ const std::vector<ScrAttackRow>* armed_rows(const ScrGraph& g, const ScrRuntime&
 // FUN_0085ab40 (R1), kind 10, on the armed table's exported rows. Not read: the row condition
 // +40, chain +08/+18, control-mode list +20, sensing +38, the alt ATK +70/+80, issue2 +b0 and
 // the foot-IK aim +d0/+e0 (§13.4: a gap).
-void attack_runner(const ScrGraph& g, ScrRuntime& rt, const ScrWorld& w, float dt, bool moveBack, ScrStepOut& out) {
+void attack_runner(const ScrGraph& g, ScrRuntime& rt, const ScrWorld& w, float dt, BackSector back, ScrStepOut& out) {
     const std::vector<ScrAttackRow>* table = armed_rows(g, rt);
     if (table == nullptr) return;
     const std::vector<ScrAttackRow>& rows = *table;
@@ -350,7 +355,7 @@ void attack_runner(const ScrGraph& g, ScrRuntime& rt, const ScrWorld& w, float d
     rt.arrived = inside(row.attain);
     const Vec3 f = forward_of(w), l = left_of(w), p = w.playerPosition;
     const Vec3 target{p.x - f.x * row.attainZ - l.x * row.attainX, p.y, p.z - f.z * row.attainZ - l.z * row.attainX};
-    gait(rt, w, target, rt.arrived, bearing_to(w, p), moveBack, out);
+    gait(rt, w, target, rt.arrived, bearing_to(w, p), back, out);
 
     // Issue: the cooldown holds it unless +f8 and arrived; the selected row's ATK, else
     // (root kind 1, FUN_0085ba60) the first row whose ATK holds the player.
@@ -385,12 +390,20 @@ void locomotion(ScrCtx& ctx, float dt) {
             if (std::hypot(rt.goal.x - w.bossPosition.x, rt.goal.z - w.bossPosition.z) <= rt.arriveRadius) {
                 rt.arrived = true;
             }
-            gait(rt, w, rt.goal, rt.arrived, 0.0f, false, ctx.out);
+            gait(rt, w, rt.goal, rt.arrived, 0.0f, {}, ctx.out);
             return;
         case 10: {
-            // MOVE_BACK rows: the slowstatus names a judge (+78; Gaius's KNIGHT_MOVE_BACK).
-            const bool moveBack = rt.attackTable >= 0 && !g.modes[static_cast<size_t>(rt.attackTable)].locomotion.judge.empty();
-            attack_runner(g, rt, w, dt, moveBack, ctx.out);
+            // MOVE_BACK rows: the slowstatus names a judge (+78; Gaius's KNIGHT_MOVE_BACK, Phaedra's KIRIN_BACK),
+            // its sector bound from the sidecar, else Gaius's.
+            BackSector back;
+            if (rt.attackTable >= 0) {
+                const ScrLocomotion& l = g.modes[static_cast<size_t>(rt.attackTable)].locomotion;
+                if (!l.judge.empty()) {
+                    back = l.backRadius > 0.0f ? BackSector{l.backRadius, l.backHalfDeg}
+                                               : BackSector{kMoveBackRadius, kMoveBackHalfDeg};
+                }
+            }
+            attack_runner(g, rt, w, dt, back, ctx.out);
             return;
         }
         default:
@@ -400,15 +413,15 @@ void locomotion(ScrCtx& ctx, float dt) {
 }
 
 // FUN_0082aef0: on a hit, kind 1/2/4 adds a, 0/5 adds b, 3 adds a when the flag is set; no hit
-// decays by decay·dt; clamped to [0, 100]. A null scr_angry_status runs no model.
+// decays by decay·dt; clamped to [0, 100]. A null scr_angry_status skips the add and the decay,
+// not the clamp (binary).
 void anger_model(const ScrGraph& g, ScrRuntime& rt, const ScrWorld& w, float dt) {
     const std::vector<float>& a = g.root.anger;  // {decay, a, b, flag}
-    if (a.size() < 4) return;
-    if (w.hit) {
+    if (a.size() >= 4 && w.hit) {
         const int k = w.hitKind;
         if (k == 1 || k == 2 || k == 4 || (k == 3 && a[3] != 0.0f)) rt.anger += a[1];
         else if (k == 0 || k == 5) rt.anger += a[2];
-    } else {
+    } else if (a.size() >= 4) {
         rt.anger -= a[0] * dt;
     }
     rt.anger = std::min(kAngerMax, rt.anger);
@@ -489,7 +502,7 @@ ScrStepOut scr_boss_step(const ScrGraph& graph, const ScrRegistry& registry, Scr
 void scr_slowleg(ScrRuntime& rt, const ScrWorld& w, const Vec3& goal, bool arrived, ScrStepOut& out) {
     const bool own = goal.x == rt.goal.x && goal.z == rt.goal.z;
     const bool under = std::hypot(goal.x - w.bossPosition.x, goal.z - w.bossPosition.z) <= kNoFacing;
-    gait(rt, w, goal, arrived, arrived && !own && !under ? bearing_to(w, goal) : 0.0f, false, out);
+    gait(rt, w, goal, arrived, arrived && !own && !under ? bearing_to(w, goal) : 0.0f, {}, out);
 }
 
 bool scr_attack_attain(ScrGraph& graph, const std::vector<EventsVolume>& judgeDefaults, std::string& error) {
@@ -512,12 +525,35 @@ bool scr_attack_attain(ScrGraph& graph, const std::vector<EventsVolume>& judgeDe
     return true;
 }
 
+bool scr_move_back_bind(ScrGraph& graph, const std::vector<EventsVolume>& judgeDefaults, std::string& error) {
+    for (ScrMode& m : graph.modes) {
+        ScrLocomotion& l = m.locomotion;
+        if (l.judge.empty()) continue;
+        // "KIRIN:scr_judge_volume_def[10] 'KIRIN_BACK'" -> KIRIN_BACK
+        const size_t open = l.judge.find('\'');
+        const std::string name =
+            open == std::string::npos ? l.judge : l.judge.substr(open + 1, l.judge.size() - open - 2);
+        const auto it = std::find_if(judgeDefaults.begin(), judgeDefaults.end(),
+                                     [&](const EventsVolume& v) { return v.name == name; });
+        if (it == judgeDefaults.end() || it->keys.size() != 1 || it->keys[0].f != -1) {
+            error = "mode " + std::to_string(m.id) + ": MOVE_BACK judge '" + name +
+                    "' is not a static judge default of the sidecar";
+            return false;
+        }
+        l.backRadius = it->keys[0].size.x;               // data: the cylinder's radius
+        l.backHalfDeg = it->angle * 0.5f / kDegToRad;  // data: the full sector width (rad) halved
+    }
+    return true;
+}
+
 std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& a) {
     const auto has = [&](const char* s) { return scr_arg(a, s) != nullptr; };
     const auto clip = [&](const char* s) { return has(s) && scr_arg(a, s)->clip >= 0; };
     const auto index = [&](const char* s) { return has(s) && bracket(scr_arg(a, s)->text) >= 0; };
     const auto mode = [&](const char* s) { return has(s) && scr_arg(a, s)->mode >= 0; };
-    const auto flag = [&](const char* s) { return has(s) && scr_arg(a, s)->num >= 0.0 && scr_arg(a, s)->num < 512.0; };
+    const auto flag = [&](const char* s) {
+        return has(s) && scr_arg(a, s)->num >= 0.0 && scr_arg(a, s)->num < static_cast<double>(kScrFlags);
+    };
     const auto handle = [&](const char* s, int ScrArg::*field) {  // a resolved ref or a null (true) handle
         return has(s) && (scr_arg(a, s)->null || scr_arg(a, s)->*field >= 0);
     };
@@ -532,7 +568,7 @@ std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& a) 
             return has("f1c") ? "" : "f1c";
         case kPlayerBearingIn: return has("f1c") && has("f20") ? "" : "f1c/f20";
         case kSwingSpaceClear: return has("f1c") && has("f20") && has("f24") ? "" : "f1c/f20/f24";
-        case kGameFlag: return flag("i10") ? "" : "i10 (a flag < 512)";
+        case kGameFlag: return flag("i10") ? "" : "i10 (a flag < kScrFlags)";
         case kHitKind: return has("i10") ? "" : "i10";
         case kModeJustEntered: case kModeIs: return mode("h50") ? "" : "h50 (a mode)";
         case kPlayerSurface:  // no gameobject filter: the app has no contact object
@@ -547,7 +583,7 @@ std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& a) 
         case kAngerAdd: case kTurnToPlayer:
             return has("f10") ? "" : "f10";
         case kMoveParam: return has("i08") ? "" : "i08";
-        case kSetFlag: return flag("i08") ? "" : "i08 (a flag < 512)";
+        case kSetFlag: return flag("i08") ? "" : "i08 (a flag < kScrFlags)";
         default: return "";
     }
 }

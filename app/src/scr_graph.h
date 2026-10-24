@@ -24,6 +24,10 @@
 // predicates and action kinds are not here: a ScrRegistry (filled per boss, Task 5)
 // supplies them, and loading fails on any fn it does not know (never a silent skip).
 
+// The game flags game_flag/set_flag index (S13 Task 14: KIRIN's 587/588, POSEIDON's 619). Guess: the
+// game's flag array is not decoded; 1024 holds every index the 16 exports use.
+inline constexpr size_t kScrFlags = 1024;
+
 // The `sub` predicate (data 0x832610): the evaluator itself evaluates the
 // condition its h50 slot names, so no registry needs to carry it.
 inline constexpr uint32_t kScrSubFn = 0x832610;
@@ -33,7 +37,7 @@ inline constexpr uint32_t kScrSubFn = 0x832610;
 struct ScrArg {
     std::string slot;
     bool null = false;   // a null handle
-    double num = 0.0;    // a number, a bool, or a "0x..." hex string
+    double num = 0.0;    // a number, a bool, or a "0x..." hex word (64-bit; exact to 2^53)
     std::string text;    // an unresolved handle ("PLAYER:ph_motion_def[604]") or a ref's name
     int clip = -1;       // {motion, name, clip} -> index in the loader's clipNames
     int mode = -1;       // {mode, name} -> mode id
@@ -95,6 +99,9 @@ struct ScrLocomotion {
     bool track = false;      // +08: tracking
     std::string judge;       // +78 handle, "" when null
     float p60 = 0.0f, p64 = 0.0f, p68 = 0.0f, p6c = 0.0f, p70 = 0.0f, p74 = 0.0f, p98 = 0.0f, p9c = 0.0f;
+    // The `judge` volume's MOVE_BACK sector (radius, half width in degrees), not exported: bound from the
+    // events sidecar (scr_move_back_bind, S13 Task 14). 0: unbound, the library's Gaius sector.
+    float backRadius = 0.0f, backHalfDeg = 0.0f;
 };
 
 struct ScrMode {
@@ -151,6 +158,7 @@ struct ScrMotionEdge {
     int ref = -1;  // clip index, -1 when null or absent
     bool speed = false;
     float blendOut = 0.0f;
+    int fromRef = -2;  // the `from` motion-def's +0x98 clip (S13 Task 14): -1 null, -2 absent (any)
 };
 
 // One control-def record (R2: the 0x68-byte records up to opcode 1, docs/notes/s12-recon.md).
@@ -241,7 +249,7 @@ struct ScrWorld {
     float hp = 1.0f;
     float hpMax = 1.0f;             // S13: hp_pct_* read 100·hp/hpMax
 
-    std::bitset<512> flags;
+    std::bitset<kScrFlags> flags;
 
     // Gaius (S12 Task 5, scr_predicates.h). His root on his ground and his facing in
     // the app convention (forward = (sin yaw, 0, cos yaw); scr_world_relate derives
@@ -303,7 +311,7 @@ struct ScrRuntime {
 
     uint32_t bossBits = 0;                // the boss-local work word (Gaius: W'+0x4c80)
     float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88
-    std::bitset<512> flags;               // flags the graph sets (set_flag)
+    std::bitset<kScrFlags> flags;         // flags the graph sets (set_flag)
     int controlMode = -1;                 // the control-mode scr_control_clip moved to
     int controlEdge = -1;                 // the motionGraph edge it took (p30/p34: its blend data)
     float anger = 0.0f;                   // S13: the anger model's value (root.anger; FUN_0082aef0)

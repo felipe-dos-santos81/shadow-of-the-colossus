@@ -27,6 +27,9 @@ struct AddEdge {
     int from, to, ref;
     float p30, p34;
     bool speed;
+    // The from motion-def's reference clip (-1 none): a from-row matches a layer playing `from` over this ref,
+    // since two motion-defs can play one clip (KIRIN's neck dummy vs swing start). -2: any ref. S13 Task 14.
+    int fromRef = -2;
 };
 
 // base ← slerp(I, cur·ref⁻¹, w)·base, t ← base + w·(cur_t − ref_t); scale untouched. S13 Task 6.

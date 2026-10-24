@@ -52,6 +52,11 @@ void scr_slowleg(ScrRuntime& runtime, const ScrWorld& world, const Vec3& goal, b
 // whose `attain` the sidecar does not carry that way.
 bool scr_attack_attain(ScrGraph& graph, const std::vector<EventsVolume>& judgeDefaults, std::string& error);
 
+// Binds every mode's MOVE_BACK sector (ScrLocomotion::backRadius/backHalfDeg) from its slowstatus judge (+78)
+// volume in the sidecar's judge defaults: radius size.x, half width angle / 2 (data; the centre offset is not
+// read, as the library's Gaius sector). False with `error` naming a judge the sidecar lacks. S13 Task 14.
+bool scr_move_back_bind(ScrGraph& graph, const std::vector<EventsVolume>& judgeDefaults, std::string& error);
+
 // What a library handler reads that `args` lacks ("" when complete or `fn` is not the
 // library's): a boss's check walks its graph with it, since the handlers read their slots unchecked.
 std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& args);
