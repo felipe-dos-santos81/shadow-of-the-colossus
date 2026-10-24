@@ -1,0 +1,137 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/arena_04.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s13-e2e
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=72 vertices=429943 materials=72 textures=78
+s7-load stage=arena instances=2 meshes=72 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=kirin_a_stand joints=38 procedural=0 t=0.000
+s13e2e-load stage=arena encounter=kirin meshes=72 ground=422x312 layers=64 entity=1122.00,53.76,147.00 yaw=-93.04 spawn=984.00,52.50,142.00 return=0 graph=KIRIN modes=15 edges=314 add_edges=74 routes=5 gps=11 nodes=52 terrain=5965 boss_ground=706 start=Kirin_withdrawal_return_mode clip=kirin_a_stand ms=<masked>
+s2-anim clip=player_a_walk joints=348 procedural=0 t=0.000
+s13e2e-mode from=none to=Kirin_withdrawal_return_mode clip=kirin_a_stand at=0.0
+s13e2e-mode from=Kirin_withdrawal_return_mode to=Kirin_route_patrol clip=kirin_a_stand at=0.0
+s13e2e-mode from=Kirin_route_patrol to=Kirin_Normal_attack_mode clip=kirin_a_stand at=18.7
+s13e2e-stomp clip=kirin_a_atack_leg_l_a mode=Kirin_Normal_attack_mode dist=9.4 at=33.3
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s13e2e-dodge clip=kirin_a_atack_leg_l_a rows=0 off_line=14.60 nearest=9.47 player_hp=100 end_clip=kirin_a_stand at=38.7
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_underpass_GP_mode clip=kirin_a_turn_l at=67.7
+s13e2e-route event=pick route=4 gp=-1 kind=8 mode=Kirin_underpass_GP_mode at=67.7
+s13e2e-route event=pick route=4 gp=0 kind=8 mode=Kirin_underpass_GP_mode at=67.7
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s13e2e-hide class=7 at=971.3,52.2,120.4 mode=Kirin_underpass_GP_mode her_dist=35.4 t=67.9
+s13e2e-route event=arrive route=4 gp=0 kind=8 mode=Kirin_underpass_GP_mode arrived=76.7 at=76.7
+s13e2e-mode from=Kirin_underpass_GP_mode to=Kirin_underpass_included_peeping_(depth)_mode clip=kirin_a_walk at=76.8
+s13e2e-peep mode=Kirin_underpass_included_peeping_(depth)_mode route=4 gp=0 ground=0x400000 arrived=76.7 clip=kirin_a_watch_start her=974.4,53.3,126.3 yaw=-67.6 at=83.2
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s13e2e-climb band=tail t=0.00 stamina=100.0 clip=kirin_a_watch_loop layers=none at=118.6
+s13e2e-entry kind=tail band=tail clip=kirin_a_watch_loop frame=47 window=0..-1 mode=Kirin_underpass_included_peeping_(depth)_mode retries=0 player_hp=100 at=118.6
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_underpass_included_peeping_(depth)_mode to=Kirin_parent_mode clip=kirin_a_watch_loop at=118.7
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s13e2e-climb band=back t=0.00 stamina=85.6 clip=kirin_a_refuse_tail layers=none at=122.4
+s13e2e-climb band=withers t=0.00 stamina=99.7 clip=kirin_a_refuse_tail layers=none at=124.1
+s13e2e-climb band=neck_low t=0.00 stamina=99.3 clip=kirin_a_refuse_tail layers=none at=125.6
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s13e2e-shake_hung clip=kirin_a_refuse_tail band=neck_low drain=20.0 start=99.3 end=69.7 loss=29.5 seconds=1.15 ended=grip at=126.7
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_refuse_tail at=126.8
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_lose_sight_mode clip=kirin_a_refuse_tail at=126.8
+s13e2e-climb band=withers t=0.36 stamina=69.7 clip=kirin_a_refuse_tail layers=kirin_a_add_insight_dummy at=126.8
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_lose_sight_mode to=Kirin_parent_mode clip=kirin_a_refuse_tail at=126.8
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s13e2e-climb band=neck_low t=0.00 stamina=99.9 clip=kirin_a_refuse_tail layers=kirin_a_add_insight_dummy,kirin_a_seach at=128.7
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_walk_angry_start at=131.3
+s13e2e-climb band=withers t=0.75 stamina=86.1 clip=kirin_a_walk_angry_start layers=kirin_a_add_neck_down_1_start,kirin_a_seach,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=131.3
+s13e2e-neck stage=1 strikes=1 mode=Kirin_Normal_attack_mode layers=kirin_a_add_neck_down_1_start,kirin_a_seach,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy flags=1,0 at=131.3
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_parent_mode clip=kirin_a_walk_angry_start at=131.4
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s13e2e-climb band=neck_low t=0.00 stamina=99.9 clip=kirin_a_walk_angry_start layers=kirin_a_add_neck_down_1_start,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=132.1
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_walk_angry_start at=136.0
+s13e2e-climb band=withers t=0.73 stamina=80.7 clip=kirin_a_walk_angry_start layers=kirin_a_add_neck_down_2_start,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=136.0
+s13e2e-neck stage=2 strikes=2 mode=Kirin_Normal_attack_mode layers=kirin_a_add_neck_down_2_start,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy flags=1,1 at=136.0
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_parent_mode clip=kirin_a_walk_angry_start at=136.0
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s13e2e-climb band=neck_low t=0.00 stamina=90.3 clip=kirin_a_walk_angry_start layers=kirin_a_add_neck_down_2_start,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=136.4
+s13e2e-climb band=neck_high t=0.00 stamina=83.4 clip=kirin_a_stand layers=kirin_a_add_neck_down_2_loop at=138.2
+s13e2e-climb band=head t=0.00 stamina=100.0 clip=kirin_a_stand layers=kirin_a_add_neck_down_2_loop at=139.2
+s13e2e-route_climb bands=tail,back,withers,neck_low,withers,neck_low,withers,neck_low,withers,neck_low,neck_high,head stamina=100.0 layers=kirin_a_add_neck_down_2_loop at=139.2
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-ground_handoff from=0x400000 to=0x0 her=958.7,51.2,132.8 yaw=-67.6 mode=Kirin_parent_mode clip=kirin_a_walk_angry_loop rider=head at=143.1
+s13e2e-shake survived=1 clip=kirin_a_add_neck_down_2_refuse band=head drain=22.9 start=100.0 low=99.6 end=100.0 loss=0.0 at=144.3
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s13e2e-strike weakpoint=weakpoint_01_int damage=34 health=126 killed=0 at=145.4
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_walk at=145.5
+s13e2e-climb band=neck_high t=0.76 stamina=86.6 clip=kirin_a_walk layers=kirin_a_add_neck_down_2_refuse,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=145.5
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_parent_mode clip=kirin_a_walk at=145.5
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s13e2e-climb band=head t=0.00 stamina=87.1 clip=kirin_a_walk_end layers=kirin_a_add_neck_down_2_refuse,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=145.7
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s13e2e-strike weakpoint=weakpoint_01_int damage=34 health=92 killed=0 at=149.1
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_walk_angry_start at=149.1
+s13e2e-climb band=head t=1.00 stamina=92.7 clip=kirin_a_walk_angry_start layers=kirin_a_add_neck_down_2_loop_low,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=149.1
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_parent_mode clip=kirin_a_walk_angry_start at=149.1
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s13e2e-strike weakpoint=weakpoint_01_int damage=34 health=58 killed=0 at=150.0
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_walk_angry_start at=150.0
+s13e2e-climb band=head t=0.76 stamina=85.3 clip=kirin_a_walk_angry_start layers=kirin_a_add_neck_down_2_loop_low,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=150.1
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_parent_mode clip=kirin_a_walk_angry_start at=150.1
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s13e2e-strike weakpoint=weakpoint_01_int damage=34 health=24 killed=0 at=151.0
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Kirin_Normal_attack_mode clip=kirin_a_walk_angry_end at=151.0
+s13e2e-climb band=head t=0.66 stamina=78.0 clip=kirin_a_walk_angry_end layers=kirin_a_add_neck_down_2_loop_low,kirin_a_add_dmg_head_min,kirin_a_add_insight_dummy at=151.0
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_Normal_attack_mode to=Kirin_parent_mode clip=kirin_a_walk_angry_end at=151.0
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s13e2e-strike weakpoint=weakpoint_01_int damage=24 health=0 killed=1 at=152.0
+s13e2e-sigil target=head strikes=5 spent=160 health=0 at=152.0
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s13e2e-mode from=Kirin_parent_mode to=Giraffe_death clip=kirin_a_death at=152.0
+s13e2e-death phase=Motion total=0.000 mode=Giraffe_death graph_clip=kirin_a_death clip=kirin_a_death lift=9.86
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s13e2e-death phase=Collapse total=7.333 mode=Giraffe_death graph_clip=kirin_a_death clip=kirin_a_death lift=2.44
+s13e2e-death phase=Done total=8.000 mode=Giraffe_death graph_clip=kirin_a_death clip=kirin_a_death lift=2.44
+s13e2e-corpse live_body=1 clip=kirin_a_death_loop held=1 lift=2.44 moved=0.00 player=grounded return=Idle
+s13e2e-mode from=Giraffe_death to=none clip=kirin_a_stand at=160.0
+s13e2e-route event=pick route=-1 gp=-1 kind=-1 mode=none at=160.0
+s13e2e-reset health=160 defeated=0 mode=Kirin_withdrawal_return_mode clip=kirin_a_stand at_base=1 layers=none player_hp=100 pmode=grounded death=Idle
+s13e2e-coverage boss=KIRIN preds=29/2/0 acts=19/4/0 ops=29/0/0 kinds=8/0/0 total=85/6/0
+s13e2e-done frames=9598 seconds=160.0
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3

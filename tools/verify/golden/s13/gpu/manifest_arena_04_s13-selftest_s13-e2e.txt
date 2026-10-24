@@ -1,0 +1,2 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/arena_04.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s13-selftest --s13-e2e
+sotc-viewer: --s13-selftest/--s13-e2e run alone in the --manifest arena: no other selftest, e2e, capture, --entity-time or --stage
