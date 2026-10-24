@@ -44,7 +44,8 @@ void additive_request(AddLayers& layers, const std::vector<AddEdge>& edges, std:
 // end holds its last frame for that step (Ended) and is cut on the next (blend-out 0). S13 Task 6.
 void additive_step(AddLayers& layers, const std::vector<float>& clipSeconds, float dt);
 
-// Whether clip `clip` plays in any layer. S13 Task 6.
+// Whether clip `clip` plays in any layer. S13 Task 6. By clip, not motion-def (the game's FUN_006357f0 compares
+// defs): two defs of one clip read alike — a labelled deviation (S13 Task 14).
 bool additive_playing(const AddLayers& layers, int clip);
 
 // The pose path's layer pass: every non-free layer's `clip` at its frame, over its `ref` (else the

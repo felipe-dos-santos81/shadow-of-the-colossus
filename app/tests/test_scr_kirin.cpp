@@ -481,6 +481,19 @@ TEST_CASE("MOVE_BACK: her KIRIN_BACK sector (20 m, 80°) from the sidecar, not G
     const Kirin& k = kirin();
     CHECK(k.graph.modes[6].locomotion.backRadius == doctest::Approx(20.0f));
     CHECK(k.graph.modes[6].locomotion.backHalfDeg == doctest::Approx(40.0f).epsilon(1e-3));
+    // A volume not yawed 180° (or not on the skelton) is not read as a MOVE_BACK sector.
+    for (const bool yawed : {false, true}) {
+        std::vector<EventsVolume> judges = sidecar().judgeDefaults;
+        for (EventsVolume& v : judges) {
+            if (v.name != "KIRIN_BACK") continue;
+            if (yawed) v.parent.kind = EventsParent::Bone;
+            else v.keys[0].quat = Quat{0.0f, 0.0f, 0.0f, 1.0f};
+        }
+        ScrGraph g = k.graph;
+        std::string error;
+        CHECK_FALSE(scr_move_back_bind(g, judges, error));
+        CHECK(error.find("KIRIN_BACK") != std::string::npos);
+    }
     Run r(k);
     to_attack(r);
     r.player(0.0f, -5.0f);  // the default row's attain point lands ~15 m behind her: inside 20 m

@@ -1,7 +1,6 @@
 #include "scr_predicates.h"
 
 #include <algorithm>
-#include <cstdio>
 
 #include "scr_cdef.h"
 
@@ -107,58 +106,9 @@ ScrRegistry scr_registry_knight() {
 }
 
 bool scr_knight_check(const ScrGraph& graph, const std::vector<std::string>& judgeNames, std::string& error) {
-    const auto fn_text = [](uint32_t fn) {
-        char s[16];
-        std::snprintf(s, sizeof s, "0x%x", fn);
-        return std::string(s);
-    };
-    for (size_t i = 0; i < graph.controlModes.size(); ++i) {
-        for (const ScrAssign& row : graph.controlModes[i].assign) {
-            if (row.layer == "base" && graph.controlDefs.find(row.when) == graph.controlDefs.end()) {
-                error = "control_mode " + std::to_string(i) + ": control-def not exported: " + row.when;
-                return false;
-            }
-        }
-    }
-    for (const ScrMode& m : graph.modes) {
-        if (!m.locomotion.attack.empty() && graph.attackdata.find(m.locomotion.attack) == graph.attackdata.end()) {
-            error = "mode " + std::to_string(m.id) + ": attackdata not exported: " + m.locomotion.attack;
-            return false;
-        }
-    }
-    for (const auto& [key, rows] : graph.attackdata) {
-        for (const ScrAttackRow& row : rows) {
-            if (row.motion < 0) {
-                error = key + ": an attackdata row has no motion";
-                return false;
-            }
-            for (const std::string* name : {&row.fix, &row.atk, &row.attain}) {
-                if (std::find(judgeNames.begin(), judgeNames.end(), *name) == judgeNames.end()) {
-                    error = key + ": attackdata judge volume not in the sidecar: " + *name;
-                    return false;
-                }
-            }
-        }
-    }
-    for (const ScrCondition& c : graph.conditions) {
-        for (const ScrClause& cl : c.clauses) {
-            const std::string miss = missing_args(cl.fn, cl.args);
-            if (!miss.empty()) {
-                error = c.key + ": " + cl.pred + " (" + fn_text(cl.fn) + ") needs " + miss;
-                return false;
-            }
-        }
-    }
-    for (const ScrActionList& l : graph.actions) {
-        for (const ScrAction& a : l.records) {
-            const std::string miss = missing_args(a.fn, a.args);
-            if (!miss.empty()) {
-                error = l.key + ": " + a.act + " (" + fn_text(a.fn) + ") needs " + miss;
-                return false;
-            }
-        }
-    }
-    return true;
+    ScrCheckRules rules;  // base rows only, every FIX/ATK/ATTAIN named; his glue binds ATTAIN after the check
+    rules.missingArgs = missing_args;
+    return scr_check_graph(graph, judgeNames, rules, error);
 }
 
 int scr_clip(const ScrGraph& graph, const std::string& name) {

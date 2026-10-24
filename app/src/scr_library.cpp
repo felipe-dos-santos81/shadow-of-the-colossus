@@ -535,9 +535,11 @@ bool scr_move_back_bind(ScrGraph& graph, const std::vector<EventsVolume>& judgeD
             open == std::string::npos ? l.judge : l.judge.substr(open + 1, l.judge.size() - open - 2);
         const auto it = std::find_if(judgeDefaults.begin(), judgeDefaults.end(),
                                      [&](const EventsVolume& v) { return v.name == name; });
-        if (it == judgeDefaults.end() || it->keys.size() != 1 || it->keys[0].f != -1) {
+        // The sector is read as a skelton cylinder yawed 180° (behind him), as KNIGHT_MOVE_BACK and KIRIN_BACK.
+        if (it == judgeDefaults.end() || it->parent.kind != EventsParent::Skelton || it->keys.size() != 1 ||
+            it->keys[0].f != -1 || std::fabs(it->keys[0].quat.y) < 0.999f) {
             error = "mode " + std::to_string(m.id) + ": MOVE_BACK judge '" + name +
-                    "' is not a static judge default of the sidecar";
+                    "' is not a static skelton judge default yawed 180° in the sidecar";
             return false;
         }
         l.backRadius = it->keys[0].size.x;               // data: the cylinder's radius
@@ -586,6 +588,71 @@ std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& a) 
         case kSetFlag: return flag("i08") ? "" : "i08 (a flag < kScrFlags)";
         default: return "";
     }
+}
+
+bool scr_check_graph(const ScrGraph& graph, const std::vector<std::string>& judgeNames, const ScrCheckRules& rules,
+                     std::string& error) {
+    const auto known = [&](const std::string& name) {
+        return std::find(judgeNames.begin(), judgeNames.end(), name) != judgeNames.end();
+    };
+    const auto fn_text = [](uint32_t fn) {
+        char s[16];
+        std::snprintf(s, sizeof s, "0x%x", fn);
+        return std::string(s);
+    };
+    for (size_t i = 0; i < graph.controlModes.size(); ++i) {
+        for (const ScrAssign& row : graph.controlModes[i].assign) {
+            const bool read = rules.additiveRows || row.layer == "base";
+            if (read && graph.controlDefs.find(row.when) == graph.controlDefs.end()) {
+                error = "control_mode " + std::to_string(i) + ": control-def not exported: " + row.when;
+                return false;
+            }
+        }
+    }
+    for (const ScrMode& m : graph.modes) {
+        if (!m.locomotion.attack.empty() && graph.attackdata.find(m.locomotion.attack) == graph.attackdata.end()) {
+            error = "mode " + std::to_string(m.id) + ": attackdata not exported: " + m.locomotion.attack;
+            return false;
+        }
+    }
+    for (const auto& [key, rows] : graph.attackdata) {
+        for (const ScrAttackRow& row : rows) {
+            if (row.motion < 0) {
+                error = key + ": an attackdata row has no motion";
+                return false;
+            }
+            for (const std::string* name : {&row.fix, &row.atk, &row.attain, &row.altAtk}) {
+                const bool optional = rules.optionalJudges || name == &row.altAtk;
+                if (!(optional && name->empty()) && !known(*name)) {
+                    error = key + ": attackdata judge volume not in the sidecar: " + *name;
+                    return false;
+                }
+            }
+            if (rules.boundAttain && !row.attain.empty() && !(row.attainR > 0.0f)) {
+                error = key + ": the ATTAIN cylinder of " + row.attain + " is unbound (scr_attack_attain)";
+                return false;
+            }
+        }
+    }
+    for (const ScrCondition& c : graph.conditions) {
+        for (const ScrClause& cl : c.clauses) {
+            const std::string miss = rules.missingArgs(cl.fn, cl.args);
+            if (!miss.empty()) {
+                error = c.key + ": " + cl.pred + " (" + fn_text(cl.fn) + ") needs " + miss;
+                return false;
+            }
+        }
+    }
+    for (const ScrActionList& l : graph.actions) {
+        for (const ScrAction& a : l.records) {
+            const std::string miss = rules.missingArgs(a.fn, a.args);
+            if (!miss.empty()) {
+                error = l.key + ": " + a.act + " (" + fn_text(a.fn) + ") needs " + miss;
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void scr_world_relate(ScrWorld& w) {

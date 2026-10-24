@@ -37,7 +37,7 @@ inline constexpr uint32_t kScrSubFn = 0x832610;
 struct ScrArg {
     std::string slot;
     bool null = false;   // a null handle
-    double num = 0.0;    // a number, a bool, or a "0x..." hex word (64-bit; exact to 2^53)
+    double num = 0.0;    // a number, a bool, or a "0x..." hex word (64-bit; exact while it spans <= 53 bits)
     std::string text;    // an unresolved handle ("PLAYER:ph_motion_def[604]") or a ref's name
     int clip = -1;       // {motion, name, clip} -> index in the loader's clipNames
     int mode = -1;       // {mode, name} -> mode id
@@ -265,6 +265,8 @@ struct ScrWorld {
     const RouteGraph* routes = nullptr;  // S13: the boss's route graph; null without one
     // S13: true when clip `clip` plays in any of the boss's layers (op 0x56 / boss_motion_in_layers);
     // null: the base motion only.
+    // Deviation (labelled, S13 Task 14): by clip, where the game tests motion-def identity (FUN_006357f0); two defs
+    // of one clip (KIRIN's neck dummy kirin[65] and swing start kirin[66]) read alike.
     std::function<bool(int clip)> bossLayerPlaying;
     // True when the player's point is inside the judge volume `name` (ruling R-B: the
     // app binds events_player_in_judge). Null: never inside.
@@ -310,7 +312,7 @@ struct ScrRuntime {
     float timeInRow = 0.0f, timeSinceAttack = 0.0f, cooldown = 0.0f;
 
     uint32_t bossBits = 0;                // the boss-local work word (Gaius: W'+0x4c80)
-    float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88
+    float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88 (Gaius's floats; Phaedra's +0x4c88 is a byte: bossBits)
     std::bitset<kScrFlags> flags;         // flags the graph sets (set_flag)
     int controlMode = -1;                 // the control-mode scr_control_clip moved to
     int controlEdge = -1;                 // the motionGraph edge it took (p30/p34: its blend data)

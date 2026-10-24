@@ -54,12 +54,29 @@ bool scr_attack_attain(ScrGraph& graph, const std::vector<EventsVolume>& judgeDe
 
 // Binds every mode's MOVE_BACK sector (ScrLocomotion::backRadius/backHalfDeg) from its slowstatus judge (+78)
 // volume in the sidecar's judge defaults: radius size.x, half width angle / 2 (data; the centre offset is not
-// read, as the library's Gaius sector). False with `error` naming a judge the sidecar lacks. S13 Task 14.
+// read, as the library's Gaius sector). False with `error` naming a judge the sidecar lacks or does not carry
+// as a static skelton volume yawed 180° (the sector behind him). S13 Task 14.
 bool scr_move_back_bind(ScrGraph& graph, const std::vector<EventsVolume>& judgeDefaults, std::string& error);
 
 // What a library handler reads that `args` lacks ("" when complete or `fn` is not the
 // library's): a boss's check walks its graph with it, since the handlers read their slots unchecked.
 std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& args);
+
+// What a boss's load-time check varies in the shared walk (scr_check_graph).
+struct ScrCheckRules {
+    bool additiveRows = false;    // the additive control-assign rows' control-defs too (a boss that plays the layer)
+    bool optionalJudges = false;  // an empty attackdata FIX/ATK/ATTAIN name is allowed (else it must be a sidecar name)
+    bool boundAttain = false;     // a row naming an ATTAIN volume must have its cylinder bound (scr_attack_attain ran)
+    // The argument slots the boss's handlers read ("" when complete): the library's plus his own.
+    std::string (*missingArgs)(uint32_t fn, const std::vector<ScrArg>& args) = scr_library_missing_args;
+};
+
+// The checks every boss's load-time check shares (S13 Task 14: scr_knight_check, scr_kirin_check): each
+// control-assign row's control-def is exported (base rows; additive too per `rules`), each mode's attackdata
+// handle is an exported table, each row has a motion and its judge volumes are in `judgeNames` (an ALT ATK when
+// named), and every clause and action record carries the slots its handler reads. False with `error` naming it.
+bool scr_check_graph(const ScrGraph& graph, const std::vector<std::string>& judgeNames, const ScrCheckRules& rules,
+                     std::string& error);
 
 // Fills distanceHorizontal, distance3d and bearingDeg (+ = his left) from the boss's and the
 // player's positions and his yaw.

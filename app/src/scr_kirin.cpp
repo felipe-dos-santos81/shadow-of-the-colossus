@@ -1,7 +1,6 @@
 #include "scr_kirin.h"
 
 #include <algorithm>
-#include <cstdio>
 
 #include "scr_cdef.h"
 #include "scr_library.h"
@@ -19,8 +18,8 @@ enum : uint32_t {
     kRockfallCave = 0x6fccf0, kRockfallHill = 0x6fd5a0, kProxForce = 0x6fc8a0, kProxClear = 0x6fc8c0,
 };
 
-// W'+0x4c88, the rockfall feed's arm byte (binary): bit 0 of the boss-local word here. The timer
-// W'+0x4c84 is bossTimer[0].
+// W'+0x4c88, the rockfall feed's arm byte (binary): bit 0 of bossBits here, not bossTimer[1] (Gaius's
+// +0x4c88 is a float; hers a byte). The timer W'+0x4c84 is bossTimer[0].
 constexpr uint32_t kRockfallArmed = 1u;
 
 float argf(const std::vector<ScrArg>& args, const char* slot) {
@@ -66,12 +65,6 @@ std::string judge_name(const std::string& handle) {
     return open == std::string::npos ? handle : handle.substr(open + 1, handle.size() - open - 2);
 }
 
-std::string hex(uint32_t fn) {
-    char s[16];
-    std::snprintf(s, sizeof s, "0x%x", fn);
-    return s;
-}
-
 }  // namespace
 
 ScrRegistry scr_registry_kirin() {
@@ -93,17 +86,12 @@ ScrRegistry scr_registry_kirin() {
 
 bool scr_kirin_check(const ScrGraph& graph, const RouteGraph* routes, const std::vector<std::string>& judgeNames,
                      std::string& error) {
-    const auto known = [&](const std::string& name) {
-        return std::find(judgeNames.begin(), judgeNames.end(), name) != judgeNames.end();
-    };
-    for (size_t i = 0; i < graph.controlModes.size(); ++i) {
-        for (const ScrAssign& row : graph.controlModes[i].assign) {  // base and additive: scr_cdef_eval reads both
-            if (!row.when.empty() && graph.controlDefs.find(row.when) == graph.controlDefs.end()) {
-                error = "control_mode " + std::to_string(i) + ": control-def not exported: " + row.when;
-                return false;
-            }
-        }
-    }
+    ScrCheckRules rules;
+    rules.additiveRows = true;    // she plays the additive layer: its rows' control-defs are read too
+    rules.optionalJudges = true;  // her exported rows name every volume; an empty one is never inside
+    rules.boundAttain = true;     // scr_attack_attain runs before this check (scr_kirin.h)
+    rules.missingArgs = missing_args;
+    if (!scr_check_graph(graph, judgeNames, rules, error)) return false;
     for (const ScrMode& m : graph.modes) {
         const ScrLocomotion& l = m.locomotion;
         const std::string at = "mode " + std::to_string(m.id) + ": ";
@@ -111,54 +99,14 @@ bool scr_kirin_check(const ScrGraph& graph, const RouteGraph* routes, const std:
             error = at + "locomotion kind " + std::to_string(l.kind) + " needs a route graph";
             return false;
         }
-        if (!l.attack.empty() && graph.attackdata.find(l.attack) == graph.attackdata.end()) {
-            error = at + "attackdata not exported: " + l.attack;
-            return false;
-        }
         if (l.judge.empty()) continue;
-        if (!known(judge_name(l.judge))) {
+        if (std::find(judgeNames.begin(), judgeNames.end(), judge_name(l.judge)) == judgeNames.end()) {
             error = at + "judge volume not in the sidecar: " + judge_name(l.judge);
             return false;
         }
         if (!(l.backRadius > 0.0f)) {
             error = at + "the MOVE_BACK sector of " + judge_name(l.judge) + " is unbound (scr_move_back_bind)";
             return false;
-        }
-    }
-    for (const auto& [key, rows] : graph.attackdata) {
-        for (const ScrAttackRow& row : rows) {
-            if (row.motion < 0) {
-                error = key + ": an attackdata row has no motion";
-                return false;
-            }
-            for (const std::string* name : {&row.fix, &row.atk, &row.altAtk, &row.attain}) {
-                if (!name->empty() && !known(*name)) {
-                    error = key + ": attackdata judge volume not in the sidecar: " + *name;
-                    return false;
-                }
-            }
-            if (!row.attain.empty() && !(row.attainR > 0.0f)) {
-                error = key + ": the ATTAIN cylinder of " + row.attain + " is unbound (scr_attack_attain)";
-                return false;
-            }
-        }
-    }
-    for (const ScrCondition& c : graph.conditions) {
-        for (const ScrClause& cl : c.clauses) {
-            const std::string miss = missing_args(cl.fn, cl.args);
-            if (!miss.empty()) {
-                error = c.key + ": " + cl.pred + " (" + hex(cl.fn) + ") needs " + miss;
-                return false;
-            }
-        }
-    }
-    for (const ScrActionList& l : graph.actions) {
-        for (const ScrAction& a : l.records) {
-            const std::string miss = missing_args(a.fn, a.args);
-            if (!miss.empty()) {
-                error = l.key + ": " + a.act + " (" + hex(a.fn) + ") needs " + miss;
-                return false;
-            }
         }
     }
     return true;

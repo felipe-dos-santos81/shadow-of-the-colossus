@@ -34,7 +34,7 @@ bool result(const ScrCdefRecord& r, const std::vector<int>& requested, const Scr
         case 0x36: return w.bossControlMode == bracket(r.handle.text);  // sub+0x9c8: his own table
         case 0x38: return std::find(requested.begin(), requested.end(), r.handle.ctrl) != requested.end();
         case 0x54: return w.bossMotion == r.handle.clip;
-        case 0x56:  // any layer (FUN_006357f0); without layers the base motion
+        case 0x56:  // any layer (FUN_006357f0; by clip, not motion-def: a labelled deviation); without layers the base
             return w.bossLayerPlaying ? w.bossLayerPlaying(r.handle.clip) : w.bossMotion == r.handle.clip;
         case 0x59: return w.hit && masked(static_cast<uint64_t>(w.hitRegion), r.mask, r.value);
         case 0x5c:  // the hit kind; the argument is the mask word
