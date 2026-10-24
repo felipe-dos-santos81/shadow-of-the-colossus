@@ -94,7 +94,7 @@ ScrRegistry scr_registry_knight();
 
 // The load-time checks the strict loader cannot make (the caller — Task 9 — must call it
 // right after scr_graph_load: the handlers dereference the argument slots it proves): every base control-assign
-// condition is one R2 decoded, every mode's attackdata is a table kAttack carries,
+// condition is exported (scr_cdef_eval reads its records), every mode's attackdata is a table kAttack carries,
 // every row's motion is a clip of the graph, every argument slot the handlers read is
 // present, and every judge volume kAttack names is in `judgeNames` (the sidecar's: an
 // unknown name would answer false at run time — R-B). False with `error` naming it.
@@ -122,7 +122,7 @@ ScrStepOut scr_knight_step(const ScrGraph& graph, const ScrRegistry& registry, S
 
 // The clip the requested controls lead to from the boss's current motion
 // (world.bossMotion) in his control-mode (world.bossControlMode): the control-mode's
-// base rows fire on a requested bit or their control-def (R2), the last firing row
+// base rows fire on a requested bit or their control-def (R2; scr_cdef_eval), the last firing row
 // wins, and its orient's motion-graph edge from the current motion (else an any-motion
 // edge: the null-`from` always table) gives the clip. Additive rows are dropped (§13.7).
 // -1 when nothing changes: no firing row, no edge, or a self-edge (the playing clip keeps

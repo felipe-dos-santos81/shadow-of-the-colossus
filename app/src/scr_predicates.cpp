@@ -4,8 +4,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <string_view>
-#include <unordered_map>
+
+#include "scr_cdef.h"
 
 namespace {
 
@@ -28,7 +28,6 @@ enum : uint32_t {
     kKnightShake = 0x6fe5e0,
 };
 
-constexpr int kCtrlFailure = 6;              // Failure_issue_knight_attack (data, the export)
 constexpr float kSwingSample = 1.0f;         // §13.3 stand-in (authored): sample every 1 m
 constexpr float kSwingRise = 1.0f;           // §13.3 stand-in (authored): a rise > 1.0 m blocks
 constexpr float kTurnDeg = 30.0f;            // §13.1 FALLBACK (R1): turn past ±30°, else walk
@@ -375,59 +374,8 @@ void locomotion(const ScrGraph& g, ScrRuntime& rt, const ScrWorld& w, float dt, 
     }
 }
 
-// --- Control-def conditions of the base control-assign rows (R2 "Values") ---
-
-enum class CDef { False, Mortality, Landing, NoGround, FailLegR, FailLegL, FailSlam };
-
-const std::unordered_map<std::string_view, CDef>& cdefs() {
-    static const std::unordered_map<std::string_view, CDef> table = {
-        {"BOSS_CONTROL:control-def[44]", CDef::Mortality},        // HP <= 0 (op 0x76)
-        {"PLAYER_CONTROL:control-def[2999]", CDef::Landing},      // his root on the ground
-        {"PLAYER_CONTROL:control-def[3151]", CDef::NoGround},     // his root has no ground
-        {"KNIGHT_CONTROL:control-def[20]", CDef::FailLegR},       // failure bit ∧ control-mode 7
-        {"KNIGHT_CONTROL:control-def[23]", CDef::FailLegL},       // failure bit ∧ control-mode 8
-        {"KNIGHT_CONTROL:control-def[26]", CDef::FailSlam},       // failure bit ∧ control-mode 6
-        // Stick X rotations: the AI's stick X is its turn amount, so these fire with the
-        // rows' own Turn bits — false here, the bit fires the row.
-        {"BOSS_CONTROL:control-def[6]", CDef::False}, {"BOSS_CONTROL:control-def[10]", CDef::False},
-        {"BOSS_CONTROL:control-def[14]", CDef::False}, {"BOSS_CONTROL:control-def[18]", CDef::False},
-        // Pad buttons/holds/stick Y and the impossible pair: never true for the AI.
-        {"COMMON_CONTROL:control-def[18]", CDef::False}, {"COMMON_CONTROL:control-def[42]", CDef::False},
-        {"COMMON_CONTROL:control-def[60]", CDef::False}, {"COMMON_CONTROL:control-def[64]", CDef::False},
-        {"COMMON_CONTROL:control-def[70]", CDef::False}, {"COMMON_CONTROL:control-def[123]", CDef::False},
-        {"COMMON_CONTROL:control-def[127]", CDef::False}, {"COMMON_CONTROL:control-def[131]", CDef::False},
-        {"COMMON_CONTROL:control-def[145]", CDef::False},
-        {"KNIGHT_CONTROL:control-def[0]", CDef::False}, {"KNIGHT_CONTROL:control-def[2]", CDef::False},
-        {"KNIGHT_CONTROL:control-def[5]", CDef::False}, {"KNIGHT_CONTROL:control-def[8]", CDef::False},
-        {"KNIGHT_CONTROL:control-def[11]", CDef::False}, {"KNIGHT_CONTROL:control-def[14]", CDef::False},
-        {"KNIGHT_CONTROL:control-def[17]", CDef::False}, {"KNIGHT_CONTROL:control-def[29]", CDef::False},
-        {"KNIGHT_CONTROL:control-def[32]", CDef::False}, {"KNIGHT_CONTROL:control-def[35]", CDef::False},
-        {"KNIGHT_CONTROL:control-def[38]", CDef::False},
-    };
-    return table;
-}
-
-// "BOSS_CONTROL:control-def[44] 'BOSS_MORTALITY_CONDITIONS'" -> "BOSS_CONTROL:control-def[44]"
-std::string_view cdef_key(const std::string& when) {
-    const size_t close = when.find(']');
-    return close == std::string::npos ? std::string_view(when) : std::string_view(when).substr(0, close + 1);
-}
-
 bool requested(const std::vector<int>& ctrls, int bit) {
     return std::find(ctrls.begin(), ctrls.end(), bit) != ctrls.end();
-}
-
-bool cdef_holds(CDef d, const std::vector<int>& ctrls, const ScrWorld& w) {
-    switch (d) {
-        case CDef::Mortality: return !(w.hp > 0.0f);
-        case CDef::Landing: return w.bossOnGround;
-        case CDef::NoGround: return !w.bossOnGround;
-        case CDef::FailLegR: return requested(ctrls, kCtrlFailure) && w.bossControlMode == 7;
-        case CDef::FailLegL: return requested(ctrls, kCtrlFailure) && w.bossControlMode == 8;
-        case CDef::FailSlam: return requested(ctrls, kCtrlFailure) && w.bossControlMode == 6;
-        case CDef::False: return false;
-    }
-    return false;
 }
 
 // What each handler reads, checked once at load: "" when the record carries it.
@@ -500,8 +448,8 @@ bool scr_knight_check(const ScrGraph& graph, const std::vector<std::string>& jud
     };
     for (size_t i = 0; i < graph.controlModes.size(); ++i) {
         for (const ScrAssign& row : graph.controlModes[i].assign) {
-            if (row.layer == "base" && cdefs().find(cdef_key(row.when)) == cdefs().end()) {
-                error = "control_mode " + std::to_string(i) + ": control-def not decoded: " + row.when;
+            if (row.layer == "base" && graph.controlDefs.find(row.when) == graph.controlDefs.end()) {
+                error = "control_mode " + std::to_string(i) + ": control-def not exported: " + row.when;
                 return false;
             }
         }
@@ -627,8 +575,7 @@ int scr_control_clip(const ScrGraph& graph, ScrRuntime& rt, const std::vector<in
     const ScrAssign* fired = nullptr;
     for (const ScrAssign& row : graph.controlModes[cm].assign) {
         if (row.layer != "base") continue;  // §13.7: no additive layer in S12
-        const auto it = cdefs().find(cdef_key(row.when));  // scr_knight_check proved every base row's known
-        const bool cond = it != cdefs().end() && cdef_holds(it->second, ctrls, world);
+        const bool cond = scr_cdef_eval(graph, row.when, ctrls, world, rt);  // scr_knight_check: all exported
         if ((row.ctrl >= 0 && requested(ctrls, row.ctrl)) || cond) fired = &row;  // the last firing row wins
     }
     if (fired == nullptr) return -1;

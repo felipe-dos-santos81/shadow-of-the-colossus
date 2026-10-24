@@ -344,8 +344,8 @@ struct ScrRegistry {
 };
 
 // Parses `json` into `out`. Fails (false, `error` naming the culprit) on a wrong
-// format tag, a malformed document, an unknown predicate fn or action kind, a mode
-// locomotion kind not in `registry.kinds`, a clip missing from `clipNames` (lower-case
+// format tag, a malformed document, an unknown predicate fn, action kind or control-def
+// opcode (kScrCdefOps), a mode locomotion kind not in `registry.kinds`, a clip missing from `clipNames` (lower-case
 // stems; edge refs and control-def handles included), or a dangling
 // mode/condition/action reference.
 bool scr_graph_load(const std::string& json, const std::vector<std::string>& clipNames,
