@@ -112,18 +112,22 @@ class GraphExport(unittest.TestCase):
                 self.assertIsInstance(g[key], dict, b)
 
     def test_s13_additions_leave_the_s12_export_untouched(self):
+        # The stored file is the S12 export now and the S13 one after the merge promotes it: strip the S13 keys
+        # from both sides (a no-op on S12's), so the pre-S13 keys must agree either way.
+        def strip(g):
+            g = json.loads(json.dumps(g))
+            for key in ("control_defs", "dprelate", "attackdata"): g.pop(key, None)
+            g["root"].pop("kind", None)
+            for m in g["modes"]:
+                for k in SLOW_ADDED:
+                    if m["locomotion"]: m["locomotion"].pop(k, None)
+            for e in g["motion_graph"]:
+                for k in ("ref", "speed", "blend_out"): e.pop(k, None)
+            return g
         self.assertTrue(os.path.isfile(S12_KNIGHT), "%s missing" % S12_KNIGHT)
         with open(S12_KNIGHT) as fh:
             old = json.load(fh)
-        new = json.loads(json.dumps(self.g["KNIGHT"]))
-        for key in ("control_defs", "dprelate", "attackdata"): del new[key]
-        del new["root"]["kind"]
-        for m in new["modes"]:
-            for k in SLOW_ADDED:
-                if m["locomotion"]: del m["locomotion"][k]
-        for e in new["motion_graph"]:
-            for k in ("ref", "speed", "blend_out"): del e[k]
-        self.assertEqual(new, old)
+        self.assertEqual(strip(self.g["KNIGHT"]), strip(old))
 
     def test_kirin(self):
         k = self.g["KIRIN"]
