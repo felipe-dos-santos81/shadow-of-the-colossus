@@ -5,7 +5,7 @@ Read-only on the elf; stdlib only. Layouts are from the decompiled walker FUN_00
 FUN_0082d9f0 and func runner FUN_0082bfb0 (docs/notes/s12-graph-recon.md). Clips are written by name
 (lower-case stem of cp3shadow/anim/<name>.anb), predicates and actions by function address ("832610").
 
-  graph_export.py export BOSS OUT.json [--elf PATH]      BOSS: KNIGHT | MAMMOTH | MINOTOUR_A | ...
+  graph_export.py export BOSS OUT.json [--elf PATH]      BOSS: KNIGHT | MAMMOTH | MINOTOUR_A
 """
 import json, os, sys
 
@@ -180,7 +180,7 @@ def floats_of(r):
 
 def export(boss):
     w = Walk(boss)
-    def args(spec, c, slots):
+    def args(spec, c):
         out = {}
         for k in (spec or {}):
             o = int(k[1:], 16)
@@ -202,7 +202,7 @@ def export(boss):
             spec = sem.get("params")
             if spec is None:   # unread predicate: export every non-default slot raw
                 spec = {k: 1 for k in list(c["i"]) + list(c["fl"]) + [k for k, v in c["q"].items() if v != -1] + list(c["h"])}
-            cl.append({"pred": sem.get("name", "pred_" + c["fn"][2:]), "fn": c["fn"], "expect": bool(c["expect"]), "args": args(spec, b, c)})
+            cl.append({"pred": sem.get("name", "pred_" + c["fn"][2:]), "fn": c["fn"], "expect": bool(c["expect"]), "args": args(spec, b)})
         conds["%s:C%d" % obj] = {"label": run[0]["label"], "op": {1: "and", 2: "or"}.get(run[0]["comb"], "false"), "clauses": cl}
     funcs = {}
     for e, run in w.funcs.items():
@@ -216,7 +216,7 @@ def export(boss):
             b = int(x["at"], 16); a = int(x["fn"], 16); sem = predsem.A.get(a, {})
             spec = sem.get("params")
             if spec is None: spec = {k: 1 for k in list(x["i"]) + list(x["fl"]) + list(x["h"])}
-            lst.append({"act": sem.get("name", "act_" + x["fn"][2:]), "fn": x["fn"], "args": args(spec, b, x)})
+            lst.append({"act": sem.get("name", "act_" + x["fn"][2:]), "fn": x["fn"], "args": args(spec, b)})
         funcs["%s:F%d" % obj] = lst
     modes = []
     for m in w.modes:
@@ -279,13 +279,16 @@ def clip_name(s):
 def main(argv):
     if len(argv) not in (4, 6) or argv[1] != "export" or (len(argv) == 6 and argv[4] != "--elf"):
         sys.exit(__doc__)
-    load(argv[5] if len(argv) == 6 else DEFAULT_ELF)
     if argv[2] not in MOTION_ORIENT:
         sys.exit("graph_export: unknown boss %r (have %s)" % (argv[2], ", ".join(sorted(MOTION_ORIENT))))
+    load(argv[5] if len(argv) == 6 else DEFAULT_ELF)
     out = argv[3]
+    data = json.dumps(export(argv[2]), indent=1)       # compute first: a raising export must not touch OUT
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    with open(out, "w") as fh:
-        json.dump(export(argv[2]), fh, indent=1)
+    tmp = out + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    os.replace(tmp, out)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 """graph_export.py against the real out/re/eboot.elf (fails, never skips, when it or SOTC_GAME_ROOT is missing).
 
+Not wired into make/verify: it needs out/re/eboot.elf and SOTC_GAME_ROOT.
+
 Run: python3 -I tools/re/scr/test_graph_export.py
 """
 import json
@@ -49,6 +51,27 @@ class GraphExport(unittest.TestCase):
         self.assertEqual(k["boss"], "KNIGHT")
         for key in ("root", "modes", "conditions", "actions", "control_modes", "motion_graph"):
             self.assertIn(key, k)
+
+    def test_root_control_modes_actions(self):
+        k = self.g["KNIGHT"]
+        r = k["root"]
+        self.assertEqual((r["start_mode"]["mode"], r["start_mode"]["name"]), (0, "Knight_standby_mode"))
+        self.assertEqual((r["death_mode"]["mode"], r["death_mode"]["name"]), (8, "Knight_death"))
+        self.assertEqual(r["retry_ctrl"]["ctrl"], "Start_Cancel")
+        self.assertTrue(r["death_control_mode"])
+        self.assertTrue(r["callback_actions"] and r["every_frame_actions"])
+        self.assertEqual(len(k["control_modes"]), 11)
+        self.assertEqual(sum(len(c["assign"]) for c in k["control_modes"].values()), 573)   # the last mode has no rows
+        self.assertEqual(len(k["actions"]), 21)
+        self.assertTrue(all(isinstance(a["fn"], str) for lst in k["actions"].values() for a in lst))
+        fns = {c["fn"] for cond in k["conditions"].values() for c in cond["clauses"]}
+        self.assertIn("0x832610", fns)                      # 'sub': a condition nested in another
+
+    def test_bad_boss_fails_before_reading_elf(self):
+        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "graph_export.py"), "export", "NOPE", "/dev/null"],
+                           capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("unknown boss", r.stderr)
 
     def test_retry_start_mode(self):
         r = self.g["KNIGHT"]["root"]["retry_start_mode"]
