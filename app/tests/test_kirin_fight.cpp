@@ -93,6 +93,51 @@ float ground_under(const KirinState& k, Vec3 p) {
     return b.found ? b.y : heightmap_floor(arena_ground(), p, 2.0f);
 }
 
+// One run on the arena: her core reset at her spawn facing the ruins, a scripted player.
+struct Run {
+    Loaded l;
+    KnightCore& c = l.core;
+    KirinState& k = l.k;
+    Vec3 root;
+    ScrWorld w;
+    float maxOff = 0.0f, maxMs = 0.0f, sumMs = 0.0f;
+    int frames = 0;
+    bool outside = false;
+
+    Run() {
+        load(l);
+        const kd::KirinArena& a = kd::kArena;
+        kirin_core_reset(c, k, std::atan2(a.faceX - a.spawnX, a.faceZ - a.spawnZ) / kDegToRad);
+        root = {a.spawnX, a.spawnGroundY, a.spawnZ};
+        root.y = kirin_ground(k, arena_ground(), root);
+        REQUIRE(std::isfinite(root.y));
+    }
+    Run(const Run&) = delete;
+    // The player on the layered floor at `p` (p.y: the layer's reference), the terrain word under him.
+    void stand(Vec3 p) {
+        p.y = heightmap_floor(arena_ground(), p, 2.0f);
+        w.playerPosition = w.playerGroundPosition = p;
+        w.playerGroundAttr = kirin_attr_word(terrain_at(k.terrain, p));
+    }
+    void frame(bool whistle = false, float dt = 1.0f / 30.0f) {
+        knight_world_player(w, whistle, false);
+        const auto t0 = std::chrono::steady_clock::now();
+        kirin_think(c, k, w, arena_ground(), root, dt);
+        const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        maxMs = std::max(maxMs, ms);
+        sumMs += ms;
+        ++frames;
+        outside = outside || !heightmap_in_bounds(arena_ground(), root);
+        maxOff = std::max(maxOff, std::fabs(root.y - ground_under(k, root)));
+    }
+    // The lure: 30 m in front of her on the platform, she senses the player (patrol 3 -> attack 6).
+    void lure() {
+        stand({1092.0f, 53.8f, 146.0f});
+        for (int i = 0; i < 300 && c.rt.current != 6; ++i) frame();
+        REQUIRE(c.rt.current == 6);
+    }
+};
+
 }  // namespace
 
 TEST_CASE("Phaedra loads with her routes snapped to her ground and her rootless clips refused") {
@@ -122,66 +167,97 @@ TEST_CASE("Phaedra loads with her routes snapped to her ground and her rootless 
 }
 
 TEST_CASE("a player in tunnel class 7 whistling brings her to route 4's GP within 60 s, on her ground") {
-    Loaded l;
-    load(l);
-    KnightCore& c = l.core;
-    KirinState& k = l.k;
-    const kd::KirinArena& a = kd::kArena;
-    const float yaw = std::atan2(a.faceX - a.spawnX, a.faceZ - a.spawnZ) / kDegToRad;
-    kirin_core_reset(c, k, yaw);
-    Vec3 root{a.spawnX, a.spawnGroundY, a.spawnZ};
-    root.y = kirin_ground(k, arena_ground(), root);
-    REQUIRE(std::isfinite(root.y));
-
-    ScrWorld w;
-    const auto stand = [&](Vec3 p) {
-        p.y = heightmap_floor(arena_ground(), p, 2.0f);  // p.y: the layer's reference
-        w.playerPosition = w.playerGroundPosition = p;
-        w.playerGroundAttr = kirin_attr_word(terrain_at(k.terrain, p));
-    };
-    float maxOff = 0.0f, maxMs = 0.0f, sumMs = 0.0f;
-    int frames = 0;
-    bool outside = false;
-    const auto frame = [&](bool whistle) {
-        knight_world_player(w, whistle, false);
-        const auto t0 = std::chrono::steady_clock::now();
-        kirin_think(c, k, w, arena_ground(), root, 1.0f / 30.0f);
-        const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        maxMs = std::max(maxMs, ms);
-        sumMs += ms;
-        ++frames;
-        outside = outside || !heightmap_in_bounds(arena_ground(), root);
-        maxOff = std::max(maxOff, std::fabs(root.y - ground_under(k, root)));
-    };
-
-    // The lure: 30 m in front of her on the platform, she senses the player (patrol 3 -> attack 6).
-    stand({1092.0f, 53.8f, 146.0f});
-    for (int i = 0; i < 300 && c.rt.current != 6; ++i) frame(false);
-    REQUIRE(c.rt.current == 6);
-
+    Run r;
+    KnightCore& c = r.c;
+    r.lure();
     // Into the west stair tunnel (class 7), whistling once a second.
-    stand({971.746f, 52.033f, 120.745f});
-    REQUIRE(w.playerGroundAttr == 7ull << 48);
+    r.stand({971.746f, 52.033f, 120.745f});
+    REQUIRE(r.w.playerGroundAttr == 7ull << 48);
     float arrivedAt = -1.0f;
     bool routed = false;
     for (int i = 0; i < 60 * 30 && arrivedAt < 0.0f; ++i) {
-        frame(i % 30 == 0);
+        r.frame(i % 30 == 0);
         routed = routed || (c.rt.current == 10 && c.rt.route.route == 4);
         if (routed && c.rt.route.gp >= 0) {
-            const Vec3 gp = k.routes.gps[static_cast<size_t>(c.rt.route.gp)].pos;
-            if (std::hypot(gp.x - root.x, gp.z - root.z) <= c.rt.arriveRadius) arrivedAt = i / 30.0f;
+            const Vec3 gp = r.k.routes.gps[static_cast<size_t>(c.rt.route.gp)].pos;
+            if (std::hypot(gp.x - r.root.x, gp.z - r.root.z) <= c.rt.arriveRadius) arrivedAt = i / 30.0f;
         }
     }
     MESSAGE("arrived at route 4's GP after " << arrivedAt << " s (mode " << c.rt.current << ", gp " << c.rt.route.gp
-                                             << "); think " << sumMs / static_cast<float>(frames) << " ms mean, "
-                                             << maxMs << " ms max over " << frames << " frames");
+                                             << "); think " << r.sumMs / static_cast<float>(r.frames) << " ms mean, "
+                                             << r.maxMs << " ms max over " << r.frames << " frames");
     CHECK(routed);
     CHECK(arrivedAt >= 0.0f);
     // Arrived (move_done), she peeps: light (11) on the ground, depth (12) on the ruins' boss ground.
-    for (int i = 0; i < 30 && c.rt.current == 10; ++i) frame(false);
+    for (int i = 0; i < 30 && c.rt.current == 10; ++i) r.frame();
     MESSAGE("peeping mode " << c.rt.current << ", her ground word "
-                            << static_cast<unsigned long long>(w.bossGroundAttr));
+                            << static_cast<unsigned long long>(r.w.bossGroundAttr));
     CHECK((c.rt.current == 11 || c.rt.current == 12));
-    CHECK_FALSE(outside);
-    CHECK(maxOff <= 0.1f);
+    CHECK_FALSE(r.outside);
+    CHECK(r.maxOff <= 0.1f);
+}
+
+TEST_CASE("R (the core reset) reopens the hill links patrol closed") {
+    Run r;
+    r.stand({1092.0f, 53.8f, 300.0f});  // out of her sight: she patrols
+    for (int i = 0; i < 30 && r.c.rt.current != 3; ++i) r.frame();
+    REQUIRE(r.c.rt.current == 3);
+    // Patrol's entry (KIRIN:F69, link_set tag 1) closed every tag-1 link (data: links 26-34, ...).
+    const auto closed = [&r](size_t li) {
+        const std::vector<int>& live = r.c.rt.route.linkFlags;
+        const int f = live.size() == r.k.routes.links.size() ? live[li] : r.k.routes.links[li].flags;
+        return (f & 4) != 0;
+    };
+    std::vector<size_t> hill;
+    for (size_t i = 0; i < r.k.routes.links.size(); ++i) {
+        const RouteGraph::Link& l = r.k.routes.links[i];
+        if (l.tags[0] == 1 || l.tags[1] == 1) hill.push_back(i);
+    }
+    REQUIRE_FALSE(hill.empty());
+    for (const size_t li : hill) CHECK(closed(li));
+    kirin_core_reset(r.c, r.k, 0.0f);  // kirin_fight_reset's R runs the same knight_core_reset
+    for (const size_t li : hill) CHECK_FALSE(closed(li));
+}
+
+TEST_CASE("no additive request at dt 0; the same frame at 1/30 s requests the neck-down layer") {
+    Run r;
+    r.lure();
+    const int neck = scr_clip(r.c.graph, "kirin_a_add_neck_down_1_start");
+    REQUIRE(neck >= 0);
+    const auto playing = [&r](int clip) { return additive_playing(r.k.layers, clip); };
+    REQUIRE_FALSE(playing(neck));
+    // A sword hit on the neck trigger (region 0x20): the graph's neck-down rows fire.
+    r.w.hit = true;
+    r.w.hitRegion = 0x20;
+    r.w.hitKind = kd::kTriggerHitKind;
+    const AddLayers before = r.k.layers;
+    r.frame(false, 0.0f);
+    CHECK_FALSE(r.k.orients.empty());  // the add rows fired ...
+    CHECK_FALSE(playing(neck));        // ... and nothing was requested or stepped (the binary returns early)
+    for (size_t i = 0; i < before.slot.size(); ++i) {
+        CHECK(r.k.layers.slot[i].state == before.slot[i].state);
+        CHECK(r.k.layers.slot[i].frame == before.slot[i].frame);
+    }
+    r.frame(false, 1.0f / 30.0f);
+    CHECK_FALSE(r.k.orients.empty());
+    CHECK(playing(neck));
+}
+
+TEST_CASE("the death's root drop: kDeathRootY over the death clip, its end once death_loop holds") {
+    const kirin_root::DeathRoot& d = kd::kDeathRootY;
+    CHECK(kirin_death_lift(false, 0.0f, 7.0f) == doctest::Approx(d.kFrom));
+    CHECK(kirin_death_lift(false, 3.5f, 7.0f) == doctest::Approx((d.kFrom + d.kTo) * 0.5f));
+    CHECK(kirin_death_lift(false, 7.0f, 7.0f) == doctest::Approx(d.kTo));
+    // After the swap death_loop plays at t 0 and never advances: the lift stays at the rest.
+    CHECK(kirin_death_lift(true, 0.0f, 7.0f) == doctest::Approx(d.kTo));
+}
+
+TEST_CASE("the rockfall feed (R-AJ): a stomp feeds while armed, a walk footstep never, capped at 5 s") {
+    CHECK(kirin_rockfall_feed(0.0f, "KIRIN_FOOT_ATK", true) == doctest::Approx(kd::kRockfallFeedSeconds));
+    CHECK(kirin_rockfall_feed(1.0f, "KIRIN_FOOT_ATK_ST", true) == doctest::Approx(1.5f));
+    CHECK(kirin_rockfall_feed(0.0f, "KIRIN_FOOT_ATK", false) == 0.0f);  // disarmed
+    for (const char* walk : {"KIRIN_FOOT", "KIRIN_FOOT_B", "KIRIN_WAIT_FOOT", "KIRIN_DEATH"}) {
+        CHECK(kirin_rockfall_feed(0.0f, walk, true) == 0.0f);
+    }
+    CHECK(kirin_rockfall_feed(4.8f, "KIRIN_FOOT_ATK", true) == doctest::Approx(kd::kRockfallCapSeconds));
 }

@@ -2,10 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 #include <limits>
-#include <sstream>
 #include <string_view>
 
 #include "kirin_root.h"
@@ -16,23 +13,12 @@ namespace kd = encounters::kirin_detail;
 
 namespace {
 
-// A per-frame table at clip time `t` (frame = t · fps), linear between frames, clamped
-// (knight_fight's sampling, on her tables).
-template <typename F>
-auto sample(int frames, float fps, float t, F at) {
-    const float f = std::clamp(std::isfinite(t) ? t * fps : 0.0f, 0.0f, static_cast<float>(frames - 1));
-    const int i = std::min(static_cast<int>(f), frames - 1);
-    const int j = std::min(i + 1, frames - 1);
-    const float u = f - static_cast<float>(i);
-    return at(i) * (1.0f - u) + at(j) * u;
-}
-
 // Her clip's root (x, z) in its clip-start frame at t (kirin_root.h); 0 without a series.
 Vec3 root_at(std::string_view clip, float t) {
     for (const kirin_root::RootSeries& r : kirin_root::kRoots) {
         if (clip != r.clip || r.frames < 1) continue;
-        return {sample(r.frames, r.fps, t, [&r](int k) { return r.xz[k][0]; }), 0.0f,
-                sample(r.frames, r.fps, t, [&r](int k) { return r.xz[k][1]; })};
+        return {knight_sample(r.frames, r.fps, t, [&r](int k) { return r.xz[k][0]; }), 0.0f,
+                knight_sample(r.frames, r.fps, t, [&r](int k) { return r.xz[k][1]; })};
     }
     return {};
 }
@@ -40,17 +26,9 @@ Vec3 root_at(std::string_view clip, float t) {
 // Her turn clip's heading at t (+ = left); 0 for every other clip.
 float turn_at(std::string_view clip, float t) {
     for (const kirin_root::TurnHeading& h : kirin_root::kTurnHeading) {
-        if (clip == h.clip) return sample(h.frames, h.fps, t, [&h](int k) { return h.deg[k]; });
+        if (clip == h.clip) return knight_sample(h.frames, h.fps, t, [&h](int k) { return h.deg[k]; });
     }
     return 0.0f;
-}
-
-std::string read_text(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return {};
-    std::stringstream s;
-    s << in.rdbuf();
-    return s.str();
 }
 
 // Every height of her route graph on her ground (§13.2: the nodes sit 1.3–8.8 m up; a clear
@@ -75,8 +53,8 @@ uint64_t kirin_attr_word(const TerrainHit& hit) {
 float kirin_ground(const KirinState& k, const Heightmap& ground, Vec3 p) {
     const TerrainHit boss = terrain_boss_ground(k.terrain, p);
     if (boss.found) return boss.y;
-    // A hole (the nearest node empty: water, the channel) or the outside is no ground; this also
-    // keeps heightmap_floor off its whole-grid fallback (measured: 13 ms frames).
+    // authored: a hole (the nearest node empty: water, the channel) or the outside is no ground for
+    // her; this also keeps heightmap_floor off its whole-grid fallback (measured: 13 ms frames).
     if (std::isnan(heightmap_node(ground, p))) return std::numeric_limits<float>::quiet_NaN();
     return heightmap_floor(ground, p, kd::kGroundStep);
 }
@@ -190,64 +168,32 @@ bool kirin_fight_load(KirinFight& f, const Scene& scene, std::size_t entityRig, 
                       const std::string& standClip, Vec3 placement, Vec3 playerStart, std::string& why) {
     // kArena vs the composed manifest (the same values live in probe.py STAGES["arena_04"]).
     const kd::KirinArena& a = kd::kArena;
-    if (std::fabs(placement.x - a.spawnX) > 1e-3f || std::fabs(placement.z - a.spawnZ) > 1e-3f ||
-        std::fabs(placement.y - a.spawnGroundY) > 1e-3f) {
-        why = "the manifest places her off kArena's spawn (re-compose arena_04 or fix kirin.h)";
-        return false;
-    }
-    if (std::fabs(playerStart.x - a.playerStartX) > 1e-3f || std::fabs(playerStart.z - a.playerStartZ) > 1e-3f) {
-        why = "the manifest's player start is off kArena's (re-compose arena_04 or fix kirin.h)";
+    if (!knight_check_arena(placement, playerStart, Vec3{a.spawnX, a.spawnGroundY, a.spawnZ}, a.playerStartX,
+                            a.playerStartZ, "arena_04", "kirin.h", why)) {
         return false;
     }
     std::string text[3];
     const std::string paths[3] = {libraryDir + "/behaviour/" + kd::kGraphBoss + ".graph.json",
                                   libraryDir + "/" + kd::kRouteFile, libraryDir + "/" + kd::kTerrainFile};
     for (int i = 0; i < 3; ++i) {
-        text[i] = read_text(paths[i]);
+        text[i] = knight_read_text(paths[i]);
         if (text[i].empty()) {
             why = paths[i] + " is missing or empty (`make behaviour routes terrain` into SOTC_LIB)";
             return false;
         }
     }
     KnightFight& b = f.base;
-    std::filesystem::path sidecar = std::filesystem::path(libraryDir) / entityGlb;
-    sidecar.replace_extension(".events.json");
-    if (!events_load(sidecar.string(), b.events, why)) return false;
     std::vector<std::string> names, judges;
     std::vector<float> seconds;
-    for (const AnimationCpu& clip : entity.clips) {
-        names.push_back(clip.name);
-        seconds.push_back(clip.duration);
-    }
-    for (const EventsVolume& v : b.events.judgeDefaults) judges.push_back(v.name);
-    for (const EventsClip& c : b.events.clips) {
-        for (const EventsVolume& v : c.judge) judges.push_back(v.name);
-    }
-    // The graph's clip indices are the playback's: scr_graph_load keeps `names`' order.
-    if (!kirin_core_load(b.core, f.k, text[0], text[1], text[2], names, seconds, b.events.judgeDefaults, judges,
-                         standClip, ground, why)) {
+    if (!knight_scene_sidecar(b, entity, libraryDir, entityGlb, names, seconds, judges, why) ||
+        !kirin_core_load(b.core, f.k, text[0], text[1], text[2], names, seconds, b.events.judgeDefaults, judges,
+                         standClip, ground, why) ||
+        !knight_scene_bind(b, scene, entityRig, encounters::kKirin.death.clip, kd::kHipJoint, why)) {
         return false;
     }
-    b.eventsClip.clear();
-    for (const std::string& n : names) b.eventsClip.push_back(events_clip(b.events, n));
-    b.deathClip = scr_clip(b.core.graph, encounters::kKirin.death.clip);
     f.deathLoopClip = scr_clip(b.core.graph, kd::kDeathLoopClip);
-    if (b.deathClip < 0 || f.deathLoopClip < 0) {
-        why = std::string("her glb lacks ") + encounters::kKirin.death.clip + " or " + kd::kDeathLoopClip;
-        return false;
-    }
-    const RigCpu& rig = rig_at(scene, entityRig);
-    b.jointNames.clear();
-    b.optBones.clear();
-    for (const JointCpu& j : rig.skin.joints) {
-        b.jointNames.push_back(j.name);
-        if (j.name.rfind("OptBone_", 0) == 0) b.optBones.push_back(j.name);
-    }
-    if (!knight_events_check(b.events, b.jointNames, b.optBones, why)) return false;
-    b.hipJoint = static_cast<int>(std::find(b.jointNames.begin(), b.jointNames.end(), kd::kHipJoint) -
-                                  b.jointNames.begin());
-    if (b.hipJoint >= static_cast<int>(b.jointNames.size())) {
-        why = std::string("her rig has no ") + kd::kHipJoint;
+    if (f.deathLoopClip < 0) {
+        why = std::string("her glb carries no ") + kd::kDeathLoopClip;
         return false;
     }
     return true;
@@ -263,75 +209,51 @@ void kirin_fight_reset(KirinFight& f, Encounter& encounter, Playback& entity) {
     encounter.entityLift = f.baseLift;
 }
 
+float kirin_death_lift(bool loopPlaying, float deathSeconds, float deathLength) {
+    const kirin_root::DeathRoot& d = kd::kDeathRootY;
+    if (loopPlaying || !(deathLength > 0.0f)) return d.kTo;
+    const float u = std::clamp(deathSeconds / deathLength, 0.0f, 1.0f);
+    return d.kFrom + (d.kTo - d.kFrom) * u;
+}
+
 KnightThink kirin_fight_step(KirinFight& f, Encounter& encounter, Playback& entity, const Heightmap& ground,
                              const PlayerState& player, const PlayerCombat& combat, bool whistleHeld, float dt) {
     KnightFight& b = f.base;
     KnightCore& c = b.core;
     KnightMotion& m = c.motion;
     if (!(dt >= 0.0f) || !std::isfinite(dt)) dt = 0.0f;
-    b.judgeFired.clear();
 
-    // The player's side of the world.
+    // The player's side of the world (shared), then hers: the strike's kind, the max HP and
+    // (D8) the terrain class and owner under the player on foot (data, arena_04.terrain.json).
     ScrWorld w;
-    w.playerPosition = player.position;
-    w.playerGroundPosition = player.position;
-    const float floor = heightmap_floor(ground, player.position, kd::kGroundStep);
-    if (std::isfinite(floor)) w.playerGroundPosition.y = floor;
-    w.playerAttached = mode_is_attached(combat.mode);
-    w.playerAttachedRegion =
-        w.playerAttached && combat.band >= 0 && combat.band < static_cast<int>(kd::kBandRegion.size())
-            ? kd::kBandRegion[static_cast<size_t>(static_cast<int>(combat.band))]
-            : 0;
-    // D8: the terrain class and owner under the player on foot (data, arena_04.terrain.json).
+    const bool struck = b.struck;
+    knight_world_player_side(b, w, encounter, ground, kd::kGroundStep, kd::kBandRegion, player, combat, whistleHeld);
+    w.hitKind = struck ? f.struckKind : -1;
+    w.hpMax = encounters::kKirin.maxHealth;
     w.playerGroundAttr = !w.playerAttached && combat.mode != PlayerMode::Falling
                              ? kirin_attr_word(terrain_at(f.k.terrain, player.position))
                              : 0u;
-    // The S8 whistle (a press) and the player's death: the PLAYER tables' indices (Gaius's R-N).
-    knight_world_player(w, whistleHeld && !b.whistleBefore, combat.mode == PlayerMode::Dead);
-    b.whistleBefore = whistleHeld;
-    w.hit = b.struck;
-    w.hitRegion = b.struckRegion;
-    w.hitKind = b.struck ? f.struckKind : -1;
-    b.struck = false;
-    w.hp = encounter.defeated ? 0.0f : encounter.health;
-    w.hpMax = encounter.desc != nullptr ? encounter.desc->maxHealth : encounters::kKirin.maxHealth;
-    // The attack runner's judge volumes, on last frame's pose (ruling R-B).
-    const PlayerView pv = knight_player_view(player, combat);
-    w.playerInJudge = [&b, pv](std::string_view name) {
-        if (!b.havePose) return false;
-        const bool in = events_player_in_judge(b.events, name, b.evNow, knight_pose_view(b), pv);
-        if (in) b.judgeFired.emplace_back(name);
-        return in;
-    };
 
     Vec3 root = encounter.entityPosition;
     KnightThink t;
     if (encounter.defeated) {
         if (b.deathMode < 0) {
-            // D12: the graph's death once — the mortality row takes the death control-mode, in
-            // which the walker forces mode 5 — two thinks at no time (the cap: those two + one spare,
-            // authored as Gaius's); then the death sequence owns the clip.
-            for (int i = 0; i < 3 && c.rt.current != c.graph.root.deathMode; ++i) {
-                t = kirin_think(c, f.k, w, ground, root, 0.0f);
-            }
-            b.deathMode = c.rt.current;
-            b.deathGraphClip = m.clip;
-            m.previous = m.clip;
-            m.clip = b.deathClip;
-            m.held = false;
-            m.blendElapsed = -1.0f;
-            m.instance += 1;
+            t = knight_enter_death(b, [&] { return kirin_think(c, f.k, w, ground, root, 0.0f); });
+            // authored: the death clip is her whole pose — the layers are cut (no think steps them
+            // after the defeat, so a layer left playing would freeze on her corpse).
+            f.k.layers = AddLayers{};
+            f.k.orients.clear();
         }
-        // The death clip has no root series: no travel; her root drops kDeathRootY over it
-        // (measured; linear in time: authored), then death_loop (its held pose) is held.
+        // The death clip has no root series: no travel. Her root drops kDeathRootY while it plays,
+        // then death_loop (its held pose) holds the drop's end.
         const float len = c.seconds[static_cast<size_t>(b.deathClip)];
-        const float u = len > 0.0f ? std::clamp(entity.time / len, 0.0f, 1.0f) : 1.0f;
-        encounter.entityLift = f.baseLift + kd::kDeathRootY.kFrom + (kd::kDeathRootY.kTo - kd::kDeathRootY.kFrom) * u;
         if (entity.index == b.deathClip && entity.time >= std::min(len, encounters::kKirin.death.motionSeconds)) {
             entity.index = f.deathLoopClip;
             entity.time = 0.0f;
         }
-        m.time = std::min(entity.time, len);
+        const bool looping = entity.index == f.deathLoopClip;
+        encounter.entityLift = f.baseLift + kirin_death_lift(looping, entity.time, len);
+        m.time = looping ? len : std::min(entity.time, len);
     } else {
         t = kirin_think(c, f.k, w, ground, root, dt);
     }
@@ -351,15 +273,13 @@ std::vector<DamageHit> kirin_fight_events(KirinFight& f, PlayerState& player, Pl
     KnightFight& b = f.base;
     std::vector<DamageHit> landed =
         knight_fight_events(b, player, combat, tuning, dt, events, kd::kHeavyReaction, kd::kNoThrowOffReaction);
-    // The rockfall feed: each ground-destruction spawn fired this frame (an effect that spawns
-    // an objanim; data reading of KIRIN_GROUND_DEST_LWS) while armed.
+    // The rockfall feed (R-AJ): the stomps' fired effects while armed.
     ScrRuntime& rt = b.core.rt;
-    if (b.havePose && (rt.bossBits & kScrKirinRockfallArmed) != 0) {
+    if (b.havePose) {
+        const bool armed = (rt.bossBits & kScrKirinRockfallArmed) != 0;
         for (const EventFire& e : events_fired(b.events, b.evNow, b.evPrev, knight_pose_view(b))) {
-            const EventsClip& clip = b.events.clips[static_cast<size_t>(e.clip)];
-            if (clip.effects[static_cast<size_t>(e.row)].spawns.empty()) continue;
             const float before = rt.bossTimer[0];
-            rt.bossTimer[0] = std::min(kd::kRockfallCapSeconds, before + kd::kRockfallFeedSeconds);
+            rt.bossTimer[0] = kirin_rockfall_feed(before, e.name, armed);
             f.rockfallFed += rt.bossTimer[0] - before;
         }
     }
@@ -394,6 +314,11 @@ KnightHit kirin_fight_hit(KirinFight& f, Encounter& encounter, Playback& entity,
         h.killed = true;
     }
     return h;
+}
+
+float kirin_rockfall_feed(float timer, std::string_view effect, bool armed) {
+    if (!armed || effect.find(kd::kRockfallEffectTag) == std::string_view::npos) return timer;
+    return std::min(kd::kRockfallCapSeconds, timer + kd::kRockfallFeedSeconds);
 }
 
 ShakeOff kirin_fight_shake(const KirinFight&) { return ShakeOff{}; }

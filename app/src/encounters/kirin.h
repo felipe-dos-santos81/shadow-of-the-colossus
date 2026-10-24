@@ -205,7 +205,7 @@ inline constexpr SoundCue kSilent{.clip = nullptr, .gain = 1.0f, .loop = false};
 inline constexpr const char* kGraphBoss = "KIRIN";  // data: the eboot's boss name
 // Her route graph (`make routes`) and arena terrain (`make terrain`), under <SOTC_LIB>.
 inline constexpr const char* kRouteFile = "behaviour/kirin.route.json";  // data: kirin.path's stem
-inline constexpr const char* kTerrainFile = "stage/arena_04.terrain.json";
+inline constexpr const char* kTerrainFile = "stage/arena_04.terrain.json";  // data: the stage's name
 
 // --- The runtime (S13 Task 15, kirin_fight) -----------------------------------
 
@@ -231,10 +231,15 @@ inline constexpr float kHeavyReaction = 4.0f;
 inline constexpr float kNoThrowOffReaction = -1.0f;
 
 // The rockfall feed (binary FUN_006fde60 / FUN_006fdec0, graph findings "Rockfall feed"): a
-// stomp's ground-destruction spawn (a type-29 event that spawns an objanim) adds this to
-// her rockfall timer (W'+0x4c84, ScrRuntime::bossTimer[0]) while armed, capped.
+// stomp's ground-destruction spawn adds this to her rockfall timer (W'+0x4c84,
+// ScrRuntime::bossTimer[0]) while armed (W'+0x4c88), capped.
 inline constexpr float kRockfallFeedSeconds = 0.5f;
 inline constexpr float kRockfallCapSeconds = 5.0f;
+// Which fired effects are those spawns (ruling R-AJ, guess): the binary feeds from the
+// KIRIN_GROUND_DEST_LWS rows, which her sidecar does not carry by name; the stomps' type-29
+// effects (KIRIN_FOOT_ATK, KIRIN_FOOT_ATK_ST — data, c04_kirin.events.json) stand in for them,
+// and her walk/turn/wait footsteps (KIRIN_FOOT, KIRIN_FOOT_B, KIRIN_WAIT_FOOT) do not feed.
+inline constexpr const char* kRockfallEffectTag = "_ATK";
 
 }  // namespace kirin_detail
 

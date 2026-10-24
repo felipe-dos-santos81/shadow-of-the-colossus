@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "additive.h"
@@ -102,13 +103,23 @@ KnightThink kirin_fight_step(KirinFight& fight, Encounter& encounter, Playback& 
                              const Heightmap& ground, const PlayerState& player,
                              const PlayerCombat& combat, bool whistleHeld, float dt);
 
+// Her root's lift over her ground at the defeat (D12): kDeathRootY's drop, linear over the death
+// clip's `deathLength` s at `deathSeconds` (authored timing), and its end (kTo) once
+// `loopPlaying` (death_loop, held). Pure.
+float kirin_death_lift(bool loopPlaying, float deathSeconds, float deathLength);
+
+// Her rockfall timer after a fired effect named `effect` (ruling R-AJ): + kRockfallFeedSeconds up
+// to kRockfallCapSeconds when `armed` and the effect is a stomp's (kRockfallEffectTag); else
+// unchanged. Pure.
+float kirin_rockfall_feed(float timer, std::string_view effect, bool armed);
+
 // After update_all_poses: her palette with the switch's blend and her additive layers (the
 // caller uploads it; the bands and the targets are posed from it).
 void kirin_fight_pose(KirinFight& fight, const Scene& scene, std::size_t entityRig,
                       const Playback& entity, float dt, std::vector<Mat4>& palette);
 
 // After the player's step: the sidecar's damage on the player (none on a rider, §13.5), the
-// rockfall feed from the fired ground-destruction spawns. Returns the rows that landed.
+// rockfall feed from the stomps fired this frame (kirin_rockfall_feed). Returns the rows that landed.
 std::vector<DamageHit> kirin_fight_events(KirinFight& fight, PlayerState& player,
                                           PlayerCombat& combat, const CombatTuning& tuning,
                                           float dt, StepEvents* events);
