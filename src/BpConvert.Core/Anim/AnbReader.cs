@@ -25,12 +25,8 @@ public static class AnbReader
     private const uint FlagSetBit = 1u << 16;
     private const int MaxTracks = 4096;
 
-    // The engine constants (docs/notes/re2-keys.md §2.1).
-    private const double Int16Scale = 1.0 / 32767.0; // types 0xC/0xD and the root series
-    private const double Packed9Scale = 1.0 / 255.0; // the signed 9-bit fields of types 3–6
-    private const double Packed11Scale = 1.0 / 1023.0; // type 0xE x
-    private const double Packed10Scale = 1.0 / 511.0; // type 0xE y/z
-    private const double ResidualScale = 1.0 / 7.0; // the 4-bit residual of types 3–6
+    // The root series scale (docs/notes/re2-keys.md §2.1); the per-key scales live in AnbKeyMath.
+    private const double Int16Scale = AnbKeyMath.Int16;
 
     private static readonly byte[] XffMagic = { 0x78, 0x66, 0x66, 0x00 };
 
@@ -60,21 +56,6 @@ public static class AnbReader
         [0x0C] = (0x18, 6, 6),
         [0x0D] = (0x14, 2, 5),
         [0x0E] = (0x18, 4, 6),
-    };
-
-    // Types 3–6: the three stored 9-bit fields occupy the components other than the derived one,
-    // packed from the top of the word. Descriptor pairs apply in field order (1st field f0/f1,
-    // 2nd f2/f3, 3rd f4/f5; the derived component uses f6/f7).
-    private static readonly Dictionary<byte, PackedLayout> PackedLayouts = new()
-    {
-        [0x03] = new PackedLayout(
-            0, new PackedField[] { new(1, 18, 0), new(2, 9, 1), new(3, 0, 2) }, 27, 31),
-        [0x04] = new PackedLayout(
-            1, new PackedField[] { new(0, 23, 0), new(2, 9, 1), new(3, 0, 2) }, 18, 22),
-        [0x05] = new PackedLayout(
-            2, new PackedField[] { new(0, 23, 0), new(1, 14, 1), new(3, 0, 2) }, 9, 13),
-        [0x06] = new PackedLayout(
-            3, new PackedField[] { new(0, 23, 0), new(1, 14, 1), new(2, 5, 2) }, 0, 4),
     };
 
     /// <summary>Reads and decodes one flag-clear <c>.anb</c> file.</summary>
@@ -184,60 +165,24 @@ public static class AnbReader
     private static Quaternion DecodeKey(
         byte[] data, string path, byte type, float[] f, long keyBase, int key)
     {
-        if (PackedLayouts.TryGetValue(type, out var layout))
-        {
-            var word = ReadU32(data, keyBase + 4L * key, path);
-            var comp = new double[4];
-            foreach (var field in layout.Fields)
-            {
-                comp[field.Component] = Signed9((int)((word >> field.Shift) & 0x1FF))
-                    * Packed9Scale * f[2 * field.Pair + 1] + f[2 * field.Pair];
-            }
-
-            var norm2 = comp[0] * comp[0] + comp[1] * comp[1] + comp[2] * comp[2] + comp[3] * comp[3];
-            var residual = Signed4((int)((word >> layout.ResidualShift) & 0xF));
-            var sign = ((word >> layout.SignBit) & 1) != 0 ? -1.0 : 1.0;
-            var sqrt = norm2 <= 1.0 ? Math.Sqrt(Math.Abs(1.0 - norm2)) : 0.0;
-            comp[layout.Derived] = f[6] + f[7] * (residual * ResidualScale) + sign * sqrt;
-            return ToQuaternion(comp);
-        }
+        if (AnbKeyMath.IsPacked(type))
+            return AnbKeyMath.Packed(type, ReadU32(data, keyBase + 4L * key, path), f);
 
         switch (type)
         {
             case 0x0C:
             {
                 var offset = keyBase + 6L * key;
-                var firstWord = ReadU16(data, offset, path);
-                double x = ReadI16(data, offset, path) * Int16Scale * f[1] + f[0];
-                double y = ReadI16(data, offset + 2, path) * Int16Scale * f[3] + f[2];
-                double z = ReadI16(data, offset + 4, path) * Int16Scale * f[5] + f[4];
-                var norm2 = x * x + y * y + z * z;
-                var sqrt = norm2 <= 1.0 ? Math.Sqrt(Math.Abs(1.0 - norm2)) : 0.0;
-                var sign = (firstWord & 1) != 0 ? -1.0 : 1.0; // LSB of the first int16
-                return new Quaternion((float)x, (float)y, (float)z, (float)(sign * sqrt));
+                return AnbKeyMath.Int16Triple(
+                    ReadI16(data, offset, path), ReadI16(data, offset + 2, path),
+                    ReadI16(data, offset + 4, path), ReadU16(data, offset, path), f);
             }
 
             case 0x0D:
-            {
-                var s = ReadI16(data, keyBase + 2L * key, path) * Int16Scale * f[1] + f[0];
-                var theta = s * 0.5;
-                var sin = Math.Sin(theta);
-                return new Quaternion(
-                    (float)(f[2] * sin), (float)(f[3] * sin), (float)(f[4] * sin),
-                    (float)Math.Cos(theta));
-            }
+                return AnbKeyMath.Angle(ReadI16(data, keyBase + 2L * key, path), f);
 
             case 0x0E:
-            {
-                var word = ReadU32(data, keyBase + 4L * key, path);
-                double x = Sext((int)(word >> 21), 11) * Packed11Scale * f[1] + f[0];
-                double y = Sext((int)((word >> 11) & 0x3FF), 10) * Packed10Scale * f[3] + f[2];
-                double z = Sext((int)((word >> 1) & 0x3FF), 10) * Packed10Scale * f[5] + f[4];
-                var norm2 = x * x + y * y + z * z;
-                var sqrt = norm2 <= 1.0 ? Math.Sqrt(Math.Abs(1.0 - norm2)) : 0.0;
-                var sign = (word & 1) == 0 ? 1.0 : -1.0; // bit 0: 0 -> +, 1 -> -
-                return new Quaternion((float)x, (float)y, (float)z, (float)(sign * sqrt));
-            }
+                return AnbKeyMath.Packed11(ReadU32(data, keyBase + 4L * key, path), f);
 
             case 0x02:
             {
@@ -289,19 +234,6 @@ public static class AnbReader
         return root;
     }
 
-    private static Quaternion ToQuaternion(double[] components) => new(
-        (float)components[0], (float)components[1], (float)components[2], (float)components[3]);
-
-    private static int Signed9(int raw) => raw >= 256 ? raw - 512 : raw;
-
-    private static int Signed4(int raw) => raw >= 8 ? raw - 16 : raw;
-
-    private static int Sext(int value, int bits)
-    {
-        var mask = 1 << (bits - 1);
-        return (value & (mask - 1)) - (value & mask);
-    }
-
     private static ushort ReadU16(byte[] data, long offset, string path) =>
         BinaryPrimitives.ReadUInt16LittleEndian(Check(data, offset, 2, path));
 
@@ -331,9 +263,4 @@ public static class AnbReader
 
     private static InvalidDataException Invalid(string path, string message) =>
         new($"{path}: {message}");
-
-    private readonly record struct PackedField(int Component, int Shift, int Pair);
-
-    private readonly record struct PackedLayout(
-        int Derived, PackedField[] Fields, int ResidualShift, int SignBit);
 }

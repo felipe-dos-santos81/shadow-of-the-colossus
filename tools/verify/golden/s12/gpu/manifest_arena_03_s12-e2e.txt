@@ -1,0 +1,109 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/arena_03.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s12-e2e
+s1-gpu format=B8G8R8A8_UNORM
+s1-scene meshes=93 vertices=1098134 materials=93 textures=109
+s7-load stage=arena instances=4 meshes=93 ms=<masked>
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s2-anim rig=1 clip=knight_a_stand joints=35 procedural=0 t=0.000
+s12e2e-load stage=arena encounter=knight meshes=93 ground=125x124 layers=64 entity=-300.00,47.66,-1420.00 yaw=-1.27 spawn=-301.00,43.33,-1375.00 return=0 graph=KNIGHT modes=13 edges=171 start=Knight_route_patrol clip=knight_a_stand ms=<masked>
+s2-anim clip=player_a_walk joints=348 procedural=0 t=0.000
+s12e2e-mode from=none to=Knight_route_patrol clip=knight_a_stand at=0.0
+s12e2e-mode from=Knight_route_patrol to=Knight_sword_attack_mode clip=knight_a_stand at=0.5
+s12e2e-judge volume=KNIGHT_WEAPON_ATK_FIX bearing=0.0 dist=43.8 sector=forward at=0.5
+s12e2e-slam n=1 choice=slam rays=1 mode=Knight_sword_attack_mode dist=43.8 at=0.5
+s2-anim clip=player_a_run joints=348 procedural=0 t=0.000
+s12e2e-dodge sword_rows=0 off_line=6.70 need=6.65 widest=KNIGHT_ATK_SHOCK reach=6.00 player_hp=100 mode=grounded at=3.7
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s12e2e-climb band=blade t=0.00 stamina=100.0 clip=knight_a_atk1_3 at=4.9
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_sword_attack_mode to=Knight_parent_mode clip=knight_a_atk1_3 at=4.9
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s12e2e-climb band=forearm t=0.00 stamina=100.0 clip=knight_a_atk1_end at=7.7
+s12e2e-blade window=9..75 grab_frame=27 close_frame=75 close_t=0.55 ride_from=0.50 margin=0.05 carried=1 band=forearm slams=1 at=7.7
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s12e2e-climb band=upper_arm t=0.00 stamina=29.0 clip=knight_a_stand at=16.1
+s12e2e-climb band=shoulder t=0.00 stamina=12.8 clip=knight_a_stand at=20.3
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s12e2e-climb band=neck t=0.00 stamina=99.9 clip=knight_a_stand at=40.7
+s12e2e-climb band=head t=0.00 stamina=87.0 clip=knight_a_stand at=44.0
+s12e2e-route bands=blade,forearm,upper_arm,shoulder,neck,head stamina=87.0 at=44.0
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s12e2e-strike weakpoint=weakpoint_01 band=head damage=34 spent=0 health=136 killed=0 at=54.5
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_parent_mode to=Knight_route_patrol clip=knight_a_stand at=54.5
+s12e2e-climb band=neck t=1.00 stamina=52.5 clip=knight_a_stand at=54.5
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_route_patrol to=Knight_parent_mode clip=knight_a_stand at=54.5
+s12e2e-climb band=head t=0.00 stamina=52.9 clip=knight_a_stand at=54.5
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s12e2e-strike weakpoint=weakpoint_01 band=head damage=34 spent=0 health=102 killed=0 at=65.7
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_parent_mode to=Knight_route_patrol clip=knight_a_stand at=65.7
+s12e2e-climb band=neck t=1.00 stamina=52.5 clip=knight_a_stand at=65.7
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_route_patrol to=Knight_parent_mode clip=knight_a_stand at=65.7
+s12e2e-climb band=head t=0.00 stamina=52.9 clip=knight_a_stand at=65.7
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s12e2e-strike weakpoint=weakpoint_01 band=head damage=18 spent=0 health=84 killed=0 at=76.9
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_parent_mode to=Knight_route_patrol clip=knight_a_stand at=76.9
+s12e2e-climb band=neck t=1.00 stamina=52.5 clip=knight_a_stand at=76.9
+s12e2e-sigil done=head strikes=3 spent=86 health=84 at=76.9
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_route_patrol to=Knight_parent_mode clip=knight_a_stand at=77.0
+s12e2e-climb band=head t=0.00 stamina=52.9 clip=knight_a_stand at=77.0
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-shake survived=1 clip=knight_a_refuse_head band=head low=1.5 stamina=8.6 at=85.1
+s12e2e-climb band=neck t=1.00 stamina=28.5 clip=knight_a_stand at=86.0
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s12e2e-climb band=shoulder t=1.00 stamina=15.6 clip=knight_a_stand at=89.3
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-climb band=belly t=0.00 stamina=85.9 clip=knight_a_stand at=94.4
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s12e2e-strike weakpoint=weakpoint_02 band=belly damage=34 spent=0 health=50 killed=0 at=100.6
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_parent_mode to=Knight_route_patrol clip=knight_a_stand at=100.6
+s12e2e-climb band=belly t=0.84 stamina=57.2 clip=knight_a_stand at=100.7
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_route_patrol to=Knight_parent_mode clip=knight_a_stand at=100.7
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s12e2e-strike weakpoint=weakpoint_02 band=belly damage=34 spent=0 health=16 killed=0 at=101.7
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_parent_mode to=Knight_route_patrol clip=knight_a_stand at=101.7
+s12e2e-climb band=belly t=0.84 stamina=49.4 clip=knight_a_stand at=101.7
+s2-anim clip=player_a_grip_loop joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_route_patrol to=Knight_parent_mode clip=knight_a_stand at=101.8
+s2-anim clip=player_a_grip_move_f1 joints=348 procedural=0 t=0.000
+s2-anim clip=player_a_grip_float_u_hi_attack joints=348 procedural=0 t=0.000
+s12e2e-strike weakpoint=weakpoint_02 band=belly damage=16 spent=0 health=0 killed=1 at=102.8
+s12e2e-sigil done=belly strikes=3 spent=84 health=0 at=102.8
+s2-anim clip=player_a_damage_m_fly2 joints=348 procedural=0 t=0.000
+s12e2e-mode from=Knight_parent_mode to=Knight_death clip=knight_a_knight_death at=102.8
+s12e2e-death phase=Motion total=0.000 mode=Knight_death graph_clip=knight_a_knight_death clip=knight_a_knight_death
+s2-anim clip=player_a_stand joints=348 procedural=0 t=0.000
+s12e2e-death phase=Collapse total=6.000 mode=Knight_death graph_clip=knight_a_knight_death clip=knight_a_knight_death
+s12e2e-death phase=Done total=8.000 mode=Knight_death graph_clip=knight_a_knight_death clip=knight_a_knight_death
+s12e2e-corpse live_body=1 clip=knight_a_knight_death t=6.000 held=1 moved=6.57 player=grounded throw_offs=0 return=Idle
+s12e2e-bound max=27.60 unclamped=27.60 clamped_frames=0 radius=36.0 centre=-300,-1400
+s12e2e-mode from=Knight_death to=none clip=knight_a_stand at=110.8
+s12e2e-reset health=170 defeated=0 mode=Knight_route_patrol clip=knight_a_stand at_base=1 player_hp=100 pmode=grounded death=Idle
+s2-anim clip=player_a_walk joints=348 procedural=0 t=0.000
+s12e2e-mode from=none to=Knight_route_patrol clip=knight_a_stand at=110.8
+s12e2e-mode from=Knight_route_patrol to=Knight_sword_attack_mode clip=knight_a_stand at=111.3
+s12e2e-hit row=KNIGHT_ATK_SHOCK amount=5 clip=knight_a_atk1 player_hp=95 mode=hurt at=114.3
+s12e2e-done frames=6857 seconds=114.3
+s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3

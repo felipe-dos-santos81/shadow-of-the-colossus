@@ -1899,6 +1899,36 @@ TEST_CASE("walking a horizontal band moves t at the surface pace on the taper, a
     CHECK(player.position.y == doctest::Approx(4.0f + r * 0.5f).epsilon(0.001));  // cos 60
 }
 
+TEST_CASE("a walked band the slope gate hangs and flips back starts on its top (bandAcross reset)") {
+    Heightmap ground = flat_heightmap();
+    const PlayerFrame flat = deck_frame(ground);
+    PlayerState player{};
+    PlayerCombat combat{};
+    onto_deck(player, combat, flat);
+    combat.stamina = 50.0f;
+    PlayerInput input{};
+    input.grab = true;
+    input.right = true;
+    for (int i = 0; i < 60; ++i) {
+        player_step(player, combat, input, flat, CombatTuning{}, kStep);
+    }
+    REQUIRE(combat.bandAcross > 0.5f);
+    // The deck tilts past the 60 deg gate (63.4 deg): hung, its offset is dropped.
+    PlayerFrame steep = frame_of(ground, lookup_of({{"POST_A", Vec3{0.0f, 0.0f, 0.0f}},
+                                                    {"POST_B", Vec3{0.0f, 4.0f, 0.0f}},
+                                                    {"DECK_B", Vec3{0.0f, 24.0f, 10.0f}}}));
+    steep.bands = kDeckBands;
+    input.right = false;
+    player_step(player, combat, input, steep, CombatTuning{}, kStep);
+    REQUIRE(combat.band == 1);
+    CHECK(combat.bandAcross == 0.0f);
+    // Flat again: walked from the top, not the stale offset.
+    player_step(player, combat, input, flat, CombatTuning{}, kStep);
+    REQUIRE(combat.band == 1);
+    CHECK(combat.bandAcross == 0.0f);
+    CHECK(player.position.x == doctest::Approx(0.0f));
+}
+
 TEST_CASE("walking back off a horizontal band's start hands over to the band below") {
     Heightmap ground = flat_heightmap();
     const PlayerFrame frame = deck_frame(ground);

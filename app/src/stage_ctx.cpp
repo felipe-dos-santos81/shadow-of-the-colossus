@@ -329,6 +329,10 @@ void StageCtx::soft_reset_encounter(DeathState& deathState, bool& cueFired, bool
         // S11: Quadratus back to his placement, standing, sigils whole.
         quadratus_fight_reset(quad, encounter, playbacks[entityRig]);
     }
+    if (knight_wired && entityRig < playbacks.size()) {
+        // S12: Gaius back to his placement, the graph from its retry start, sigils whole.
+        knight_fight_reset(knight, encounter, playbacks[entityRig]);
+    }
     audio.reset();  // R stops every voice, music too
     deathState = reset_death();
     cueFired = false;

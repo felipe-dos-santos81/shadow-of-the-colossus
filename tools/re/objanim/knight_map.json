@@ -1,0 +1,20 @@
+{
+  "skeleton": "knight_a",
+  "note": "Curated from eboot.elf (S12 recon, objanim/dumps): the effect-name -> spawned-damage-objanim link and the KNIGHT_DAMAGE damage_def rows (amount = +1c, reaction = +18; both raw, meanings a guess). spawns: eff_package_def sets Knight_walking/wait_*_set carry KNIGHT_SYNC[31] (objanim_knight_walk_dmg) and Knight_sword_attack_set_2 / Knight_leg_attack_set carry KNIGHT_SYNC[32] (objanim_knight_atk_dmg). Only the segment names the recon pinned are listed; the KNIGHT_WAIT* segments also point at the walk set (name match only, unverified) and are left out.",
+  "spawns": {
+    "KNIGHT_FOOT_R": ["knight_walk_dmg"],
+    "KNIGHT_FOOT_L": ["knight_walk_dmg"],
+    "KNIGHT_FOOT_ATK": ["knight_atk_dmg"],
+    "KNIGHT_SWD_ATK_2": ["knight_atk_dmg"]
+  },
+  "damage": {
+    "KNIGHT_FOOT_DMG": { "amount": 35, "reaction": 4 },
+    "KNIGHT_FOOT_DMG_SUB": { "amount": 20, "reaction": 5 },
+    "KNIGHT_SWORD_ATK1_DMG": { "amount": 40, "reaction": 4 },
+    "KNIGHT_SWORD_ATK1_DMG_SUB": { "amount": 20, "reaction": 5 },
+    "KNIGHT_ATK_SHOCK": { "amount": 5, "reaction": 9 },
+    "KNIGHT_ATK_STAGGER": { "amount": 0, "reaction": 10 },
+    "KNIGHT_ATK_SHOCK2": { "amount": 5, "reaction": 9 },
+    "KNIGHT_PLAYER_OUT": { "amount": 0, "reaction": 6 }
+  }
+}

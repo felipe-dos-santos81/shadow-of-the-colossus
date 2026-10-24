@@ -49,9 +49,14 @@ public static class ModelConverter
     /// is mapped against this model's skeleton joint names; a clip with any unresolved track fails
     /// the conversion (never a partially attached animation). <c>null</c>/empty = M0 shape.
     /// </param>
+    /// <param name="objAnimMapDirectory">
+    /// Optional directory of curated objanim maps for the <c>&lt;stem&gt;.events.json</c> sidecar
+    /// (<see cref="EventsSidecar"/>); <c>null</c> = the sidecar is written without the map's
+    /// spawns and damage defs.
+    /// </param>
     /// <exception cref="InvalidDataException">A clip has an unresolved track against this model.</exception>
     public static ConvertResult Convert(string gameRoot, string sourceRelPath, string outLibDir,
-        Action<string>? note = null, IReadOnlyList<ClipSource>? clips = null)
+        Action<string>? note = null, IReadOnlyList<ClipSource>? clips = null, string? objAnimMapDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(gameRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceRelPath);
@@ -123,10 +128,13 @@ public static class ModelConverter
         if (animations.Count > 0)
         {
             ClipManifest.Write(written.GlbPath, sourceRelative, animations);
+            // The objanim event tracks of the baked clips (S12), when the game ships them.
+            EventsSidecar.Write(written.GlbPath, root, clips!, objAnimMapDirectory, note);
         }
         else
         {
             ClipManifest.Delete(written.GlbPath);
+            EventsSidecar.Delete(written.GlbPath);
         }
 
         return new ConvertResult(written.GlbPath, pngPaths, output.Meshes.Count,

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "camera.h"
@@ -78,6 +79,10 @@ struct PlayerCombat {
     float invulnSeconds = 0.0f;  // i-frame window left; > 0 ignores damage
     bool heavyHit = false;       // this Hurt came from a heavy attack
     bool pendingDeath = false;   // lethal damage taken while Falling
+
+    // S12 ruling R-J: the held band's window closed with the player on its
+    // upper `carryFraction`, so he keeps it (cleared on any band change).
+    bool heldPastWindow = false;
 };
 
 
@@ -120,6 +125,11 @@ struct PlayerFrame {
     // The encounter's climb bands (S11 Task 7): grab, climb and catch walk this
     // table; the default is Valus's.
     std::span<const ClimbBand> bands = encounters::kValus.bands;
+    // S12: the entity's playing clip and its frame (floor of clip seconds x 30)
+    // for the bands' enable windows (band_enabled). The default (no clip)
+    // leaves every band without a window exactly as before.
+    std::string_view entityClip;
+    int entityFrame = 0;
 };
 
 // The pinned S4.1 constants. Ruling R6 replaces the plan's `strikeSeconds` /
@@ -216,6 +226,16 @@ struct StepEvents {
 // band (boneA -> boneB). Standing is not gripping (authored, the game's
 // behaviour): Grabbing/Climbing there drain nothing and regenerate at
 // `staminaRegen`; a strike's charge and a shake still drain. E stays held.
+//
+// S12 (design D7/D8, §13.4): a horizontal band is walked only while it passes
+// band_walkable's slope gate (else it is hung and climbed as above), at its own
+// `walkSpeed` when set. Grab and catch skip a band whose enable window
+// (`frame.entityClip`/`entityFrame`) is closed and enter a `grabEntryLowEnd`
+// band only at its low end; a chain hand-over stops at a closed band. When the
+// held band's window closes (ruling R-J), the player at bandT >= 1 -
+// carryFraction keeps holding it (`heldPastWindow`) and rides it, its upper end
+// handing over to `carryTo` (else `up`); lower, the grip breaks into Falling
+// with the catch window.
 //
 // Falling: integrates vertical velocity at 9.8 m/s² downward, keeps XZ, and
 // lands when `position.y` reaches the ground sample (the ground is only used

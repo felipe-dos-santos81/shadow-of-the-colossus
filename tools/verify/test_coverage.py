@@ -18,8 +18,8 @@ import run  # noqa: E402
 # Frozen scripts before the runner's scope (S1's model viewer, M0's converter, RE-0) are not adapted.
 NOT_ADAPTED = {"m0", "re0", "s1"}
 # The viewer runs each frozen script makes (§13.1: ≈27 across s3–s7, plus s8's; s9's 8 = six flag
-# refusals + the selftest + the e2e; s11's 7 = five flag refusals + the selftest + the e2e).
-RUNS = {"s3": 4, "s4": 8, "s41": 3, "s42": 4, "s5": 2, "s6": 1, "s7": 2, "s8": 2, "s9": 8, "s11": 7}
+# refusals + the selftest + the e2e; s11's and s12's 7 = five flag refusals + the selftest + the e2e).
+RUNS = {"s3": 4, "s4": 8, "s41": 3, "s42": 4, "s5": 2, "s6": 1, "s7": 2, "s8": 2, "s9": 8, "s11": 7, "s12": 7}
 
 
 def plumbing():

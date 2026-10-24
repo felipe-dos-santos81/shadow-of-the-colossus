@@ -12,7 +12,8 @@ import subprocess
 from masks import _SOURCE   # the `# source:` worktree prefix, normalised as in the goldens
 
 GITLINK = "@gitlink"    # the PSO2-Aqua-Library submodule SHA recorded in the index
-LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, audio/, textures/vfx/ PNGs
+LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, *.events.json, behaviour/, audio/,
+                        # textures/vfx/ PNGs
 LIBPATH = "@libpath"    # the library's realpath only (where the audio decode writes)
 LIBAUDIO = "@libaudio"  # the library's audio/audio.manifest content (8/10/34 entries: who decoded last)
 LIBGEO = "@libgeo"      # @lib without audio/: what the probes and the preflight read (the decode
@@ -21,9 +22,11 @@ LIBGEO = "@libgeo"      # @lib without audio/: what the probes and the preflight
 # The input classes (D3 + ruling §13.5). A section of an adapter hashes its class, the adapter, its
 # frozen script, its goldens and the runner's own code (VERIFY).
 CLASSES = {
+    # tools/re/objanim/*.json: ObjAnimTests read the curated maps; tools/re/scr/**: the ctest
+    # suite runs graph_export.py for its KNIGHT fixture.
     "dotnet": ["src/**", "tests/**", "*.sln", "Directory.Build.*", "tools/re/audio/*.json",
-               "tools/native/**", GITLINK],
-    "ctest": ["app/**", "tools/re/audio/*.json", LIB],
+               "tools/re/objanim/*.json", "tools/native/**", GITLINK],
+    "ctest": ["app/**", "tools/re/audio/*.json", "tools/re/scr/**", LIB],
     "audio": ["tools/re/audio/**", "src/**", LIBPATH, LIBAUDIO],
     "probes": ["tools/re/stage/**", "tools/re/anb/**", "tools/re/s6/**",
                "tools/re/s7/shrine_placements.json", "tools/re/s8/placements.json", "tools/re/s9/**",
@@ -49,7 +52,8 @@ MANIFESTS = {
     "s7": {"probes": "encounter shrine", "gpu": "encounter shrine"},
     "s8": {s: "encounter shrine plain" for s in ("probes", "audio", "gpu")},
     "s9": {s: "encounter shrine plain road" for s in ("probes", "audio", "gpu")},   # via preflight()
-    "s11": {"gpu": "arena_02"},   # report-only until Task 11 (run.report_only)
+    "s11": {"gpu": "arena_02"},
+    "s12": {"gpu": "arena_03"},
 }
 NAMED = "@named:"   # a pattern naming one file that must exist: absent hashes as "absent"
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",
@@ -139,7 +143,9 @@ class Stamper:
                         or (name.endswith(".png") and rel.startswith(os.path.join("textures", "vfx", "")))):
                     st = os.stat(path)
                     h.update(("%s %d %d\n" % (rel, st.st_size, st.st_mtime_ns)).encode())
-                elif (name.endswith(".clips.json") or rel == os.path.join("audio", "audio.manifest")
+                elif (name.endswith(".clips.json") or name.endswith(".events.json")
+                        or rel.startswith(os.path.join("behaviour", ""))  # S12: the graph exports
+                        or rel == os.path.join("audio", "audio.manifest")
                         or (name.endswith(".wav") and rel.startswith("audio" + os.sep))):
                     h.update(("%s %s\n" % (rel, _file_sha(path))).encode())
         return h.hexdigest()

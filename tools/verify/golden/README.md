@@ -17,6 +17,13 @@ runs that agreed byte for byte after normalisation — no mask beyond the timing
 are byte-identical to the S9 blessing. Two blesses (four fresh runs) agreed byte for byte with three
 new timing masks (`s11-load`/`s11e2e-load` `ms`, `s11-perf` `frame_ms`). Evidence: `task-11-report.md`.
 
+**S12** (`s12/`) was blessed the same way (`scripts/verify --bless --only s12`, `SOTC_LIB` = the branch's
+view `out/libviews/s12-gaius`, ruling R-K) on the commit that added `scripts/s12-acceptance.sh`, the new
+`PIN`; the s3–s11 goldens are byte-identical. Two blesses (four fresh runs) agreed byte for byte with the
+three masks Task 9 added (`s12-load`/`s12e2e-load` `ms`, `s12-perf` `frame_ms`). Run from a desktop
+(Aqua) session: from a background session CoreAudio refuses output and every e2e golden gains an
+`audio: no output device` line. Evidence: `.superpowers/sdd/2026-10-23-s12-gaius/task-10-report.md`.
+
 ## How to bless (on a clean pinned commit; nothing else running on the machine)
 
 1. Check out the pinned commit clean (`git status` empty; `scripts/` must equal `HEAD`).

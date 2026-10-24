@@ -22,6 +22,7 @@ SHRINE    = out/re/stage/shrine.manifest
 PLAIN     = out/re/stage/plain.manifest
 ROAD      = out/re/stage/road.manifest
 ARENA02   = out/re/stage/arena_02.manifest
+ARENA03   = out/re/stage/arena_03.manifest
 # The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, the
 # two S7 wake cuts (docs/notes/s7-recon.md §6), the 26 S8 ride clips
 # (docs/notes/s8-recon.md), then the six S9 raise clips at 43…48 (design D9).
@@ -80,12 +81,31 @@ QUADRATUS_CLIPS = boss_a_add_bl_shoulder_top_damage boss_a_add_body_damage \
                   boss_a_scale_center boss_a_search boss_a_stand boss_a_standby boss_a_turn_l \
                   boss_a_turn_r boss_a_walk boss_a_walk_end boss_a_walk_start \
                   boss_a_walk_turn_l boss_a_walk_turn_r
+# Gaius's 62 clips (S12 design D11; recon arena03/), every cp3shadow/anim/knight_a_*.anb, in byte
+# order (LC_ALL=C sort). The order is the clip index. Baked by `make bake-knight`, part of `bake` (ruling R-C).
+KNIGHT_CLIPS = knight_a_add_arm_l_back_damage knight_a_add_arm_l_front_damage knight_a_add_arm_l_up_end \
+               knight_a_add_arm_l_up_loop knight_a_add_arm_l_up_start knight_a_add_arm_r_front_damage \
+               knight_a_add_arm_r_up_end knight_a_add_arm_r_up_loop knight_a_add_arm_r_up_start \
+               knight_a_add_body_back_damage knight_a_add_body_back_damage_weak knight_a_add_face_damage \
+               knight_a_add_hara_back_damage knight_a_add_hara_front_damage knight_a_add_head_damage \
+               knight_a_add_insight_dummy knight_a_add_jowan_l_back_damage knight_a_add_jowan_l_front_damage \
+               knight_a_add_jowan_r_back_damage knight_a_add_jowan_r_front_damage knight_a_add_mune_damage \
+               knight_a_add_neck_back_damage knight_a_add_shoulder_l_damage knight_a_add_shoulder_r_damage \
+               knight_a_atk1 knight_a_atk1_2 knight_a_atk1_3 knight_a_atk1_end knight_a_atk1_fail \
+               knight_a_atk1_fail2 knight_a_atk1_start knight_a_atk2_end knight_a_atk2_loop \
+               knight_a_atk2_start knight_a_atk_leg_l knight_a_atk_leg_l_fail knight_a_atk_leg_l_start \
+               knight_a_atk_leg_r knight_a_atk_leg_r_fail knight_a_atk_leg_r_start knight_a_back knight_a_boot \
+               knight_a_boot_cancel knight_a_death_loop knight_a_knight_death knight_a_limit_pose \
+               knight_a_refuse_arm_l knight_a_refuse_arm_r knight_a_refuse_body knight_a_refuse_head \
+               knight_a_scale_center knight_a_search knight_a_slide_l knight_a_slide_r knight_a_stand \
+               knight_a_standby knight_a_turn_back knight_a_turn_l knight_a_turn_r knight_a_walk \
+               knight_a_walk_end knight_a_walk_start
 comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake bake-quadratus run shrine plain road quadratus viewer shrine-manifest plain-manifest road-manifest arena02-manifest probe-check accept clean libview \
-        verify verify-long
+        bake bake-quadratus bake-knight run shrine plain road quadratus gaius viewer shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest probe-check accept clean libview \
+        verify verify-long behaviour
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -108,7 +128,7 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-bake: publish bake-quadratus ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases and Quadratus's 58 (rewrites the glbs)
+bake: behaviour publish bake-quadratus bake-knight ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases, Quadratus's 58, Gaius's 62 + his graph (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
@@ -122,6 +142,11 @@ bake: publish bake-quadratus ## Bake Mono's pose, Wander's 49 clips, Agro's 20, 
 bake-quadratus: publish ## Bake Quadratus (colossus_02_bull_a) with his 58 clips (rewrites his glb)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.cmsh --force --clips $(subst $(space),$(comma),$(strip $(QUADRATUS_CLIPS)))
+
+# S12: part of `bake` (D11, ruling R-C); the branch baked into its view, the merge promotes it to the base.
+bake-knight: publish ## Bake Gaius (colossus_03_knight) with his 62 clips + the events sidecar (rewrites his glb)
+	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
+		--under models/shadow/characters/colossus_03_knight/_cmn/colossus_03_knight.cmsh --force --clips $(subst $(space),$(comma),$(strip $(KNIGHT_CLIPS)))
 
 inspect: publish ## Inspect one source container (f=models/.../wander.cmsh)
 	$(CLI) inspect "$(GAME_ROOT)/$(f)"
@@ -152,6 +177,9 @@ road: plain ## The same start as `plain`: interactive play loads the road (C rai
 quadratus: app arena02-manifest ## Fight Quadratus in arena_02 (stab a rear hoof; R resets)
 	$(VIEWER) --manifest $(ARENA02)
 
+gaius: app arena03-manifest ## Fight Gaius in arena_03 (dodge his slam, grab the stuck blade; R resets)
+	$(VIEWER) --manifest $(ARENA03)
+
 viewer: app ## Show Wander alone (no stage)
 	$(VIEWER)
 
@@ -167,7 +195,10 @@ road-manifest: ## Compose out/re/stage/road.manifest from the stage data
 arena02-manifest: ## Compose out/re/stage/arena_02.manifest (Quadratus's arena) from the stage data
 	@test -f $(ARENA02) || python3 tools/re/stage/probe.py compose --stage arena_02 --library "$(LIB)" --out $(ARENA02)
 
-probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road + arena_02 manifests)
+arena03-manifest: ## Compose out/re/stage/arena_03.manifest (Gaius's lake arena) from the stage data
+	@test -f $(ARENA03) || python3 tools/re/stage/probe.py compose --stage arena_03 --library "$(LIB)" --out $(ARENA03)
+
+probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road + arena_02 + arena_03 manifests)
 	python3 tools/re/anb/probe.py check-skb
 	python3 tools/re/stage/probe.py check-cwks
 	python3 tools/re/stage/probe.py check-manifest --library "$(LIB)"
@@ -176,22 +207,28 @@ probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + pla
 	python3 tools/re/stage/probe.py check-manifest --stage plain --library "$(LIB)" $(PLAIN)
 	python3 tools/re/stage/probe.py check-manifest --stage road --library "$(LIB)" $(ROAD)
 	python3 tools/re/stage/probe.py check-manifest --stage arena_02 --library "$(LIB)" $(ARENA02)
+	python3 tools/re/stage/probe.py check-manifest --stage arena_03 --library "$(LIB)" $(ARENA03)
 
 census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
 .PHONY: census
 
+# S12: the colossus mode graphs the app interprets (part of `bake`, ruling R-C).
+behaviour: ## Export Gaius's mode graph from out/re/eboot.elf to LIB/behaviour/KNIGHT.graph.json (read-only; ~1 s)
+	@test -f out/re/eboot.elf || { echo "out/re/eboot.elf is missing: run scripts/re0-acceptance.sh first" >&2; exit 1; }
+	python3 -I tools/re/scr/graph_export.py export KNIGHT "$(LIB)/behaviour/KNIGHT.graph.json"
+
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest road-manifest arena02-manifest accept-s11 ## Run the current milestone's acceptance (S11 → S9 → S8 → … → S3)
+accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest accept-s12 ## Run the current milestone's acceptance (S12 → S11 → S9 → S8 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11, -s12 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
-verify: shrine-manifest plain-manifest road-manifest arena02-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
+verify: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
 	./scripts/verify $(ARGS)
 
-verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
+verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
 	./scripts/verify --long
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export
