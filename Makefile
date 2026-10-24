@@ -225,8 +225,9 @@ behaviour: ## Export the 16 colossus mode graphs from out/re/eboot.elf to LIB/be
 routes: ## Export the .path route graphs to LIB/behaviour/{kirin,knight,minotaur}.route.json (S13 Task 7; read-only on the game tree)
 	@for s in kirin knight minotaur; do python3 -I tools/re/path/route_export.py "$(GAME_ROOT)/cp3shadow/path/pathdata/$$s.path" "$(LIB)/behaviour/$$s.route.json" || exit 1; done
 
-terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (S13 Task 9)
-	@echo "not yet (S13 Task 9)" >&2; exit 1
+terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (read-only; ~1 s)
+	@mkdir -p "$(LIB)/stage"
+	python3 -I tools/re/clb/terrain_export.py "$(LIB)/stage/arena_04.terrain.json" --game "$(GAME_ROOT)"
 
 coverage: ## Per-boss interpreter coverage into out/re/coverage.md (S13 Task 3; needs `make behaviour`)
 	cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release && cmake --build app/build --target scr_registry_dump -j
