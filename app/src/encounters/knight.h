@@ -66,15 +66,17 @@ enum : int { Blade, Forearm, UpperArm, Shoulder, Neck, Head, Belly, Count };
 //   enable window: R3 decode — `knight_a_atk1_3` frames [9, 75): after the fling
 //     volume (track 43, f0–8) until KNIGHT_PULLSWD fires at 75.0.
 //   walkSpeed 5.0 m/s: authored (§13.4, the run speed, not the 2.2 m/s surface
-//     walk). carryFraction 0.4: authored (§13.4, ruling R-J) — high on
-//     the blade at the close, the player rides it up and climbs off onto the forearm.
+//     walk). carryFraction 0.5: authored (R-M; §13.4's 0.4 was authored too — 0.5
+//     lets the honestly-dodging player ride in one slam; bandT 0.54 at the f75 close
+//     from the 6.65 m dodge spot; ruling R-J) — on the blade's upper half at the
+//     close, the player rides it up and climbs off onto the forearm.
 //   grabEntryLowEnd: authored (D7 — the tilted disc leaves the low end 1.6–2.9 m
 //     up, beyond the 1.0 m step: a grab, not the game's walk-on).
 inline constexpr std::array<ClimbBand, B::Count> kBands{{
     {.boneA = "OptBone_IK_atk", .boneB = "OptBone_sword", .radius = 0.33f, .up = B::Forearm,
      .down = ClimbBandId::None, .weakpoint = -1, .horizontal = true, .name = "blade",
      .radiusB = 0.55f, .enableClip = "knight_a_atk1_3", .enableFrom = 9, .enableTo = 75,
-     .walkSpeed = 5.0f, .carryFraction = 0.4f, .carryTo = B::Forearm, .grabEntryLowEnd = true},
+     .walkSpeed = 5.0f, .carryFraction = 0.5f, .carryTo = B::Forearm, .grabEntryLowEnd = true},
     {.boneA = "Bone_HAND_A_R", .boneB = "Bone_UDE_R", .radius = 1.05f, .up = B::UpperArm,
      .down = B::Blade, .weakpoint = -1, .horizontal = true, .name = "forearm", .radiusB = 2.7f},
     {.boneA = "Bone_UDE_R", .boneB = "Bone_JOWA_R", .radius = 0.9f, .up = B::Shoulder,

@@ -28,22 +28,25 @@ enum Phase {
     kBellySigil, // strike the belly sigil to his death
     kDeath,      // watch the death to Done: the corpse stays
     kReset,      // R: his opening state
+    kExposure,   // walk into his next slam: one damage row lands (s12-hit)
     kPhaseCount,
 };
 constexpr const char* kPhaseNames[kPhaseCount] = {"approach", "dodge", "to_blade", "blade", "climb",
                                                   "head_sigil", "shake", "to_belly", "belly_sigil",
-                                                  "death", "reset"};
+                                                  "death", "reset", "exposure"};
 constexpr float kBudget[kPhaseCount] = {60.0f, 20.0f, 20.0f, 20.0f, 90.0f, 150.0f,
-                                        60.0f, 90.0f, 150.0f, 20.0f, 1.0f};
+                                        60.0f, 90.0f, 150.0f, 20.0f, 1.0f, 30.0f};
 constexpr int kS12PerfFrames = 240;
-// Authored (the script): where the dodge waits — kDodgeOff across his facing line (the
-// slam box's half-width across the blade is 3.1 m, KNIGHT_SWORD_ATK1_DMG, R4; plus the
-// capsule and a margin) and kLowEndAhead along it (measured on this arena: the blade's low
-// end lands 26.5 m ahead of his root); it leaves for the low end once the box's last
-// active frame (atk1_2 f4, the sidecar) has passed. Any farther and the blade cannot be
-// walked past its 60 % before the window closes.
-constexpr float kDodgeOff = 4.0f;
+// Where the dodge waits (ruling R-L): off his facing line by the slam's reach — the widest
+// lateral reach of its damage rows (KNIGHT_SWORD_ATK1*, KNIGHT_ATK_SHOCK: the sidecar's
+// rows of the slam's clips up to the box's last frame, posed on his clip-local skeleton at
+// every active frame; slam_reach) + the capsule radius + kDodgeMargin — and kLowEndAhead
+// along it; it leaves for the low end once that last frame has passed.
+// authored (selftest): the margin, the clips, the ahead distance (measured on this arena:
+// the blade's low end lands 26.5 m ahead of his root).
+constexpr float kDodgeMargin = 0.3f;
 constexpr float kLowEndAhead = 27.0f;
+constexpr const char* kSlamClips[] = {"knight_a_atk1_start", "knight_a_atk1", "knight_a_atk1_2"};
 constexpr int kSlamBoxLastFrame = 4;  // data: KNIGHT_SWORD_ATK1_DMG's window ends atk1_2 f4
 // Authored (the script): the grip it keeps — hung below kRestBelow it heads for a walked
 // band; onto the belly only above kEnterHungAbove (the climb down and three strikes).
@@ -155,6 +158,67 @@ bool rays_clear(StageCtx& ctx) {
         }
     }
     return false;
+}
+
+// A slam damage row (the dodge's set): the blade's rows and the shock (KNIGHT_ATK_SHOCK2 is
+// the stuck blade's, after the box's last frame).
+bool slam_row(const std::string& name) {
+    return name.rfind("KNIGHT_SWORD_ATK1", 0) == 0 || name == "KNIGHT_ATK_SHOCK";
+}
+
+// The slam's widest reach across his facing line (m) and its row: every slam row with an
+// amount, posed at each active frame on his clip-local skeleton (glb frame: +z his front,
+// so the reach across is |x| of the volume's farthest corner; a sphere's |x| + radius).
+float slam_reach(StageCtx& ctx, std::string& widest) {
+    const KnightFight& kn = ctx.knight;
+    const RigCpu& rig = ctx.scene.rigs[ctx.entityRig];
+    const Playback& entity = ctx.playbacks[ctx.entityRig];
+    float reach = 0.0f;
+    for (const char* clipName : kSlamClips) {
+        const int ev = events_clip(kn.events, clipName);
+        const int ci = clip_index_named(entity, clipName);
+        if (ev < 0 || ci < 0) continue;
+        const EventsClip& clip = kn.events.clips[static_cast<std::size_t>(ev)];
+        const bool last = std::string(clipName) == kSlamClips[std::size(kSlamClips) - 1];
+        for (const EventsVolume& row : clip.damage) {
+            if (!row.hasDef || !(row.amount > 0.0f) || !slam_row(row.name)) continue;
+            for (const auto& [from, to] : row.windows) {
+                for (int f = from; f <= to && !(last && f > kSlamBoxLastFrame); ++f) {
+                    const std::vector<Mat4> palette = animation_pose(
+                        ctx.scene, ctx.entityRig, entity.clips[static_cast<std::size_t>(ci)], f / clip.fps);
+                    PoseFrame pose;
+                    pose.joint = [&rig, &palette](std::string_view name, Mat4& out) {
+                        for (std::size_t j = 0; j < rig.skin.joints.size() && j < palette.size(); ++j) {
+                            if (rig.skin.joints[j].name == name) {
+                                out = mat4_mul(palette[j], rig.skin.joints[j].bindWorld);
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    const PosedVolume v = events_pose(row, static_cast<float>(f), pose, kn.optBones);
+                    float x = 0.0f;
+                    if (row.shape == EventsVolume::Sphere) {
+                        x = std::fabs(v.centre.x) + v.size.x;
+                    } else {
+                        for (int c = 0; c < 8; ++c) {
+                            float cx = v.centre.x;
+                            for (int a = 0; a < 3; ++a) {
+                                const float sz = a == 0 ? v.size.x : a == 1 ? v.size.y : v.size.z;
+                                cx += ((c >> a) & 1 ? sz : -sz) * v.axis[a].x;
+                            }
+                            x = std::max(x, std::fabs(cx));
+                        }
+                    }
+                    if (x > reach) {
+                        reach = x;
+                        widest = row.name;
+                    }
+                }
+            }
+        }
+    }
+    return reach;
 }
 
 // His shake (a refuse clip) is playing.
@@ -347,7 +411,9 @@ bool s12_start(S12Script& sc, StageCtx& ctx, double loadMs) {
                 ctx.return_wired ? 1 : 0, ctx.knight.core.graph.boss.c_str(),
                 ctx.knight.core.graph.modes.size(), ctx.knight.core.graph.motionGraph.size(),
                 knight_mode_name(ctx.knight, ctx.knight.core.rt.pending), clip_name(ctx), loadMs);
-    return true;
+    sc.dodgeReach = slam_reach(ctx, sc.dodgeWidest);
+    sc.dodgeOff = sc.dodgeReach + kPlayerCapsuleRadius + kDodgeMargin;
+    return sc.dodgeReach > 0.0f;
 }
 
 PlayerInput s12_input(S12Script& sc, StageCtx& ctx) {
@@ -361,15 +427,21 @@ PlayerInput s12_input(S12Script& sc, StageCtx& ctx) {
     const Vec3 him = ctx.encounter.entityPosition;
     switch (sc.phase) {
         case kApproach:
+        case kExposure:  // the reset's fresh fight: at him, into his next slam
             walk_along(ctx, in, him.x - me.x, him.z - me.z, /*run=*/false);
             break;
         case kDodge: {
-            // Beside where the blade's low end lands (kLowEndAhead of his root along his
-            // facing, kDodgeOff across it, on the side nearer his disc's centre): out of the
-            // slam's box, a few steps from the grab.
+            // Across his facing line first (out of every slam row's reach), then along it to
+            // beside where the blade's low end lands (kLowEndAhead), on the side nearer his
+            // disc's centre.
             const float r = ctx.encounter.entityYawDeg * kDegToRad;
-            const Vec3 to{him.x + kLowEndAhead * std::sin(r) + sc.dodgeSide * kDodgeOff * std::cos(r), me.y,
-                          him.z + kLowEndAhead * std::cos(r) - sc.dodgeSide * kDodgeOff * std::sin(r)};
+            const float off = (me.x - him.x) * std::cos(r) - (me.z - him.z) * std::sin(r);
+            if (off * sc.dodgeSide < sc.dodgeOff) {
+                walk_along(ctx, in, sc.dodgeSide * std::cos(r), -sc.dodgeSide * std::sin(r), /*run=*/true);
+                break;
+            }
+            const Vec3 to{him.x + kLowEndAhead * std::sin(r) + sc.dodgeSide * (sc.dodgeOff + 0.1f) * std::cos(r), me.y,
+                          him.z + kLowEndAhead * std::cos(r) - sc.dodgeSide * (sc.dodgeOff + 0.1f) * std::sin(r)};
             const float togo = std::hypot(to.x - me.x, to.z - me.z);
             if (togo > 0.3f) walk_along(ctx, in, to.x - me.x, to.z - me.z, /*run=*/true);
             break;
@@ -438,7 +510,7 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
         }
         std::fprintf(stderr, "\n");
     }
-    if (sc.phase < kReset && sc.phaseSeconds > kBudget[sc.phase]) {
+    if (sc.phase != kReset && sc.phaseSeconds > kBudget[sc.phase]) {
         char where[200];
         std::snprintf(where, sizeof(where), "phase %s over its %.0f s budget (mode %s, clip %s, player %s, band %s, %.1f,%.1f,%.1f)",
                       kPhaseNames[sc.phase], kBudget[sc.phase], knight_mode_name(kn, kn.core.rt.current),
@@ -469,7 +541,7 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
     // Rows that overlapped the player count, landed or not (an earlier hit's i-frames would
     // refuse the blade's damage, not move the blade).
     for (const DamageHit& h : kn.overlaps) {
-        if (sc.phase == kDodge && h.name.rfind("KNIGHT_SWORD_ATK1", 0) == 0) {
+        if (sc.phase == kDodge && slam_row(h.name)) {
             if (sc.swordRows++ == 0) {
                 // Where it overlapped: the row, his clip and frame, the player off his facing line.
                 const float r = encounter.entityYawDeg * kDegToRad;
@@ -486,16 +558,16 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
     for (const DamageHit& h : ctx.knightHits) {
         if (h.reaction == ka::kThrowOffReaction) ++sc.throwOffs;
     }
-    // The first damage row that landed on the player (once).
-    if (!sc.hitPrinted) {
-        for (const DamageHit& h : ctx.knightHits) {
-            if (h.amount > 0.0f) {
-                std::printf("%s-hit row=%s amount=%.0f clip=%s player_hp=%.0f mode=%s at=%.1f\n", p, h.name.c_str(),
-                            h.amount, clip_name(ctx), combat.health, player_mode_name(combat.mode), sc.seconds);
-                sc.hitPrinted = true;
-                break;
-            }
+    // His damage lands on the player only in the exposure (ruling R-L): once, named there.
+    for (const DamageHit& h : ctx.knightHits) {
+        if (!(h.amount > 0.0f)) continue;
+        if (sc.phase != kExposure) {
+            return fail(sc, "a damage row landed outside the exposure: " + h.name + " in phase " +
+                                kPhaseNames[sc.phase]);
         }
+        std::printf("%s-hit row=%s amount=%.0f clip=%s player_hp=%.0f mode=%s at=%.1f\n", p, h.name.c_str(),
+                    h.amount, clip_name(ctx), combat.health, player_mode_name(combat.mode), sc.seconds);
+        return 0;
     }
     // The climb's route, once per band.
     const int band = attached(ctx) ? static_cast<int>(combat.band) : -1;
@@ -551,8 +623,16 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
         case kDodge:
             if (clip_is(ctx, "knight_a_atk1_3") ||
                 (clip_is(ctx, "knight_a_atk1_2") && entity_frame(ctx) > kSlamBoxLastFrame)) {
-                std::printf("%s-dodge sword_rows=%d%s player_hp=%.0f mode=%s at=%.1f\n", p, sc.swordRows,
-                            sc.swordFirst.c_str(), combat.health, player_mode_name(combat.mode), sc.seconds);
+                {
+                    const float r = encounter.entityYawDeg * kDegToRad;
+                    const Vec3 me = ctx.player.position, him = encounter.entityPosition;
+                    std::printf("%s-dodge sword_rows=%d%s off_line=%.2f need=%.2f widest=%s reach=%.2f player_hp=%.0f "
+                                "mode=%s at=%.1f\n",
+                                p, sc.swordRows, sc.swordFirst.c_str(),
+                                std::fabs((me.x - him.x) * std::cos(r) - (me.z - him.z) * std::sin(r)), sc.dodgeOff,
+                                sc.dodgeWidest.c_str(), sc.dodgeReach, combat.health, player_mode_name(combat.mode),
+                                sc.seconds);
+                }
                 if (sc.swordRows != 0) return fail(sc, "the slam's blade landed on the player");
                 next(sc, kToBlade);
             }
@@ -569,14 +649,18 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
         case kBlade: {
             const ClimbBand& blade = climb_band(ctx.enc().bands, ka::B::Blade);
             if (sc.closeFrame < 0 && (!clip_is(ctx, blade.enableClip) || entity_frame(ctx) >= blade.enableTo)) {
+                // The bandT the close decided on (a fall at the close has already left the band:
+                // its last bandT on it).
                 sc.closeFrame = entity_frame(ctx);
-                sc.closeT = combat.band == ka::B::Blade ? combat.bandT : -1.0f;
+                sc.closeT = combat.band == ka::B::Blade ? combat.bandT : sc.lastBladeT;
             }
+            if (combat.band == ka::B::Blade) sc.lastBladeT = combat.bandT;
             const bool off = !attached(ctx);
             if (combat.band == ka::B::Forearm || off) {
-                std::printf("%s-blade window=%d..%d grab_frame=%d close_frame=%d close_t=%.2f carried=%d band=%s slams=%d "
-                            "at=%.1f\n",
+                std::printf("%s-blade window=%d..%d grab_frame=%d close_frame=%d close_t=%.2f ride_from=%.2f margin=%.2f "
+                            "carried=%d band=%s slams=%d at=%.1f\n",
                             p, blade.enableFrom, blade.enableTo, sc.grabFrame, sc.closeFrame, sc.closeT,
+                            1.0f - blade.carryFraction, sc.closeT - (1.0f - blade.carryFraction),
                             !off && combat.band == ka::B::Forearm ? 1 : 0, off ? "none" : band_name(ctx), sc.slams,
                             sc.seconds);
                 if (off) return fail(sc, "the blade dropped the climber");
@@ -680,7 +764,8 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
                 death.phase != DeathPhase::Idle || kn.core.rt.pending != kn.core.graph.root.retryStartMode) {
                 return fail(sc, "R did not bring Gaius back to his opening state");
             }
-            return 0;
+            next(sc, kExposure);
+            break;
         }
         default:
             break;

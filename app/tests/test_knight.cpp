@@ -203,7 +203,7 @@ TEST_CASE("the blade band carries the R3 window, the 5 m/s walk, the low-end gra
     CHECK(blade.enableFrom == 9);   // after the fling volume's f0–8
     CHECK(blade.enableTo == 75);    // KNIGHT_PULLSWD fires at 75.0 (half-open)
     CHECK(blade.walkSpeed == doctest::Approx(5.0f));
-    CHECK(blade.carryFraction == doctest::Approx(0.4f));
+    CHECK(blade.carryFraction == doctest::Approx(0.5f));  // R-M
     CHECK(blade.carryTo == k::B::Forearm);
     CHECK(blade.grabEntryLowEnd);
     // Low end (tip) -> hilt, so bandT >= 1 - carryFraction is the part near his fist.

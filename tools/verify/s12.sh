@@ -103,7 +103,7 @@ one_line() {
 
 # The timeline's events in order (the mode/climb/strike lines in between vary with the route).
 s12_events="$(grep -E '^s12-(load|judge|slam|hit|dodge|blade|route|sigil|shake|death|corpse|bound|reset|perf|status) ' <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ' || true)"
-[[ "$s12_events" = "s12-load s12-judge s12-slam s12-hit s12-dodge s12-blade s12-route s12-sigil s12-shake s12-sigil s12-death s12-death s12-death s12-corpse s12-bound s12-reset s12-perf s12-status " ]] ||
+[[ "$s12_events" = "s12-load s12-judge s12-slam s12-dodge s12-blade s12-route s12-sigil s12-shake s12-sigil s12-death s12-death s12-death s12-corpse s12-bound s12-reset s12-hit s12-perf s12-status " ]] ||
   fail "the s12-* events are '$s12_events' (expected the timeline's order)"
 
 load_line="$(one_line '^s12-load ' s12-load)"
@@ -118,11 +118,14 @@ grep -q -E '^s12-mode from=Knight_sword_attack_mode to=Knight_parent_mode ' <<<"
   fail "the first judge volume that held the player is not the slam's, in front of him"
 [[ "$(one_line '^s12-slam ' s12-slam)" =~ ^s12-slam\ n=1\ choice=slam\ rays=1\  ]] ||
   fail "the first attack is not a slam with its three rays clear"
+# The one hit: his next slam after R walked into (ruling R-L; any earlier landed row fails the run).
 [[ "$(one_line '^s12-hit ' s12-hit)" =~ ^s12-hit\ row=KNIGHT_[A-Z0-9_]+\ amount=[1-9][0-9]*\  ]] ||
-  fail "no damage row landed on the player"
-[[ "$(one_line '^s12-dodge ' s12-dodge)" =~ ^s12-dodge\ sword_rows=0\  ]] || fail "the slam's blade landed on the player"
-[[ "$(one_line '^s12-blade ' s12-blade)" =~ ^s12-blade\ window=9\.\.75\ grab_frame=[0-9]+\ close_frame=75\ close_t=0\.[6-9][0-9]\ carried=1\ band=forearm\ slams=1\  ]] ||
-  fail "the blade was not grabbed, walked past 60 % and ridden up onto the forearm in one slam"
+  fail "no damage row landed on the player in the exposure"
+# The dodge clears every slam row by overlap (not by i-frames), off the line by the posed reach.
+[[ "$(one_line '^s12-dodge ' s12-dodge)" =~ ^s12-dodge\ sword_rows=0\ off_line=[0-9.]+\ need=[0-9.]+\ widest=KNIGHT_[A-Z0-9_]+\ reach=[0-9.]+\ player_hp=100\  ]] ||
+  fail "the slam's rows reached the player during the dodge"
+[[ "$(one_line '^s12-blade ' s12-blade)" =~ ^s12-blade\ window=9\.\.75\ grab_frame=[0-9]+\ close_frame=75\ close_t=0\.[5-9][0-9]\ ride_from=0\.50\ margin=0\.[0-9]+\ carried=1\ band=forearm\ slams=1\  ]] ||
+  fail "the blade was not grabbed, walked onto its upper half and ridden up onto the forearm in one slam"
 [[ "$(one_line '^s12-route ' s12-route)" =~ ^s12-route\ bands=blade,forearm,upper_arm,shoulder,neck,head\  ]] ||
   fail "the climb did not follow the band chain to the head"
 sigils="$(grep -E '^s12-sigil ' <<<"$selftest_out" | sed 's/^s12-sigil done=\([a-z]*\) .* health=\([0-9]*\) .*/\1:\2/' | tr '\n' ' ' || true)"
@@ -148,8 +151,8 @@ perf_line="$(one_line '^s12-perf ' s12-perf)"
 perf_frame="$(field "$perf_line" frame_ms)"
 cmp_ok "$perf_frame" ">" 0 && cmp_ok "$perf_frame" "<=" 16.7 ||
   fail "the arena_03 frame costs ${perf_frame} ms (outside the 60 fps budget of 16.7 ms)"
-[[ "$(one_line '^s12-status ' s12-status)" =~ ^s12-status\ phases_done=10\  ]] ||
-  fail "the selftest did not reach its last phase (reset)"
+[[ "$(one_line '^s12-status ' s12-status)" =~ ^s12-status\ phases_done=11\  ]] ||
+  fail "the selftest did not reach its last phase (the exposure)"
 one_line '^s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 ' s1-status > /dev/null
 
 # The four stills: one 2560x1440 s1-screenshot line each, PNG magic, > 5000 B, a channel span >= 30.

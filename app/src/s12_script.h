@@ -39,16 +39,19 @@ struct S12Script {
     int lastDeathPhase = -1;
     int lastClip = -1;
     bool judged = false;
-    bool hitPrinted = false;
     int slams = 0;
     int swordRows = 0;  // the slam's blade rows that overlapped the player during the dodge
     std::string swordFirst;  // the first one: row, clip, frame, the player's offsets
     int throwOffs = 0;  // KNIGHT_PLAYER_OUT landings (D12)
     float dodgeSide = 1.0f;
+    float dodgeReach = 0.0f;  // the slam rows' widest reach across his facing line (slam_reach)
+    float dodgeOff = 0.0f;    // the dodge spot's offset off the line: reach + capsule + margin
+    std::string dodgeWidest;  // the row that reaches widest
     // The blade: the window it was grabbed in and what its close did.
     int grabFrame = -1;
     int closeFrame = -1;
     float closeT = -1.0f;
+    float lastBladeT = -1.0f;  // the bandT on the blade last frame
     bool bladeDone = false;
     std::vector<std::string> route;  // the bands climbed, in order
     bool sawShake = false;
