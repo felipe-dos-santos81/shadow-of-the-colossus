@@ -85,7 +85,7 @@ space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
         bake bake-quadratus run shrine plain road quadratus viewer shrine-manifest plain-manifest road-manifest arena02-manifest probe-check accept clean libview \
-        verify verify-long
+        verify verify-long behaviour
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -180,6 +180,11 @@ probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + pla
 census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
 .PHONY: census
+
+# S12: the colossus mode graphs the app interprets (not yet a `bake` prerequisite; Task 10 adds it).
+behaviour: ## Export Gaius's mode graph from out/re/eboot.elf to LIB/behaviour/KNIGHT.graph.json (read-only; ~1 s)
+	@test -f out/re/eboot.elf || { echo "out/re/eboot.elf is missing: run scripts/re0-acceptance.sh first" >&2; exit 1; }
+	python3 -I tools/re/scr/graph_export.py export KNIGHT "$(LIB)/behaviour/KNIGHT.graph.json"
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
