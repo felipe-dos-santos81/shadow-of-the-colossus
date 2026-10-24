@@ -25,6 +25,9 @@ MASKS = (
     ("s11-perf ", "frame_ms"),  # S11 (Task 10's two runs: 8.345 / 8.289)
     ("s11-load ", "ms"),        # the arena_02 load wall time (1073.7 / 891.6)
     ("s11e2e-load ", "ms"),     # the same load inside the e2e (952.0 / 869.7)
+    ("s12-perf ", "frame_ms"),  # S12 (Task 9's two runs)
+    ("s12-load ", "ms"),        # the arena_03 load wall time
+    ("s12e2e-load ", "ms"),     # the same load inside the e2e
 )
 MASKED = "<masked>"
 
