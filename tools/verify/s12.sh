@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# s12.sh — the runner's adapter for S12 (Gaius), report-only until S12 Task 10 commits
-# scripts/s12-acceptance.sh and blesses the goldens (run.report_only).
-#   gpu: the preflight (arena_03.manifest selects Gaius; his bake, sidecar and exported graph), the
-#        four flag refusals + the --stage refusal (exit 2), the selftest + four 2560x1440 stills (the
+# s12.sh — the runner's adapter for S12 (Gaius): a second copy of scripts/s12-acceptance.sh's
+# assertions, like s3…s11 (the frozen S11 chain and the build are run.py's; the gates are verbatim).
+#   gpu: the preflight (arena_03.manifest selects Gaius; his bake; the KNIGHT export's 13/53/40/171
+#        counts; the knight_a events sidecar valid), the four flag refusals + the --stage refusal
+#        (exit 2), the selftest + four 2560x1440 stills (the
 #        timeline's gates, Review Focus 5's bound, the perf budget, the pixel spans), the e2e (skipped
 #        by --quick): one arena load and no shrine, and its lines equal the selftest's.
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -39,6 +40,24 @@ sys.exit(0 if {"knight_a_stand", "knight_a_atk1_3", "knight_a_knight_death"} <= 
     fail "$knight_clips_json lacks his bake (knight_a_stand/atk1_3/knight_death: make bake-knight)"
   [[ -f "$knight_events_json" ]] || fail "Gaius's events sidecar not found: $knight_events_json (make bake-knight)"
   [[ -f "$knight_graph_json" ]] || fail "Gaius's exported graph not found: $knight_graph_json (make behaviour)"
+  # The export counts (spec D2; tools/re/scr/test_graph_export.py PINNED): modes, conditions, transitions, edges.
+  python3 -I -c 'import json, sys
+g = json.load(open(sys.argv[1]))
+n = (len(g["modes"]), len(g["conditions"]), sum(len(m["transitions"]) for m in g["modes"]), len(g["motion_graph"]))
+sys.exit(0 if g["format"] == "sotc-scr-graph/0" and g["boss"] == "KNIGHT" and n == (13, 53, 40, 171) else 1)' "$knight_graph_json" ||
+    fail "$knight_graph_json is not KNIGHT's export (13 modes, 53 conditions, 40 transitions, 171 motion edges: make behaviour)"
+  # The sidecar (plan Task 3): its format, skeleton and frame, < 64 KB, and the pinned rows.
+  python3 -I -c 'import json, os, sys
+e = json.load(open(sys.argv[1]))
+c = e["clips"]
+row = lambda clip, kind, name: [r for r in c[clip][kind] if r["name"] == name]
+foot = row("knight_a_walk", "effects", "KNIGHT_FOOT_R")
+shock = row("knight_a_atk1_3", "damage", "KNIGHT_ATK_SHOCK2")
+sys.exit(0 if e["format"] == "sotc-objanim-events/1" and e["skeleton"] == "knight_a" and e["frame"] == "glb"
+         and os.path.getsize(sys.argv[1]) < 65536 and row("knight_a_atk1", "damage", "KNIGHT_SWORD_ATK1_DMG")
+         and shock and shock[0]["windows"] == [[0, 94]] and foot and foot[0]["events"] == [[40, 42]]
+         and foot[0]["spawns"] == ["knight_walk_dmg"] and "knight_walk_dmg" in e["spawned"] and e["judgeDefaults"] else 1)' "$knight_events_json" ||
+    fail "$knight_events_json is not a valid knight_a sidecar (format/skeleton/frame, < 64 KB, the pinned rows: make bake-knight)"
 }
 
 section_gpu() {
@@ -122,23 +141,31 @@ grep -q -E '^s12-mode from=Knight_sword_attack_mode to=Knight_parent_mode ' <<<"
 [[ "$(one_line '^s12-hit ' s12-hit)" =~ ^s12-hit\ row=KNIGHT_[A-Z0-9_]+\ amount=[1-9][0-9]*\  ]] ||
   fail "no damage row landed on the player in the exposure"
 # The dodge clears every slam row by overlap (not by i-frames), off the line by the posed reach.
-[[ "$(one_line '^s12-dodge ' s12-dodge)" =~ ^s12-dodge\ sword_rows=0\ off_line=[0-9.]+\ need=[0-9.]+\ widest=KNIGHT_[A-Z0-9_]+\ reach=[0-9.]+\ player_hp=100\  ]] ||
+dodge_line="$(one_line '^s12-dodge ' s12-dodge)"
+[[ "$dodge_line" =~ ^s12-dodge\ sword_rows=0\ off_line=[0-9.]+\ need=[0-9.]+\ widest=KNIGHT_[A-Z0-9_]+\ reach=[0-9.]+\ player_hp=100\  ]] ||
   fail "the slam's rows reached the player during the dodge"
-[[ "$(one_line '^s12-blade ' s12-blade)" =~ ^s12-blade\ window=9\.\.75\ grab_frame=[0-9]+\ close_frame=75\ close_t=0\.[5-9][0-9]\ ride_from=0\.50\ margin=0\.[0-9]+\ carried=1\ band=forearm\ slams=1\  ]] ||
+dodge_off="$(field "$dodge_line" off_line)"
+dodge_need="$(field "$dodge_line" need)"
+cmp_ok "$dodge_off" ">=" "$dodge_need" || fail "the dodge spot is inside the slam's posed reach: $dodge_line"
+blade_line="$(one_line '^s12-blade ' s12-blade)"
+[[ "$blade_line" =~ ^s12-blade\ window=9\.\.75\ grab_frame=[0-9]+\ close_frame=75\ close_t=0\.[5-9][0-9]\ ride_from=0\.50\ margin=0\.[0-9]+\ carried=1\ band=forearm\ slams=1\  ]] ||
   fail "the blade was not grabbed, walked onto its upper half and ridden up onto the forearm in one slam"
-[[ "$(one_line '^s12-route ' s12-route)" =~ ^s12-route\ bands=blade,forearm,upper_arm,shoulder,neck,head\  ]] ||
+route_line="$(one_line '^s12-route ' s12-route)"
+[[ "$route_line" =~ ^s12-route\ bands=blade,forearm,upper_arm,shoulder,neck,head\  ]] ||
   fail "the climb did not follow the band chain to the head"
 sigils="$(grep -E '^s12-sigil ' <<<"$selftest_out" | sed 's/^s12-sigil done=\([a-z]*\) .* health=\([0-9]*\) .*/\1:\2/' | tr '\n' ' ' || true)"
 [[ "$sigils" = "head:84 belly:0 " ]] || fail "the sigils were '$sigils' (expected head:84 belly:0)"
 strikes="$(grep -E '^s12-strike ' <<<"$selftest_out" | sed 's/.*weakpoint=\([^ ]*\) .*/\1/' | uniq | tr '\n' ' ' || true)"
 [[ "$strikes" = "weakpoint_01 weakpoint_02 " ]] || fail "the sigils were not struck head then belly: '$strikes'"
 [[ "$(grep -E '^s12-strike ' <<<"$selftest_out" | tail -1)" =~ \ health=0\ killed=1\  ]] || fail "the last strike did not kill him"
-[[ "$(one_line '^s12-shake ' s12-shake)" =~ ^s12-shake\ survived=1\ clip=knight_a_refuse_[a-z_]+\  ]] ||
+shake_line="$(one_line '^s12-shake ' s12-shake)"
+[[ "$shake_line" =~ ^s12-shake\ survived=1\ clip=knight_a_refuse_[a-z_]+\  ]] ||
   fail "no shake-off was survived"
 deaths="$(grep -E '^s12-death ' <<<"$selftest_out" | sed 's/^s12-death phase=\([A-Za-z]*\) .* mode=\([A-Za-z_]*\) .*/\1:\2/' | tr '\n' ' ' || true)"
 [[ "$deaths" = "Motion:Knight_death Collapse:Knight_death Done:Knight_death " ]] ||
   fail "the death phases are '$deaths' (expected the graph's root death mode throughout)"
-[[ "$(one_line '^s12-corpse ' s12-corpse)" =~ ^s12-corpse\ live_body=1\ clip=knight_a_knight_death\ t=6\.000\ held=1\ .*\ return=Idle$ ]] ||
+corpse_line="$(one_line '^s12-corpse ' s12-corpse)"
+[[ "$corpse_line" =~ ^s12-corpse\ live_body=1\ clip=knight_a_knight_death\ t=6\.000\ held=1\ .*\ return=Idle$ ]] ||
   fail "the corpse did not stay as his held death frame"
 bound_line="$(one_line '^s12-bound ' s12-bound)"
 bound_max="$(field "$bound_line" max)"
@@ -225,6 +252,9 @@ if [[ -z "${VERIFY_QUICK:-}" ]]; then   # --quick skips the e2e run
   e2e_loads="$(grep -E '^s7-load ' <<<"$e2e_out" | awk '{ print $2 }' | tr '\n' ' ' || true)"
   [[ "$e2e_loads" = "stage=arena " ]] ||
     fail "the e2e loaded '$e2e_loads' (expected the arena once: no shrine after his death)"
+  e2e_load_line="$(grep -m1 -E '^s12e2e-load ' <<<"$e2e_out" || true)"
+  [[ "$e2e_load_line" =~ ^s12e2e-load\ stage=arena\ encounter=knight\ meshes=[0-9]+\ ground=[0-9]+x[0-9]+\ layers=64\ .*\ return=0\ graph=KNIGHT\ modes=13\ edges=171\ start=Knight_route_patrol\ clip=knight_a_stand\ ms=[0-9]+\.[0-9]$ ]] ||
+    fail "s12e2e-load is malformed (Gaius's arena and graph, a layered ground, no return): $e2e_load_line"
   # The interactive loop played the selftest's fight: the same lines, the timings aside.
   self_lines="$(grep -E '^s12-' <<<"$selftest_out" | grep -v -E '^s12-(load|perf|status) ' | sed 's/^s12-//' || true)"
   e2e_lines="$(grep -E '^s12e2e-' <<<"$e2e_out" | grep -v -E '^s12e2e-(load|done) ' | sed 's/^s12e2e-//' || true)"

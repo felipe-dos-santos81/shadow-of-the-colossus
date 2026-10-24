@@ -82,8 +82,7 @@ QUADRATUS_CLIPS = boss_a_add_bl_shoulder_top_damage boss_a_add_body_damage \
                   boss_a_turn_r boss_a_walk boss_a_walk_end boss_a_walk_start \
                   boss_a_walk_turn_l boss_a_walk_turn_r
 # Gaius's 62 clips (S12 design D11; recon arena03/), every cp3shadow/anim/knight_a_*.anb, in byte
-# order (LC_ALL=C sort). The order is the clip index. Baked only by `make bake-knight` (Task 10 adds
-# it to `bake`, ruling R-C).
+# order (LC_ALL=C sort). The order is the clip index. Baked by `make bake-knight`, part of `bake` (ruling R-C).
 KNIGHT_CLIPS = knight_a_add_arm_l_back_damage knight_a_add_arm_l_front_damage knight_a_add_arm_l_up_end \
                knight_a_add_arm_l_up_loop knight_a_add_arm_l_up_start knight_a_add_arm_r_front_damage \
                knight_a_add_arm_r_up_end knight_a_add_arm_r_up_loop knight_a_add_arm_r_up_start \
@@ -105,7 +104,7 @@ comma := ,
 space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
-        bake bake-quadratus bake-knight run shrine plain road quadratus viewer shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest probe-check accept clean libview \
+        bake bake-quadratus bake-knight run shrine plain road quadratus gaius viewer shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest probe-check accept clean libview \
         verify verify-long behaviour
 
 help: ## List the targets
@@ -129,7 +128,7 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-bake: publish bake-quadratus ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases and Quadratus's 58 (rewrites the glbs)
+bake: publish bake-quadratus bake-knight behaviour ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases, Quadratus's 58, Gaius's 62 + his graph (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
@@ -144,7 +143,7 @@ bake-quadratus: publish ## Bake Quadratus (colossus_02_bull_a) with his 58 clips
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/colossus_02_bull_a/_cmn/colossus_02_bull_a.cmsh --force --clips $(subst $(space),$(comma),$(strip $(QUADRATUS_CLIPS)))
 
-# S12: into the branch's view until the merge promotes it (D11; `bake` gains it at Task 10, ruling R-C).
+# S12: part of `bake` (D11, ruling R-C); the branch baked into its view, the merge promotes it to the base.
 bake-knight: publish ## Bake Gaius (colossus_03_knight) with his 62 clips + the events sidecar (rewrites his glb)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/colossus_03_knight/_cmn/colossus_03_knight.cmsh --force --clips $(subst $(space),$(comma),$(strip $(KNIGHT_CLIPS)))
@@ -177,6 +176,9 @@ road: plain ## The same start as `plain`: interactive play loads the road (C rai
 
 quadratus: app arena02-manifest ## Fight Quadratus in arena_02 (stab a rear hoof; R resets)
 	$(VIEWER) --manifest $(ARENA02)
+
+gaius: app arena03-manifest ## Fight Gaius in arena_03 (dodge his slam, grab the stuck blade; R resets)
+	$(VIEWER) --manifest $(ARENA03)
 
 viewer: app ## Show Wander alone (no stage)
 	$(VIEWER)
@@ -211,16 +213,16 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
 .PHONY: census
 
-# S12: the colossus mode graphs the app interprets (not yet a `bake` prerequisite; Task 10 adds it).
+# S12: the colossus mode graphs the app interprets (part of `bake`, ruling R-C).
 behaviour: ## Export Gaius's mode graph from out/re/eboot.elf to LIB/behaviour/KNIGHT.graph.json (read-only; ~1 s)
 	@test -f out/re/eboot.elf || { echo "out/re/eboot.elf is missing: run scripts/re0-acceptance.sh first" >&2; exit 1; }
 	python3 -I tools/re/scr/graph_export.py export KNIGHT "$(LIB)/behaviour/KNIGHT.graph.json"
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest road-manifest arena02-manifest accept-s11 ## Run the current milestone's acceptance (S11 → S9 → S8 → … → S3)
+accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest accept-s12 ## Run the current milestone's acceptance (S12 → S11 → S9 → S8 → … → S3)
 
-accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11 (one at a time)
+accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11, -s12 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
 verify: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
