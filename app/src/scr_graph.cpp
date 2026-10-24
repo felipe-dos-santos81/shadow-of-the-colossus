@@ -251,7 +251,10 @@ struct Loader {
             if (rows.kind != Json::Array) fail(where + ": transitions is not an array");
             for (const Json& r : rows.array) {
                 ScrTransition t;
-                t.cond = ref(r.get("when"), condKeys, "condition", where + " transition");
+                // `when` must be there (a renamed key must not read as always-true); an
+                // explicit null is the always-true row.
+                t.cond = ref(present(r, "when", where + " transition"), condKeys, "condition",
+                             where + " transition");
                 t.to = static_cast<int>(num(need(r, "to", where), where));
                 if (t.to < 0 || t.to >= static_cast<int>(modes.array.size())) {
                     fail(where + ": transition to " + std::to_string(t.to) + " out of range");
