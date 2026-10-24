@@ -41,7 +41,8 @@ struct S12Script {
     bool judged = false;
     bool hitPrinted = false;
     int slams = 0;
-    int swordRows = 0;  // the slam's blade rows that landed during the dodge
+    int swordRows = 0;  // the slam's blade rows that overlapped the player during the dodge
+    std::string swordFirst;  // the first one: row, clip, frame, the player's offsets
     int throwOffs = 0;  // KNIGHT_PLAYER_OUT landings (D12)
     float dodgeSide = 1.0f;
     // The blade: the window it was grabbed in and what its close did.

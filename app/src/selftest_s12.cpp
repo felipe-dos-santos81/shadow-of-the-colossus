@@ -466,8 +466,24 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
         sc.judged = true;
     }
     // The slam's own rows (the blade box) during the dodge: they must miss.
+    // Rows that overlapped the player count, landed or not (an earlier hit's i-frames would
+    // refuse the blade's damage, not move the blade).
+    for (const DamageHit& h : kn.overlaps) {
+        if (sc.phase == kDodge && h.name.rfind("KNIGHT_SWORD_ATK1", 0) == 0) {
+            if (sc.swordRows++ == 0) {
+                // Where it overlapped: the row, his clip and frame, the player off his facing line.
+                const float r = encounter.entityYawDeg * kDegToRad;
+                const Vec3 me = ctx.player.position, him = encounter.entityPosition;
+                char at[200];
+                std::snprintf(at, sizeof(at), " first=%s clip=%s frame=%d off_line=%.2f ahead=%.2f", h.name.c_str(),
+                              clip_name(ctx), entity_frame(ctx),
+                              (me.x - him.x) * std::cos(r) - (me.z - him.z) * std::sin(r),
+                              (me.x - him.x) * std::sin(r) + (me.z - him.z) * std::cos(r));
+                sc.swordFirst = at;
+            }
+        }
+    }
     for (const DamageHit& h : ctx.knightHits) {
-        if (sc.phase == kDodge && h.name.rfind("KNIGHT_SWORD_ATK1", 0) == 0) ++sc.swordRows;
         if (h.reaction == ka::kThrowOffReaction) ++sc.throwOffs;
     }
     // The first damage row that landed on the player (once).
@@ -535,8 +551,8 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
         case kDodge:
             if (clip_is(ctx, "knight_a_atk1_3") ||
                 (clip_is(ctx, "knight_a_atk1_2") && entity_frame(ctx) > kSlamBoxLastFrame)) {
-                std::printf("%s-dodge sword_rows=%d player_hp=%.0f mode=%s at=%.1f\n", p, sc.swordRows, combat.health,
-                            player_mode_name(combat.mode), sc.seconds);
+                std::printf("%s-dodge sword_rows=%d%s player_hp=%.0f mode=%s at=%.1f\n", p, sc.swordRows,
+                            sc.swordFirst.c_str(), combat.health, player_mode_name(combat.mode), sc.seconds);
                 if (sc.swordRows != 0) return fail(sc, "the slam's blade landed on the player");
                 next(sc, kToBlade);
             }
@@ -640,8 +656,9 @@ std::optional<int> s12_after(S12Script& sc, StageCtx& ctx) {
                 if (!live || ctx.carry.ret.phase != ReturnPhase::Idle) {
                     return fail(sc, "the corpse did not stay (or the return ran)");
                 }
-                std::printf("%s-bound max=%.2f radius=%.1f centre=%.0f,%.0f\n", p, kn.maxBoundDistance,
-                            kn.core.boundRadius, kn.core.boundCentre.x, kn.core.boundCentre.z);
+                std::printf("%s-bound max=%.2f unclamped=%.2f clamped_frames=%d radius=%.1f centre=%.0f,%.0f\n", p,
+                            kn.maxBoundDistance, kn.maxUnclampedDistance, kn.clampedFrames, kn.core.boundRadius,
+                            kn.core.boundCentre.x, kn.core.boundCentre.z);
                 if (kn.maxBoundDistance > kn.core.boundRadius + 1e-3f) {
                     return fail(sc, "his root left his 36 m disc");
                 }

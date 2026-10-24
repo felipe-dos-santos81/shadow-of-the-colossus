@@ -116,12 +116,10 @@ bool knight_core_load(KnightCore& core, const std::string& graphJson,
     if (!scr_knight_check(core.graph, judgeNames, why)) return false;
     core.seconds = seconds;
     core.rootless.assign(clipNames.size(), 0);
-    core.loops.assign(clipNames.size(), 0);
     for (size_t i = 0; i < clipNames.size(); ++i) {
         for (const char* name : knight_root::kNoRoot) {
             if (clipNames[i] == name) core.rootless[i] = 1;
         }
-        if (const knight_root::RootSeries* r = root_series(clipNames[i])) core.loops[i] = r->loop ? 1 : 0;
     }
     core.standClip = scr_clip(core.graph, standClip);
     if (core.standClip < 0 || core.rootless[static_cast<size_t>(core.standClip)]) {
@@ -178,15 +176,19 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     // The clock.
     const float len = c.seconds[static_cast<size_t>(m.clip)];
     const float t0 = m.time;
-    if (!m.held) m.time += dt;
-    const bool ended = !m.held && m.time >= len;
+    const bool wasHeld = m.held;
+    if (!wasHeld) m.time += dt;
+    const bool ended = !wasHeld && m.time >= len;
+    // A held clip (a refused rootless target, a one-shot with nowhere to go) is at its end:
+    // its deferred (p30 -1) edges and its else edge may still leave it.
+    const bool atEnd = ended || wasHeld;
     // A playing turn is cut once its own turn bits are no longer requested: the gait fires
     // them only past R1's 3° steer gate (or, arrived, while his facing is off by more), so
     // the turn has reached his goal's bearing. Every edge out of a turn is taken at its end
     // (p30 -1): without the cut one ~90° turn overshoots and he turns back (Task 5's note).
     const knight_root::TurnHeading* turn = turn_series(name);
     bool cut = false;
-    if (turn != nullptr && !ended) {
+    if (turn != nullptr && !atEnd) {
         const bool left = turn->deg[turn->frames - 1] > 0.0f;
         const bool still = left ? requested(out.step.controls, scr_knight::kCtrlTurnLeft) ||
                                       requested(out.step.controls, scr_knight::kCtrlStopTurnLeft)
@@ -203,7 +205,7 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     int to = scr_control_clip(c.graph, c.rt, out.step.controls, w);
     int edge = to >= 0 ? c.rt.controlEdge : -1;
     int nextCm = to >= 0 ? c.rt.controlMode : m.controlMode;
-    if (to >= 0 && c.graph.motionGraph[static_cast<size_t>(edge)].p30 < 0.0f && !ended && !cut) {
+    if (to >= 0 && c.graph.motionGraph[static_cast<size_t>(edge)].p30 < 0.0f && !atEnd && !cut) {
         to = -1;  // waits for the clip's end; asked again every frame
         edge = -1;
         nextCm = m.controlMode;
@@ -212,7 +214,7 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
         c.rt.controlMode = cmBefore;
         c.rt.controlEdge = edgeBefore;
     }
-    if (to < 0 && (ended || cut)) {
+    if (to < 0 && (atEnd || cut)) {
         int cm = -1;
         edge = else_edge(c.graph, m.clip, cm);
         if (edge >= 0) {
@@ -234,8 +236,8 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     const float atSwitch = ended ? len : m.time;
     Vec3 local = sub(root_at(name, to >= 0 ? atSwitch : endT), root_at(name, t0));
     out.travel = rotate(local, c.yawDeg);
-    if (to >= 0 || (ended && to < 0 && !m.held)) {
-        // A turn adds the yaw its bones turned (its end or the cut).
+    if (!wasHeld && (to >= 0 || ended)) {
+        // A turn adds the yaw its bones turned (its end or the cut), once.
         out.yawAddedDeg = turn_heading(name, atSwitch);
         c.yawDeg = std::remainder(c.yawDeg + out.yawAddedDeg, 360.0f);
     }
@@ -470,7 +472,8 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
             // mortality row -> the death clip), then the death sequence owns the clip.
             // The mortality row (HP <= 0) takes the death clip into the root's death
             // control-mode; in it the walker forces the root death mode (§1 step 6): two
-            // thinks, at no time.
+            // thinks, at no time. The cap (authored: 3 = those two + one spare) ends the loop
+            // for a graph that never gets there; the s12-death line then shows its mode.
             for (int i = 0; i < 3 && c.rt.current != c.graph.root.deathMode; ++i) {
                 t = knight_think(c, w, 0.0f);
             }
@@ -491,8 +494,12 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     } else {
         t = knight_think(c, w, dt);
     }
-    // His root over the ground, clamped into his disc (Review Focus 5).
+    // His root over the ground, clamped into his disc (Review Focus 5); the unclamped
+    // reach and the clamped frames are the s12-bound line's evidence.
     Vec3 to = add(encounter.entityPosition, t.travel);
+    const float reach = std::hypot(to.x - c.boundCentre.x, to.z - c.boundCentre.z);
+    f.maxUnclampedDistance = std::max(f.maxUnclampedDistance, reach);
+    if (reach > c.boundRadius) ++f.clampedFrames;
     to = knight_clamp_bound(to, c.boundCentre, c.boundRadius);
     if (heightmap_in_bounds(ground, to)) encounter.entityPosition = grounded(ground, to);
     encounter.entityYawDeg = c.yawDeg;
@@ -556,6 +563,7 @@ std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, 
                                            const CombatTuning& tuning, float dt, StepEvents* events) {
     std::vector<DamageHit> landed;
     f.throwOff = false;  // last frame's throw-off was read by this frame's step
+    f.overlaps.clear();
     if (!f.havePose) return landed;
     const PoseView pose = pose_view(f);
     const PlayerView pv = player_view(player, combat);
@@ -565,6 +573,7 @@ std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, 
     std::vector<DamageHit> hits = events_damage(f.events, f.evNow, f.evPrev, pose, pv);
     for (const DamageHit& h : hits) f.evNow.hit |= uint64_t{1} << h.row;
     for (const DamageHit& h : f.spawns.damage(f.events, pv, kEntityId)) hits.push_back(h);
+    f.overlaps = hits;  // every row that overlapped him, landed or not (i-frames, §13.5 aside)
     // D12: the throw-off reaches a player attached to him (§13.5 holds back the rest).
     if (pv.attachedTo == kEntityId) {
         PoseView open = pose;

@@ -47,7 +47,6 @@ struct KnightCore {
     ScrRuntime rt;
     std::vector<float> seconds;  // per graph clip: its length (s)
     std::vector<char> rootless;  // per graph clip: no root series (never played raw)
-    std::vector<char> loops;     // per graph clip: the root series wraps (knight_root.h)
     int standClip = -1;
     int standControlMode = -1;   // the stand's else edge's control-mode (the retry start's)
     KnightMotion motion;
@@ -103,7 +102,6 @@ const char* knight_clip_name(const KnightCore& core, int clip);
 struct KnightFight {
     KnightCore core;
     EventsFile events;
-    std::vector<int> playIndex;   // graph clip -> the entity playback's clip (-1 none)
     std::vector<int> eventsClip;  // graph clip -> events clip (-1 none)
     std::vector<std::string> jointNames;  // the rig's joints, in skin order
     std::vector<std::string> optBones;    // OptBone_* in glb joint order
@@ -124,6 +122,11 @@ struct KnightFight {
     bool throwOff = false;        // a throw-off row landed: the next frame's ShakeOff releases
     // The run's record (the selftest's lines).
     float maxBoundDistance = 0.0f;  // his root's farthest from the bound centre (s12-bound)
+    float maxUnclampedDistance = 0.0f;  // ... before the clamp: where his travel would have taken him
+    int clampedFrames = 0;              // frames the clamp moved him
+    // This frame's damage rows that overlapped the player (his and the spawned), landed or
+    // not: i-frames refuse a hit, they do not make a row miss (the dodge's evidence).
+    std::vector<DamageHit> overlaps;
     std::vector<std::string> judgeFired;  // judge volumes that held the player this frame
     KnightThink think;
     int deathMode = -1;           // the mode the graph entered at HP 0

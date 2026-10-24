@@ -75,6 +75,16 @@ inline constexpr AttackRow kAttack[8] = {
     {nullptr, nullptr, nullptr, -1, nullptr, 0.0f, 0.0f, false, false, 0.0f, 0.0f, 0.0f},
 };
 
+// Every armed table (mode 9 [0], mode 10 [4]) reaches its terminator inside the array: the
+// runner walks to it unchecked (S12 Task 9 fix).
+constexpr bool attack_table_terminated(int first) {
+    for (int i = first; i < static_cast<int>(sizeof(kAttack) / sizeof(kAttack[0])); ++i) {
+        if (kAttack[i].fix == nullptr) return true;
+    }
+    return false;
+}
+static_assert(attack_table_terminated(0) && attack_table_terminated(4));
+
 }  // namespace scr_knight
 
 // Exactly KNIGHT's predicates (minus `sub`), his action kinds and the mode-entry hook
