@@ -6,6 +6,7 @@
 #include "gamepad_input.h"
 #include "s11_script.h"
 #include "s12_script.h"
+#include "s13_script.h"
 #include "ride_points.h"
 #include "road_points.h"
 #include "shrine_points.h"
@@ -812,6 +813,16 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                              "(encounter knight, his bake and graph) or his fight is unwired\n");
         return 1;
     }
+    // --s13-e2e (Task 16): the shared S13 script (s13_script.h), the same way; its whistle
+    // goes in as the S8 whistle key.
+    S13Script s13s;
+    s13s.prefix = "s13e2e";
+    if (opts.s13E2e && !s13_start(s13s, ctx, ctx.loadMs)) {
+        std::fprintf(stderr, "sotc-viewer: --s13-e2e: the --manifest arena is not Phaedra's "
+                             "(encounter kirin, her bake, graph, routes and terrain) or her fight "
+                             "is unwired\n");
+        return 1;
+    }
     // S8 (D14): a stage entered through a door completes the door's Load
     // here; FadeIn runs on this stage's frames.
     if (door_arrival) {
@@ -1598,6 +1609,9 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                 in.input = s11_input(s11s, ctx);
             } else if (opts.s12E2e) {
                 in.input = s12_input(s12s, ctx);
+            } else if (opts.s13E2e) {
+                in.input = s13_input(s13s, ctx);
+                in.rideKeys.whistle = s13s.whistle;
             } else if (!opts.s7E2e) {
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 // S8 (G4): W kicks, S reins, A/D steer, E mounts and
@@ -1740,6 +1754,22 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                         return *code;
                     }
                     std::printf("s12e2e-done frames=%d seconds=%.1f\n", s12s.frames, s12s.seconds);
+                    print_status_line(opts, shell.win);
+                    return 0;
+                }
+            }
+            if (opts.s13E2e) {
+                std::optional<int> code = s13_after(s13s, ctx);
+                if (!code && s13s.wantR) {
+                    press_r_key();  // the R key's own handler
+                    s13s.wantR = false;
+                    code = s13_after(s13s, ctx);
+                }
+                if (code) {
+                    if (*code != 0) {
+                        return *code;
+                    }
+                    std::printf("s13e2e-done frames=%d seconds=%.1f\n", s13s.frames, s13s.seconds);
                     print_status_line(opts, shell.win);
                     return 0;
                 }

@@ -241,6 +241,32 @@ inline constexpr float kRockfallCapSeconds = 5.0f;
 // and her walk/turn/wait footsteps (KIRIN_FOOT, KIRIN_FOOT_B, KIRIN_WAIT_FOOT) do not feed.
 inline constexpr const char* kRockfallEffectTag = "_ATK";
 
+// The shake-off's strength per refuse clip (ruling R-AH), for player_state's ShakeOff: the stamina
+// drain per second inside the active window, no forced release. The rule is S11/S12's (authored,
+// S11 C§6: the region bone's p90 angular speed / 10; the window = the frame intervals above 90 °/s,
+// s on the clip clock); the values are measured on her bake (tools/re/s13/kirin_shake.py: model
+// space, the clips' own 15 fps). The clips: data (graph findings "Shake-off by region": the base
+// refuse_* and the additive neck/head swings); the bone each is read on: authored (the rider's
+// grip region's bone, CL: 0x1e0 MATA_L, 0x60/0x80/0x160 MUNE, 0x20 KUBI_B, 0x10 HEAD). An additive
+// clip drains while it plays in a layer (its clock = the layer's frame / 30), measured on its own
+// baked pose (a reading). `Sudden_braking` stops her walk (walk_end): not a refuse clip.
+struct KirinShake {
+    const char* clip;
+    float drainPerSecond;
+    float activeBegin;  // s on the clip clock
+    float activeEnd;
+};
+inline constexpr std::array<KirinShake, 8> kShakes{{
+    {.clip = "kirin_a_refuse_tail", .drainPerSecond = 20.0f, .activeBegin = 2.20f, .activeEnd = 4.93f},
+    {.clip = "kirin_a_refuse_body", .drainPerSecond = 8.3f, .activeBegin = 1.19f, .activeEnd = 1.39f},
+    {.clip = "kirin_a_refuse_mune", .drainPerSecond = 11.4f, .activeBegin = 1.00f, .activeEnd = 2.20f},
+    {.clip = "kirin_a_add_neck_refuse_start", .drainPerSecond = 9.4f, .activeBegin = 0.40f, .activeEnd = 0.67f},
+    {.clip = "kirin_a_add_neck_refuse_loop", .drainPerSecond = 15.4f, .activeBegin = 0.00f, .activeEnd = 3.00f},
+    {.clip = "kirin_a_add_neck_refuse_end", .drainPerSecond = 15.8f, .activeBegin = 0.00f, .activeEnd = 0.73f},
+    {.clip = "kirin_a_add_head_refuse", .drainPerSecond = 23.5f, .activeBegin = 0.00f, .activeEnd = 2.33f},
+    {.clip = "kirin_a_add_neck_down_2_refuse", .drainPerSecond = 22.9f, .activeBegin = 0.53f, .activeEnd = 2.93f},
+}};
+
 }  // namespace kirin_detail
 
 inline constexpr EncounterDesc kKirin{

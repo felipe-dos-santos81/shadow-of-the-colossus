@@ -22,7 +22,7 @@ add_executable(sotc-viewer
   src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
   src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp
   src/quadratus_fight.cpp src/scr_graph.cpp src/scr_predicates.cpp src/objanim_events.cpp
-  src/knight_fight.cpp src/selftest_s12.cpp ${S13_SOURCES})
+  src/knight_fight.cpp src/selftest_s12.cpp src/selftest_s13.cpp ${S13_SOURCES})
 target_link_libraries(sotc-viewer PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 target_include_directories(sotc-viewer PRIVATE third_party)
 

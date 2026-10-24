@@ -166,6 +166,35 @@ TEST_CASE("Phaedra loads with her routes snapped to her ground and her rootless 
     CHECK(kirin_attr_word(terrain_boss_ground(l.k.terrain, {990.0f, 60.0f, 140.0f})) == 0x400000u);
 }
 
+TEST_CASE("Phaedra loads from her glb's own clip names: a foreign clip a shared control-def names never plays") {
+    // The viewer passes the glb's clips (her kirin_a_* only); KIRIN's graph also names
+    // knight_a_atk1_start (COMMON_BOSS_CONTROL:control-def[102], a "not playing" clause).
+    const std::string graph = read_file(lib() + "/behaviour/KIRIN.graph.json");
+    std::vector<std::string> names;
+    for (const std::string& n : export_clips(graph)) {
+        if (n.rfind("kirin_a_", 0) == 0) names.push_back(n);
+    }
+    EventsFile events;
+    std::string why;
+    REQUIRE(events_load(lib() + "/models/shadow/characters/colossus_04_kirin/_cmn/c04_kirin.events.json", events,
+                        why));
+    std::vector<std::string> judges;
+    for (const EventsVolume& v : events.judgeDefaults) judges.push_back(v.name);
+    for (const EventsClip& c : events.clips) {
+        for (const EventsVolume& v : c.judge) judges.push_back(v.name);
+    }
+    Loaded l;
+    const bool ok = kirin_core_load(l.core, l.k, graph, read_file(lib() + "/" + kd::kRouteFile),
+                                    read_file(lib() + "/" + kd::kTerrainFile), names, lengths(names),
+                                    events.judgeDefaults, judges, "kirin_a_stand", arena_ground(), why);
+    INFO(why);
+    REQUIRE(ok);
+    const int foreign = scr_clip(l.core.graph, "knight_a_atk1_start");
+    REQUIRE(foreign >= static_cast<int>(names.size()));  // after her own: never a playback index
+    CHECK(l.core.rootless[static_cast<size_t>(foreign)]);
+    CHECK(l.core.seconds.size() == l.core.graph.clipNames.size());
+}
+
 TEST_CASE("a player in tunnel class 7 whistling brings her to route 4's GP within 60 s, on her ground") {
     Run r;
     KnightCore& c = r.c;
@@ -241,6 +270,49 @@ TEST_CASE("no additive request at dt 0; the same frame at 1/30 s requests the ne
     r.frame(false, 1.0f / 30.0f);
     CHECK_FALSE(r.k.orients.empty());
     CHECK(playing(neck));
+}
+
+TEST_CASE("HP 0: the mortality row takes her rootless death clip, the graph reaches its death mode") {
+    Run r;
+    r.lure();
+    const int death = scr_clip(r.c.graph, "kirin_a_death");
+    REQUIRE(death >= 0);
+    REQUIRE(r.c.rootless[static_cast<size_t>(death)]);  // never raw in play (kNoRoot)
+    r.w.hp = 0.0f;
+    // A plain think refuses the rootless clip: the control-mode never reaches the death's, no forced death.
+    {
+        Run plain;
+        plain.lure();
+        plain.w.hp = 0.0f;
+        for (int i = 0; i < 3; ++i) kirin_think(plain.c, plain.k, plain.w, arena_ground(), plain.root, 0.0f);
+        CHECK(plain.c.rt.current != plain.c.graph.root.deathMode);
+    }
+    for (int i = 0; i < 3 && r.c.rt.current != r.c.graph.root.deathMode; ++i) {
+        kirin_death_think(r.c, r.k, r.w, arena_ground(), r.root, death);
+    }
+    CHECK(r.c.rt.current == r.c.graph.root.deathMode);
+    CHECK(r.c.rootless[static_cast<size_t>(death)]);  // restored
+}
+
+TEST_CASE("the shake-off drain (R-AH): a base refuse clip inside its window, an additive swing in a layer") {
+    KirinFight f;
+    Loaded l;
+    load(l);
+    f.base.core = l.core;
+    KnightCore& c = f.base.core;
+    const auto drain = [&f] { return kirin_fight_shake(f).staminaDrain; };
+    c.motion.clip = scr_clip(c.graph, "kirin_a_refuse_tail");
+    c.motion.time = 3.0f;
+    CHECK(drain() == doctest::Approx(20.0f));  // measured: kd::kShakes, active 2.20..4.93 s
+    c.motion.time = 1.0f;
+    CHECK(drain() == 0.0f);  // before its window
+    c.motion.clip = scr_clip(c.graph, "kirin_a_stand");
+    CHECK(drain() == 0.0f);
+    f.k.layers.slot[1].clip = scr_clip(c.graph, "kirin_a_add_head_refuse");
+    f.k.layers.slot[1].state = AddLayer::Playing;
+    f.k.layers.slot[1].frame = 30.0f;  // 1 s on the layer clock
+    CHECK(drain() == doctest::Approx(23.5f));
+    CHECK_FALSE(kirin_fight_shake(f).forceRelease);
 }
 
 TEST_CASE("the death's root drop: kDeathRootY over the death clip, its end once death_loop holds") {

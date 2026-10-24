@@ -449,7 +449,8 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
             // weakpoints', then the body's), the death, the attacks.
             std::vector<const char*> required{manifest.entities[0].clip.c_str()};
             for (const WeakpointDesc& weakpoint : desc.weakpoints) {
-                required.push_back(weakpoint.reactionClip);
+                // S13: a target with no hurt clip of its own (Phaedra's neck trigger) needs none.
+                if (weakpoint.reactionClip != nullptr) required.push_back(weakpoint.reactionClip);
             }
             required.push_back(desc.bodyReactionClip);
             required.push_back(desc.death.clip);

@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <string_view>
 
+#include "json_reader.h"
 #include "kirin_root.h"
 #include "scr_kirin.h"
 #include "scr_library.h"
@@ -80,13 +82,38 @@ bool kirin_walkable(const KirinState& k, const Heightmap& ground, Vec3 from, Vec
 
 bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJson,
                      const std::string& routeJson, const std::string& terrainJson,
-                     const std::vector<std::string>& clipNames, const std::vector<float>& seconds,
+                     const std::vector<std::string>& glbClips, const std::vector<float>& glbSeconds,
                      const std::vector<EventsVolume>& judgeDefaults,
                      const std::vector<std::string>& judgeNames, const std::string& standClip,
                      const Heightmap& ground, std::string& why) {
-    if (seconds.size() != clipNames.size()) {
+    if (glbSeconds.size() != glbClips.size()) {
         why = "one length per clip name";
         return false;
+    }
+    // data: her graph names a clip she does not carry — COMMON_BOSS_CONTROL:control-def[102]'s
+    // "boss motion is knight_a_atk1_start" (expect 0), a control-def every boss shares. It goes
+    // after hers (never a playback index), 0 s and rootless: it never plays, so the clause reads
+    // "not playing" (authored reading).
+    std::vector<std::string> clipNames = glbClips;
+    std::vector<float> seconds = glbSeconds;
+    std::vector<char> foreign(clipNames.size(), 0);
+    {
+        std::function<void(const Json&)> walk = [&](const Json& v) {
+            if (v.kind == Json::Object) {
+                for (const auto& [key, child] : v.object) {
+                    if (key == "clip" && child.kind == Json::String &&
+                        std::find(clipNames.begin(), clipNames.end(), child.string) == clipNames.end()) {
+                        clipNames.push_back(child.string);
+                        seconds.push_back(0.0f);
+                        foreign.push_back(1);
+                    }
+                    walk(child);
+                }
+            } else if (v.kind == Json::Array) {
+                for (const Json& child : v.array) walk(child);
+            }
+        };
+        walk(json_parse(graphJson));
     }
     if (!route_load(routeJson, k.routes, why) || !terrain_load(terrainJson, k.terrain, why)) return false;
     core.registry = scr_registry_kirin();
@@ -100,6 +127,7 @@ bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJs
     core.seconds = seconds;
     core.rootless.assign(clipNames.size(), 0);
     for (size_t i = 0; i < clipNames.size(); ++i) {
+        core.rootless[i] = foreign[i];
         for (const char* name : kirin_root::kNoRoot) core.rootless[i] |= clipNames[i] == name;
         for (const char* name : kirin_root::kUnusable) core.rootless[i] |= clipNames[i] == name;
     }
@@ -158,6 +186,17 @@ KnightThink kirin_think(KnightCore& c, KirinState& k, ScrWorld& w, const Heightm
         const float y = kirin_ground(k, ground, to);
         if (std::isfinite(y) && std::fabs(y - root.y) <= kd::kGroundStep) root = {to.x, y, to.z};
     }
+    return t;
+}
+
+KnightThink kirin_death_think(KnightCore& c, KirinState& k, ScrWorld& w, const Heightmap& ground, Vec3& root,
+                              int deathClip) {
+    if (deathClip < 0 || deathClip >= static_cast<int>(c.rootless.size())) return kirin_think(c, k, w, ground, root, 0.0f);
+    char& rootless = c.rootless[static_cast<size_t>(deathClip)];
+    const char keep = rootless;
+    rootless = 0;
+    const KnightThink t = kirin_think(c, k, w, ground, root, 0.0f);
+    rootless = keep;
     return t;
 }
 
@@ -238,7 +277,7 @@ KnightThink kirin_fight_step(KirinFight& f, Encounter& encounter, Playback& enti
     KnightThink t;
     if (encounter.defeated) {
         if (b.deathMode < 0) {
-            t = knight_enter_death(b, [&] { return kirin_think(c, f.k, w, ground, root, 0.0f); });
+            t = knight_enter_death(b, [&] { return kirin_death_think(c, f.k, w, ground, root, b.deathClip); });
             // authored: the death clip is her whole pose — the layers are cut (no think steps them
             // after the defeat, so a layer left playing would freeze on her corpse).
             f.k.layers = AddLayers{};
@@ -321,4 +360,21 @@ float kirin_rockfall_feed(float timer, std::string_view effect, bool armed) {
     return std::min(kd::kRockfallCapSeconds, timer + kd::kRockfallFeedSeconds);
 }
 
-ShakeOff kirin_fight_shake(const KirinFight&) { return ShakeOff{}; }
+ShakeOff kirin_fight_shake(const KirinFight& f) {
+    ShakeOff s;
+    const KnightCore& c = f.base.core;
+    // The base motion's refuse clip and every layer playing an additive one, the strongest wins.
+    const auto take = [&s](std::string_view clip, float t) {
+        for (const kd::KirinShake& k : kd::kShakes) {
+            if (clip == k.clip && t >= k.activeBegin && t <= k.activeEnd) {
+                s.staminaDrain = std::max(s.staminaDrain, k.drainPerSecond);
+            }
+        }
+    };
+    take(knight_clip_name(c, c.motion.clip), c.motion.time);
+    for (const AddLayer& l : f.k.layers.slot) {
+        // A layer's clock is its frame at 30 per s (additive.cpp kLayerFps, data DAT_0126dac4).
+        if (l.state != AddLayer::Free) take(knight_clip_name(c, l.clip), l.frame / 30.0f);
+    }
+    return s;
+}

@@ -37,12 +37,13 @@ struct KirinState {
 
 // Loads her graph (scr_graph_load with scr_registry_kirin, scr_attack_attain and
 // scr_move_back_bind on `judgeDefaults`, then scr_kirin_check against `judgeNames`), her
-// routes and terrain, `seconds` per clip, her rootless clips (kirin_root's kNoRoot and
+// routes and terrain, `glbSeconds` per glb clip, her rootless clips (kirin_root's kNoRoot and
 // kUnusable: never played raw) and the stand, and snaps every route height to her ground on
-// `ground`. False with `why` naming the culprit.
+// `ground`. A clip the graph names that her glb lacks is appended after hers, 0 s and rootless
+// (it never plays). False with `why` naming the culprit.
 bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJson,
                      const std::string& routeJson, const std::string& terrainJson,
-                     const std::vector<std::string>& clipNames, const std::vector<float>& seconds,
+                     const std::vector<std::string>& glbClips, const std::vector<float>& glbSeconds,
                      const std::vector<EventsVolume>& judgeDefaults,
                      const std::vector<std::string>& judgeNames, const std::string& standClip,
                      const Heightmap& ground, std::string& why);
@@ -70,6 +71,13 @@ bool kirin_walkable(const KirinState& k, const Heightmap& ground, Vec3 from, Vec
 // her ground (a refused step holds her). `yawDeg` is the core's.
 KnightThink kirin_think(KnightCore& core, KirinState& k, ScrWorld& world, const Heightmap& ground,
                         Vec3& root, float dt);
+
+// One think at dt 0 at her defeat (D12): kirin_think with `deathClip` allowed — it has no root
+// series (kNoRoot, never raw in play), but the death sequence owns it and its drop is
+// kDeathRootY, so the mortality row's edge onto it is taken (its control-mode is the root's
+// death control-mode, where the walker forces the death mode); refused, the graph never dies.
+KnightThink kirin_death_think(KnightCore& core, KirinState& k, ScrWorld& world, const Heightmap& ground,
+                              Vec3& root, int deathClip);
 
 // --- The scene's side ---------------------------------------------------------
 
@@ -130,6 +138,6 @@ std::vector<DamageHit> kirin_fight_events(KirinFight& fight, PlayerState& player
 KnightHit kirin_fight_hit(KirinFight& fight, Encounter& encounter, Playback& entity,
                           const EntityClips& clips, int weakpoint, float damage);
 
-// The shake this frame. ponytail: no drain table for her refuse clips yet (Gaius's rule needs
-// her bones' angular speeds measured) — the shake-off plays, it drains nothing (labelled gap).
+// The shake this frame (ruling R-AH): kShakes' drain inside the active window of the playing base
+// refuse clip or of an additive swing playing in a layer (the strongest); no forced release.
 ShakeOff kirin_fight_shake(const KirinFight& fight);

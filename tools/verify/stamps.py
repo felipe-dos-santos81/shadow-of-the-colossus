@@ -58,6 +58,7 @@ MANIFESTS = {
     "s9": {s: "encounter shrine plain road" for s in ("probes", "audio", "gpu")},   # via preflight()
     "s11": {"gpu": "arena_02"},
     "s12": {"gpu": "arena_03"},
+    "s13": {"gpu": "arena_04"},
 }
 NAMED = "@named:"   # a pattern naming one file that must exist: absent hashes as "absent"
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",

@@ -23,6 +23,7 @@ PLAIN     = out/re/stage/plain.manifest
 ROAD      = out/re/stage/road.manifest
 ARENA02   = out/re/stage/arena_02.manifest
 ARENA03   = out/re/stage/arena_03.manifest
+ARENA04   = out/re/stage/arena_04.manifest
 # The clips `make bake` puts into wander.glb, in order: the 15 S2–S6 clips, the
 # two S7 wake cuts (docs/notes/s7-recon.md §6), the 26 S8 ride clips
 # (docs/notes/s8-recon.md), then the six S9 raise clips at 43…48 (design D9).
@@ -228,7 +229,7 @@ arena02-manifest: ## Compose out/re/stage/arena_02.manifest (Quadratus's arena) 
 arena03-manifest: ## Compose out/re/stage/arena_03.manifest (Gaius's lake arena) from the stage data
 	@test -f $(ARENA03) || python3 tools/re/stage/probe.py compose --stage arena_03 --library "$(LIB)" --out $(ARENA03)
 
-probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road + arena_02 + arena_03 manifests)
+probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + plain + road + arena_02 + arena_03 + arena_04 manifests)
 	python3 tools/re/anb/probe.py check-skb
 	python3 tools/re/stage/probe.py check-cwks
 	python3 tools/re/stage/probe.py check-manifest --library "$(LIB)"
@@ -238,6 +239,7 @@ probe-check: ## Run the RE probes' pinned gates (anb, cwks, arena + shrine + pla
 	python3 tools/re/stage/probe.py check-manifest --stage road --library "$(LIB)" $(ROAD)
 	python3 tools/re/stage/probe.py check-manifest --stage arena_02 --library "$(LIB)" $(ARENA02)
 	python3 tools/re/stage/probe.py check-manifest --stage arena_03 --library "$(LIB)" $(ARENA03)
+	python3 tools/re/stage/probe.py check-manifest --stage arena_04 --library "$(LIB)" $(ARENA04)
 
 census: ## Census the sixteen colossi into tools/re/census/census.json (read-only; ~2 s)
 	python3 -I tools/re/census/census.py --game "$(GAME_ROOT)" --lib "$(LIB)" --check --out tools/re/census/census.json
@@ -282,10 +284,10 @@ accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-ma
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11, -s12 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
 
-verify: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
+verify: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
 	./scripts/verify $(ARGS)
 
-verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
+verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
 	./scripts/verify --long
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export
