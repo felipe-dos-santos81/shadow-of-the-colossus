@@ -128,7 +128,7 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-bake: publish bake-quadratus bake-knight behaviour ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases, Quadratus's 58, Gaius's 62 + his graph (rewrites the glbs)
+bake: behaviour publish bake-quadratus bake-knight ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases, Quadratus's 58, Gaius's 62 + his graph (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
