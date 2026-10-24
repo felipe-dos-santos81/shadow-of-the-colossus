@@ -32,11 +32,20 @@ struct AddEdge {
 // base ← slerp(I, cur·ref⁻¹, w)·base, t ← base + w·(cur_t − ref_t); scale untouched. S13 Task 6.
 void additive_apply(LocalPose& base, const LocalPose& cur, const LocalPose& ref, float w);
 
-// Requests `orient` (Continue / Shift / Always / Always-Cancel); no free slot → dropped. S13 Task 6.
+// Requests `orient` (Continue / Shift / Always / Always-Cancel, recon §1, binary FUN_00639520):
+// the first from-row whose `from` plays and passes its p30 gate wins (a playing one that fails
+// still blocks the Always rows); then every Always row; no free slot → dropped. S13 Task 6.
 void additive_request(AddLayers& layers, const std::vector<AddEdge>& edges, std::string_view orient);
 
-// Advances every layer by dt·30 frames; the end cuts. S13 Task 6.
+// Advances every layer by dt·30 frames, ramping its weight over blendFrames; a layer reaching its
+// end holds its last frame for that step (Ended) and is cut on the next (blend-out 0). S13 Task 6.
 void additive_step(AddLayers& layers, const std::vector<float>& clipSeconds, float dt);
 
 // Whether clip `clip` plays in any layer. S13 Task 6.
 bool additive_playing(const AddLayers& layers, int clip);
+
+// The pose path's layer pass: every non-free layer's `clip` at its frame, over its `ref` (else the
+// clip itself) at frame 0, onto `pose` (additive_apply per bone at the layer's weight). `clips` are
+// the rig's playback clips the layer indices name. An all-free pool leaves `pose` untouched.
+void additive_compose(LocalPose& pose, const Scene& scene, std::size_t rigIndex,
+                      const std::vector<AnimationCpu>& clips, const AddLayers& layers);
