@@ -139,6 +139,15 @@ struct KnightFight {
     int deathGraphClip = -1;      // the clip its controls chose there (the death sequence plays desc's)
 };
 
+// The sidecar against his rig, at load (finding 5/6: a bad row must not throw mid-frame,
+// a sidecar without its map must not load silently harmless). Every clip row (damage,
+// judge, effect, judge default) has a non-spawn parent whose `bone` is in `joints` and
+// whose `optBone` indexes `optBones`; every spawned row's parent is the spawn or the
+// entity; the file carries spawned objanims and at least one damage row with a def
+// (tools/re/objanim's map reached the converter). False with `why` naming the row.
+bool knight_events_check(const EventsFile& events, const std::vector<std::string>& joints,
+                         const std::vector<std::string>& optBones, std::string& why);
+
 // Loads <libraryDir>/behaviour/KNIGHT.graph.json and the entity glb's sidecar, maps the
 // graph's clips onto the entity playback, resolves the rig's joints, and checks the
 // manifest's placement and player start against kArena (x/z, his ground). False with `why`.

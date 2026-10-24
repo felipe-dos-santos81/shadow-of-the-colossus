@@ -186,3 +186,47 @@ TEST_CASE("R-N: a dead player is in the death control-mode (ALWAYS:C71)") {
     knight_world_player(w, false, false);
     CHECK(w.playerControlMode == -1);
 }
+
+TEST_CASE("knight_events_check refuses rows that would throw mid-frame and a sidecar without its map") {
+    const std::vector<std::string> joints{"Bone_HAND_A_R", "OptBone_a", "OptBone_b"};
+    const std::vector<std::string> opt{"OptBone_a", "OptBone_b"};
+    EventsFile ev;
+    EventsClip clip;
+    clip.name = "knight_a_atk1";
+    EventsVolume dmg;
+    dmg.name = "KNIGHT_SWORD_ATK1_DMG";
+    dmg.parent.kind = EventsParent::Bone;
+    dmg.parent.bone = "Bone_HAND_A_R";
+    dmg.hasDef = true;
+    clip.damage.push_back(dmg);
+    ev.clips.push_back(clip);
+    EventsSpawned sp;
+    sp.name = "knight_walk_dmg";
+    EventsVolume foot;
+    foot.name = "KNIGHT_FOOT_DMG";
+    foot.parent.kind = EventsParent::Spawn;
+    sp.damage.push_back(foot);
+    ev.spawned.push_back(sp);
+    std::string why;
+    CHECK(knight_events_check(ev, joints, opt, why));
+
+    EventsFile bad = ev;
+    bad.clips[0].damage[0].parent.bone = "Bone_NOPE";
+    CHECK_FALSE(knight_events_check(bad, joints, opt, why));
+    CHECK(why.find("Bone_NOPE") != std::string::npos);
+    bad = ev;
+    bad.clips[0].damage[0].parent = EventsParent{EventsParent::OptBone, "", 2};
+    CHECK_FALSE(knight_events_check(bad, joints, opt, why));
+    bad = ev;
+    bad.clips[0].damage[0].parent = EventsParent{EventsParent::Spawn, "", -1};
+    CHECK_FALSE(knight_events_check(bad, joints, opt, why));
+    bad = ev;
+    bad.spawned[0].damage[0].parent = EventsParent{EventsParent::Bone, "Bone_HAND_A_R", -1};
+    CHECK_FALSE(knight_events_check(bad, joints, opt, why));
+    bad = ev;
+    bad.spawned.clear();  // the map never reached the converter
+    CHECK_FALSE(knight_events_check(bad, joints, opt, why));
+    bad = ev;
+    bad.clips[0].damage[0].hasDef = false;
+    CHECK_FALSE(knight_events_check(bad, joints, opt, why));
+}

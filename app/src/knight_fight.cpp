@@ -340,6 +340,59 @@ Vec3 grounded(const Heightmap& ground, Vec3 at) {
 
 }  // namespace
 
+bool knight_events_check(const EventsFile& ev, const std::vector<std::string>& joints,
+                         const std::vector<std::string>& optBones, std::string& why) {
+    const auto clip_parent = [&](const EventsParent& p, const std::string& row) {
+        if (p.kind == EventsParent::Spawn) {
+            why = "the sidecar row " + row + " has a spawn parent on a clip";
+            return false;
+        }
+        if (p.kind == EventsParent::Bone && std::find(joints.begin(), joints.end(), p.bone) == joints.end()) {
+            why = "the sidecar row " + row + " names bone " + p.bone + ", not in his rig";
+            return false;
+        }
+        if (p.kind == EventsParent::OptBone &&
+            (p.optBone < 0 || p.optBone >= static_cast<int>(optBones.size()))) {
+            why = "the sidecar row " + row + " names OptBone " + std::to_string(p.optBone) + " of " +
+                  std::to_string(optBones.size());
+            return false;
+        }
+        return true;
+    };
+    bool hasDef = false;
+    for (const EventsVolume& v : ev.judgeDefaults) {
+        if (!clip_parent(v.parent, "judgeDefaults/" + v.name)) return false;
+    }
+    for (const EventsClip& c : ev.clips) {
+        for (const EventsVolume& v : c.damage) {
+            if (!clip_parent(v.parent, c.name + "/" + v.name)) return false;
+            hasDef = hasDef || v.hasDef;
+        }
+        for (const EventsVolume& v : c.judge) {
+            if (!clip_parent(v.parent, c.name + "/" + v.name)) return false;
+        }
+        for (const EventsEffect& e : c.effects) {
+            if (!clip_parent(e.parent, c.name + "/" + e.name)) return false;
+        }
+    }
+    for (const EventsSpawned& s : ev.spawned) {
+        for (const EventsVolume& v : s.damage) {
+            const EventsParent::Kind k = v.parent.kind;
+            if (k != EventsParent::Spawn && k != EventsParent::Entity && k != EventsParent::EntityRoot) {
+                why = "the spawned row " + s.name + "/" + v.name + " has a bone parent (spawn or entity only)";
+                return false;
+            }
+            hasDef = hasDef || v.hasDef;
+        }
+    }
+    if (ev.spawned.empty() || !hasDef) {
+        why = "the sidecar has no spawned objanims or no damage def (bake from the repo root: "
+              "the converter reads tools/re/objanim/ relative to its working directory)";
+        return false;
+    }
+    return true;
+}
+
 const char* knight_mode_name(const KnightFight& f, int mode) {
     return mode >= 0 && mode < static_cast<int>(f.core.graph.modes.size())
                ? f.core.graph.modes[static_cast<size_t>(mode)].name.c_str()
@@ -400,6 +453,7 @@ bool knight_fight_load(KnightFight& f, const Scene& scene, std::size_t entityRig
         f.jointNames.push_back(j.name);
         if (j.name.rfind("OptBone_", 0) == 0) f.optBones.push_back(j.name);
     }
+    if (!knight_events_check(f.events, f.jointNames, f.optBones, why)) return false;
     f.hipJoint = joint_of(f, ka::kHipJoint);
     if (f.hipJoint < 0) {
         why = std::string("his rig has no ") + ka::kHipJoint;
