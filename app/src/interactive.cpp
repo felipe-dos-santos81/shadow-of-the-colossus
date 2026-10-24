@@ -5,6 +5,7 @@
 #include "encounter_rt.h"
 #include "gamepad_input.h"
 #include "s11_script.h"
+#include "s12_script.h"
 #include "ride_points.h"
 #include "road_points.h"
 #include "shrine_points.h"
@@ -240,6 +241,15 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
                                              std::clamp(dt, 0.0f, kMaxCombatStepSeconds));
         update_entity_transform(scene, encounter, entityRig);
     }
+    // S12 (Task 9): Gaius's fight — the world, his graph, his clip, his travel.
+    ctx.knightHit = KnightHit{};
+    ctx.knightHits.clear();
+    ctx.knightBackstop = false;
+    if (ctx.knight_wired) {
+        knight_fight_step(ctx.knight, encounter, playbacks[entityRig], heightmap, player, combat,
+                          std::clamp(dt, 0.0f, kMaxCombatStepSeconds));
+        update_entity_transform(scene, encounter, entityRig);
+    }
     // S7: while waking the wake clips own the player's clip.
     const bool wakeFrame = ctx.waking();
     if (wakeFrame) {
@@ -268,6 +278,12 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         }
     }
     palettes = update_all_poses(renderer, scene, playbacks, dt, club);
+    if (ctx.knight_wired && entityRig < palettes.size()) {
+        // S12: his palette with the switch's blend; the joints for the events.
+        knight_fight_pose(ctx.knight, scene, entityRig, playbacks[entityRig],
+                          std::clamp(dt, 0.0f, kMaxCombatStepSeconds), palettes[entityRig]);
+        renderer.upload_pose(entityRig, palettes[entityRig]);
+    }
     if (plain_ride) {
         ctx.plain_step(dt, rideKeys, inputLocked, palettes);
     }
@@ -314,6 +330,13 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     if (ctx.quad_wired) {
         frame.shake = quadratus_shake(ctx.quad);  // S11: his refuse clips' drain
     }
+    if (ctx.knight_wired) {
+        // S12: his refuse clips' drain and the throw-off; the clip and frame the blade's
+        // enable window reads (floor of clip seconds x 30).
+        frame.shake = knight_fight_shake(ctx.knight);
+        frame.entityClip = knight_clip_name(ctx.knight.core, ctx.knight.core.motion.clip);
+        frame.entityFrame = static_cast<int>(std::floor(ctx.knight.core.motion.time * 30.0f));
+    }
     const int weakpoint = combat.weakpoint;  // detach() clears it
     const Vec3 positionBefore = player.position;
     // S8 (D8): no player_step while mounted — the ride places him.
@@ -336,6 +359,11 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
                                               entityClips, weakpoint,
                                               static_cast<float>(events.damageDealt),
                                               attached_before);
+        } else if (ctx.knight_wired) {
+            // S12: a sigil's pool (his table), HP 0 his death; silent (D10).
+            ctx.knightHit = knight_fight_hit(ctx.knight, encounter, playbacks[entityRig],
+                                             entityClips, weakpoint,
+                                             static_cast<float>(events.damageDealt));
         } else {
             apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
                                 weakpoint, audio_on ? &frameSfx : nullptr);
@@ -357,6 +385,20 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
                                                                : ValusAttack::StompR,
                                ctx.enc(), audio_on ? &frameSfx : nullptr,
                                audio_on ? &events : nullptr);
+        }
+    }
+    if (ctx.knight_wired) {
+        // S12: his events (his damage, the spawned footsteps, the throw-off) after the
+        // player's step, like Valus's impact; then the fall backstop (D9, kArena).
+        ctx.knightHits = knight_fight_events(ctx.knight, player, combat, tuning,
+                                             std::clamp(dt, 0.0f, kMaxCombatStepSeconds),
+                                             audio_on ? &events : nullptr);
+        if (combat.mode != PlayerMode::Dead &&
+            player.position.y < encounters::knight_detail::kArena.fallBackstopY) {
+            const float health = combat.health;
+            reset_player_combat(player, combat, stage_spawn, stage_spawn_yaw, tuning);
+            combat.health = health;
+            ctx.knightBackstop = true;
         }
     }
     if (in.lethalHit && !encounter.defeated) {
@@ -714,6 +756,14 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
     if (opts.s11E2e && !s11_start(s11s, ctx, ctx.loadMs)) {
         std::fprintf(stderr, "sotc-viewer: --s11-e2e: the --manifest arena is not Quadratus's "
                              "(encounter quadratus, his bake) or his fight is unwired\n");
+        return 1;
+    }
+    // --s12-e2e (Task 9): the shared S12 script (s12_script.h), the same way.
+    S12Script s12s;
+    s12s.prefix = "s12e2e";
+    if (opts.s12E2e && !s12_start(s12s, ctx, ctx.loadMs)) {
+        std::fprintf(stderr, "sotc-viewer: --s12-e2e: the --manifest arena is not Gaius's "
+                             "(encounter knight, his bake and graph) or his fight is unwired\n");
         return 1;
     }
     // S8 (D14): a stage entered through a door completes the door's Load
@@ -1500,6 +1550,8 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                 in.swordHeld = s9Held;
             } else if (opts.s11E2e) {
                 in.input = s11_input(s11s, ctx);
+            } else if (opts.s12E2e) {
+                in.input = s12_input(s12s, ctx);
             } else if (!opts.s7E2e) {
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 // S8 (G4): W kicks, S reins, A/D steer, E mounts and
@@ -1626,6 +1678,22 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                         return *code;
                     }
                     std::printf("s11e2e-done frames=%d seconds=%.1f\n", s11s.frames, s11s.seconds);
+                    print_status_line(opts, shell.win);
+                    return 0;
+                }
+            }
+            if (opts.s12E2e) {
+                std::optional<int> code = s12_after(s12s, ctx);
+                if (!code && s12s.wantR) {
+                    press_r_key();  // the R key's own handler
+                    s12s.wantR = false;
+                    code = s12_after(s12s, ctx);
+                }
+                if (code) {
+                    if (*code != 0) {
+                        return *code;
+                    }
+                    std::printf("s12e2e-done frames=%d seconds=%.1f\n", s12s.frames, s12s.seconds);
                     print_status_line(opts, shell.win);
                     return 0;
                 }

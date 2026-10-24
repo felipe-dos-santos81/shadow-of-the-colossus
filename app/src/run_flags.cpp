@@ -12,7 +12,7 @@ bool pinned_timeline(const AppOptions& opts) {
 
 bool is_frozen_selftest(const AppOptions& opts) {
     return opts.selftest || pinned_timeline(opts) || opts.s6Selftest || opts.s8Selftest ||
-           opts.s9Selftest || opts.s11Selftest;
+           opts.s9Selftest || opts.s11Selftest || opts.s12Selftest;
 }
 
 RunFlags run_flags(const AppOptions& opts, StageId stage, bool followMode, bool returnAvailable) {
@@ -30,15 +30,15 @@ RunFlags run_flags(const AppOptions& opts, StageId stage, bool followMode, bool 
                     (opts.s7Selftest || (f.interactiveRun && !opts.noReturn));
     // S7: only the S7+ runs pump events during a load.
     f.pumpLoad = opts.s7Selftest || opts.s8Selftest || opts.s9Selftest || opts.s11Selftest ||
-                 f.interactiveRun;
+                 opts.s12Selftest || f.interactiveRun;
     // S8: the plain's doors and ride; S9: the road, the corridor and arena doors.
-    // S11: --s11-e2e stays in its arena (no doors, no road).
-    f.s8Wired = (f.interactiveRun && !opts.s7E2e && !opts.s11E2e) || opts.s8Selftest ||
-                opts.s9Selftest;
-    f.s9Wired = (f.interactiveRun && !opts.s7E2e && !opts.s8E2e && !opts.s11E2e) ||
+    // S11/S12: --s11-e2e and --s12-e2e stay in their arena (no doors, no road).
+    f.s8Wired = (f.interactiveRun && !opts.s7E2e && !opts.s11E2e && !opts.s12E2e) ||
+                opts.s8Selftest || opts.s9Selftest;
+    f.s9Wired = (f.interactiveRun && !opts.s7E2e && !opts.s8E2e && !opts.s11E2e && !opts.s12E2e) ||
                 opts.s9Selftest || opts.s9E2e;
     f.road = f.s9Wired && stage == StageId::Plain;
-    f.scriptedE2e = opts.s7E2e || opts.s8E2e || opts.s9E2e || opts.s11E2e;
+    f.scriptedE2e = opts.s7E2e || opts.s8E2e || opts.s9E2e || opts.s11E2e || opts.s12E2e;
     f.audioStrict = opts.s5Selftest || opts.s6Selftest;
     return f;
 }

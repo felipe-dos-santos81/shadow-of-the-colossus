@@ -623,6 +623,26 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         quadratus_fight_reset(ctx.quad, encounter, playbacks[entityRig]);
         update_entity_transform(scene, encounter, entityRig);
     }
+    // S12 (Task 9): Gaius's fight from his exported graph replaces Valus's behaviour
+    // where it would run (the knight encounter never reaches the S11 behaviour machine,
+    // whose states his empty table lacks); his graph, sidecar and clips must load.
+    ctx.knight_wired = valus_behavior && &ctx.enc() == &encounters::kKnight &&
+                       encounter.entityTransformSet;
+    if (ctx.knight_wired) {
+        valus_behavior = false;
+        std::string why;
+        if (!knight_fight_load(ctx.knight, scene, entityRig, playbacks[entityRig], opts.libraryDir,
+                               manifest.entities[0].placement.glbRelPath,
+                               manifest.entities[0].clip, encounter.entityPosition,
+                               spawn_position(manifest, scene), why)) {
+            std::fprintf(stderr, "sotc-viewer: Gaius's fight: %s\n", why.c_str());
+            return 2;
+        }
+        ctx.knight.basePosition = encounter.entityPosition;
+        ctx.knight.baseYawDeg = encounter.entityBaseYawDeg;
+        knight_fight_reset(ctx.knight, encounter, playbacks[entityRig]);
+        update_entity_transform(scene, encounter, entityRig);
+    }
 
     // The target-framing capture starts here: sample the entity's chest at
     // the initial playback time (before the first frame advances it) so the

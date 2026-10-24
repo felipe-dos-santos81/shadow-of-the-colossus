@@ -52,14 +52,14 @@ inline constexpr std::array<int, W::Count> kWeakpointRegion{{0x10, 0x50}};
 // --- Climb bands (D7) ---------------------------------------------------------
 
 namespace B {
-enum : int { Blade, Forearm, UpperArm, Shoulder, Neck, Head, Count };
+enum : int { Blade, Forearm, UpperArm, Shoulder, Neck, Head, Belly, Count };
 }  // namespace B
 
 // The chain (SW "Proposed bands"; joints: data, C3 §2; radii, tapers and the
 // walk/hang split: measured in the stuck hold, SW): blade (walked) -> forearm
 // (walk) -> upper arm (hang, 49.5–64.1°) -> shoulder (walk) -> neck (hang) ->
-// head (walk; weakpoint_01 0.83–0.97 m from its top). The belly sigil has no
-// band yet (its route is Task 9's, design §8).
+// head (walk; weakpoint_01 0.83–0.97 m from its top). The belly sigil's band is
+// Task 9's route (design §8), below.
 // The blade runs its LOW end (the tip, OptBone_IK_atk) -> the hilt
 // (OptBone_sword, 0.058 m from the wrist, measured), so bandT >= 1 -
 // carryFraction is the part next to his fist (grab.h band_low_end_t).
@@ -80,11 +80,21 @@ inline constexpr std::array<ClimbBand, B::Count> kBands{{
     {.boneA = "Bone_UDE_R", .boneB = "Bone_JOWA_R", .radius = 0.9f, .up = B::Shoulder,
      .down = B::Forearm, .weakpoint = -1, .name = "upper_arm", .radiusB = 1.75f},
     {.boneA = "Bone_JOWA_R", .boneB = "Bone_KATA_R", .radius = 2.0f, .up = B::Neck,
-     .down = B::UpperArm, .weakpoint = -1, .horizontal = true, .name = "shoulder"},
+     .down = B::UpperArm, .weakpoint = -1, .branch = B::Belly, .horizontal = true,
+     .name = "shoulder"},
     {.boneA = "Bone_KUBI", .boneB = "Bone_KAO", .radius = 1.9f, .up = B::Head, .down = B::Shoulder,
      .weakpoint = -1, .name = "neck"},
     {.boneA = "Bone_KAO", .boneB = "OptBone_Look", .radius = 1.45f, .up = ClimbBandId::None,
      .down = B::Neck, .weakpoint = W::HeadSigil, .horizontal = true, .name = "head"},
+    // The belly route (S12 Task 9; authored from the measured bands): the shoulder's top
+    // (KATA_R, 0.4 m from KUBI) branches (W + a lateral key) down his front, the neck base
+    // -> the belly, hung. Radius at Bone_KUBI 2.8 m: measured, his front surface at the
+    // neck base (1 m bins of the stand pose, |x| < 1 m: 2.71–2.88 m at y 19–20). At
+    // Bone_HARA 1.0 m: authored inside the measured belly recess (1.18–1.24 m at y 13–14),
+    // where weakpoint_02's shell spans 0.61–1.26 m from the axis (shell r 1.44), so the hang
+    // reaches it; the taper cuts ~1 m into the chest plate's overhang at y 16–17 (3.37 m).
+    {.boneA = "Bone_KUBI", .boneB = "Bone_HARA", .radius = 2.8f, .up = ClimbBandId::None,
+     .down = B::Shoulder, .weakpoint = W::BellySigil, .name = "belly", .radiusB = 1.0f},
 }};
 
 // --- Collision ----------------------------------------------------------------
@@ -138,6 +148,62 @@ inline constexpr KnightArena kArena{
 
 // A silent cue (D10: no curated Gaius audio map yet).
 inline constexpr SoundCue kSilent{.clip = nullptr, .gain = 1.0f, .loop = false};
+
+// --- The runtime's values (S12 Task 9: knight_fight reads them) ---------------
+
+// The exported graph the fight runs (D2): <SOTC_LIB>/behaviour/<kGraphBoss>.graph.json.
+inline constexpr const char* kGraphBoss = "KNIGHT";  // data: the eboot's boss name
+
+// Each sigil's damage pool (data: `knight_first` 0x16c0bc0, +18 = 86 each; read as the
+// sigil's share of his HP 170 — a strong guess, KN (c)). A strike deals at most what is
+// left of its sigil's pool; HP 0 is the death.
+inline constexpr std::array<float, W::Count> kWeakpointPool{{86.0f, 86.0f}};
+
+// The region (attr & 0x3f0) a player on each band touches: the graph's
+// `player_surface` and knight_shake read it. Codes and names: data (KN regions:
+// 0xa0 ARM_R1 "also the sword surface", 0xb0 ARM_R2, 0xe0 THIGH_R1 = right upper arm
+// front, 0x60 SHOULDER_R1, 0x20 HEAD2, 0x10 HEAD1, 0x50 MOUTH = the belly sigil); which
+// code each band is: authored.
+inline constexpr std::array<int, B::Count> kBandRegion{{0xa0, 0xb0, 0xe0, 0x60, 0x20, 0x10, 0x50}};
+
+// The shake-off's strength per refuse clip, for player_state's ShakeOff: the stamina
+// drain per second inside the active window, no forced release. The rule is
+// Quadratus's (authored, S11 C§6: the region bone's p90 angular speed / 10; the window =
+// the frames above 90 °/s); the values are measured on Gaius's glb (S12 Task 9:
+// Bone_KAO / Bone_MUNE / Bone_UDE_R / Bone_UDE_L in model space, 30 fps).
+struct KnightShake {
+    const char* clip;
+    float drainPerSecond;
+    float activeBegin;  // s on the clip clock
+    float activeEnd;
+};
+inline constexpr std::array<KnightShake, 4> kShakes{{
+    {.clip = "knight_a_refuse_head", .drainPerSecond = 37.4f, .activeBegin = 0.27f, .activeEnd = 5.90f},
+    {.clip = "knight_a_refuse_body", .drainPerSecond = 27.1f, .activeBegin = 0.20f, .activeEnd = 5.93f},
+    {.clip = "knight_a_refuse_arm_r", .drainPerSecond = 18.0f, .activeBegin = 0.00f, .activeEnd = 3.07f},
+    {.clip = "knight_a_refuse_arm_l", .drainPerSecond = 24.6f, .activeBegin = 0.47f, .activeEnd = 2.07f},
+}};
+
+// The sidecar's damage_def reactions (+0x18, raw) the runtime reads:
+// - 6: KNIGHT_PLAYER_OUT's (data, knight_death f109–180, amount 0): the throw-off. It
+//   throws an attached player off (D12), so it is the one row §13.5's "never on a player
+//   attached to him" filter does not hold back (authored reading).
+// - 4: the 35/40 rows (the sword and the foot; data): a heavy hurt (authored reading;
+//   every other row with an amount is a medium hurt).
+inline constexpr float kThrowOffReaction = 6.0f;
+inline constexpr float kHeavyReaction = 4.0f;
+
+// The most his ground origin rises or sinks in one frame of travel (authored, as
+// Quadratus's kQuadGroundStep).
+inline constexpr float kGroundStep = 2.0f;
+
+// The skelton parent's hip (R4: "lifted by the hip height"): the posed joint's height
+// above his origin, each frame (data: the root's child, at the stand root 12.662 m).
+inline constexpr const char* kHipJoint = "Bone_KOSI";
+
+// The motion-graph edge's p34 is its blend in frames at this rate (data reading:
+// behaviour.md "blend 10"; the clips are 30 fps).
+inline constexpr float kBlendFps = 30.0f;
 
 }  // namespace knight_detail
 

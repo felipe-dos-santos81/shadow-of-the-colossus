@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "json_reader.h"
+#include "knight_fixture.h"
 #include "objanim_events.h"
 #include "scr_graph.h"
 #include "scr_predicates.h"
@@ -26,49 +27,7 @@ namespace {
 namespace fs = std::filesystem;
 namespace k = scr_knight;
 
-const fs::path kRepoRoot = fs::path(__FILE__).parent_path().parent_path().parent_path();
-
-std::string read_file(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("cannot read " + path.string());
-    std::stringstream s;
-    s << in.rdbuf();
-    return s.str();
-}
-
-// KNIGHT's export, generated once per run into the build directory.
-const std::string& knight_json() {
-    static const std::string json = [] {
-        const fs::path out = fs::path(SOTC_TEST_BUILD_DIR) / "fixtures" / "KNIGHT.graph.json";
-        fs::create_directories(out.parent_path());
-        const std::string cmd = "python3 -I '" + (kRepoRoot / "tools/re/scr/graph_export.py").string() +
-                                "' export KNIGHT '" + out.string() + "'";
-        if (std::system(cmd.c_str()) != 0) {
-            throw std::runtime_error("graph_export.py failed (is out/re/eboot.elf there?): " + cmd);
-        }
-        return read_file(out);
-    }();
-    return json;
-}
-
-// Every clip stem the export names (motion-graph ends and {clip} arguments), sorted.
-std::vector<std::string> export_clips(const std::string& json) {
-    std::set<std::string> names;
-    std::function<void(const Json&)> walk = [&](const Json& v) {
-        if (v.kind == Json::Object) {
-            for (const auto& [key, child] : v.object) {
-                if ((key == "clip" || key == "from" || key == "to") && child.kind == Json::String) {
-                    names.insert(child.string);
-                }
-                walk(child);
-            }
-        } else if (v.kind == Json::Array) {
-            for (const Json& child : v.array) walk(child);
-        }
-    };
-    walk(json_parse(json));
-    return {names.begin(), names.end()};
-}
+using namespace knight_fixture;
 
 struct Knight {
     ScrRegistry reg = scr_registry_knight();

@@ -240,6 +240,14 @@ struct AppOptions {
     bool s11Selftest = false;
     std::string s11StillsPath;
     bool s11E2e = false;
+    // --s12-selftest / --s12-stills DIR / --s12-e2e (S12 Task 9): Gaius in the
+    // --manifest arena (arena_03), run from his exported graph and scripted from the
+    // spawn to his death and R; the selftest prints the s12-* lines (+ four stills),
+    // the e2e drives the interactive loop and prints s12e2e-*. The flag rules live in
+    // main.cpp; the usage text is frozen (goldens hold it), app/README.md lists them.
+    bool s12Selftest = false;
+    std::string s12StillsPath;
+    bool s12E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode

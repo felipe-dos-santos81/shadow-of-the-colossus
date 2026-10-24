@@ -393,8 +393,15 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                                                     dt, t, combat.bandAcross)) {
                         ClimbBandId next = ClimbBandId::None;
                         if (axis > 0.0f && t >= 1.0f) {
-                            next = next_climbable_band(frame, upper_link(band, combat),
-                                                       /*ascending=*/true);
+                            // S12: W + lateral at the top takes the band's branch, as on
+                            // a hung band (Gaius's shoulder -> belly; no S4/S11 walked band
+                            // has a branch).
+                            next = next_climbable_band(
+                                frame,
+                                lateral != 0.0f && band.branch != ClimbBandId::None
+                                    ? band.branch
+                                    : upper_link(band, combat),
+                                /*ascending=*/true);
                             if (next != ClimbBandId::None) {
                                 select_band(combat, frame, next, 0.0f);
                             }

@@ -336,3 +336,37 @@ TEST_CASE("a fresh grab on the closed blade fails") {
     CHECK(combat.band == ClimbBandId::None);
     CHECK(combat.mode == PlayerMode::Grounded);
 }
+
+TEST_CASE("a walked band's top: W + a lateral key takes its branch, W alone its up (S12 belly route)") {
+    // A flat deck (band 0, walked) whose top hands over to a post (band 1, up) or, with a
+    // lateral key, to a strap (band 2, branch) — Gaius's shoulder -> neck | belly.
+    static constexpr std::array<ClimbBand, 3> kBands{{
+        {.boneA = "A", .boneB = "B", .radius = 0.5f, .up = 1, .down = -1, .weakpoint = -1, .branch = 2,
+         .horizontal = true, .name = "deck"},
+        {.boneA = "B", .boneB = "C", .radius = 0.5f, .up = -1, .down = 0, .weakpoint = -1, .name = "post"},
+        {.boneA = "B", .boneB = "D", .radius = 0.5f, .up = -1, .down = 0, .weakpoint = -1, .name = "strap"},
+    }};
+    const Heightmap ground = flat_heightmap();
+    PlayerFrame frame;
+    frame.heightmap = &ground;
+    frame.jointWorld = lookup_of({{"A", {0.0f, 2.0f, 0.0f}}, {"B", {0.0f, 2.0f, 10.0f}},
+                                  {"C", {0.0f, 12.0f, 10.0f}}, {"D", {0.0f, -6.0f, 12.0f}}});
+    frame.bands = kBands;
+    for (const bool lateral : {false, true}) {
+        CAPTURE(lateral);
+        PlayerState player;
+        PlayerCombat combat;
+        player.position = Vec3{0.0f, 0.0f, 9.0f};
+        PlayerInput input{};
+        input.grab = true;
+        player_step(player, combat, input, frame, CombatTuning{}, kStep);
+        REQUIRE(combat.band == 0);
+        input.forward = true;
+        input.right = lateral;
+        for (int i = 0; i < 120 && combat.band == 0; ++i) {
+            player_step(player, combat, input, frame, CombatTuning{}, kStep);
+        }
+        CHECK(combat.band == (lateral ? 2 : 1));
+        CHECK(combat.bandT == doctest::Approx(0.0f));
+    }
+}

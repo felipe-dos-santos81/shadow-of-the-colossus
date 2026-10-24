@@ -14,6 +14,7 @@
 #include "encounter_rt.h"
 #include "heightmap.h"
 #include "hud.h"
+#include "knight_fight.h"
 #include "manifest.h"
 #include "player.h"
 #include "player_state.h"
@@ -265,6 +266,14 @@ struct StageCtx {
     QuadratusFrame quadFrame{};
     QuadratusStab quadStab{};
     QuadratusHit quadHit{};
+    // S12 (Task 9): Gaius's fight from his exported graph (his arena's `encounter
+    // knight`, wherever Valus's would run); this frame's results are kept for the
+    // --s12 scripts' lines.
+    bool knight_wired = false;
+    KnightFight knight{};
+    KnightHit knightHit{};
+    std::vector<DamageHit> knightHits;
+    bool knightBackstop = false;  // the y backstop reset the player this frame
     bool s8_wired = false;
     bool plain_ride = false;
     PlainRide pr{};
