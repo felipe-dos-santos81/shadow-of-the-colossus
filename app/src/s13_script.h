@@ -51,7 +51,12 @@ struct S13Script {
     float stompNear = 1e9f;     // ... and the nearest to her root
     bool peeped = false;
     uint64_t peepGround = 0;  // her ground word when she peeped
-    bool leftRuins = false;
+    bool leftRuins = false;   // her root's ground word left the ruins' after the peep (s13-ground_handoff)
+    bool arrivedGp = false;   // the picked GP's arrival line printed
+    // The first shake on the hung neck (s13-shake_hung).
+    bool hungActive = false, hungDone = false;
+    std::string hungClip;
+    float hungStart = 0.0f, hungEnd = 0.0f, hungFrom = 0.0f, hungDrain = 0.0f;
     float arrivedAt = -1.0f;
     std::string entryClip;  // the tail grab's clip and frame
     int entryFrame = -1;
@@ -60,6 +65,7 @@ struct S13Script {
     bool shookLast = false;
     float shakeLow = 100.0f;
     std::string shakeClip;
+    float shakeStart = 0.0f;  // stamina when it began
     float shakeDrain = 0.0f;  // the strongest drain (kirin_fight_shake) during the shake
     float sinceShake = -1.0f;
     Vec3 diedAt{};

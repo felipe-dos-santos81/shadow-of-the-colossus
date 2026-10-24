@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <limits>
 #include <string_view>
 
@@ -90,30 +89,33 @@ bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJs
         why = "one length per clip name";
         return false;
     }
-    // data: her graph names a clip she does not carry — COMMON_BOSS_CONTROL:control-def[102]'s
-    // "boss motion is knight_a_atk1_start" (expect 0), a control-def every boss shares. It goes
-    // after hers (never a playback index), 0 s and rootless: it never plays, so the clause reads
-    // "not playing" (authored reading).
+    // Her graph names one clip she does not carry: the 8 SWORD_ONLY control-defs every boss shares
+    // (COMMON_BOSS_CONTROL:control-def[10], [14], [18], [28], [35], [86], [102], [109]) test "boss
+    // motion is knight[23] knight_a_atk1_start" (expect 0) — binary: an identity compare against
+    // KNIGHT's motion-def never holds for her. Only such a handle (under control_defs, a motion row
+    // that is not hers) is admitted, after her clips (never a playback index), 0 s and rootless: the
+    // clause reads "not playing". Any other unknown clip — a kirin_a_* one a stale bake lacks — is
+    // still refused by the loader.
     std::vector<std::string> clipNames = glbClips;
     std::vector<float> seconds = glbSeconds;
     std::vector<char> foreign(clipNames.size(), 0);
-    {
-        std::function<void(const Json&)> walk = [&](const Json& v) {
-            if (v.kind == Json::Object) {
-                for (const auto& [key, child] : v.object) {
-                    if (key == "clip" && child.kind == Json::String &&
-                        std::find(clipNames.begin(), clipNames.end(), child.string) == clipNames.end()) {
-                        clipNames.push_back(child.string);
-                        seconds.push_back(0.0f);
-                        foreign.push_back(1);
-                    }
-                    walk(child);
+    const Json doc = json_parse(graphJson);
+    if (const Json* defs = doc.get("control_defs"); defs != nullptr && defs->kind == Json::Object) {
+        for (const auto& [handle, records] : defs->object) {
+            for (const Json& rec : records.array) {
+                const Json* h = rec.get("handle");
+                const Json* motion = h != nullptr ? h->get("motion") : nullptr;
+                const Json* clip = h != nullptr ? h->get("clip") : nullptr;
+                if (motion == nullptr || clip == nullptr || motion->kind != Json::String ||
+                    clip->kind != Json::String || motion->string.rfind("kirin[", 0) == 0 ||
+                    std::find(clipNames.begin(), clipNames.end(), clip->string) != clipNames.end()) {
+                    continue;
                 }
-            } else if (v.kind == Json::Array) {
-                for (const Json& child : v.array) walk(child);
+                clipNames.push_back(clip->string);
+                seconds.push_back(0.0f);
+                foreign.push_back(1);
             }
-        };
-        walk(json_parse(graphJson));
+        }
     }
     if (!route_load(routeJson, k.routes, why) || !terrain_load(terrainJson, k.terrain, why)) return false;
     core.registry = scr_registry_kirin();

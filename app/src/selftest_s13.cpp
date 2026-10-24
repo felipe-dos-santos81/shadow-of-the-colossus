@@ -533,14 +533,26 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
                     mode_name(ctx, c.rt.current), clip_name(ctx), sc.seconds);
         sc.lastMode = c.rt.current;
     }
-    // The route follower: the route and GP it picks.
+    // The route follower: the route and GP it picks, then her arrival there (her root within the
+    // runtime's arrive radius of the GP), once per pick.
     if (c.rt.route.route != sc.lastRoute || c.rt.route.gp != sc.lastGp) {
         if (c.rt.route.route >= 0 || sc.lastRoute >= 0) {
-            std::printf("%s-route route=%d gp=%d kind=%d mode=%s at=%.1f\n", p, c.rt.route.route, c.rt.route.gp,
-                        c.rt.route.kind, mode_name(ctx, c.rt.current), sc.seconds);
+            std::printf("%s-route event=pick route=%d gp=%d kind=%d mode=%s at=%.1f\n", p, c.rt.route.route,
+                        c.rt.route.gp, c.rt.route.kind, mode_name(ctx, c.rt.current), sc.seconds);
         }
         sc.lastRoute = c.rt.route.route;
         sc.lastGp = c.rt.route.gp;
+        sc.arrivedGp = false;
+    }
+    if (c.rt.route.gp >= 0 && !sc.arrivedGp) {
+        const Vec3 gp = f.k.routes.gps[static_cast<size_t>(c.rt.route.gp)].pos;
+        if (std::hypot(gp.x - her.x, gp.z - her.z) <= c.rt.arriveRadius) {
+            sc.arrivedGp = true;
+            if (sc.arrivedAt < 0.0f) sc.arrivedAt = sc.seconds;
+            std::printf("%s-route event=arrive route=%d gp=%d kind=%d mode=%s arrived=%.1f at=%.1f\n", p,
+                        c.rt.route.route, c.rt.route.gp, c.rt.route.kind, mode_name(ctx, c.rt.current), sc.seconds,
+                        sc.seconds);
+        }
     }
     // Her damage on the player: never in this script (the dodge proves the stomp missed).
     for (const DamageHit& h : ctx.kirinHits) {
@@ -568,6 +580,7 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
     if (!shake.empty()) {
         if (!sc.shookLast) {
             sc.shakeClip = shake;
+            sc.shakeStart = combat.stamina;
             sc.shakeLow = combat.stamina;
             sc.shakeDrain = 0.0f;
             sc.sawShake = attached(ctx);
@@ -577,15 +590,45 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
         sc.sawShake = sc.sawShake && attached(ctx);
     }
     sc.shookLast = !shake.empty();
-    // After the peep: the first frame her root's ground leaves the ruins' boss ground (a step off
-    // it must be possible, kGroundStep): where, in which mode and clip.
+    // The first shake met on the hung neck (neck_low: the grip drains there, nothing regenerates):
+    // its clip, its strongest drain and the stamina it cost until it ended, the climber left the
+    // band, or the grip broke (a strike, a drop). On this route it is her base refuse_tail still
+    // playing (the S12 rule drains wherever the rider is); her neck swing (add_neck_refuse_*) is not
+    // met on it (the climber leaves neck_low within ~3 s each visit: a strike or a grip break).
+    const bool onNeck = attached(ctx) && combat.band == kd::B::NeckLow;
+    if (!sc.hungDone && !sc.hungActive && onNeck && !shake.empty()) {
+        sc.hungActive = true;
+        sc.hungClip = shake;
+        sc.hungStart = combat.stamina;
+        sc.hungFrom = sc.seconds;
+        sc.hungDrain = 0.0f;
+    }
+    if (sc.hungActive) {
+        if (onNeck && !shake.empty()) {
+            sc.hungEnd = combat.stamina;
+            sc.hungDrain = std::max(sc.hungDrain, kirin_fight_shake(f).staminaDrain);
+        } else {
+            std::printf("%s-shake_hung clip=%s band=neck_low drain=%.1f start=%.1f end=%.1f loss=%.1f seconds=%.2f "
+                        "ended=%s at=%.1f\n", p, sc.hungClip.c_str(), sc.hungDrain, sc.hungStart, sc.hungEnd,
+                        sc.hungStart - sc.hungEnd, sc.seconds - sc.hungFrom,
+                        !attached(ctx) ? "grip" : !onNeck ? "left_band" : "shake_end", sc.seconds);
+            sc.hungActive = false;
+            sc.hungDone = true;
+        }
+    }
+    // After the peep: the first frame her root's ground word changes off the ruins' boss ground — the
+    // ground handoff (her ground: the boss layer, else the layered heightmap within kGroundStep).
+    // Ruling R-AL: her modes 3 and 14 are locomotion kind 1, which the shared slowleg does not steer
+    // (S12 R1: no waypoint, no request), so this walk is the else-edge walk loop on her heading, not
+    // a chosen exit.
     const uint64_t ground = kirin_attr_word(terrain_boss_ground(f.k.terrain, her));
     if (sc.peeped && !sc.leftRuins && ground != sc.peepGround && !encounter.defeated) {
         sc.leftRuins = true;
-        std::printf("%s-leave_ruins from=0x%llx to=0x%llx her=%.1f,%.1f,%.1f mode=%s clip=%s rider=%s at=%.1f\n", p,
+        std::printf("%s-ground_handoff from=0x%llx to=0x%llx her=%.1f,%.1f,%.1f yaw=%.1f mode=%s clip=%s rider=%s "
+                    "at=%.1f\n", p,
                     static_cast<unsigned long long>(sc.peepGround), static_cast<unsigned long long>(ground), her.x,
-                    her.y, her.z, mode_name(ctx, c.rt.current), clip_name(ctx), attached(ctx) ? band_name(ctx) : "none",
-                    sc.seconds);
+                    her.y, her.z, encounter.entityYawDeg, mode_name(ctx, c.rt.current), clip_name(ctx),
+                    attached(ctx) ? band_name(ctx) : "none", sc.seconds);
     }
     if (ctx.kirinBackstop) {
         std::printf("%s-backstop at=%.1f\n", p, sc.seconds);
@@ -626,10 +669,6 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
             }
             break;
         case kPeep: {
-            if (c.rt.route.gp >= 0 && sc.arrivedAt < 0.0f) {
-                const Vec3 gp = f.k.routes.gps[static_cast<size_t>(c.rt.route.gp)].pos;
-                if (std::hypot(gp.x - her.x, gp.z - her.z) <= c.rt.arriveRadius) sc.arrivedAt = sc.seconds;
-            }
             if ((c.rt.current == 11 || c.rt.current == 12) && clip_starts(ctx, "kirin_a_watch")) {
                 const uint64_t owner = kirin_attr_word(terrain_boss_ground(f.k.terrain, her));
                 std::printf("%s-peep mode=%s route=%d gp=%d ground=0x%llx arrived=%.1f clip=%s her=%.1f,%.1f,%.1f "
@@ -689,9 +728,9 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
         case kShake:
             if (!attached(ctx)) return fail(sc, "the shake threw the climber");
             if (shakeEnded && sc.sawShake) {
-                std::printf("%s-shake survived=1 clip=%s band=%s drain=%.1f low=%.1f stamina=%.1f at=%.1f\n", p,
-                            sc.shakeClip.c_str(), band_name(ctx), sc.shakeDrain, sc.shakeLow, combat.stamina,
-                            sc.seconds);
+                std::printf("%s-shake survived=1 clip=%s band=%s drain=%.1f start=%.1f low=%.1f end=%.1f loss=%.1f "
+                            "at=%.1f\n", p, sc.shakeClip.c_str(), band_name(ctx), sc.shakeDrain, sc.shakeStart,
+                            sc.shakeLow, combat.stamina, sc.shakeStart - combat.stamina, sc.seconds);
                 sc.strikes = 0;
                 next(sc, kHeadSigil);
             }
@@ -734,7 +773,8 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
                 if (!live || ctx.carry.ret.phase != ReturnPhase::Idle) {
                     return fail(sc, "the corpse did not stay (or the return ran)");
                 }
-                if (!sc.leftRuins) return fail(sc, "she never left the ruins' boss ground after peeping");
+                if (!sc.leftRuins) return fail(sc, "her root never handed off the ruins' boss ground after the peep");
+                if (!sc.hungDone) return fail(sc, "no shake was met on the hung neck");
                 sc.wantR = true;
                 next(sc, kReset);
             }

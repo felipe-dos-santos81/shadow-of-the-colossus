@@ -122,8 +122,8 @@ one_line() {
 }
 
 # The timeline's events in order (the mode/route/climb/strike lines in between vary with the fight).
-s13_events="$(grep -E '^s13-(load|stomp|dodge|hide|peep|entry|neck|route_climb|shake|sigil|death|corpse|reset|coverage|perf|status) ' <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ' || true)"
-[[ "$s13_events" = "s13-load s13-stomp s13-dodge s13-hide s13-peep s13-entry s13-neck s13-neck s13-route_climb s13-shake s13-sigil s13-death s13-death s13-death s13-corpse s13-reset s13-coverage s13-perf s13-status " ]] ||
+s13_events="$(grep -E '^s13-(load|stomp|dodge|hide|peep|entry|shake_hung|neck|route_climb|shake|sigil|death|corpse|reset|coverage|perf|status) ' <<<"$selftest_out" | awk '{ print $1 }' | tr '\n' ' ' || true)"
+[[ "$s13_events" = "s13-load s13-stomp s13-dodge s13-hide s13-peep s13-entry s13-shake_hung s13-neck s13-neck s13-route_climb s13-shake s13-sigil s13-death s13-death s13-death s13-corpse s13-reset s13-coverage s13-perf s13-status " ]] ||
   fail "the s13-* events are '$s13_events' (expected the timeline's order)"
 
 load_line="$(one_line '^s13-load ' s13-load)"
@@ -143,8 +143,10 @@ dodge_line="$(one_line '^s13-dodge ' s13-dodge)"
   fail "a stomp's volumes reached the player during the dodge: $dodge_line"
 # The tunnel: the west stair (terrain class 7), route 4, its inner GP 0, depth peeping on the ruins.
 [[ "$(one_line '^s13-hide ' s13-hide)" =~ ^s13-hide\ class=7\  ]] || fail "the player did not hide in the class-7 stair"
-grep -q -E '^s13-route route=4 gp=0 kind=8 mode=Kirin_underpass_GP_mode ' <<<"$selftest_out" ||
+grep -q -E '^s13-route event=pick route=4 gp=0 kind=8 mode=Kirin_underpass_GP_mode ' <<<"$selftest_out" ||
   fail "she did not route to tunnel 4's inner GP 0"
+[[ "$(one_line '^s13-route event=arrive ' s13-route-arrive)" =~ ^s13-route\ event=arrive\ route=4\ gp=0\ kind=8\ .*\ arrived=[0-9.]+\  ]] ||
+  fail "she did not arrive at tunnel 4's inner GP 0"
 peep_line="$(one_line '^s13-peep ' s13-peep)"
 [[ "$peep_line" =~ ^s13-peep\ mode=Kirin_underpass_included_peeping_\(depth\)_mode\ route=4\ gp=0\ ground=0x400000\ arrived=[0-9.]+\ clip=kirin_a_watch_ ]] ||
   fail "she did not peep deep (mode 12) from GP 0 on the ruins' boss ground: $peep_line"
@@ -161,11 +163,18 @@ grep -E '^s13-neck stage=2 ' <<<"$selftest_out" | grep -q 'kirin_a_add_neck_down
 route_line="$(one_line '^s13-route_climb ' s13-route_climb)"
 [[ "$route_line" =~ ^s13-route_climb\ bands=tail,back,withers,neck_low,.*neck_high,head\  ]] ||
   fail "the climb did not follow the band chain from the tail to the head"
-# After the peep she leaves the ruins' boss ground (a step off it is possible).
-[[ "$(one_line '^s13-leave_ruins ' s13-leave_ruins)" =~ ^s13-leave_ruins\ from=0x400000\ to=0x[0-9a-f]+\  ]] ||
-  fail "she never left the ruins' boss ground after peeping"
+# After the peep her root's ground hands off the ruins' boss ground (during an unsteered kind-1 walk,
+# ruling R-AL: the step off it is possible, not a chosen exit).
+[[ "$(one_line '^s13-ground_handoff ' s13-ground_handoff)" =~ ^s13-ground_handoff\ from=0x400000\ to=0x[0-9a-f]+\  ]] ||
+  fail "her root never handed off the ruins' boss ground after the peep"
+# The hung neck: a shake met there drains the grip (no regeneration on a hung band).
+hung_line="$(one_line '^s13-shake_hung ' s13-shake_hung)"
+[[ "$hung_line" =~ ^s13-shake_hung\ clip=kirin_a_[a-z0-9_]*refuse[a-z_]*\ band=neck_low\ drain=[1-9][0-9.]*\  ]] ||
+  fail "no shake was met on the hung neck: $hung_line"
+hung_loss="$(field "$hung_line" loss)"
+cmp_ok "$hung_loss" ">" 0 || fail "the hung-neck shake cost no grip: $hung_line"
 shake_line="$(one_line '^s13-shake ' s13-shake)"
-[[ "$shake_line" =~ ^s13-shake\ survived=1\ clip=kirin_a_[a-z0-9_]*refuse[a-z_]*\ band=head\ drain=[1-9][0-9.]*\  ]] ||
+[[ "$shake_line" =~ ^s13-shake\ survived=1\ clip=kirin_a_[a-z0-9_]*refuse[a-z_]*\ band=head\ drain=[1-9][0-9.]*\ start=[0-9.]+\ low=[0-9.]+\ end=[0-9.]+\ loss=-?[0-9.]+\  ]] ||
   fail "no shake-off (with its measured drain) was survived on the head: $shake_line"
 [[ "$(one_line '^s13-sigil ' s13-sigil)" =~ ^s13-sigil\ target=head\ strikes=[0-9]+\ spent=160\ health=0\  ]] ||
   fail "the head sigil did not take her 160 HP"

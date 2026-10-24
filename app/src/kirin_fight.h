@@ -39,8 +39,9 @@ struct KirinState {
 // scr_move_back_bind on `judgeDefaults`, then scr_kirin_check against `judgeNames`), her
 // routes and terrain, `glbSeconds` per glb clip, her rootless clips (kirin_root's kNoRoot and
 // kUnusable: never played raw) and the stand, and snaps every route height to her ground on
-// `ground`. A clip the graph names that her glb lacks is appended after hers, 0 s and rootless
-// (it never plays). False with `why` naming the culprit.
+// `ground`. The one foreign clip the shared SWORD_ONLY control-defs name (KNIGHT's motion row) is
+// appended after hers, 0 s and rootless (it never plays); any other clip her glb lacks is refused.
+// False with `why` naming the culprit.
 bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJson,
                      const std::string& routeJson, const std::string& terrainJson,
                      const std::vector<std::string>& glbClips, const std::vector<float>& glbSeconds,

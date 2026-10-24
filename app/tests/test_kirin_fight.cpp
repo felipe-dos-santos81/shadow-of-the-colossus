@@ -195,6 +195,28 @@ TEST_CASE("Phaedra loads from her glb's own clip names: a foreign clip a shared 
     CHECK(l.core.seconds.size() == l.core.graph.clipNames.size());
 }
 
+TEST_CASE("a kirin_a_* clip her glb lacks is still refused (a stale bake never loads silently)") {
+    const std::string graph = read_file(lib() + "/behaviour/KIRIN.graph.json");
+    std::vector<std::string> names;
+    for (const std::string& n : export_clips(graph)) {
+        if (n.rfind("kirin_a_", 0) == 0 && n != "kirin_a_add_neck_refuse_loop") names.push_back(n);
+    }
+    EventsFile events;
+    std::string why;
+    REQUIRE(events_load(lib() + "/models/shadow/characters/colossus_04_kirin/_cmn/c04_kirin.events.json", events,
+                        why));
+    std::vector<std::string> judges;
+    for (const EventsVolume& v : events.judgeDefaults) judges.push_back(v.name);
+    for (const EventsClip& c : events.clips) {
+        for (const EventsVolume& v : c.judge) judges.push_back(v.name);
+    }
+    Loaded l;
+    CHECK_FALSE(kirin_core_load(l.core, l.k, graph, read_file(lib() + "/" + kd::kRouteFile),
+                                read_file(lib() + "/" + kd::kTerrainFile), names, lengths(names),
+                                events.judgeDefaults, judges, "kirin_a_stand", arena_ground(), why));
+    CHECK(why.find("kirin_a_add_neck_refuse_loop") != std::string::npos);
+}
+
 TEST_CASE("a player in tunnel class 7 whistling brings her to route 4's GP within 60 s, on her ground") {
     Run r;
     KnightCore& c = r.c;
