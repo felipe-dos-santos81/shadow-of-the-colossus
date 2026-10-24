@@ -232,6 +232,7 @@ struct ScrRuntime {
     float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88
     std::bitset<512> flags;               // flags the graph sets (set_flag)
     int controlMode = -1;                 // the control-mode scr_control_clip moved to
+    int controlEdge = -1;                 // the motionGraph edge it took (p30/p34: its blend data)
 };
 
 struct ScrStepOut {

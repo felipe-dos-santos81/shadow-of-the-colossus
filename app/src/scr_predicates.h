@@ -78,7 +78,8 @@ inline constexpr AttackRow kAttack[7] = {
 // that applies a mode's slowstatus (perception params, locomotion kind, the attack arm).
 ScrRegistry scr_registry_knight();
 
-// The load-time checks the strict loader cannot make: every base control-assign
+// The load-time checks the strict loader cannot make (the caller — Task 9 — must call it
+// right after scr_graph_load: the handlers dereference the argument slots it proves): every base control-assign
 // condition is one R2 decoded, every mode's attackdata is a table kAttack carries,
 // every row's motion is a clip of the graph, every argument slot the handlers read is
 // present, and every judge volume kAttack names is in `judgeNames` (the sidecar's: an
@@ -110,6 +111,18 @@ ScrStepOut scr_knight_step(const ScrGraph& graph, const ScrRegistry& registry, S
 // base rows fire on a requested bit or their control-def (R2), the last firing row
 // wins, and its orient's motion-graph edge from the current motion (else an any-motion
 // edge: the null-`from` always table) gives the clip. Additive rows are dropped (§13.7).
-// On a clip, rt.controlMode = the row's next control-mode. -1 when nothing changes.
+// -1 when nothing changes: no firing row, no edge, or a self-edge (the playing clip keeps
+// playing — restarting it would freeze him on its first frame). On a new clip,
+// rt.controlMode = the row's next control-mode and rt.controlEdge = the edge taken, whose
+// p34 is the blend in frames (data reading: 10 by default, 20 stand -> stomp, 5 from the
+// failure clips — behaviour.md) and whose p30 is -1 on edges taken at the clip's end (the
+// else/chain edges; a reading: every edge out of a turn clip has p30 -1).
+//
+// For the caller (Task 9), the turn overshoot: the stop-turn clips (turn_r/turn_l) rotate a
+// fixed ~90° and every edge out of them, turn -> turn and turn -> walk_start included, is
+// p30 -1, so honouring p30 lets one turn carry him past a 10° error and the next frame's
+// gait asks for the opposite turn. The gait stops asking once |rt.steerDeg| <= 3° (R1's
+// gate), so the caller should cut a playing turn (stop its root yaw, or leave it early)
+// when |rt.steerDeg| falls inside 3° rather than play the whole clip.
 int scr_control_clip(const ScrGraph& graph, ScrRuntime& rt, const std::vector<int>& ctrls, const ScrWorld& world);
 int scr_control_clip(const ScrGraph& graph, ScrRuntime& rt, int ctrl, const ScrWorld& world);

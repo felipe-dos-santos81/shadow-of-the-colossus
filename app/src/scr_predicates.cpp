@@ -221,6 +221,7 @@ void a_knight_shake(const ScrAction& a, ScrCtx& ctx) {
     const uint32_t r = region(ctx.world);
     const bool head = r == 0x10 || r == 0x20;
     if ((rt.bossBits & 2u) != 0) {
+        // Verbatim: with bits 1 and 2 set and walk < limit, walk gains dt twice this frame.
         if (walk < limit) walk += rt.dt;
         if (walk >= limit) scr_request(ctx.out, k::kCtrlForcedStop);
         if ((rt.bossBits & 1u) != 0 && (walk += rt.dt) >= hold + limit) {
@@ -257,7 +258,8 @@ void enter_mode(int mode, ScrCtx& ctx) {
     rt.relpos = l.perception;
     rt.locoKind = l.kind;
     rt.moveParam = l.p0c;
-    // Guess: the attainrange's first float (12 m; 30 m in lose_sight) is the arrival radius.
+    // Guess: the attainrange's first non-zero float (+0x10: 12 m; 30 m in lose_sight) is the
+    // arrival radius.
     rt.arriveRadius = l.attain.size() > 4 ? l.attain[4] : 0.0f;
     const int table = l.attack.empty() ? -1 : bracket(l.attack);
     if (table != rt.attackTable) {  // authored: a newly armed table starts unselected
@@ -631,17 +633,25 @@ int scr_control_clip(const ScrGraph& graph, ScrRuntime& rt, const std::vector<in
     // The edge from the current motion; else an any-motion edge (null `from`: the always
     // table — fall, death; the additive table's null-`from` edges are reached only by the
     // dropped additive rows' orients).
-    int to = -1;
-    for (const ScrMotionEdge& e : graph.motionGraph) {
+    int to = -1, edge = -1;
+    for (size_t i = 0; i < graph.motionGraph.size(); ++i) {
+        const ScrMotionEdge& e = graph.motionGraph[i];
         if (e.orient != fired->orient) continue;
         if (e.from == world.bossMotion) {
             to = e.to;
+            edge = static_cast<int>(i);
             break;
         }
-        if (e.from < 0 && to < 0) to = e.to;
+        if (e.from < 0 && to < 0) {
+            to = e.to;
+            edge = static_cast<int>(i);
+        }
     }
-    if (to < 0) return -1;  // no edge for that orient from here: the motion layer keeps playing
+    // No edge for that orient from here, or a self-edge (turn_r + Right_rotation_Tachidomari
+    // -> turn_r): the playing clip keeps playing.
+    if (to < 0 || to == world.bossMotion) return -1;
     rt.controlMode = fired->nextControlMode;
+    rt.controlEdge = edge;
     return to;
 }
 

@@ -627,3 +627,51 @@ TEST_CASE("a hurt (additive) row requests nothing") {
     CHECK(has(out.controls, 13));
     CHECK(scr_control_clip(kn.graph, rt, out.controls, w) == -1);
 }
+
+TEST_CASE("the gait through control resolution: stand -> turn (10 deg off) -> walk_start (within 3 deg)") {
+    const Knight& kn = knight();
+    ScrRuntime rt;
+    ScrWorld w = world_ahead(80.0f);
+    scr_runtime_start(kn.graph, rt, true);
+    ScrStepOut sink;
+    ScrCtx ctx{kn.graph, kn.reg, rt, w, sink};
+    kn.reg.enterMode(4, ctx);  // kind 0 toward the player's snapshot, 80 m ahead
+    scr_run(ctx, kn.graph.modes[4].enterActions);
+    rt.current = rt.pending = 4;
+
+    // 10 deg to his right (yaw +10): inside ±30 -> accel, past 3 -> Turn_right. In
+    // KNIGHT_DEFAULT the Turn_right row follows accel's, so it wins: the stop-turn in place.
+    w.bossYawDeg = 10.0f;
+    w.bossMotion = kn.clip("knight_a_stand");
+    w.bossControlMode = 1;
+    ScrStepOut out = scr_knight_step(kn.graph, kn.reg, rt, w, 0.1f);
+    CHECK(has(out.controls, k::kCtrlAccel));
+    CHECK(has(out.controls, k::kCtrlTurnRight));
+    CHECK(rt.steerDeg == doctest::Approx(-10.0f));
+    CHECK(scr_control_clip(kn.graph, rt, out.controls, w) == kn.clip("knight_a_turn_r"));
+    CHECK(rt.controlMode == 2);  // KNIGHT_TURN
+    REQUIRE(rt.controlEdge >= 0);
+    CHECK(kn.graph.motionGraph[rt.controlEdge].p30 == doctest::Approx(0.0f));
+    CHECK(kn.graph.motionGraph[rt.controlEdge].p34 == doctest::Approx(10.0f));  // the blend, frames
+
+    // Still 10 deg off while turn_r plays: the self-edge keeps the playing clip (-1, no restart).
+    w.bossMotion = kn.clip("knight_a_turn_r");
+    w.bossControlMode = 2;
+    rt.controlEdge = -1;
+    out = scr_knight_step(kn.graph, kn.reg, rt, w, 0.1f);
+    CHECK(scr_control_clip(kn.graph, rt, out.controls, w) == -1);
+    CHECK(rt.controlMode == 2);
+    CHECK(rt.controlEdge == -1);
+
+    // From turn_l with the goal within 3 deg: accel alone -> 'Move_(small)' -> walk_start, KNIGHT_WALK.
+    w.bossYawDeg = 1.0f;
+    w.bossMotion = kn.clip("knight_a_turn_l");
+    out = scr_knight_step(kn.graph, kn.reg, rt, w, 0.1f);
+    CHECK(has(out.controls, k::kCtrlAccel));
+    CHECK_FALSE(has(out.controls, k::kCtrlTurnRight));
+    CHECK_FALSE(has(out.controls, k::kCtrlTurnLeft));
+    CHECK(scr_control_clip(kn.graph, rt, out.controls, w) == kn.clip("knight_a_walk_start"));
+    CHECK(rt.controlMode == 3);
+    REQUIRE(rt.controlEdge >= 0);
+    CHECK(kn.graph.motionGraph[rt.controlEdge].p30 == doctest::Approx(-1.0f));  // out of a turn: at its end
+}
