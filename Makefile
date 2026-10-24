@@ -266,8 +266,8 @@ bake-kirin: publish ## Bake Phaedra (colossus_04_kirin) with her 75 clips + the 
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/colossus_04_kirin/_cmn/c04_kirin.cmsh --force --clips $(subst $(space),$(comma),$(strip $(KIRIN_CLIPS)))
 
-arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena) (S13 Task 12)
-	@echo "not yet (S13 Task 12)" >&2; exit 1
+arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena; the ruins as floors-only lines)
+	@test -f out/re/stage/arena_04.manifest || python3 tools/re/stage/probe.py compose --stage arena_04 --library "$(LIB)" --out out/re/stage/arena_04.manifest
 
 phaedra: ## Fight Phaedra on arena_04 (S13 Task 15)
 	@echo "not yet (S13 Task 15)" >&2; exit 1

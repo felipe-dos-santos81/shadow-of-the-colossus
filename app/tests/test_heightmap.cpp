@@ -711,3 +711,84 @@ TEST_CASE("build_backdrop_grid is empty when the scene has no backdrops") {
     CHECK(is_nan(ray_march(grid, {0, 0, 0}, {1, 0, 0}, 10.0f, 0.5f)));
     CHECK(is_nan(heightmap_node(grid, {0, 0, 0})));
 }
+
+// ---- S13: floors-only ground (the arena_04 ruins) ---------------------------
+
+namespace {
+
+// A closed box x 2..6, z 2..6, y 1..3, every face wound outward (glTF CCW: the
+// normal (b - a) x (c - a) points out), over a ground quad at y 0 (x/z 0..10).
+Scene box_on_ground(bool floorsOnly) {
+    std::vector<Vec3> ground;
+    add_floor(ground, 0, 10, 0, 10, 0.0f);
+    Scene scene = scene_from_triangles(ground);
+    const float x0 = 2, x1 = 6, z0 = 2, z1 = 6, y0 = 1, y1 = 3;
+    const std::vector<Vec3> box = {
+        {x0, y1, z0}, {x0, y1, z1}, {x1, y1, z0}, {x1, y1, z0}, {x0, y1, z1}, {x1, y1, z1},  // top +y
+        {x0, y0, z0}, {x1, y0, z0}, {x0, y0, z1}, {x1, y0, z0}, {x1, y0, z1}, {x0, y0, z1},  // bottom -y
+        {x0, y0, z0}, {x0, y0, z1}, {x0, y1, z0}, {x0, y1, z0}, {x0, y0, z1}, {x0, y1, z1},  // -x
+        {x1, y0, z0}, {x1, y1, z0}, {x1, y0, z1}, {x1, y1, z0}, {x1, y1, z1}, {x1, y0, z1},  // +x
+        {x0, y0, z0}, {x0, y1, z0}, {x1, y0, z0}, {x1, y0, z0}, {x0, y1, z0}, {x1, y1, z0},  // -z
+        {x0, y0, z1}, {x1, y0, z1}, {x0, y1, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1},  // +z
+    };
+    MeshCpu mesh;
+    for (std::size_t i = 0; i < box.size(); ++i) {
+        mesh.vertices.push_back(vertex_at(box[i]));
+        mesh.indices.push_back(static_cast<uint32_t>(i));
+    }
+    mesh.floorsOnly = floorsOnly;
+    scene.meshes.push_back(std::move(mesh));
+    scene.boundsMax.y = 3;
+    return scene;
+}
+
+std::vector<float> node_layers(const Heightmap& hm, int i, int j) {
+    std::vector<float> out;
+    const std::size_t base = (static_cast<std::size_t>(j) * hm.width + i) * hm.maxLayers;
+    for (int k = 0; k < hm.maxLayers && !std::isnan(hm.layers[base + k]); ++k) {
+        out.push_back(hm.layers[base + k]);
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("a floors-only box adds its top face as a floor layer and no wall flag") {
+    // The same box as ordinary ground: its down-facing bottom is a layer and its
+    // walls flag the ground's body band (the control).
+    const Heightmap plain = build_heightmap(box_on_ground(false), 1.0f, true);
+    CHECK(node_layers(plain, 4, 4) == std::vector<float>{0.0f, 1.0f, 3.0f});
+    CHECK(std::any_of(plain.blocked.begin(), plain.blocked.end(), [](uint8_t b) { return b != 0; }));
+
+    // Floors-only: the top at 3 over the ground at 0; no bottom, no flag anywhere.
+    const Heightmap floors = build_heightmap(box_on_ground(true), 1.0f, true);
+    CHECK(node_layers(floors, 4, 4) == std::vector<float>{0.0f, 3.0f});
+    CHECK(node_layers(floors, 8, 8) == std::vector<float>{0.0f});
+    CHECK(std::all_of(floors.blocked.begin(), floors.blocked.end(), [](uint8_t b) { return b == 0; }));
+    CHECK(heightmap_sample(floors, {4, 0, 4}) == doctest::Approx(3.0f));
+
+    // Unlayered, the top is still the column's maximum.
+    const Heightmap flat = build_heightmap(box_on_ground(true), 1.0f);
+    CHECK(heightmap_node(flat, {4, 0, 4}) == doctest::Approx(3.0f));
+    CHECK(heightmap_node(flat, {8, 0, 8}) == doctest::Approx(0.0f));
+}
+
+TEST_CASE("a floors-only mesh drops a down-facing floor (the arena_04 dirt-prim phantom)") {
+    // A ground quad at 0 and, as floors-only, a quad at 5 wound down (add_floor's
+    // winding: (b - a) x (c - a) points -y): it contributes nothing.
+    std::vector<Vec3> ground;
+    add_floor(ground, 0, 10, 0, 10, 0.0f);
+    Scene scene = scene_from_triangles(ground);
+    std::vector<Vec3> under;
+    add_floor(under, 0, 10, 0, 10, -2.0f);
+    MeshCpu mesh;
+    for (std::size_t i = 0; i < under.size(); ++i) {
+        mesh.vertices.push_back(vertex_at(under[i]));
+        mesh.indices.push_back(static_cast<uint32_t>(i));
+    }
+    mesh.floorsOnly = true;
+    scene.meshes.push_back(std::move(mesh));
+    scene.boundsMin.y = -2;
+    const Heightmap hm = build_heightmap(scene, 1.0f, true);
+    CHECK(node_layers(hm, 5, 5) == std::vector<float>{0.0f});
+}

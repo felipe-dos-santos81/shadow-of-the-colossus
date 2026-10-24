@@ -802,6 +802,9 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
     for (const ManifestInstance& instance : manifest.instances) {
         glbs.push_back(instance.glbRelPath);
     }
+    for (const ManifestInstance& floor : manifest.floors) {
+        glbs.push_back(floor.glbRelPath);
+    }
     glbs.push_back(playerGlbRelPath);
     for (const ManifestEntity& entity : manifest.entities) {
         glbs.push_back(entity.placement.glbRelPath);
@@ -836,6 +839,26 @@ Scene compose_scene(const std::filesystem::path& libraryDir, const SceneManifest
             // harder to match back to the instance that placed it.
             throw std::runtime_error("compose_scene: instance \"" + instance.glbRelPath +
                                      "\": " + error.what());
+        }
+    }
+
+    // S13 floors (arena_04's ruins): static ground like an instance, in the scene
+    // bounds, but rasterized floors-only (up-facing triangles, no wall flags).
+    for (const ManifestInstance& floor : manifest.floors) {
+        progress();
+        const std::size_t mesh_begin = scene.meshes.size();
+        const GlbPlacement placement{
+            .model = mat4_from_trs(floor.position, floor.rotation, floor.scale),
+            .materialOffset = static_cast<int>(scene.materials.size()),
+        };
+        try {
+            load_glb_into(scene, libraryDir, floor.glbRelPath, placement, have_bounds, &decoded);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error("compose_scene: floor \"" + floor.glbRelPath + "\": " +
+                                     error.what());
+        }
+        for (std::size_t m = mesh_begin; m < scene.meshes.size(); ++m) {
+            scene.meshes[m].floorsOnly = true;
         }
     }
 

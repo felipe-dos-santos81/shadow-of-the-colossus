@@ -110,7 +110,8 @@ SceneManifest parse_manifest(const std::filesystem::path& path, bool acceptEncou
         }
 
         const std::string& directive = tokens[0];
-        if (directive == "instance" || directive == "backdrop" || directive == "horse") {
+        if (directive == "instance" || directive == "backdrop" || directive == "horse" ||
+            directive == "floor") {
             if (tokens.size() != 12) {
                 fail(path, line_number, directive + " expects 12 tokens (glb path + 10 numbers), got " +
                                             std::to_string(tokens.size()));
@@ -122,6 +123,8 @@ SceneManifest parse_manifest(const std::filesystem::path& path, bool acceptEncou
                 manifest.instances.push_back(std::move(placement));
             } else if (directive == "backdrop") {
                 manifest.backdrops.push_back(std::move(placement));
+            } else if (directive == "floor") {
+                manifest.floors.push_back(std::move(placement));
             } else {
                 manifest.horses.push_back(ManifestHorse{std::move(placement)});
             }

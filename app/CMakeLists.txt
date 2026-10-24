@@ -91,3 +91,9 @@ set_tests_properties(windowed_selftest PROPERTIES
 add_executable(scr_registry_dump tools/scr_registry_dump.cpp src/scr_graph.cpp src/scr_predicates.cpp
   ${S13_SCR_SOURCES})
 target_include_directories(scr_registry_dump PRIVATE src)
+
+# S13 Task 12: the layered ground of a stage manifest, flooded (probe.py check-manifest --stage
+# arena_04 reads it). No SDL.
+add_executable(stage_flood tools/stage_flood.cpp src/asset_io.cpp src/anim.cpp src/manifest.cpp
+  src/heightmap.cpp src/player.cpp)
+target_include_directories(stage_flood PRIVATE src third_party)

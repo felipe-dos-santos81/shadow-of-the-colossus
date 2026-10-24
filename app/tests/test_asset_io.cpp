@@ -1627,3 +1627,24 @@ TEST_CASE("compose_scene loads a backdrop as static, non-ground meshes outside t
     // Everything else stays ground.
     CHECK(scene.meshes.front().ground);
 }
+
+TEST_CASE("compose_scene loads a floor line as floors-only ground after the instances (S13)") {
+    SceneManifest manifest{};
+    manifest.instances.push_back(placed_at("models/objects/props/_cmn/obj_plank_01.glb",
+                                           Vec3{1.0f, 0.0f, 0.0f}));
+    manifest.floors.push_back(placed_at("models/objects/props/_cmn/obj_plank_01.glb",
+                                        Vec3{0.0f, 0.0f, 50.0f}));
+    std::size_t player_mesh_begin = 999;
+    const Scene scene = compose_scene(test_library(), manifest,
+                                      "models/shadow/characters/wander/_cmn/wander.glb",
+                                      &player_mesh_begin);
+    REQUIRE(scene.meshes.size() == 14);  // plank, floor plank, wander's 12
+    CHECK(player_mesh_begin == 2);
+    CHECK_FALSE(scene.meshes[0].floorsOnly);
+    CHECK(scene.meshes[1].floorsOnly);
+    CHECK(scene.meshes[1].ground);
+    CHECK(scene.meshes[1].rig == -1);
+    CHECK(scene.meshes[1].model.m[14] == doctest::Approx(50.0f));
+    CHECK(scene.boundsMax.z >= 50.0f);  // a floor is scene extent, unlike a backdrop
+    for (std::size_t i = 2; i < scene.meshes.size(); ++i) CHECK_FALSE(scene.meshes[i].floorsOnly);
+}

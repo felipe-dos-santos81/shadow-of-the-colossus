@@ -21,6 +21,7 @@ instance <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
 posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
 backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+floor <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 spawn <px> <py> <pz> <yawDeg>
 encounter <id>
@@ -52,6 +53,14 @@ encounter <id>
   meshes (`rig = -1`) with `MeshCpu::ground = false`; `build_heightmap` skips them, and they
   stay out of the scene bounds (the heightmap grid is sized by those), so a distant
   backdrop cannot stretch the walkable map. Loaded after the entities.
+- `floor` — the S13 addition (arena_04's ruins): an `instance` that is ground **floors-only**.
+  Static meshes (`rig = -1`, `ground = true`, in the scene bounds) with
+  `MeshCpu::floorsOnly = true`: `build_heightmap` keeps only their up-facing triangles
+  (`normal.y >= kWallSteepness · |normal|`, the normal `(p1 − p0) × (p2 − p0)` of the glTF CCW
+  winding, flipped under a mirroring `model`) — so a ceiling or a down-facing floor adds no
+  layer — and they never flag a wall. Loaded right after the instances (`SceneManifest::floors`).
+  Always accepted by `parse_manifest`; the probe parses it only with `parse_manifest_text(...,
+  floor=[])`. A manifest without `floor` lines builds exactly the map it did before.
 - `horse` — the S8 addition: Agro. Placement as an `instance`'s, no clip. Like an `entity` it
   keeps its skeleton and clips as its own rig (index after the player and any entities,
   `Scene::horseRig`; `-1` when the manifest has none), but it is never an encounter entity —
@@ -63,7 +72,7 @@ encounter <id>
   `parse_manifest_text(..., encounter=[])`); otherwise it is an unknown directive, as before
   S11. At most one line; absent means `valus` (`SceneManifest::encounter`).
 
-Token counts are exact (12 for `instance`, `backdrop` and `horse`, 13 for `entity`, 14 for `posed`, 5 for `spawn`, 2 for `encounter`), and unknown
+Token counts are exact (12 for `instance`, `backdrop`, `floor` and `horse`, 13 for `entity`, 14 for `posed`, 5 for `spawn`, 2 for `encounter`), and unknown
 directives fail loudly. A malformed line throws `std::runtime_error` formatted
 `<file>:<line>: <reason>`.
 
@@ -192,6 +201,29 @@ layered map is large: 1111 × 1151 nodes, 409 MB of layers + wall flags — the 
 z 0.1 because the player glb's rest pose at the origin is merged into them (the level alone spans
 z −1150…−463).
 
+## Example (arena_04, S13 — Phaedra)
+
+`probe.py compose --stage arena_04` (`make arena04-manifest`; gate `probe.py check-manifest --stage
+arena_04`, which needs `app/build/stage_flood`). The set is `models/shadow/levels/arena_04/` (26
+glb files; the 9 hash stubs and the 7 invisible occluder / shadow-blocker meshes dropped = 10 kept,
+cwks order per group): `arena_04_ground` and `arena_04_structures_platform` as `instance`, the three
+ruins glbs (`ruins_entrance`, `ruins_skirts`, `ruins_corridors`) as `floor`, and `arena_04`, the moss
+fur, the skirts and the two water planes as `backdrop` (the corridor water at y −0.095, its
+`arena_04.csml` placement). Then `encounter kirin`, Phaedra (`c04_kirin.glb`, `kirin_a_stand`) at
+(1122, 53.76, 147) on the platform facing the ruins' centre (990, 140), and the player start
+`spawn 984 52.5 142` verbatim. The north road (`arena_04_ground` prims 2 and 5, terrain class 5) is
+kept (spec D9). Pins in `STAGES["arena_04"]`: 49 meshes, 148,792 vertices, sha256
+`1062c045766621e12d57765db0dae69fc79f7e1b4244828adb9ee6021a442940`.
+
+The gate floods the app's own layered map (`app/tools/stage_flood.cpp`: `compose_scene` +
+`build_heightmap` 1 m, layered, static bounds + node-to-node `heightmap_walkable`) from the start and
+from the four tunnel mouths (measured 2026-10-24): 422 × 312 nodes, 40.68 MiB; 0 out-of-bounds edges
+(the map's edge holds at the road's end too); the road's end (z < −15) reached at x 986–994,
+z −19…−15, y 60.34–61.69 (Task 13's backstop box); 201 of the 207 ring-corridor layers
+(y 43.5–44.6) reached from each mouth, lowest reached floor 43.73; 0 layers at the dirt prim's
+phantom 42.49. With the ruins as `instance` lines instead, the ring is reached 0 times and the
+phantom floor holds 375 layers.
+
 ## Output path
 
 W2's `compose` step writes the arena manifest to **`out/re/stage/valus.manifest`**
@@ -200,5 +232,6 @@ when it is absent.
 
 The other stages default to their own file (`probe.py` `STAGE_OUT`; `compose --stage X` without
 `--out`, and `check-manifest --stage X` without a file): `shrine` → `shrine.manifest`, `plain` →
-`plain.manifest`, `road` → `road.manifest`, `arena_02` → `arena_02.manifest`, all under
+`plain.manifest`, `road` → `road.manifest`, `arena_02` → `arena_02.manifest`, `arena_03` →
+`arena_03.manifest`, `arena_04` → `arena_04.manifest`, all under
 `out/re/stage/`. Only `arena_01` (the default stage) writes `valus.manifest`.

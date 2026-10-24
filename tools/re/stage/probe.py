@@ -49,7 +49,7 @@ Modes
                              records, string pool; extracts the pool path list
                              matching SUBSTR (default: the stage's match)
   check-cwks                 pinned assertions for the workspace file (exit 0/1)
-  compose --library <dir> [--out <file>] [--paths <file>] [--stage arena_01|arena_02|arena_03|shrine|plain|road]
+  compose --library <dir> [--out <file>] [--paths <file>] [--stage arena_01|arena_02|arena_03|arena_04|shrine|plain|road]
                              emit the stage's scene manifest (the W1↔W2 format):
                              arena_01: the level sets' non-*_collision* glbs,
                              identity transforms, the labeled spawn pick;
@@ -65,14 +65,19 @@ Modes
                              arena_03: the four tower glbs of levels/arena_03 as
                              ground + six backdrops (the water among them) +
                              `encounter knight` + Gaius + spawn (S12)
+                             arena_04: ground + platform as instances, the three
+                             ruins glbs as `floor` (floors-only), five backdrops +
+                             `encounter kirin` + Phaedra + the player start (S13)
                              --out defaults per stage: arena_01 out/re/stage/valus.manifest,
                              arena_02 .../arena_02.manifest, arena_03 .../arena_03.manifest,
                              shrine .../shrine.manifest,
                              plain .../plain.manifest, road .../road.manifest
-  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|arena_03|shrine|plain|road]
+  check-manifest [<file>] --library <dir> [--stage arena_01|arena_02|arena_03|arena_04|shrine|plain|road]
+                             [--flood-tool EXE]
                              pinned assertions for the stage's manifest (exit 0/1);
                              no --stage means arena_01; <file> defaults per stage
-                             as for compose --out
+                             as for compose --out; arena_04 also floods the app's
+                             layered ground (app/build/stage_flood: `make app`)
   compose-encounter --library <dir> [--s3-manifest <file>] [--out <file>]
                              derive the S4 encounter manifest from the S3 one:
                              the 30 instances verbatim, a rewritten spawn, one
@@ -87,6 +92,7 @@ the one measured workspace file.
 """
 
 import argparse
+import array
 import contextlib
 import glob
 import hashlib
@@ -96,6 +102,7 @@ import math
 import os
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 
@@ -361,6 +368,59 @@ STAGES["arena_03"] = {
     "exclude_lod": STAGES["shrine"]["exclude_lod"],
     "exclude_names": STAGES["shrine"]["exclude_names"] + ("arena_03_occluders", "arena_03_shadowcasters"),
 }
+# arena_04 (S13, Phaedra; design D9, recon .superpowers/sdd/2026-10-23-s13-recon/arena04/): `levels/arena_04`
+# in the world frame — 26 glb files minus the shrine's rules (9 hash stubs) and the 7 invisible occluder /
+# shadow-blocker meshes (the four `shadowblocker_ruinentrance_*` are 28 m boxes that would roof the ruins) =
+# 10 kept.  The ground and the boss platform are `instance` lines; the three ruins glbs are `floor` lines
+# (floors-only: up-facing triangles, no wall flags — the stair tunnels and the ring corridor walkable, the
+# down-facing dirt prim's phantom floor under the plain gone); the cliffs, the moss fur, the skirts and the
+# two water planes are `backdrop`s, each group in cwks order.  The north road (`arena_04_ground` prims 2
+# and 5, terrain class 5) is kept: it leaves the map at z −20 by design (spec D9).  Every line is identity
+# but the corridor water, at the y offset arena_04.csml instance 5296 carries.  Then `encounter kirin`,
+# Phaedra on the platform (spec D9: `kirin_standby_col`) facing the ruins, and the player start.
+STAGES["arena_04"] = {
+    "cwks_match": "levels/arena_04/",
+    "count": 82,
+    "cwks_sha256": "eb05547337a971a92b52da2afd3c79a3546a190aa04b3ca5ff21b10e5c4f81f9",
+    "sets": ("models/shadow/levels/arena_04",),
+    "order": "cwks",
+    "files": 26,                  # glb files in the set (geo/_cmn included), before the exclusions
+    "kept": 10,
+    "ground": tuple("models/shadow/levels/arena_04/_cmn/arena_04_%s.glb" % n for n in ("ground", "structures_platform")),
+    "floor": tuple("models/shadow/levels/arena_04/_cmn/arena_04_ruins_%s.glb" % n
+                   for n in ("entrance", "skirts", "corridors")),
+    "water_glbs": tuple("models/shadow/levels/arena_04/_cmn/arena_04_%s.glb" % n
+                        for n in ("corridor_water_02", "trenchwater")),
+    # data scripts/shadow/world/arena_04/_cmn/arena_04.csml instance 5296 (float32 -0.095)
+    "offsets": {"models/shadow/levels/arena_04/_cmn/arena_04_corridor_water_02.glb": (0.0, -0.095, 0.0)},
+    "meshes": (49, 148792),       # (primitives, vertices) over the 10 lines' glbs (== the recon's §1)
+    "sha256": "1062c045766621e12d57765db0dae69fc79f7e1b4244828adb9ee6021a442940",
+    "encounter": "kirin",
+    "entity_glb": "models/shadow/characters/colossus_04_kirin/_cmn/c04_kirin.glb",
+    "entity_clip": "kirin_a_stand",
+    "entity_xz": (1122.0, 147.0),    # spec D9: the platform (`kirin_standby_col`, data-supported)
+    "entity_faces": (990.0, 140.0),  # the ruins' centre (recon §4)
+    "spawn": (984.0, 52.5, 142.0),   # the player start (recon §7; written verbatim, its ground is 51.41)
+    "grounds": (53.76,),             # (entity) ground sample, metres (the platform)
+    # The layered-ground gate (stage_flood: the app's own compose + build_heightmap + walkable).
+    "heightmap_max_bytes": 48 * 1024 * 1024,
+    "road_end_z": -15.0,             # nodes north of this are the road's end (it leaves the map, D9)
+    # data the .clb tunnel classes 6..9 (Task 9); each flood starts at the spawn's y 52.5 (authored),
+    # i.e. on the mound top at the mouth (layers 51.8-52.3 measured; the ruin roof is ~55.6)
+    "mouths": ((1011.0, 121.0), (970.0, 121.0), (970.0, 159.0), (1011.0, 159.0)),
+    "ruin_box": (958.0, 1022.0, 108.0, 172.0),   # x0, x1, z0, z1 (the boss-ground owner 0x400000 box)
+    "ring_y": (43.5, 44.6),          # the ring corridor floor (43.84) band
+    "ring_min": 200,                 # of the ring-band layers, reached from each mouth
+    "phantom_y": 42.49,              # the dirt prim's down-facing floor (recon §3), ±0.05
+    "exclude_stub": STAGES["shrine"]["exclude_stub"],
+    "exclude_lod": STAGES["shrine"]["exclude_lod"],
+    "exclude_names": STAGES["shrine"]["exclude_names"] + (
+        "arena_04_occluder", "arena_04_ruins_corrdior_occluder", "arena_04_shadowblocker",
+        "arena_04_shadowblocker_ruinentrance_01", "arena_04_shadowblocker_ruinentrance_02",
+        "arena_04_shadowblocker_ruinentrance_03", "arena_04_shadowblocker_ruinentrance_04",
+    ),
+}
+ARENA_04_OUT = "out/re/stage/arena_04.manifest"
 ARENA_03_OUT = "out/re/stage/arena_03.manifest"
 ARENA_02_OUT = "out/re/stage/arena_02.manifest"
 ARENA = STAGES["arena_01"]
@@ -371,7 +431,7 @@ SHRINE_OUT = "out/re/stage/shrine.manifest"
 PLAIN_OUT = "out/re/stage/plain.manifest"
 ROAD_OUT = "out/re/stage/road.manifest"
 STAGE_OUT = {"arena_02": ARENA_02_OUT, "arena_03": ARENA_03_OUT, "shrine": SHRINE_OUT, "plain": PLAIN_OUT,
-             "road": ROAD_OUT}
+             "road": ROAD_OUT, "arena_04": ARENA_04_OUT}
 ARENA_PATHS_OUT = "out/re/stage/arena_paths.txt"
 
 # The S4 encounter (Task 6): the S3 arena's 30 instances carried verbatim, a
@@ -1137,7 +1197,7 @@ def manifest_float(token, path, line, field):
     return value
 
 
-def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None, encounter=None):
+def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None, encounter=None, floor=None):
     """Parse the W1↔W2 schema; return (instances, spawns, entities) where
     instances = [(glbRelPath, [10 floats])], spawns = [[4 floats]] and entities
     = [(glbRelPath, [10 floats], clipName)].  A `posed` line (S7) is accepted
@@ -1146,12 +1206,13 @@ def parse_manifest_text(text, path, posed=None, backdrop=None, horse=None, encou
     directive, as for the arena; `backdrop` and `horse` (S8, both shaped as an
     `instance`) work the same way, filling their lists with (glbRelPath,
     [10 floats]).  `encounter <id>` (S11) likewise needs an `encounter` list,
-    which gets the id (at most one line; absent means valus).  Raises ManifestError
+    which gets the id (at most one line; absent means valus); `floor` (S13) is shaped
+    as an `instance` and opts in like `backdrop`.  Raises ManifestError
     shaped `<path>:<line>: <reason>` (the app's message shape)."""
     instances = []
     spawns = []
     entities = []
-    placed = {"instance": instances, "backdrop": backdrop, "horse": horse}
+    placed = {"instance": instances, "backdrop": backdrop, "horse": horse, "floor": floor}
     for number, line in enumerate(text.splitlines(), start=1):
         tokens = line.split("#", 1)[0].split()
         if not tokens:
@@ -1637,6 +1698,8 @@ def cmd_compose(args):
         return compose_road(library, args.out)
     if args.stage == "arena_03":
         return compose_arena_03(library, args.out)
+    if args.stage == "arena_04":
+        return compose_arena_04(library, args.out)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
     plain = args.stage == "plain"
@@ -1817,6 +1880,8 @@ def cmd_check_manifest(args):
         return road_check_manifest(library, os.path.abspath(args.file))
     if args.stage == "arena_03":
         return arena_03_check_manifest(library, os.path.abspath(args.file))
+    if args.stage == "arena_04":
+        return arena_04_check_manifest(library, os.path.abspath(args.file), args.flood_tool)
     path = os.path.abspath(args.file)
     stage = STAGES[args.stage]
     arena = args.stage == "arena_01"
@@ -2813,6 +2878,348 @@ def arena_03_check_manifest(library, path):
     return 0
 
 
+# ------------------------------------------------------------ arena_04 (S13)
+
+
+def arena_04_lines(library):
+    """(ground, floor, backdrop): the arena_04 kept glbs (cwks order) split into the pinned
+    ground and floor glbs and the rest, each as (glbRelPath, values) — identity but for the
+    stage's csml `offsets`.  Dies when the set is off its pins."""
+    stage = STAGES["arena_04"]
+    _, kept, excluded = shrine_sets(library, "arena_04")[0]
+    if (len(kept) + len(excluded), len(kept)) != (stage["files"], stage["kept"]):
+        die("arena_04 set is %d glb files, %d kept; expected %d, %d"
+            % (len(kept) + len(excluded), len(kept), stage["files"], stage["kept"]))
+    named = stage["ground"] + stage["floor"] + stage["water_glbs"]
+    if not set(named) <= set(kept):
+        die("arena_04 ground/floor/water glbs not all kept: %s" % ", ".join(sorted(set(named) - set(kept))))
+
+    def values(rel):
+        return list(stage["offsets"].get(rel, (0.0, 0.0, 0.0))) + IDENTITY_VALUES[3:]
+
+    group = lambda keep: [(rel, values(rel)) for rel in kept if keep(rel)]
+    return (group(lambda r: r in stage["ground"]), group(lambda r: r in stage["floor"]),
+            group(lambda r: r not in stage["ground"] + stage["floor"]))
+
+
+def compose_arena_04(library, out):
+    stage = STAGES["arena_04"]
+    ground, floor, backdrop = arena_04_lines(library)
+    entity_y, _ = composed_ground(library, ground, *stage["entity_xz"])
+    if entity_y is None:
+        die("arena_04: no ground under the entity")
+    entity_yaw = yaw_between(stage["entity_xz"], stage["entity_faces"])
+    sx, sy, sz = stage["spawn"]
+    spawn_yaw = yaw_between((sx, sz), stage["entity_xz"])
+    _, qy, _, qw = yaw_quaternion(entity_yaw)
+    water = stage["water_glbs"][0]
+    header = [
+        "# arena_04 — S13 Phaedra, generated by tools/re/stage/probe.py compose --stage arena_04",
+        "# %d glbs kept of %s/ (%d glb files; the hash stubs and the" % (stage["kept"], stage["sets"][0], stage["files"]),
+        "#   7 occluder / shadow-blocker meshes dropped), world frame, workspace pool-list order per group:",
+        "#   the ground and the platform as `instance`, the %d ruins glbs as `floor` (floors-only:" % len(floor),
+        "#   walkable tunnels, no phantom floor), the other %d as `backdrop`; identity but" % len(backdrop),
+        "#   %s at y %s (arena_04.csml #5296)."
+        % (water.rsplit("/", 1)[-1], fmt_manifest_float(stage["offsets"][water][1])),
+        "#   The north road (terrain class 5) is kept: it leaves the map at z -20 (spec D9).",
+        "# encounter=%s entity=%s clip=%s" % (stage["encounter"], stage["entity_glb"], stage["entity_clip"]),
+        "#   (%s, %s) on the platform (spec D9, kirin_standby_col), ground %s m, yaw %.6f deg toward the"
+        % (fmt_manifest_float(stage["entity_xz"][0]), fmt_manifest_float(stage["entity_xz"][1]),
+           fmt_ground(entity_y), entity_yaw),
+        "#   ruins' centre (%s, %s)." % tuple(fmt_manifest_float(v) for v in stage["entity_faces"]),
+        "# spawn: the player start (%s, %s, %s) verbatim (recon §7), yaw %.6f deg facing the entity."
+        % (fmt_manifest_float(sx), fmt_manifest_float(sy), fmt_manifest_float(sz), spawn_yaw),
+    ]
+    text = "\n".join(
+        header
+        + ["instance %s %s" % (rel, fmt_values(v)) for rel, v in ground]
+        + ["floor %s %s" % (rel, fmt_values(v)) for rel, v in floor]
+        + ["backdrop %s %s" % (rel, fmt_values(v)) for rel, v in backdrop]
+        + [
+            "encounter %s" % stage["encounter"],
+            "entity %s %s %s %s 0 %.6f 0 %.6f 1 1 1 %s"
+            % (stage["entity_glb"], fmt_manifest_float(stage["entity_xz"][0]), fmt_ground(entity_y),
+               fmt_manifest_float(stage["entity_xz"][1]), qy, qw, stage["entity_clip"]),
+            "spawn %s %s %s %.6f" % (fmt_manifest_float(sx), fmt_manifest_float(sy), fmt_manifest_float(sz), spawn_yaw),
+        ]
+    ) + "\n"
+
+    parsed_floor, parsed_backdrop, encounter = [], [], []
+    instances, spawns, entities = parse_manifest_text(text, out, backdrop=parsed_backdrop, encounter=encounter,
+                                                      floor=parsed_floor)
+    if (len(instances), len(parsed_floor), len(parsed_backdrop), len(spawns), len(entities), encounter) != \
+            (len(ground), len(floor), len(backdrop), 1, 1, [stage["encounter"]]):
+        die("composed arena_04 manifest does not round-trip")
+    totals = manifest_counts(library, [rel for rel, _ in ground + floor + backdrop])
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if stage["meshes"] is not None and totals != stage["meshes"]:
+        die("arena_04 mesh/vertex totals %s != the pin %s" % (totals, stage["meshes"]))
+    if stage["sha256"] is not None and sha != stage["sha256"]:
+        die("arena_04 manifest sha256 %s != the pin %s" % (sha, stage["sha256"]))
+    out = os.path.abspath(out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w") as fh:
+        fh.write(text)
+    print("compose: library %s" % library)
+    print("compose: %d ground + %d floor + %d backdrop lines; totals %d meshes, %d vertices"
+          % (len(ground), len(floor), len(backdrop), totals[0], totals[1]))
+    print("compose: entity ground %s yaw %.6f; spawn yaw %.6f" % (fmt_ground(entity_y), entity_yaw, spawn_yaw))
+    print("compose: wrote %s (sha256 %s)" % (out, sha))
+    return 0
+
+
+FLOOD_TOOL = "app/build/stage_flood"
+FLOOD_PLAYER_GLB = "models/shadow/characters/wander/_cmn/wander.glb"
+
+
+def stage_flood(library, path, tool, starts):
+    """Runs the app's own layered ground over the manifest (app/tools/stage_flood.cpp) and
+    floods it from each (x, y, z) start.  Returns a dict: width, height, layers, minx, minz,
+    cell, bytes, lay (array of floats, node-major), reach (one list of ints per start)."""
+    tool = tool or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", FLOOD_TOOL)
+    if not os.path.isfile(tool):
+        raise ManifestError("%s is missing: build the app (`make app`)" % os.path.normpath(tool))
+    with tempfile.TemporaryDirectory() as tmp:
+        dump = os.path.join(tmp, "flood.bin")
+        args = [tool, library, path, FLOOD_PLAYER_GLB, dump] + ["%r" % v for s in starts for v in s]
+        run = subprocess.run(args, capture_output=True, text=True)
+        if run.returncode != 0:
+            raise ManifestError("stage_flood failed (%d): %s" % (run.returncode, run.stderr.strip()))
+        data = read_bytes(dump)
+    if data[:4] != b"SFL1":
+        raise ManifestError("stage_flood: not an SFL1 dump")
+    width, height, layers, count = struct.unpack_from("<4i", data, 4)
+    minx, minz, cell = struct.unpack_from("<3f", data, 20)
+    nodes = width * height
+    at = 32
+    lay = array.array("f")
+    lay.frombytes(data[at: at + nodes * layers * 4])
+    at += nodes * layers * 5   # the floats, then the blocked bytes (unused here)
+    reach = []
+    for _ in range(count):
+        mask = array.array("Q")
+        mask.frombytes(data[at: at + nodes * 8])
+        reach.append(mask)
+        at += nodes * 8
+    size = int(re.search(r"bytes (\d+)", run.stdout).group(1))
+    return {"width": width, "height": height, "layers": layers, "minx": minx, "minz": minz, "cell": cell,
+            "bytes": size, "lay": lay, "reach": reach}
+
+
+def flood_rows(stage, flood):
+    """The layered-ground measurements of the arena_04 gate, from `stage_flood` (start flood
+    first, then one per mouth): [(measured, ok)] for the heightmap size, the out-of-bounds
+    edges, the road, the ring and the phantom rows."""
+    W, H, L = flood["width"], flood["height"], flood["layers"]
+    lay, minx, minz, cell = flood["lay"], flood["minx"], flood["minz"], flood["cell"]
+    start, mouths = flood["reach"][0], flood["reach"][1:]
+
+    def layers_at(n):
+        out = []
+        for k in range(L):
+            y = lay[n * L + k]
+            if y != y:
+                break
+            out.append(y)
+        return out
+
+    def states(mask):
+        for n, bits in enumerate(mask):
+            if bits:
+                for k, y in enumerate(layers_at(n)):
+                    if bits >> k & 1:
+                        yield n, k, y
+
+    rows = [("%dx%d nodes, %.2f MiB" % (W, H, flood["bytes"] / 1048576.0),
+             flood["bytes"] <= stage["heightmap_max_bytes"])]
+
+    # Out-of-bounds edges: a reached state on the grid's rim stepping off it, over every flood;
+    # the road's end (z < road_end_z) leaves the map by design and is reported, not counted.
+    edges, road_edges, road = 0, 0, []
+    reached_any = [0] * (W * H)
+    for mask in flood["reach"]:
+        for n, bits in enumerate(mask):
+            reached_any[n] |= bits
+    for n, k, y in states(reached_any):
+        i, j = n % W, n // W
+        z = minz + j * cell
+        off = sum(1 for dj in (-1, 0, 1) for di in (-1, 0, 1)
+                  if (di or dj) and not (0 <= i + di < W and 0 <= j + dj < H))
+        if z >= stage["road_end_z"]:
+            edges += off
+        else:
+            road_edges += off
+    rows.append(("%d (%d more at the road's end)" % (edges, road_edges), edges == 0))
+    for n, k, y in states(start):
+        if minz + (n // W) * cell < stage["road_end_z"]:
+            road.append((minx + (n % W) * cell, minz + (n // W) * cell, y))
+    if road:
+        xs, zs, ys = zip(*road)
+        rows.append(("%d nodes, road end x[%.2f, %.2f] z[%.2f, %.2f] y[%.2f, %.2f]"
+                     % (len(road), min(xs), max(xs), min(zs), max(zs), min(ys), max(ys)), True))
+    else:
+        rows.append(("not reached", False))
+
+    # The ring corridor: the ring-band layers inside the ruins' box, reached from each mouth.
+    x0, x1, z0, z1 = stage["ruin_box"]
+    lo, hi = stage["ring_y"]
+    ring = set()
+    for n in range(W * H):
+        x, z = minx + (n % W) * cell, minz + (n // W) * cell
+        if x0 <= x <= x1 and z0 <= z <= z1:
+            ring.update((n, k) for k, y in enumerate(layers_at(n)) if lo < y < hi)
+    got = [sum(1 for n, k in ring if mouths[m][n] >> k & 1) for m in range(len(mouths))]
+    rows.append(("%s of %d" % ("/".join("%d" % g for g in got), len(ring)),
+                 len(got) == len(stage["mouths"]) and min(got) >= stage["ring_min"]))
+
+    # The dirt prim's phantom floor: no layer anywhere at its height.
+    phantom = sum(1 for n in range(W * H) for y in layers_at(n) if abs(y - stage["phantom_y"]) <= 0.05)
+    low = min((y for _, _, y in states(start)), default=float("nan"))
+    rows.append(("%d layers; lowest reached %.2f" % (phantom, low), phantom == 0))
+    return rows
+
+
+def arena_04_check_spec():
+    stage = STAGES["arena_04"]
+    entity_y = stage["grounds"][0] if stage["grounds"] else float("nan")
+    return [
+        ("manifest parses (W1↔W2 schema + floor + backdrop + entity + the encounter opt-in)", "structure", "ok"),
+        ("glb lines (instance + floor + backdrop) == the library's kept set", "structure",
+         "exact (%d)" % stage["kept"]),
+        ("ground (instance lines) == the ground and the platform, cwks order, identity", "structure",
+         "exact (%d)" % len(stage["ground"])),
+        ("floor lines == the three ruins glbs, cwks order, identity", "structure", "exact (%d)" % len(stage["floor"])),
+        ("backdrop lines == the other kept glbs, both waters among them, cwks order, csml offsets", "structure",
+         "exact (%d)" % (stage["kept"] - len(stage["ground"]) - len(stage["floor"]))),
+        ("every glbRelPath exists under the library", "structure", "all"),
+        ("no excluded name (stubs, the 7 occluders) among the lines", "structure", "0 excluded"),
+        ("exactly one encounter line", "structure", stage["encounter"]),
+        ("exactly one entity (glb, x/z, clip)", "structure",
+         "%s (%s, %s) %s" % (stage["entity_glb"].rsplit("/", 1)[-1], fmt_manifest_float(stage["entity_xz"][0]),
+                             fmt_manifest_float(stage["entity_xz"][1]), stage["entity_clip"])),
+        ("entity y == the platform ground (%.3f)" % entity_y, "measured", "±0.001"),
+        ("entity faces the ruins' centre (quaternion yaw)", "measured", "±0.01 deg"),
+        ("exactly one spawn at the player start", "structure", "(%s)" % ", ".join(
+            fmt_manifest_float(v) for v in stage["spawn"])),
+        ("spawn faces the entity (yaw)", "measured", "±0.01 deg"),
+        ("layered heightmap (the app's, over the ground + floor lines' bounds)", "measured",
+         "<= %.0f MiB" % (stage["heightmap_max_bytes"] / 1048576.0)),
+        ("out-of-bounds edges of the layered flood outside the road's end (z < %s)"
+         % fmt_manifest_float(stage["road_end_z"]), "measured", "0"),
+        ("the north road's end reached from the start (the backstop's extent)", "measured", "reached"),
+        ("ring-band layers (y %s..%s) reached from each tunnel mouth" % tuple(
+            fmt_manifest_float(v) for v in stage["ring_y"]), "measured", ">= %d each" % stage["ring_min"]),
+        ("no layer at the dirt prim's phantom floor (y %s ± 0.05)" % fmt_manifest_float(stage["phantom_y"]),
+         "measured", "0"),
+        ("mesh/vertex totals over the glb lines", "measured",
+         "%d meshes, %d vertices" % tuple(stage["meshes"]) if stage["meshes"] else "unpinned"),
+        ("manifest sha256", "measured", stage["sha256"]),
+    ]
+
+
+def arena_04_checks(library, path, text, instances, floor, backdrop, spawns, entities, encounter, flood_tool):
+    """The arena_04 rows, measured: [(name, kind, expected, measured, ok)] in
+    `arena_04_check_spec` order."""
+    stage = STAGES["arena_04"]
+    spec = arena_04_check_spec()
+    want_ground, want_floor, want_backdrop = arena_04_lines(library)
+
+    def exact(got, want):
+        ok = [(r, fmt_values(v)) for r, v in got] == [(r, fmt_values(v)) for r, v in want]
+        return ("exact (%d)" % len(got) if ok else "differs (%d lines, %d wanted)" % (len(got), len(want)), ok)
+
+    lines = [rel for rel, _ in instances + floor + backdrop]
+    kept = sorted(rel for rel, _ in want_ground + want_floor + want_backdrop)
+    results = [("ok", True),
+               ("exact (%d)" % len(lines) if sorted(lines) == kept else "differs: %d lines" % len(lines),
+                sorted(lines) == kept and len(lines) == stage["kept"]),
+               exact(instances, want_ground), exact(floor, want_floor)]
+    waters = all(any(rel == w for rel, _ in backdrop) for w in stage["water_glbs"])
+    measured, ok = exact(backdrop, want_backdrop)
+    results.append((measured + ("" if waters else ", a water missing"), ok and waters))
+
+    every = lines + [e[0] for e in entities]
+    missing = sorted({r for r in every if not os.path.isfile(os.path.join(library, r))})
+    results.append(("%d/%d" % (len(every) - len([r for r in every if r in missing]), len(every))
+                    + (" missing: %s" % ", ".join(missing[:3]) if missing else ""), not missing))
+    bad = [rel for rel in lines if shrine_excluded(rel, "arena_04")]
+    results.append(("%d excluded" % len(bad) + (": %s" % ", ".join(bad[:3]) if bad else ""), not bad))
+    results.append((" ".join(encounter) or "absent (valus)", encounter == [stage["encounter"]]))
+
+    entity = entities[0] if len(entities) == 1 else None
+    entity_ok = entity is not None and (
+        entity[0], entity[1][0], entity[1][2], entity[2]
+    ) == (stage["entity_glb"], stage["entity_xz"][0], stage["entity_xz"][1], stage["entity_clip"])
+    results.append(("exact" if entity_ok else "%d entity line(s), differs" % len(entities), entity_ok))
+    sampled, _ = composed_ground(library, want_ground, *stage["entity_xz"])
+    pin = stage["grounds"][0] if stage["grounds"] else float("nan")
+    if entity_ok and sampled is not None:
+        results.append(("line %.3f, sampled %.3f" % (entity[1][1], sampled),
+                        abs(entity[1][1] - sampled) <= 0.001 and abs(sampled - pin) <= 0.001))
+    else:
+        results.append(("unmeasurable", False))
+
+    def yaw_row(measured, source, target):
+        want_yaw = yaw_between(source, target)
+        delta = (measured - want_yaw + 180.0) % 360.0 - 180.0
+        return ("%.6f (want %.6f)" % (measured, want_yaw), abs(delta) <= 0.01)
+
+    try:
+        results.append(yaw_row(yaw_from_quaternion(entity[1]), stage["entity_xz"], stage["entity_faces"])
+                       if entity_ok else ("no entity", False))
+    except ManifestError as exc:
+        results.append((str(exc), False))
+    spawn = spawns[0] if len(spawns) == 1 else None
+    spawn_ok = spawn is not None and tuple(spawn[:3]) == stage["spawn"]
+    results.append(("(%s)" % ", ".join(fmt_manifest_float(v) for v in spawn[:3]) if spawn
+                    else "%d spawn line(s)" % len(spawns), spawn_ok))
+    results.append(yaw_row(spawn[3], (stage["spawn"][0], stage["spawn"][2]), stage["entity_xz"])
+                   if spawn_ok else ("no spawn", False))
+
+    if missing:
+        results += [("unmeasurable: missing glbs", False)] * 6
+    else:
+        sx, sy, sz = stage["spawn"]
+        try:
+            flood = stage_flood(library, path, flood_tool, [stage["spawn"]] + [(x, sy, z) for x, z in stage["mouths"]])
+            results += flood_rows(stage, flood)
+        except ManifestError as exc:
+            results += [(str(exc), False)] * 5
+        totals = manifest_counts(library, lines)
+        results.append(("%d meshes, %d vertices" % totals, totals == tuple(stage["meshes"] or ())))
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    results.append((sha, sha == stage["sha256"]))
+    return [(name, kind, expected, measured, ok) for (name, kind, expected), (measured, ok) in zip(spec, results)]
+
+
+def arena_04_check_manifest(library, path, flood_tool=None):
+    try:
+        if not os.path.isfile(path):
+            raise ManifestError("%s: cannot open manifest file" % path)
+        raw = read_bytes(path)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ManifestError("%s: not UTF-8 text (%s)" % (path, exc))
+        floor, backdrop, encounter = [], [], []
+        instances, spawns, entities = parse_manifest_text(text, path, backdrop=backdrop, encounter=encounter,
+                                                          floor=floor)
+        rows = arena_04_checks(library, path, text, instances, floor, backdrop, spawns, entities, encounter,
+                               flood_tool)
+    except ManifestError as exc:
+        rows = [(n, k, e, "unparsed: %s" % exc, False) for n, k, e in arena_04_check_spec()]
+    print("check-manifest: %s (library %s)" % (path, library))
+    for name, kind, expected, measured, ok in rows:
+        print("%-5s %-9s %-58s expected %s, measured %s" % ("PASS" if ok else "FAIL", kind, name, expected, measured))
+    failed = [r for r in rows if not r[4]]
+    print("summary: %d/%d gating assertions pass" % (len(rows) - len(failed), len(rows)))
+    if failed:
+        print("gate: NOT MET — %d assertion(s) fail" % len(failed))
+        return 1
+    print("gate: MET")
+    return 0
+
+
 def check_manifest_spec(name):
     stage = STAGES[name]
     count = stage["instances"]
@@ -3495,6 +3902,10 @@ def main(argv=None):
     )
     p_check_manifest.add_argument(
         "--stage", choices=sorted(STAGES), default="arena_01", help="the stage to check (default arena_01)"
+    )
+    p_check_manifest.add_argument(
+        "--flood-tool", default=None, metavar="EXE",
+        help="arena_04: the app's stage_flood (default %s under the repo)" % FLOOD_TOOL
     )
     p_check_manifest.set_defaults(func=cmd_check_manifest)
 
