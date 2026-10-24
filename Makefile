@@ -228,8 +228,9 @@ routes: ## Export the .path route graphs to LIB/behaviour/<stem>.route.json (S13
 terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (S13 Task 9)
 	@echo "not yet (S13 Task 9)" >&2; exit 1
 
-coverage: ## Per-boss interpreter coverage into out/re/coverage.md (S13 Task 3)
-	@echo "not yet (S13 Task 3)" >&2; exit 1
+coverage: ## Per-boss interpreter coverage into out/re/coverage.md (S13 Task 3; needs `make behaviour`)
+	cmake -S app -B app/build -DCMAKE_BUILD_TYPE=Release && cmake --build app/build --target scr_registry_dump -j
+	@d=$$(mktemp) && app/build/scr_registry_dump > $$d && python3 -I tools/re/scr/coverage.py "$(LIB)/behaviour" $$d out/re/coverage.md; r=$$?; rm -f $$d; exit $$r
 
 bake-kirin: ## Bake Phaedra (kirin_a) with her clips + the events sidecar (S13 Task 11)
 	@echo "not yet (S13 Task 11)" >&2; exit 1
