@@ -55,8 +55,10 @@ struct AttackRow {
     float attainX, attainZ, attainR;  // the ATTAIN cylinder in his frame (glb x, z; data t44)
 };
 
-// Rows 0..6; row 3 is the table terminator (fix == nullptr). Mode 9 arms [0], mode 10 [4].
-inline constexpr AttackRow kAttack[7] = {
+// Rows 0..7; rows 3 and 7 are the tables' terminators (fix == nullptr; the runner walks a
+// table to its terminator, so mode 10's table [4] needs row 7 — S12 Task 9 fix: with 7
+// rows its walk read past the array). Mode 9 arms [0], mode 10 [4].
+inline constexpr AttackRow kAttack[8] = {
     {"KNIGHT_LEG_L_ATK_FIX", "KNIGHT_LEG_L_ATK", "KNIGHT_LEG_L_ATK_ATTAIN", kCtrlLeftFoot,
      "knight_a_atk_leg_l_start", 5.0f, 15.0f, false, false, 3.0f, 7.0f, 2.0f},
     {"KNIGHT_LEG_R_ATK_FIX", "KNIGHT_LEG_R_ATK", "KNIGHT_LEG_R_ATK_ATTAIN", kCtrlRightFoot,
@@ -70,6 +72,7 @@ inline constexpr AttackRow kAttack[7] = {
      "knight_a_atk_leg_r_start", 5.0f, 15.0f, false, false, -3.0f, 7.0f, 2.0f},
     {"KNIGHT_WEAPON_ATK2_FIX", "KNIGHT_WEAPON_ATK2", "KNIGHT_WEAPON_ATK2_ATTAIN", kCtrlStab,
      "knight_a_atk2_start", 15.0f, 8.0f, true, true, 0.0f, 16.0f, 4.0f},
+    {nullptr, nullptr, nullptr, -1, nullptr, 0.0f, 0.0f, false, false, 0.0f, 0.0f, 0.0f},
 };
 
 }  // namespace scr_knight
