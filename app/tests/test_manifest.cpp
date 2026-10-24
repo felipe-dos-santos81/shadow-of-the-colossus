@@ -458,3 +458,30 @@ TEST_CASE("a malformed or repeated encounter line is refused with its line numbe
     CHECK_THROWS_WITH_AS(parse_manifest(twice, true), (twice.string() + ":2: encounter given twice").c_str(),
                          std::runtime_error);
 }
+
+TEST_CASE("a floor line parses into its own list; a manifest without one has none (S13)") {
+    TempFixtureDir dir;
+    const SceneManifest manifest = parse_manifest(write_manifest(
+        dir, "instance models/a.glb 0 0 0 0 0 0 1 1 1 1\n"
+             "floor models/ruin.glb 1 -0.5 3 0 0 0 1 1 1 1\n"
+             "backdrop models/b.glb 0 0 0 0 0 0 1 1 1 1\n"));
+    REQUIRE(manifest.instances.size() == 1);
+    REQUIRE(manifest.floors.size() == 1);
+    CHECK(manifest.floors[0].glbRelPath == "models/ruin.glb");
+    CHECK(manifest.floors[0].position.y == doctest::Approx(-0.5f));
+    CHECK(manifest.floors[0].position.z == doctest::Approx(3.0f));
+    CHECK(manifest.backdrops.size() == 1);
+
+    // An old manifest (no floor line) parses exactly as before: no floors.
+    const SceneManifest old = parse_manifest(write_manifest(
+        dir, "instance models/a.glb 0 0 0 0 0 0 1 1 1 1\nspawn 1 2 3 90\n"));
+    CHECK(old.floors.empty());
+    CHECK(old.instances.size() == 1);
+    CHECK(old.hasSpawn);
+
+    // A malformed floor line names its directive and line.
+    const std::filesystem::path bad =
+        write_manifest(dir, "# h\nfloor models/ruin.glb 0 0 0 0 0 0 1 1 1\n");
+    CHECK(manifest_error(bad).starts_with(bad.string() + ":2:"));
+    CHECK(manifest_error(bad).find("floor") != std::string::npos);
+}

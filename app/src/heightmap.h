@@ -77,6 +77,11 @@ struct Heightmap {
 // higher; when full the highest kHeightmapLayers are kept), and every steep
 // triangle flags the layers whose body band it overlaps over the nodes within
 // one cell of its XZ footprint's outline.
+//
+// S13: a `MeshCpu::floorsOnly` mesh (a manifest `floor` line) contributes only its
+// up-facing triangles (normal.y >= kWallSteepness, glTF CCW winding) — to `heights` and
+// to the layers — so it adds no ceiling, no down-facing floor and no wall flag. Without
+// such meshes the map is exactly what it was.
 // ponytail: a steep slope's footprint interior wider than ~4 cells is not
 // flagged; rasterize the interior if the shrine ever has one.
 Heightmap build_heightmap(const Scene& scene, float cellSize, bool layered = false,

@@ -210,6 +210,13 @@ static Heightmap rasterize(const Scene& scene, float cellSize, bool layered, boo
             if (mesh.rig >= 0 || mesh.ground == backdrops) {
                 continue;  // a rigged mesh (player or entity), or the other kind of static mesh
             }
+            // S13: a floors-only mesh keeps its up-facing triangles alone (glTF CCW: the
+            // normal (p1 - p0) x (p2 - p0) points out; a mirroring model flips it).
+            const Mat4& m = mesh.model;
+            const float det = m.m[0] * (m.m[5] * m.m[10] - m.m[9] * m.m[6]) -
+                              m.m[4] * (m.m[1] * m.m[10] - m.m[9] * m.m[2]) +
+                              m.m[8] * (m.m[1] * m.m[6] - m.m[5] * m.m[2]);
+            const float up = det < 0.0f ? -1.0f : 1.0f;
             for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
                 const std::size_t i0 = mesh.indices[t];
                 const std::size_t i1 = mesh.indices[t + 1];
@@ -229,6 +236,17 @@ static Heightmap rasterize(const Scene& scene, float cellSize, bool layered, boo
                     Vec3{mesh.vertices[i2].px, mesh.vertices[i2].py, mesh.vertices[i2].pz});
                 if (!is_finite(p0) || !is_finite(p1) || !is_finite(p2)) {
                     continue;  // a non-finite vertex would poison the index arithmetic
+                }
+                if (mesh.floorsOnly) {
+                    const Vec3 u{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+                    const Vec3 v{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+                    const float ny = up * (u.z * v.x - u.x * v.z);
+                    const float length = std::sqrt(
+                        (u.y * v.z - u.z * v.y) * (u.y * v.z - u.z * v.y) + ny * ny +
+                        (u.x * v.y - u.y * v.x) * (u.x * v.y - u.y * v.x));
+                    if (!(length > 0.0f) || ny < kWallSteepness * length) {
+                        continue;  // a wall, a ceiling or a down-facing floor: not ground here
+                    }
                 }
                 visit(p0, p1, p2);
             }

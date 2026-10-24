@@ -53,6 +53,9 @@ struct SceneManifest {
     std::vector<ManifestPosed> posed;
     // Drawn but never ground (`MeshCpu::ground` false, outside the scene bounds).
     std::vector<ManifestInstance> backdrops;
+    // Ground that contributes only up-facing triangles and no wall flags
+    // (`MeshCpu::floorsOnly`; S13, arena_04's ruins: walkable tunnels).
+    std::vector<ManifestInstance> floors;
     std::vector<ManifestHorse> horses;
     Vec3 spawnPosition;
     float spawnYawDeg;
@@ -69,6 +72,7 @@ struct SceneManifest {
 //   entity <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName>
 //   posed <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz> <clipName> <seconds>
 //   backdrop <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
+//   floor <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>   (S13)
 //   horse <glbRelPath> <px> <py> <pz> <qx> <qy> <qz> <qw> <sx> <sy> <sz>
 //   spawn <px> <py> <pz> <yawDeg>
 //   encounter <id>          (only with `acceptEncounter`; at most once)
