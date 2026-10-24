@@ -350,12 +350,12 @@ void a_route_by_dprelate(const ScrAction& a, ScrCtx& ctx) {
 }
 
 // FUN_0082e290 / FUN_0082e2c0 (FUN_0081c300): bit 0x4 on every link tagged i08. The game
-// writes the stage's shared graph (DAT_03290da0); the world holds the glue's own graph by a
-// const pointer, so the action writes through it.
+// writes the stage's shared graph (DAT_03290da0); here the runtime's copy (ruling R-AC), so a
+// reset reopens them.
 void link_flags(const ScrAction& a, ScrCtx& ctx, bool close) {
     const ScrArg* tag = scr_arg(a.args, "i08");
     if (!ctx.world.routes || !tag) return;
-    route_link_flags(const_cast<RouteGraph&>(*ctx.world.routes), static_cast<int>(tag->num), close);
+    route_link_flags(ctx.runtime.route, *ctx.world.routes, static_cast<int>(tag->num), close);
 }
 void a_link_set(const ScrAction& a, ScrCtx& ctx) { link_flags(a, ctx, true); }
 void a_link_clear(const ScrAction& a, ScrCtx& ctx) { link_flags(a, ctx, false); }
@@ -389,6 +389,9 @@ void route_enter(RouteState& st, int kind, bool refPlayer, bool track) {
     // The entry switch's resets for kinds -1/0/1/10 (binary): the follower never ticks those
     // kinds, so mode entry applies them.
     if (kind < 2 || kind > 9) st.ap = st.pp = -1;
+    // The binary clears +4770..+4772 every frame for every kind; the follower ticks only 2-9,
+    // so a mode entry clears them (no stale level through a kind -1/0/1/10 mode).
+    st.doneGP = st.doneAP = st.donePP = false;
 }
 
 void route_tick(RouteState& st, const RouteGraph& graph, Vec3 boss, Vec3 player, bool arrived,
@@ -405,12 +408,13 @@ void route_tick(RouteState& st, const RouteGraph& graph, Vec3 boss, Vec3 player,
     hasGoal = st.hasGoal;
 }
 
-std::vector<Vec3> route_walk(const RouteGraph& graph, Vec3 from, Vec3 to, int classMask,
-                             const std::function<bool(Vec3, Vec3)>& clear) {
+std::vector<Vec3> route_walk(const RouteGraph& graph, const std::vector<int>& linkFlags, Vec3 from, Vec3 to,
+                             int classMask, const std::function<bool(Vec3, Vec3)>& clear) {
     const int n = static_cast<int>(graph.nodes.size());
+    const bool live = linkFlags.size() == graph.links.size();
     auto open = [&](int li) {
-        const auto& l = graph.links[li];
-        return (l.flags & 4) == 0 && (l.flags & classMask) != 0;
+        const int f = live ? linkFlags[li] : graph.links[li].flags;
+        return (f & 4) == 0 && (f & classMask) != 0;
     };
     auto usable = [&](int i) {
         if ((graph.nodes[i].cls & classMask) == 0) return false;
@@ -463,10 +467,15 @@ std::vector<Vec3> route_walk(const RouteGraph& graph, Vec3 from, Vec3 to, int cl
     return path;
 }
 
-void route_link_flags(RouteGraph& graph, int tag, bool close) {
-    for (auto& l : graph.links) {
+void route_link_flags(RouteState& st, const RouteGraph& graph, int tag, bool close) {
+    if (st.linkFlags.size() != graph.links.size()) {
+        st.linkFlags.clear();
+        for (const auto& l : graph.links) st.linkFlags.push_back(l.flags);
+    }
+    for (size_t i = 0; i < graph.links.size(); ++i) {
+        const auto& l = graph.links[i];
         if (l.tags[0] != tag && l.tags[1] != tag) continue;
-        l.flags = close ? (l.flags | 4) : (l.flags & ~4);
+        st.linkFlags[i] = close ? (st.linkFlags[i] | 4) : (st.linkFlags[i] & ~4);
     }
 }
 
@@ -494,7 +503,7 @@ bool route_target(ScrRuntime& rt, const ScrWorld& w, Vec3& target) {
     }
     // authored: the walk's waypoints string-pulled from the boss (the farthest visible one,
     // the goal last), so a re-plan every frame never walks back to a node already passed.
-    std::vector<Vec3> pts = route_walk(*w.routes, w.bossPosition, goal, kWalkerClassMask, clear);
+    std::vector<Vec3> pts = route_walk(*w.routes, st.linkFlags, w.bossPosition, goal, kWalkerClassMask, clear);
     pts.push_back(goal);
     target = pts.front();
     for (size_t i = pts.size(); i-- > 0;) {

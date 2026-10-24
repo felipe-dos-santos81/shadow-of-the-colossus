@@ -81,6 +81,12 @@ int link_between(const RouteGraph& g, int a, int b) {
     }
     return -1;
 }
+int closed_links(const std::vector<int>& flags) {
+    int n = 0;
+    for (const int f : flags) n += (f & 4) != 0;
+    return n;
+}
+
 // The walk's waypoints as node indices (each is a node position exactly).
 std::vector<int> as_nodes(const RouteGraph& g, const std::vector<Vec3>& path) {
     std::vector<int> out;
@@ -242,9 +248,10 @@ TEST_CASE("route: player_gp_changed and the GP update keep 0.5 m of hysteresis")
 }
 
 TEST_CASE("route: closing tag 1 closes 27 links and the walk avoids them") {
-    RouteGraph g = kirin();
+    const RouteGraph g = kirin();
+    RouteState st;
     const Vec3 from = g.nodes[12].pos, to = g.nodes[29].pos;  // the plain -> the hill
-    const std::vector<int> before = as_nodes(g, route_walk(g, from, to, 1, kClear));
+    const std::vector<int> before = as_nodes(g, route_walk(g, st.linkFlags, from, to, 1, kClear));
     REQUIRE(before.size() >= 2);
     CHECK(before.front() == 12);
     CHECK(before.back() == 29);
@@ -255,27 +262,30 @@ TEST_CASE("route: closing tag 1 closes 27 links and the walk avoids them") {
     }
     CHECK(usedTagged);
 
-    route_link_flags(g, 1, true);
-    int closed = 0;
-    for (const auto& l : g.links) closed += (l.flags & 4) != 0;
-    CHECK(closed == 27);
-    const std::vector<int> after = as_nodes(g, route_walk(g, from, to, 1, kClear));
+    route_link_flags(st, g, 1, true);
+    CHECK(closed_links(st.linkFlags) == 27);
+    for (const auto& l : g.links) CHECK((l.flags & 4) == 0);  // the graph itself is never written
+    const std::vector<int> after = as_nodes(g, route_walk(g, st.linkFlags, from, to, 1, kClear));
     REQUIRE_FALSE(after.empty());
     for (size_t i = 1; i < after.size(); ++i) {
         const int l = link_between(g, after[i - 1], after[i]);
         REQUIRE(l >= 0);
-        CHECK((g.links[l].flags & 4) == 0);
+        CHECK((st.linkFlags[l] & 4) == 0);
     }
     CHECK(after.back() != 29);
 
-    route_link_flags(g, 1, false);
-    closed = 0;
-    for (const auto& l : g.links) closed += (l.flags & 4) != 0;
-    CHECK(closed == 0);
+    route_link_flags(st, g, 1, false);
+    CHECK(closed_links(st.linkFlags) == 0);
+
+    // Ruling R-AC: the live flags are runtime state, so a reset (a fresh RouteState) reopens them.
+    route_link_flags(st, g, 1, true);
+    REQUIRE(closed_links(st.linkFlags) == 27);
+    st = RouteState{};
+    CHECK(as_nodes(g, route_walk(g, st.linkFlags, from, to, 1, kClear)) == before);
 }
 
 TEST_CASE("route: route_by_dprelate and the link actions run from Phaedra's graph") {
-    RouteGraph routes = kirin();
+    const RouteGraph routes = kirin();
     const std::string& json = kirin_graph_json();
     // Every fn the export names as a no-op (her registry is Task 14's), then the route fns.
     ScrRegistry reg;
@@ -323,13 +333,74 @@ TEST_CASE("route: route_by_dprelate and the link actions run from Phaedra's grap
     CHECK(rt.route.route == 4);
 
     scr_run(ctx, list("KIRIN:F69"));  // route_link_flag_set(1): mode 3's entry
-    int closed = 0;
-    for (const auto& l : routes.links) closed += (l.flags & 4) != 0;
-    CHECK(closed == 27);
+    CHECK(closed_links(rt.route.linkFlags) == 27);
     scr_run(ctx, list("KIRIN:F67"));  // route_link_flag_clear(1)
-    closed = 0;
-    for (const auto& l : routes.links) closed += (l.flags & 4) != 0;
-    CHECK(closed == 0);
+    CHECK(closed_links(rt.route.linkFlags) == 0);
+
+    // Ruling R-AB: terrain class 2 names route 1, which kirin.path lacks: the route id is set
+    // (binary), the follower finds no GP and keeps the goal it had; nothing crashes.
+    w.playerPosition = routes.gps[1].pos;
+    w.bossPosition = {1122.0f, 59.0f, 147.0f};
+    route_enter(rt.route, 2, true, true);
+    Vec3 target{};
+    REQUIRE(route_target(rt, w, target));  // route 4: a goal
+    const Vec3 before = rt.route.goal;
+    w.playerGroundAttr = 2ull << 48;
+    scr_run(ctx, list("KIRIN:F15"));
+    CHECK(rt.route.route == 1);
+    route_enter(rt.route, 2, true, true);
+    route_target(rt, w, target);
+    CHECK(rt.route.gp == -1);
+    CHECK(rt.route.hasGoal);
+    CHECK(same(rt.route.goal, before));
+    route_target(rt, w, target);  // the per-frame step with no GP
+    CHECK(same(rt.route.goal, before));
+    CHECK_FALSE(rt.route.doneAP);
+}
+
+TEST_CASE("route: kind 6 (mode 8) keeps mode 7's GP and faces on through it") {
+    const RouteGraph g = kirin();
+    const Vec3 boss{900.0f, 53.0f, 120.0f};
+    RouteState st;
+    route_enter(st, 2, true, true);  // mode 7: picks GP 8
+    st.route = 2;
+    tick(st, g, boss, g.gps[8].pos, false);
+    REQUIRE(st.gp == 8);
+    route_enter(st, 6, true, false);  // mode 8: ref player, tracking off (data)
+    const Tick t = tick(st, g, boss, g.gps[9].pos, false);  // the player moved: no GP update
+    CHECK(st.gp == 8);
+    CHECK(t.hasGoal);
+    CHECK(same(t.goal, g.gps[8].pos));  // offset 0
+    const Vec3 gp = g.gps[8].pos;
+    const float len = std::hypot(boss.x - gp.x, boss.z - gp.z);
+    CHECK(t.face.x - t.goal.x == doctest::Approx(-(boss.x - gp.x) / len).epsilon(1e-4));
+    CHECK(t.face.z - t.goal.z == doctest::Approx(-(boss.z - gp.z) / len).epsilon(1e-4));
+    CHECK(t.face.y == doctest::Approx(t.goal.y));
+    CHECK_FALSE(st.doneGP);
+    tick(st, g, boss, g.gps[9].pos, true);
+    CHECK(st.doneGP);
+}
+
+TEST_CASE("route: a mode entry clears the done levels (no stale doneAP into mode 7)") {
+    const RouteGraph g = kirin();
+    ScrRegistry reg;
+    scr_route_add(reg);
+    const auto moveDoneAp = reg.predicates.at(0x833660);
+    const ScrClause clause{};
+    ScrWorld w;
+    ScrRuntime rt;
+    const Vec3 boss{900.0f, 53.0f, 120.0f};
+    route_enter(rt.route, 2, true, true);
+    rt.route.route = 2;
+    tick(rt.route, g, boss, g.gps[8].pos, false);
+    tick(rt.route, g, boss, g.gps[8].pos, true);
+    REQUIRE(rt.route.doneAP);
+    route_enter(rt.route, 0, false, false);  // mode 4 (kind 0): the follower does not tick
+    CHECK_FALSE(moveDoneAp(clause, w, rt));
+    route_enter(rt.route, 2, true, true);    // mode 7 again
+    CHECK_FALSE(moveDoneAp(clause, w, rt));
+    tick(rt.route, g, boss, g.gps[8].pos, false);
+    CHECK_FALSE(moveDoneAp(clause, w, rt));
 }
 
 TEST_CASE("route: with every link closed kind 5 still goes straight to the GP (Review Focus 4)") {
@@ -348,7 +419,7 @@ TEST_CASE("route: with every link closed kind 5 still goes straight to the GP (R
     CHECK_FALSE(st.doneGP);
     tick(st, g, boss, g.gps[1].pos, true);
     CHECK(st.doneGP);
-    CHECK(route_walk(g, boss, g.gps[0].pos, 1, kClear).empty());
+    CHECK(route_walk(g, st.linkFlags, boss, g.gps[0].pos, 1, kClear).empty());
 
     // The hook hands the gait the GP itself.
     ScrRuntime rt;

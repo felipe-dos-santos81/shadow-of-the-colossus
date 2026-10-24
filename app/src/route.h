@@ -72,6 +72,9 @@ struct RouteState {
     int prevKind = -1, prevRoute = -1, gpRoute = -1;
     bool hasGoal = false;
     Vec3 goal{0.0f, 0.0f, 0.0f}, face{0.0f, 0.0f, 0.0f};
+    // The live link flags (the graph's `flags` until a tag toggles them; ruling R-AC): kept here
+    // so a runtime reset reopens the links. Empty or size-mismatched: the graph's own flags.
+    std::vector<int> linkFlags;
 };
 
 // Parses `json` into `out`; false with `error` naming the culprit. S13 Task 8.
@@ -87,13 +90,15 @@ void route_tick(RouteState& st, const RouteGraph& graph, Vec3 boss, Vec3 player,
                 const std::function<bool(Vec3 from, Vec3 to, Vec3& hit)>& sweep, Vec3& goal, bool& hasGoal,
                 Vec3& face);
 
-// The nav-graph walk from `from` to `to` over open, class-allowed links; empty when none (the
-// caller goes straight). S13 Task 8.
-std::vector<Vec3> route_walk(const RouteGraph& graph, Vec3 from, Vec3 to, int classMask,
-                             const std::function<bool(Vec3, Vec3)>& clear);
+// The nav-graph walk from `from` to `to` over open, class-allowed links (the live flags
+// `linkFlags`, the graph's when empty or size-mismatched); empty when none (the caller goes
+// straight). S13 Task 8.
+std::vector<Vec3> route_walk(const RouteGraph& graph, const std::vector<int>& linkFlags, Vec3 from, Vec3 to,
+                             int classMask, const std::function<bool(Vec3, Vec3)>& clear);
 
-// Closes (sets bit 0x4) or opens every link tagged `tag`. S13 Task 8.
-void route_link_flags(RouteGraph& graph, int tag, bool close);
+// Closes (sets bit 0x4) or opens every link tagged `tag` in `st.linkFlags` (filled from the
+// graph first when empty or size-mismatched). S13 Task 8.
+void route_link_flags(RouteState& st, const RouteGraph& graph, int tag, bool close);
 
 // Registers the route predicates/actions, kinds 2-9 and the registry's locomotion hook. S13 Task 8.
 void scr_route_add(ScrRegistry& registry);
