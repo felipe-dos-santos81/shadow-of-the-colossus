@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -147,6 +148,7 @@ struct ScrGraph {
     std::vector<ScrActionList> actions;
     std::vector<ScrControlMode> controlModes;  // indexed by control-mode number
     std::vector<ScrMotionEdge> motionGraph;
+    std::vector<std::string> clipNames;  // the loader's clipNames: ScrArg::clip etc. index these
 };
 
 // Everything the predicates read this frame. App conventions (metres, degrees, a
@@ -178,19 +180,58 @@ struct ScrWorld {
 
     std::bitset<512> flags;
 
+    // Gaius (S12 Task 5, scr_predicates.h). His root on his ground and his facing in
+    // the app convention (forward = (sin yaw, 0, cos yaw); scr_world_relate derives
+    // the distances and the bearing above from these).
+    Vec3 bossPosition{0.0f, 0.0f, 0.0f};
+    float bossYawDeg = 0.0f;
+    bool bossOnGround = true;          // R2: PLAYER_LANDING / NO_PLAYER_SCAFFOLDING control-defs
+    bool playerOnArenaGround = false;  // §13.3 stand-in (authored): the arena ground is the battle area
+    // True when the player's point is inside the judge volume `name` (ruling R-B: the
+    // app binds events_player_in_judge). Null: never inside.
+    std::function<bool(std::string_view name)> playerInJudge;
+
     // The ground height under (x, z); false when there is none.
     std::function<bool(float x, float z, float& height)> groundAt;
     // A segment from -> to against the scene; true and the hit point on a hit.
     std::function<bool(const Vec3& from, const Vec3& to, Vec3& hitPoint)> ray;
 };
 
-// The walker's state (W+0x4b34..+0x4b5c). Task 5 adds its own fields.
+// The walker's state (W+0x4b34..+0x4b5c), then the rest of the boss work block the
+// boss's own predicates and actions keep (Task 5, scr_predicates.h).
 struct ScrRuntime {
     int current = -1, pending = -1, previous = -1;
     bool entered = true, transitioned = false;
     float timer1 = 0.0f;  // time in mode: survives a self-transition
     float timer2 = 0.0f;  // since the last transition
     bool exitDeferred = false;  // a switch waits on the old mode's exit motion
+    float dt = 0.0f;            // this frame's time (DAT_0325de90) for actions that time themselves
+
+    // Perception (FUN_0083a6f0): the mode's scr_relposparam (W+0x4b00, 10 floats; empty
+    // before the first switch) and the `sensed` latch W+0x4aec.
+    std::vector<float> relpos;
+    bool sensed = false;
+    float seenFor = 0.0f, nearFor = 0.0f, unsensedFor = 0.0f;
+    Vec3 lastKnown{0.0f, 0.0f, 0.0f};  // W+0x4ac0
+
+    // Locomotion: the kind W+0x4730, the point goal W+0x54 and arrival W+0x3d6.
+    int locoKind = -1;
+    int moveParam = 0;         // W+0x3dc (slowstatus +0c / move_param)
+    float arriveRadius = 0.0f;
+    bool hasGoal = false, arrived = false;
+    Vec3 goal{0.0f, 0.0f, 0.0f};
+    float steerDeg = 0.0f;     // this frame's turn toward the goal (+ = left), for the caller's walk
+    bool aimAtPlayer = false;  // look_if_motion held this frame
+
+    // The attack runner (FUN_0085ab40): armed table W+0x4b78 (its first row; -1
+    // none), row W+0x4b80, time in row +0x4b8c, since attack +0x4b90, cooldown +0x4b94.
+    int attackTable = -1, attackRow = -1;
+    float timeInRow = 0.0f, timeSinceAttack = 0.0f, cooldown = 0.0f;
+
+    uint32_t bossBits = 0;                // the boss-local work word (Gaius: W'+0x4c80)
+    float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88
+    std::bitset<512> flags;               // flags the graph sets (set_flag)
+    int controlMode = -1;                 // the control-mode scr_control_clip moved to
 };
 
 struct ScrStepOut {

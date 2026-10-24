@@ -342,6 +342,7 @@ bool scr_graph_load(const std::string& json, const std::vector<std::string>& cli
     try {
         const Json doc = json_parse(json);
         ScrGraph graph;
+        graph.clipNames = clipNames;
         Loader{clipNames, registry, graph, {}, {}}.load(doc);
         out = std::move(graph);
         return true;

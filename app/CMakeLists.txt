@@ -54,14 +54,17 @@ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/te
   tests/test_climb_window.cpp
   tests/test_knight.cpp
   tests/test_objanim_events.cpp
+  tests/test_scr_predicates.cpp
   src/encounter_rt.cpp src/renderer.cpp src/audio_seam.cpp
   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
   src/audio.cpp src/wav_io.cpp src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
   src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp
-  src/quadratus_fight.cpp src/scr_graph.cpp src/objanim_events.cpp)
+  src/quadratus_fight.cpp src/scr_graph.cpp src/objanim_events.cpp src/scr_predicates.cpp)
 target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 target_include_directories(sotc-app-tests PRIVATE third_party src)
+# test_scr_predicates.cpp generates its fixture (the KNIGHT graph export) here at test time.
+target_compile_definitions(sotc-app-tests PRIVATE SOTC_TEST_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME unit_tests COMMAND sotc-app-tests)
 add_test(NAME windowed_selftest COMMAND sotc-viewer --selftest)
 set_tests_properties(windowed_selftest PROPERTIES
