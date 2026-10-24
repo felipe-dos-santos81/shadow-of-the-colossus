@@ -26,10 +26,10 @@ Later tasks take each gate's values from its **Values for later tasks** block.
 ## Verdicts
 
 ```
-R1: CLOSED — FUN_0085a960 only arms the attack data; the issue rule is decoded in FUN_0085ab40 (kind 10), and the locomotion kinds are decoded down to the control bits. The walk/turn gait ladder inside FUN_008158d0 is partly decoded, so its selection keeps the §13.1 turn rule with the decoded constants.
+R1: CLOSED (attack issue rule, selection order, cooldowns, control bits, kind dispatch, goal per kind) / FALLBACK (gait ladder: walk vs fast-turn vs stop-turn selection in FUN_008158d0 keeps the §13.1 30° rule; mode 12's goal is a guess, authored as none) — FUN_0085a960 only arms; the runner is FUN_0085ab40 (kind 10). The ATTAIN reading (goal = bring the player into the attain volume) is a GUESS.
 R2: CLOSED — control-def = AND of 0x68-byte records (expect at +0x58); all 28 opcodes in KNIGHT's 67 control-defs decoded; row fires on (ctrl bit requested) OR (condition).
-R3: CLOSED — atk1_3 blade window = [9, 75] (fling t41 active f0–8; KNIGHT_PULLSWD event start f75 < stillness end f77/f86).
-R4: CLOSED — bone parent = glb joint of the same skb name, offset (−x, y, z) and quat (−x, y, z, w) in that joint's glb frame; entity (−x, y, z); skelton (x, hipY + y, −z). Residuals: blade 0.70 m / 0.2°, footsteps 0 frames.
+R3: CLOSED — atk1_3 blade window = [9, 75] (fling volume, type 41 on track 43, active f0–8; KNIGHT_PULLSWD event start f75 < stillness end f77/f86).
+R4: CLOSED — bone parent = glb joint of the same skb name, offset (−x, y, z) and quat (−x, y, z, w) in that joint's glb frame; entity (−x, y, z); skelton (x, hipY + y, −z). Residuals: slam blade 0.70 m / 0.2° and far end 0.09 m from the tip (chain frame); foot spheres 1.92 m (R) / 0.54 m (L) from the footprint centres, inside r 7.26; footstep spawns 0 frames; Quadratus t46 holds the impact 5.5 m inside (unmirrored: misses by 5.5 m).
 R5: CLOSED — player_bearing_in = atan2(local x, local z) in the game frame, + = the boss's RIGHT; app bearing (+ = left) = −game bearing.
 ```
 
@@ -61,16 +61,37 @@ Every frame `FUN_00859ad0` (@0x859ad0) runs, but only when the root kind `W+0x4b
 
 | kind `W+0x4730` | on entry (kind changed) | every frame |
 |---|---|---|
-| −1 | goal cleared (`W+0x4764` = −1,−1); `W+0x378` = −1 | `FUN_0085bdb0` |
-| 0 | goal cleared; `W+0x378` = 0 | `FUN_0085bdb0` |
-| 1 | goal cleared; `W+0x378` = 1 | `FUN_0085bdb0` |
-| 10 | goal cleared; `FUN_0081d3a0(W, target)` (follow-target = the player entity) | **`FUN_0085ab40`** (the attack runner) |
+| −1 | route indices cleared (`W+0x4764` = −1,−1); `W+0x378` = −1 | `FUN_0085bdb0` |
+| 0 | route indices cleared; `W+0x378` = 0 | `FUN_0085bdb0` |
+| 1 | route indices cleared; `W+0x378` = 1 | `FUN_0085bdb0` |
+| 10 | route indices cleared; `FUN_0081d3a0(W, target)` (follow-target = the player entity) | **`FUN_0085ab40`** (the attack runner) |
 | 2–9 | route/waypoint followers | not used by Gaius |
 
 Then `FUN_0081da00` (the path follower) runs for every kind.
 - `W+0x378` is its mode: 0 runs the route search (`FUN_00820730`/`FUN_00820940`); 1 is direct. This reading is a
   **guess** from the code shape.
 - `arrived` = `W+0x3d6` ∧ `W+0x36c` == 0 (`FUN_0081d5f0`; the same test as the `arrived_goal` predicate).
+- The slowleg moves only toward the follower's waypoint 0. Its goal pointer is `FUN_0081d980(W, 0)` =
+  `W+0xec` and is non-null only while the waypoint count `W+0x36c` > 0. With no waypoint it emits no move code
+  and requests no bit (binary, `FUN_00814180`: `pauStack_268 == 0` skips `FUN_008158d0`/`FUN_008168c0`).
+
+**Where the goal comes from** (binary for the setters; data for which modes run them):
+- **Point goal.** `FUN_0081cfc0(W, p)` stores a fixed point in `W+0x54` and clears the follow target `W+0x88`.
+  It is called by the graph actions `goal_player` (`FUN_0082e480`: a snapshot of the player position + (0, f, 0)),
+  `goal_player_ground` (`FUN_0082e9c0`: the same, snapped to the nav ground) and `goal_lastseen*`.
+- **Follow target.** `FUN_0081d3a0(W, entity)` stores a live entity in `W+0x88`. Only kind 10's entry calls it,
+  with the player.
+- The kind entries for −1/0/1 clear the route indices (`W+0x4764`) and set `W+0x378`. They do **not** clear
+  `W+0x54` or `W+0x88` (binary, `FUN_00859ad0`).
+
+**Gaius's modes with kinds 0 and 1** (data: the exported graph's actions):
+
+| mode | kind | goal | per frame |
+|---|---|---|---|
+| 3 route_patrol (the retry start mode) | 1 | **none.** The mode has no actions. The resident `KNIGHT:F46 → F49` (`goal_lastseen_y(53)`) runs only on `ALWAYS:C28` "kabura-ya is present", which is false in S12. At the retry start no goal has ever been set | `FUN_0085bdb0` (cooldown tick; unarmed, so no attack). The slowleg has no waypoint, so **no movement bits**: he stands until a transition fires (binary + data) |
+| 4 lose_sight | 0 | on entry, `ALWAYS:F8`: `goal_player(0)` (a **snapshot** of the player position, not live), `route_replan` (`FUN_0082e920` re-runs `FUN_00859ad0` now), then `goal_player_ground(0)` when `ALWAYS:C107` (not `lost_target`) holds | follower in route-search mode (`W+0x378` = 0) toward the snapshot point; the slowleg's move codes and steer bits until `arrived` |
+| 6 lose_sight (point) | 0 | no actions: keeps whatever point goal is stored (the last snapshot) (data; leftover: **guess**) | as mode 4 |
+| 12 parent (player attached) | 1 | no goal actions. The leftover is a **guess**: the follow target (the player) set at the mode 9/10 entry, never cleared by kind 1 | unknown: direct follow (`W+0x378` = 1) of the leftover goal |
 
 **Gaius's rows (data, `KNIGHT scr_slowstatus` 0x23367b0).**
 
@@ -235,6 +256,15 @@ That ladder keeps §13.1's rule, extended with the decoded constants.
   - kinds 0/1/10 request only the bits in the move-code table, plus `Turn_right`/`Left_turn` when
     |steer| > 3°;
   - target inside MOVE_BACK in modes 9/10 (plus the undecoded sign test) → `Backward`.
+- **Kinds 0/1, goal and requests per mode** (see the table under "Where the goal comes from"):
+  - **mode 3** (kind 1, the retry start mode): no goal, so no movement request; only the cooldown ticks
+    (binary + data). §13.1's "kind 1 turns in place" is **not** supported by the binary for mode 3: he stands.
+  - **modes 4/6** (kind 0): the goal is a point snapshot of the player, taken at mode 4's entry (binary + data),
+    not the live player. §13.1's "kind 0 walks toward the goal, turn controls past ±30°" **stands** as the gait
+    choice (FALLBACK below), aimed at that point; `arrived` ends it.
+  - **mode 12** (kind 1): the goal is unknown (leftover; **guess**: the player entity). Authored for S12: no
+    goal (he stands; the shake-off comes from the mode's actions). Label it authored.
+  - The player entity as a live goal (`FUN_0081d3a0`) is set only by kind 10 (modes 9/10).
 - **FALLBACK, inside R1:** the selection among codes 0/1/2 (walk / fast turn / stop-turn). Use §13.1's rule:
   turn when |bearing to goal| > 30°, else walk. The arrival brake at |facing| ≤ 3° is binary.
 
@@ -304,6 +334,10 @@ is false for Gaius.
 
 ### Values for later tasks (R2) — the name map, now from the binary
 
+*Numbering:* "control-mode N" is `KNIGHT:control-mode[N]` (0 STANDBY … 10 DEATH, the motion layer). "mode N"
+elsewhere in this note is `KNIGHT:scr_mode_status[N]` (0 standby … 12 parent, the behaviour graph). They are
+different tables.
+
 | condition | rule |
 |---|---|
 | **hurt rows (17)** `*_DAMAGE_CONDITIONS__SWORD_ONLY_` | landed hit this frame ∧ region ∧ kind |
@@ -333,8 +367,8 @@ is false for Gaius.
 ## R3 — the blade window in `atk1_3` (§13.4)
 
 The facts behind the window:
-- **Start.** `KNIGHT_SWORD_FLING_ATTACK` (type 41, camera/throw volume, parent `.skb` record 9) is active `atk1_3` **f0–8**
-  (data, `objanim_knight_a_atk1_3.anb` t43). The start is therefore **f9**.
+- **Start.** `KNIGHT_SWORD_FLING_ATTACK` (a type-41 camera/throw volume on track 43, parent `.skb` record 9) is
+  active `atk1_3` **f0–8** (data, `objanim_knight_a_atk1_3.anb`). The start is therefore **f9**.
 - **PULLSWD.** The `KNIGHT_PULLSWD` type-29 event on OptBone 12 (`OptBone_sword`) has window **[75, 76]**. It
   fires as the clip crosses f75 (data, t4; `FUN_0060e370` start-crossed).
 - **Stillness end** (measured, sword recon `sword.json` stuck_hold on the bake sha256 0490ba82…): the blade
@@ -375,11 +409,34 @@ frame is the clip-local glb frame plus the `.anb` root x/z, x negated, chained f
 | same | offset (+x, y, z) | centre 6.61 m off, at the hilt end (t = 0): rejected |
 | `KNIGHT_ATK_SHOCK2` (½ 4×0.8×0.5, offset (9.936, 0, −1.329)) vs the stuck blade, 94 frames (`atk1_2` f6–12, `atk1_3` f0–86) | (**−x**, y, z) | **1.31 m** mean and max (= its own 1.33 m perpendicular offset), axis 0.2°, t 0.69 |
 | same | (+x, y, z) | 10.02 m: rejected |
-| slam reach 28–30.6 m (the WEAPON_ATK_ATTAIN 30 m ahead) | (−x, y, z) | the box spans z **18.65 … 31.63** in the chain frame, covering 28–30.6. The far end is 31.63 m ahead of the chain start and 27.47 m ahead of the root at the impact (root z +4.16) |
+| slam reach 28–30.6 m (the WEAPON_ATK_ATTAIN 30 m ahead) | (−x, y, z) | see **Which frame the reach is in** below: at the impact the box spans z **18.64 … 31.63** in the chain frame and covers 28–30.6; far end − tip = **−0.09 m** in the chain frame and in the root-relative frame alike |
 | `KNIGHT_FOOT_DMG` spheres (r 7.258, offset 0) vs the measured touchdowns (footprint AABB centres) | joint position | R (`Bone_TUMASAKI_R`, `atk_leg_r` f9–13): 1.92 m horizontal, y −0.49 (toe tip vs footprint centre). L (`Bone_TOE_L`, `atk_leg_l` f8–12): 0.51–0.57 m. Both footprints lie inside r 7.26 |
 | walk footsteps (type-29 `KNIGHT_FOOT_R/L` spawn `knight_walk_dmg`) | event start frame vs FK touchdown | R event f40, toe y reaches 0.00 at **f40**; L event f17, y 0.00 at **f17**: **0 frames** |
 | Quadratus's validated t46 (`MAMMOTH_LEG_R_ATK`, entity, raw (18.0875, 2.2019, 37.2787) size (20, 15, 30)) | entity → (**−x**, y, z) | box x [−38.1, 1.9] holds the measured impact (−7.42, 24.15) (5.5 m inside); unmirrored [−1.9, 38.1] misses it by 5.5 m; L_ATK holds none (recon `validate_stomp.py`, re-run) |
 | skelton judge volumes | (x, hipY + y, −z) on the raw data (= R(180° about y) ∘ mirror) | WEAPON_ATK_ATTAIN → (0, 0.76, **30.0**): 30 m ahead, matching the slam; LEG_R_ATK_ATTAIN → x −3 (his right, the glb's −x, where `Bone_TUMASAKI_R` stands at x −5.7) |
+
+**Which frame the reach is in** (measured; `re/dumps/r4c.txt`):
+- **Source.** "28–30.6 m" comes from the C3 recon (`2026-10-23-s10-s11-acceleration/s12-c3-recon/recon.md:43`,
+  `c3.json climb_bands_candidate[0].stuck_pose`), quoted by `knight/behaviour.md:152`. It is the **stuck pose**
+  (`atk1_2`'s last frame = `atk1_3` f0): the blade top meets flat ground at z 27.96 and the tip is at z 30.55.
+- **Its frame.** The slam chain's start frame, with the root chained through `atk1` (z +4.165) but **without**
+  `atk1_2`'s own +0.904 m advance. This is inferred: its stuck-pose hand z 18.55 = the FK clip-local 14.41 +
+  4.14 (0.03 m from 4.165).
+- **The same span in other frames.**
+  - The sword recon's full chain frame (all roots chained, x negated; the frame of its slam sweep z 23.4–31.4):
+    28.86–31.45. The sword recon's tip there is 31.48.
+  - The root-relative frame (the root at that frame, z 5.069): 23.80–26.39 (the sword recon's tip − root = 26.41).
+- **The box against it.** `KNIGHT_SWORD_ATK1_DMG` is active only through `atk1_2` f4, so it is compared at the
+  impact (`atk1` f1). There the C3 frame and the chain frame coincide (both chain the root to z 4.165).
+
+  | frame (at `atk1` f1) | box span z | measured tip z | far end − tip |
+  |---|---|---|---|
+  | chain = C3 | 18.64 … 31.63 | 31.72 | −0.09 m |
+  | root-relative | 14.48 … 27.47 | 27.56 | −0.09 m |
+
+  The note's 27.47 m is root-relative, so it is not comparable with "28–30.6". The C3 frame's 28–30.6 lies
+  inside the box span. At the box's last active frame (`atk1_2` f4) the far end is 31.43 (chain) vs the tip's
+  31.49 at f6.
 
 **What is not determined.** The y/z signs of bone offsets: the combinations differ by ≤ 0.05 m. Keep (y, z) as
 stored, consistent with `AnimBridge.ToGlb` (quat (−x, y, z, w)).
@@ -393,7 +450,9 @@ stored, consistent with `AnimBridge.ToGlb` (quat (−x, y, z, w)).
 - **Skelton parent:** (x, hipY + y, −z), rotation composed with R(180° about y). (data + measured)
 - **Fast rows.** Between `atk1` f0 and f1 the slam box centre moves 3.7 m, (−0.46, 6.96, 26.31) → (−0.27, 3.42,
   25.14). Its far end moves 6.8 m, (0.01, 4.80, 34.17) → (−0.06, −1.51, 31.63). The swept test stays as D6 says.
-- **Residuals for the results note:** blade 0.70 m / 0.2° (slam), 1.31 m (SHOCK2, by data); feet 1.92 m (R) /
+- **Residuals for the results note:** blade 0.70 m / 0.2° (slam); the slam far end is 0.09 m short of the tip at
+  the impact, in the chain frame (= the C3 frame at that instant), and the box covers the C3 28–30.6 m span;
+  1.31 m (SHOCK2, by data); feet 1.92 m (R) /
   0.54 m (L) inside r 7.26; footstep spawns 0 frames.
 
 ---
@@ -432,6 +491,9 @@ measured, Gaius's `Bone_TUMASAKI_R` stands at glb x −5.7.
 ---
 
 ## Reproduce
+
+These commands depend on the gitignored scratch (`.superpowers/sdd/2026-10-23-s12-gaius/re/`: the Ghidra
+runner, scripts and dumps) and on the library view. They are not runnable from a fresh clone.
 
 ```bash
 S=.superpowers/sdd/2026-10-23-s12-gaius/re   # scratch, gitignored
