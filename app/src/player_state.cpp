@@ -83,6 +83,13 @@ void select_band(PlayerCombat& combat, const PlayerFrame& frame, ClimbBandId ban
     combat.bandT = std::clamp(std::isfinite(t) ? t : 0.5f, 0.0f, 1.0f);
     combat.bandAcross = 0.0f;
     combat.weakpoint = climb_band(frame.bands, band).weakpoint;
+    combat.heldPastWindow = false;
+}
+
+// The band above `band` at its upper end: `carryTo` while held past the
+// window (ruling R-J) when it has one, otherwise the chain's `up`.
+int upper_link(const ClimbBand& band, const PlayerCombat& combat) {
+    return combat.heldPastWindow && band.carryTo != ClimbBandId::None ? band.carryTo : band.up;
 }
 
 // The band reachable from `band` in the chain direction whose segment this
@@ -133,6 +140,7 @@ void detach(PlayerCombat& combat, StepEvents& events, bool brokeGrip, float catc
     combat.bandT = 0.5f;
     combat.bandAcross = 0.0f;
     combat.weakpoint = -1;
+    combat.heldPastWindow = false;
     if (brokeGrip) {
         events.gripBroke = true;
     }
@@ -236,6 +244,7 @@ void clear_fight_attachment(PlayerCombat& combat) {
     combat.strikeHit = false;
     combat.catchSecondsLeft = 0.0f;
     combat.fallVelocity = 0.0f;
+    combat.heldPastWindow = false;
 }
 
 // Leaves every fight-bearing attachment/rumble field behind and enters the
@@ -336,33 +345,19 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
                 break;
             }
-            // S12 (§13.4): the held band's window closed under the player. Its
-            // upper `carryFraction` is carried onto `carryTo` at the nearest
-            // point ("he lifts you with the sword") when that point is within
-            // kCarryReachMeters (ruling R-I: never a snap); else the grip breaks.
+            // S12 (§13.4, ruling R-J): the held band's window closed under the
+            // player. On its upper `carryFraction` he keeps holding it and rides
+            // it as the bones move ("he lifts you with the sword"); lower, the
+            // grip breaks.
             if (const ClimbBand& held = climb_band(frame.bands, combat.band);
+                !combat.heldPastWindow &&
                 !band_enabled(held, frame.entityClip, frame.entityFrame)) {
-                const ClimbBand& carry = climb_band(frame.bands, held.carryTo);
-                const float carryT = nearest_t(carry, frame.jointWorld, player.position, 0.5f);
-                Vec3 point{};
-                Vec3 normal{};
-                const auto within_reach = [&] {
-                    const Vec3 d{point.x - player.position.x, point.y - player.position.y,
-                                 point.z - player.position.z};
-                    return std::sqrt(vec3_dot(d, d)) <= kCarryReachMeters;
-                };
-                const bool carried =
-                    held.carryTo != ClimbBandId::None &&
-                    combat.bandT >= 1.0f - held.carryFraction &&
-                    band_enabled(carry, frame.entityClip, frame.entityFrame) &&
-                    climb_attach_point(carry, frame.jointWorld, carryT, 0.0f, player.position,
-                                       point, normal) &&
-                    within_reach();
-                if (!carried) {
+                if (!(held.carryFraction > 0.0f &&
+                      combat.bandT >= 1.0f - held.carryFraction)) {
                     detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
                     break;
                 }
-                select_band(combat, frame, held.carryTo, carryT);
+                combat.heldPastWindow = true;
             }
 
             if (strikePressed && (combat.mode == PlayerMode::Grabbing ||
@@ -398,7 +393,8 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                                                     dt, t, combat.bandAcross)) {
                         ClimbBandId next = ClimbBandId::None;
                         if (axis > 0.0f && t >= 1.0f) {
-                            next = next_climbable_band(frame, band.up, /*ascending=*/true);
+                            next = next_climbable_band(frame, upper_link(band, combat),
+                                                       /*ascending=*/true);
                             if (next != ClimbBandId::None) {
                                 select_band(combat, frame, next, 0.0f);
                             }
@@ -432,7 +428,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                         if (t >= 1.0f) {
                             // W + lateral takes the branch when the band has
                             // one; W alone always follows the chain up.
-                            ClimbBandId next = band.up;
+                            ClimbBandId next = upper_link(band, combat);
                             if (lateral != 0.0f && band.branch != ClimbBandId::None) {
                                 next = band.branch;
                             }

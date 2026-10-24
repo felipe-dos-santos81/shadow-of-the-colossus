@@ -203,27 +203,6 @@ TEST_CASE("disable at 30 % -> Falling, no band") {
     CHECK(combat.band != 0);
 }
 
-TEST_CASE("disable at 70 % -> on carryTo, position continuous within 0.5 m") {
-    Heightmap ground = flat_heightmap();
-    PlayerState player{};
-    PlayerCombat combat{};
-    grab_blade(player, combat, blade_frame(ground, 20));
-    combat.bandT = 0.7f;
-    PlayerInput input{};
-    input.grab = true;
-    player_step(player, combat, input, blade_frame(ground, 74), CombatTuning{}, kStep);
-    REQUIRE(combat.band == 0);
-    const Vec3 before = player.position;
-
-    const StepEvents events =
-        player_step(player, combat, input, blade_frame(ground, 75), CombatTuning{}, kStep);
-    CHECK(combat.band == 1);
-    CHECK(combat.mode != PlayerMode::Falling);
-    CHECK_FALSE(events.gripBroke);
-    CHECK(combat.bandT == doctest::Approx(0.5f).epsilon(0.01));  // z 7 on the forearm
-    CHECK(distance(player.position, before) < 0.5f);
-}
-
 TEST_CASE("a horizontal band at 65 deg is hung, at 55 deg walked") {
     Heightmap ground = flat_heightmap();
     const auto slope_frame = [&](float deg) {
@@ -268,28 +247,92 @@ TEST_CASE("a horizontal band at 65 deg is hung, at 55 deg walked") {
     }
 }
 
-TEST_CASE("disable at 70 % with the carry point beyond reach -> Falling, no band") {
-    // The forearm runs on from the hilt (the real rig: the fist at the hilt),
-    // so its nearest point to 70 % of the blade is ~3 m away: no snap, a fall.
+// --- Ruling R-J: high on the blade, the player rides it as it lifts ----------
+
+namespace {
+
+// Holds the blade at `t` in the window (frame 74), then lets it close (75).
+void hold_through_close(PlayerState& player, PlayerCombat& combat, const Heightmap& ground,
+                        float t, Vec3& before, StepEvents& closing) {
+    grab_blade(player, combat, blade_frame(ground, 20));
+    combat.bandT = t;
+    PlayerInput input{};
+    input.grab = true;
+    player_step(player, combat, input, blade_frame(ground, 74), CombatTuning{}, kStep);
+    REQUIRE(combat.band == 0);
+    before = player.position;
+    closing = player_step(player, combat, input, blade_frame(ground, 75), CombatTuning{}, kStep);
+}
+
+}  // namespace
+
+TEST_CASE("closes at 70 % -> still on the blade, continuous, riding it as the bones move") {
     Heightmap ground = flat_heightmap();
-    const Vec3 tip{0.0f, 2.0f, 0.0f};
-    const Vec3 hilt{0.0f, 2.0f, 10.0f};
-    const Vec3 elbow{0.0f, 2.4f, 16.0f};
     PlayerState player{};
     PlayerCombat combat{};
-    grab_blade(player, combat, blade_frame(ground, 20, tip, hilt, elbow));
+    Vec3 before{};
+    StepEvents closing{};
+    hold_through_close(player, combat, ground, 0.7f, before, closing);
+    CHECK(combat.band == 0);
+    CHECK(combat.mode != PlayerMode::Falling);
+    CHECK_FALSE(closing.gripBroke);
+    CHECK(combat.bandT == doctest::Approx(0.7f));
+    CHECK(distance(player.position, before) <= 0.5f);
+
+    // The sword lifts 1 m after the window: the held player goes with it.
+    PlayerInput input{};
+    input.grab = true;
+    const Vec3 onBlade = player.position;
+    player_step(player, combat, input,
+                blade_frame(ground, 80, {0.0f, 3.0f, 0.0f}, {0.0f, 3.0f, 10.0f}), CombatTuning{},
+                kStep);
+    CHECK(combat.band == 0);
+    CHECK(player.position.y == doctest::Approx(onBlade.y + 1.0f));
+    CHECK(player.position.z == doctest::Approx(onBlade.z));
+
+    // Letting go of E still drops him.
+    input.grab = false;
+    player_step(player, combat, input, blade_frame(ground, 81), CombatTuning{}, kStep);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.band == ClimbBandId::None);
+}
+
+TEST_CASE("from the blade held past its window, its upper end links onto carryTo") {
+    // `up` cleared: the hand-over past the window is carryTo's.
+    std::array<ClimbBand, 2> bands = kBladeBands;
+    bands[0].up = ClimbBandId::None;
+    Heightmap ground = flat_heightmap();
+    const auto frame_at = [&](int frameIndex) {
+        PlayerFrame frame = blade_frame(ground, frameIndex);
+        frame.bands = bands;
+        return frame;
+    };
+    PlayerState player{};
+    PlayerCombat combat{};
+    grab_blade(player, combat, frame_at(20));
     combat.bandT = 0.7f;
     PlayerInput input{};
     input.grab = true;
-    player_step(player, combat, input, blade_frame(ground, 74, tip, hilt, elbow), CombatTuning{},
-                kStep);
+    player_step(player, combat, input, frame_at(75), CombatTuning{}, kStep);
     REQUIRE(combat.band == 0);
-    const Vec3 before = player.position;
+    input.forward = true;
+    for (int i = 0; i < 120 && combat.band == 0; ++i) {  // 3 m at 5 m/s
+        player_step(player, combat, input, frame_at(80), CombatTuning{}, kStep);
+    }
+    CHECK(combat.band == 1);
+    CHECK(combat.mode != PlayerMode::Falling);
+}
 
-    const StepEvents events = player_step(
-        player, combat, input, blade_frame(ground, 75, tip, hilt, elbow), CombatTuning{}, kStep);
-    CHECK(combat.mode == PlayerMode::Falling);
+TEST_CASE("a fresh grab on the closed blade fails") {
+    Heightmap ground = flat_heightmap();
+    PlayerState player{};
+    PlayerCombat combat{};
+    player.position = Vec3{0.0f, 0.0f, -0.6f};  // at the low end, as grab_blade
+    PlayerInput input{};
+    input.grab = true;
+    const StepEvents events =
+        player_step(player, combat, input, blade_frame(ground, 80), CombatTuning{}, kStep);
+    CHECK_FALSE(events.grabbed);
     CHECK(combat.band == ClimbBandId::None);
-    CHECK(events.gripBroke);
-    CHECK(distance(player.position, before) < 0.5f);  // no snap either way
+    CHECK(combat.mode == PlayerMode::Grounded);
 }

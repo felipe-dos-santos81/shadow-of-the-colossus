@@ -66,8 +66,8 @@ enum : int { Blade, Forearm, UpperArm, Shoulder, Neck, Head, Count };
 //   enable window: R3 decode — `knight_a_atk1_3` frames [9, 75): after the fling
 //     volume (track 43, f0–8) until KNIGHT_PULLSWD fires at 75.0.
 //   walkSpeed 5.0 m/s: authored (§13.4, the run speed, not the 2.2 m/s surface
-//     walk). carryFraction 0.4 onto the forearm: authored (§13.4), within
-//     grab.h's kCarryReachMeters only (ruling R-I).
+//     walk). carryFraction 0.4: authored (§13.4, ruling R-J) — high on
+//     the blade at the close, the player rides it up and climbs off onto the forearm.
 //   grabEntryLowEnd: authored (D7 — the tilted disc leaves the low end 1.6–2.9 m
 //     up, beyond the 1.0 m step: a grab, not the game's walk-on).
 inline constexpr std::array<ClimbBand, B::Count> kBands{{

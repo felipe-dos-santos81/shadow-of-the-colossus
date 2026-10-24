@@ -79,6 +79,10 @@ struct PlayerCombat {
     float invulnSeconds = 0.0f;  // i-frame window left; > 0 ignores damage
     bool heavyHit = false;       // this Hurt came from a heavy attack
     bool pendingDeath = false;   // lethal damage taken while Falling
+
+    // S12 ruling R-J: the held band's window closed with the player on its
+    // upper `carryFraction`, so he keeps it (cleared on any band change).
+    bool heldPastWindow = false;
 };
 
 
@@ -228,10 +232,10 @@ struct StepEvents {
 // `walkSpeed` when set. Grab and catch skip a band whose enable window
 // (`frame.entityClip`/`entityFrame`) is closed and enter a `grabEntryLowEnd`
 // band only at its low end; a chain hand-over stops at a closed band. When the
-// held band's window closes, the player at bandT >= 1 - carryFraction moves onto
-// `carryTo` at its nearest parameter when that attach point is within
-// kCarryReachMeters of him; otherwise the grip breaks into Falling with the
-// catch window.
+// held band's window closes (ruling R-J), the player at bandT >= 1 -
+// carryFraction keeps holding it (`heldPastWindow`) and rides it, its upper end
+// handing over to `carryTo` (else `up`); lower, the grip breaks into Falling
+// with the catch window.
 //
 // Falling: integrates vertical velocity at 9.8 m/s² downward, keeps XZ, and
 // lands when `position.y` reaches the ground sample (the ground is only used

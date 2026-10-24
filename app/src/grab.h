@@ -127,11 +127,6 @@ bool band_enabled(const ClimbBand& band, std::string_view playingClip, int frame
 // like any other band.
 inline constexpr float kWalkableBandMaxSlopeDeg = 60.0f;
 
-// The disable hand-over's reach (authored: Plan Review Focus 2's continuity
-// bound): the player is carried onto `carryTo` only when its attach point lies
-// within this of him; farther, he falls rather than snap.
-inline constexpr float kCarryReachMeters = 0.5f;
-
 // `horizontal` and its top (the up hint +Y made perpendicular to the posed
 // segment) passes the slope gate. False for a band whose segment cannot be
 // formed.

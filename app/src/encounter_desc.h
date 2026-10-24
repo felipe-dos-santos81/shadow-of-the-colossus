@@ -69,11 +69,13 @@ struct ClimbBand {
     int enableTo = -1;
     // S12 walk pace on a walked band (m/s; 0 = CombatTuning::surfaceWalkSpeed).
     float walkSpeed = 0.0f;
-    // S12 disable hand-over (§13.4): when the window closes with the player at
-    // bandT >= 1 - carryFraction (bandT runs boneA -> boneB, so this is the
-    // boneB end) he is moved onto `carryTo` at its nearest point when that point
-    // is within grab.h's kCarryReachMeters; lower, out of reach, or with no
-    // carryTo he falls.
+    // S12 window close (§13.4, ruling R-J): when the window closes with the
+    // player holding the band at bandT >= 1 - carryFraction (bandT runs boneA ->
+    // boneB, so this is the boneB end) he keeps holding it past the window and
+    // rides it as the bones move ("he lifts you with the sword"); lower, or with
+    // carryFraction 0, he falls. Held past the window, its upper end hands over
+    // to `carryTo` (None = `up`, the chain as usual); a closed band is never
+    // grabbed afresh.
     float carryFraction = 0.0f;
     int carryTo = ClimbBandId::None;
     // S12 entry (D7): E grabs this band only within reach of its low end (the
