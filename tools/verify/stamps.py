@@ -22,9 +22,11 @@ LIBGEO = "@libgeo"      # @lib without audio/: what the probes and the preflight
 # The input classes (D3 + ruling §13.5). A section of an adapter hashes its class, the adapter, its
 # frozen script, its goldens and the runner's own code (VERIFY).
 CLASSES = {
+    # tools/re/objanim/*.json: ObjAnimTests read the curated maps; tools/re/scr/**: the ctest
+    # suite runs graph_export.py for its KNIGHT fixture.
     "dotnet": ["src/**", "tests/**", "*.sln", "Directory.Build.*", "tools/re/audio/*.json",
-               "tools/native/**", GITLINK],
-    "ctest": ["app/**", "tools/re/audio/*.json", LIB],
+               "tools/re/objanim/*.json", "tools/native/**", GITLINK],
+    "ctest": ["app/**", "tools/re/audio/*.json", "tools/re/scr/**", LIB],
     "audio": ["tools/re/audio/**", "src/**", LIBPATH, LIBAUDIO],
     "probes": ["tools/re/stage/**", "tools/re/anb/**", "tools/re/s6/**",
                "tools/re/s7/shrine_placements.json", "tools/re/s8/placements.json", "tools/re/s9/**",
