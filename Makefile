@@ -223,8 +223,9 @@ behaviour: ## Export Gaius's mode graph from out/re/eboot.elf to LIB/behaviour/K
 routes: ## Export the .path route graphs to LIB/behaviour/<stem>.route.json (S13 Task 7)
 	@echo "not yet (S13 Task 7)" >&2; exit 1
 
-terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (S13 Task 9)
-	@echo "not yet (S13 Task 9)" >&2; exit 1
+terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (read-only; ~1 s)
+	@mkdir -p "$(LIB)/stage"
+	python3 -I tools/re/clb/terrain_export.py "$(LIB)/stage/arena_04.terrain.json" --game "$(GAME_ROOT)"
 
 coverage: ## Per-boss interpreter coverage into out/re/coverage.md (S13 Task 3)
 	@echo "not yet (S13 Task 3)" >&2; exit 1
