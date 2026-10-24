@@ -81,7 +81,7 @@ The path findings' "Design inputs" (`.superpowers/sdd/2026-10-23-s13-recon/path/
 already in the glb frame (`tools/re/stage/cell_frame.py`, stage id from the `.path` header +0x1c):
 
 ```json
-{"schema": "sotc-route/0", "source": "<path file>", "stage_id": 56,
+{"format": "sotc-route/0", "source": "<path file>", "stage_id": 56,
  "frame": {"Tx": 900, "Tz": 300, "label": "glb = (Tx - x, y, Tz + z)"},
  "nodes":  [{"i": 0, "pos": [x, y, z], "class": 1, "tag": 0, "links": [0, 3]}],
  "links":  [{"i": 0, "a": 0, "b": 1, "flags": 1, "tags": [1, 0], "length": 12.3}],

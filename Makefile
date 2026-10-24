@@ -222,8 +222,8 @@ behaviour: ## Export the 16 colossus mode graphs from out/re/eboot.elf to LIB/be
 	@for b in $(BEHAVIOUR_BOSSES); do python3 -I tools/re/scr/graph_export.py export $$b "$(LIB)/behaviour/$$b.graph.json" || exit 1; done
 
 # S13 (Phaedra): each target fails until the task that fills it lands (Task 1 contracts).
-routes: ## Export the .path route graphs to LIB/behaviour/<stem>.route.json (S13 Task 7)
-	@echo "not yet (S13 Task 7)" >&2; exit 1
+routes: ## Export the .path route graphs to LIB/behaviour/{kirin,knight,minotaur}.route.json (S13 Task 7; read-only on the game tree)
+	@for s in kirin knight minotaur; do python3 -I tools/re/path/route_export.py "$(GAME_ROOT)/cp3shadow/path/pathdata/$$s.path" "$(LIB)/behaviour/$$s.route.json" || exit 1; done
 
 terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (S13 Task 9)
 	@echo "not yet (S13 Task 9)" >&2; exit 1
