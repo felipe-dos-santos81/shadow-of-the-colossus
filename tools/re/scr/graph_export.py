@@ -2,8 +2,9 @@
 """Export one colossus's SCR mode graph from out/re/eboot.elf as `sotc-scr-graph/0` JSON (S12 Task 2).
 
 Read-only on the elf; stdlib only. Layouts are from the decompiled walker FUN_0082c080, evaluator
-FUN_0082d9f0 and func runner FUN_0082bfb0 (docs/notes/s12-graph-recon.md). Clips are written by name
-(lower-case stem of cp3shadow/anim/<name>.anb), predicates and actions by function address ("832610").
+FUN_0082d9f0 and func runner FUN_0082bfb0 (docs/superpowers/specs/2026-10-23-s12-gaius-design.md §6,
+docs/notes/s12-recon.md). Clips are written by name (lower-case stem of cp3shadow/anim/<name>.anb),
+predicates and actions by function address ("0x832610", ruling R-G).
 
   graph_export.py export BOSS OUT.json [--elf PATH]      BOSS: KNIGHT | MAMMOTH | MINOTOUR_A
 """

@@ -40,8 +40,9 @@ inline constexpr int kCtrlStopTurnRight = 55;  // move code 2
 inline constexpr int kCtrlStopTurnLeft = 56;
 inline constexpr int kCtrlBrake = 57;       // move code 3 'Sudden_braking'
 
-// One `KNIGHT_SWORD` scr_attackdata row (data 0x2232a98, R1 "Row numbers"). Every
-// row: sensing 0, condition null, control-mode list null, chain percent 100, no chain.
+// One `KNIGHT_SWORD` scr_attackdata row (data 0x2232a98, R1 "Row numbers"; hand-transcribed,
+// not exported — exporting the attackdata is S13 debt). Every row: sensing 0, condition
+// null, control-mode list null, chain percent 100, no chain.
 struct AttackRow {
     const char* fix;     // +50 FIX volume (judge names as the sidecar spells them)
     const char* atk;     // +60 ATK volume

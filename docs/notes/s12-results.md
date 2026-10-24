@@ -122,7 +122,7 @@ While the climber is on him the graph flips `Knight_parent_mode` ↔ `Knight_rou
 | `s12-dodge` | `sword_rows=0`, `player_hp=100`, `off_line >= need` | 6.70 m off his line; need 6.65 = the widest posed row 6.00 (`KNIGHT_ATK_SHOCK`) + capsule 0.35 + margin 0.3 |
 | `s12-blade` | `window=9..75`, `close_frame=75`, `close_t` 0.5x–0.9x, `ride_from=0.50`, `carried=1 band=forearm slams=1` | grab at `atk1_3` f27; bandT 0.55 at the f75 close; margin 0.05 |
 | `s12-route` | `blade,forearm,upper_arm,shoulder,neck,head` | the head at 44.0 s, stamina 87.0 |
-| `s12-sigil` | `head:84 belly:0`; strikes head then belly; the last kills | head 34 + 34 + 18 (pool 86), belly 34 + 34 + 16 (84 left) |
+| `s12-sigil` | `head:84 belly:0`; strikes head then belly; the last kills | head 34 + 34 + 18 (pool 86), belly 34 + 34 + 16 (84 spent) |
 | `s12-shake` | `survived=1 clip=knight_a_refuse_*` | `refuse_head` on the head, stamina low 1.5 |
 | `s12-death` | `Motion/Collapse/Done`, all in `Knight_death` | 0.000 / 6.000 / 8.000 s |
 | `s12-corpse` | `clip=knight_a_knight_death t=6.000 held=1 … return=Idle` | the death clip's root moves him 6.57 m; no throw-off fired; no shrine |
@@ -188,8 +188,9 @@ interpreter); **sidecar** — the objanim events sidecar (the shipped `objanim_k
 | Control → clip (control-assign rows, motion-graph edges, `p30` timing, `p34` blend) | graph (the `p30`/`p34` readings: Task 5) |
 | Else edge at a clip's end → control-mode N (`else_orient_def[N]`) | graph + **authored** reading (the pattern 0/1/3/6/7/8/9/10; not a decode) |
 | Control-assign conditions (hurt, landing, mortality rows) | graph + R2 |
-| Slam/stab choice, the attack rows, their cooldowns, approach and back-off (ATTAIN goal) | graph + R1 (the ATTAIN reading is a guess) |
+| Slam/stab choice, the attack rows, their cooldowns, approach and back-off (ATTAIN goal) | data (hand-transcribed, `scr_predicates.h` `kAttack`, eboot 0x2232a98) + R1 (the ATTAIN reading is a guess) |
 | Walk vs turn choice, turn cut | **authored** §13.1 ±30° rule (R1 fallback); the 3° cut via the gait's bits |
+| The player's whistle and death (`ALWAYS:C120`, `ALWAYS:C71`): the S8 whistle press (`Q` / gamepad north) starts `ph_motion_def` 604 for one frame; a Dead player is in control-mode 79 | graph (the rows) + **authored** 604 (R-N: the first of C120's twelve; which is the on-foot whistle is not decoded) + data 79 (C71's row) |
 | Perception latch (`scr_relposparam`) | graph; the sight ray never blocks (**authored**: no wall on the disc) |
 | Shake-off triggers, cooldowns, regions | graph + data (`knight_shake`); which region each band is: **authored** |
 | Shake strength (stamina drain, active window) | **authored** rule (Quadratus's p90 angular speed / 10), measured on Gaius's glb |
@@ -214,7 +215,7 @@ interpreter); **sidecar** — the objanim events sidecar (the shipped `objanim_k
 
 The authored list is the one the spec's success line asks for: the walk/turn rule, the shake strength, the
 blade's speed / ride threshold / grab entry, the belly route, the arena values (spawn, clamp, backstop, step),
-the §13.3 stand-ins, the reaction readings, the else-edge reading, the camera — every one labelled in source.
+the §13.3 stand-ins, the reaction readings, the else-edge reading, the whistle's motion index (R-N), the camera — every one labelled in source.
 
 ## 8 · Deviations
 
@@ -226,7 +227,7 @@ the §13.3 stand-ins, the reaction readings, the else-edge reading, the camera �
   `carryFraction` 0.5 (bandT ≥ 0.5), not §13.4's 0.4. R-I's 0.5 m carry reach is superseded.
 - **The measured blade length is 14.3 m**, not the recon's 11.9 m. From the honest dodge spot the grab
   is at `atk1_3` f27 and the close finds the climber at bandT 0.55: a margin of 0.05 (≈ 0.7 m of blade,
-  ≈ 4 frames at 5 m/s).
+  ≈ 4 clip frames at 30 fps, at 5 m/s).
 - **The §13.3 stand-ins**: the arena's collision attributes (ground = owner kinds 0x400000/0x800000),
   `swing_space_clear` (three 35 m rays sampled every 1 m, blocked by a rise > 1.0 m), `ray_ctrl` never
   reporting class 0xc00 — so slams never fail.
@@ -320,6 +321,7 @@ no flinch on sigil hits; the opaque water; silence.
 | R-K | verify and the bake use the view `out/libviews/s12-gaius`; promotion lands with the merge | no (until the merge) |
 | R-L | the selftest dodges the whole slam (every row cleared by overlap); `s12-hit` from its own exposure | **yes** — what the proof shows: a clean dodge is possible |
 | R-M | the blade's `carryFraction` 0.5 instead of §13.4's 0.4; margin 0.05 at the close | **yes** — where on the blade the ride starts |
+| R-N | the S8 whistle feeds his graph (`player_motion_started` 604, authored) and a Dead player's control-mode 79 (C71); route_patrol/lose_sight's whistle rows (C21 → lose_sight, C24 → search) can now run | **yes** — `Q` makes him search for the player |
 
 ## 12 · What's next
 
@@ -328,8 +330,9 @@ no flinch on sigil hits; the opaque water; silence.
   `test_knight` (R-K).
 - **Quadratus onto the interpreter** (his exported MAMMOTH graph: 21/55/105/172), and **Valus from his own
   tables** (the user: "Fix later"); both need a deliberate re-bless.
-- **The exporter's two known gaps** (S13 recon): the hard-coded `MOTION_ORIENT` (V/Q/K only) and undecoded
-  predicate/action arguments dropped silently.
+- **The exporter's known gaps** (S13 recon): the hard-coded `MOTION_ORIENT` (V/Q/K only), undecoded
+  predicate/action arguments dropped silently, and **export the attackdata** (`KNIGHT_SWORD`'s rows are
+  hand-transcribed into `scr_predicates.h` `kAttack` from eboot 0x2232a98).
 - **S13** (the systems milestone, design after this merge): the additive layer, `.path` routes, terrain
   zones, all-16 predicates; Phaedra as the proof.
 

@@ -67,7 +67,7 @@ enum : int { Blade, Forearm, UpperArm, Shoulder, Neck, Head, Belly, Count };
 //     volume (track 43, f0–8) until KNIGHT_PULLSWD fires at 75.0.
 //   walkSpeed 5.0 m/s: authored (§13.4, the run speed, not the 2.2 m/s surface
 //     walk). carryFraction 0.5: authored (R-M; §13.4's 0.4 was authored too — 0.5
-//     lets the honestly-dodging player ride in one slam; bandT 0.54 at the f75 close
+//     lets the honestly-dodging player ride in one slam; bandT 0.55 (measured) at the f75 close
 //     from the 6.65 m dodge spot; ruling R-J) — on the blade's upper half at the
 //     close, the player rides it up and climbs off onto the forearm.
 //   grabEntryLowEnd: authored (D7 — the tilted disc leaves the low end 1.6–2.9 m
