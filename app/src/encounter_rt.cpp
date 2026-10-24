@@ -48,7 +48,7 @@ void select_clip(Playback& playback, const Scene& scene, std::size_t rigIndex, i
 }
 
 std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_t rigIndex,
-                              Playback& playback, float dt) {
+                              Playback& playback, float dt, const AddLayers* layers) {
     if (playback.index < 0) {
         return {};
     }
@@ -57,8 +57,11 @@ std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_
     }
     const AnimationCpu& clip = playback.clips[static_cast<size_t>(playback.index)];
     const float time = playback_time(playback, clip.duration);
-    std::vector<Mat4> palette =
-        pose_palette(scene, rigIndex, animation_local_pose(scene, rigIndex, clip, time));
+    LocalPose pose = animation_local_pose(scene, rigIndex, clip, time);
+    if (layers != nullptr) {
+        additive_compose(pose, scene, rigIndex, playback.clips, *layers);  // S13 D6
+    }
+    std::vector<Mat4> palette = pose_palette(scene, rigIndex, pose);
     renderer.upload_pose(rigIndex, palette);
     return palette;
 }
@@ -984,7 +987,8 @@ void print_scene_line(const Scene& scene) {
 
 std::vector<Mat4> blended_palette(const Scene& scene, std::size_t rigIndex,
                                   const Playback& playback, RigBlend& blend,
-                                  const std::string& clipName, float time, float blendFrom) {
+                                  const std::string& clipName, float time, float blendFrom,
+                                  const AddLayers* layers) {
     const int index = clip_index_named(playback, clipName);
     if (index < 0) {
         return {};
@@ -1004,6 +1008,11 @@ std::vector<Mat4> blended_palette(const Scene& scene, std::size_t rigIndex,
         pose = blend_poses(blend.from, pose, blendFrom / kClipBlendSeconds);
     }
     blend.shown = pose;
+    if (layers != nullptr) {
+        // S13 D6: the layers go on the blended base; `shown` stays without them, so a switch
+        // never blends a layer's delta in twice.
+        additive_compose(pose, scene, rigIndex, playback.clips, *layers);
+    }
     return pose_palette(scene, rigIndex, pose);
 }
 
