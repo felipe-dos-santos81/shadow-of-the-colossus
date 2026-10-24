@@ -100,6 +100,35 @@ KNIGHT_CLIPS = knight_a_add_arm_l_back_damage knight_a_add_arm_l_front_damage kn
                knight_a_scale_center knight_a_search knight_a_slide_l knight_a_slide_r knight_a_stand \
                knight_a_standby knight_a_turn_back knight_a_turn_l knight_a_turn_r knight_a_walk \
                knight_a_walk_end knight_a_walk_start
+# Phaedra's 75 body clips (S13 recon, kirin/findings.md), every cp3shadow/anim/kirin_a_*.anb except the
+# two ladder rest poses (hashigo_{l,r}_base: separate skeletons), in byte order (LC_ALL=C sort). The order is
+# the clip index. Baked by `make bake-kirin`, part of `bake`.
+KIRIN_CLIPS = kirin_a_add_angry kirin_a_add_dmg_head_min kirin_a_add_head_refuse \
+              kirin_a_add_hip_damage kirin_a_add_insight_dummy kirin_a_add_mune_back_l_damage \
+              kirin_a_add_mune_back_r_damage kirin_a_add_mune_front_damage \
+              kirin_a_add_mune_ke_l_damage kirin_a_add_mune_ke_r_damage \
+              kirin_a_add_neck_down_1_end kirin_a_add_neck_down_1_loop \
+              kirin_a_add_neck_down_1_start kirin_a_add_neck_down_1b_end \
+              kirin_a_add_neck_down_1b_loop kirin_a_add_neck_down_1b_start \
+              kirin_a_add_neck_down_2_end kirin_a_add_neck_down_2_loop \
+              kirin_a_add_neck_down_2_loop_low kirin_a_add_neck_down_2_refuse \
+              kirin_a_add_neck_down_2_start kirin_a_add_neck_down_2_start2 \
+              kirin_a_add_neck_refuse_end kirin_a_add_neck_refuse_loop \
+              kirin_a_add_neck_refuse_start kirin_a_add_shoulder_l_damage \
+              kirin_a_add_shoulder_r_damage kirin_a_add_tail_l_damage_ kirin_a_add_tail_r_damage_ \
+              kirin_a_atack_leg_b_l kirin_a_atack_leg_b_r kirin_a_atack_leg_l_a \
+              kirin_a_atack_leg_l_a_wait kirin_a_atack_leg_l_b kirin_a_atack_leg_l_b_wait \
+              kirin_a_atack_leg_l_c kirin_a_atack_leg_l_c_wait kirin_a_atack_leg_l_d \
+              kirin_a_atack_leg_r_a kirin_a_atack_leg_r_a_wait kirin_a_atack_leg_r_b \
+              kirin_a_atack_leg_r_b_wait kirin_a_atack_leg_r_c kirin_a_atack_leg_r_c_wait \
+              kirin_a_atack_leg_r_d kirin_a_boot kirin_a_boot_cancel kirin_a_death \
+              kirin_a_death_loop kirin_a_limit_pose kirin_a_refuse_body kirin_a_refuse_mune \
+              kirin_a_refuse_tail kirin_a_scale_center kirin_a_seach kirin_a_stand kirin_a_standby \
+              kirin_a_threat kirin_a_turn_l kirin_a_turn_r kirin_a_walk kirin_a_walk_angry_end \
+              kirin_a_walk_angry_loop kirin_a_walk_angry_start kirin_a_walk_back kirin_a_walk_end \
+              kirin_a_walk_start kirin_a_walk_turn_l kirin_a_walk_turn_r kirin_a_watch2_end \
+              kirin_a_watch2_loop kirin_a_watch2_start kirin_a_watch_end kirin_a_watch_loop \
+              kirin_a_watch_start
 comma := ,
 space := $(subst ,, )
 
@@ -129,7 +158,7 @@ convert: publish ## Convert the cmsh batch into the library (resumable; force=1,
 audio: publish ## Decode the curated audio slice (the S9 map, 36 entries)
 	$(AWAKE) $(CLI) audio --root "$(GAME_ROOT)" --out "$(LIB)" --map tools/re/audio/s9_map.json --force
 
-bake: behaviour publish bake-quadratus bake-knight ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases, Quadratus's 58, Gaius's 62 + his graph (rewrites the glbs)
+bake: behaviour publish bake-quadratus bake-knight bake-kirin routes terrain ## Bake Mono's pose, Wander's 49 clips, Agro's 20, the sword's atlases, Quadratus's 58, Gaius's 62 + his graph, Phaedra's 75 + her routes and terrain (rewrites the glbs)
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
 		--under models/shadow/characters/mono/_cmn/mono.cmsh --clips girl_a_death_loop --force
 	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
@@ -229,8 +258,9 @@ terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json
 coverage: ## Per-boss interpreter coverage into out/re/coverage.md (S13 Task 3)
 	@echo "not yet (S13 Task 3)" >&2; exit 1
 
-bake-kirin: ## Bake Phaedra (kirin_a) with her clips + the events sidecar (S13 Task 11)
-	@echo "not yet (S13 Task 11)" >&2; exit 1
+bake-kirin: publish ## Bake Phaedra (colossus_04_kirin) with her 75 clips + the events sidecar (rewrites her glb)
+	$(AWAKE) $(CLI) convert --root "$(GAME_ROOT)" --out "$(LIB)" \
+		--under models/shadow/characters/colossus_04_kirin/_cmn/c04_kirin.cmsh --force --clips $(subst $(space),$(comma),$(strip $(KIRIN_CLIPS)))
 
 arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena) (S13 Task 12)
 	@echo "not yet (S13 Task 12)" >&2; exit 1

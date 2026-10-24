@@ -120,6 +120,46 @@ public class ObjAnimTests
     }
 
     [Fact]
+    public void Phaedra_stomp_spawns_once_per_chain_and_the_sidecar_is_small()
+    {
+        var map = ObjAnimMap.Load(RepoFile("tools/re/objanim/kirin_map.json"));
+        var anim = TestAssets.Sample("cp3shadow/anim");
+        var clips = Directory.EnumerateFiles(anim, "objanim_kirin_a_*.anb")
+            .Select(p => Path.GetFileNameWithoutExtension(p)["objanim_".Length..])
+            .Where(n => File.Exists(Path.Combine(anim, n + ".anb"))) // _skelton / _kirin_region are not clips
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        var json = EventsSidecar.Build(TestAssets.Root, "kirin_a", clips, map);
+        Assert.True(json.Length < 64 * 1024, $"sidecar is {json.Length} bytes");
+        var root = JsonNode.Parse(json)!.AsObject();
+        ValidateAgainstSchema(root);
+
+        JsonObject? Effect(string clip, string name) => root["clips"]![clip]!["effects"]!.AsArray()
+            .FirstOrDefault(e => (string?)e!["name"] == name)?.AsObject();
+
+        var stomp = Effect("kirin_a_atack_leg_r_a", "KIRIN_FOOT_ATK")!;
+        Assert.Equal("Bone_TOE_R", (string?)stomp["parent"]!["bone"]);
+        Assert.Equal("kirin_atk_dmg", (string?)stomp["spawns"]![0]);
+
+        // the planted-hoof holds re-fire the stomp at frame 0: dropped (one hit per chain)
+        Assert.Null(Effect("kirin_a_atack_leg_r_a_wait", "KIRIN_FOOT_ATK"));
+        Assert.Null(Effect("kirin_a_atack_leg_l_b_wait", "KIRIN_FOOT_ATK"));
+        Assert.Null(Effect("kirin_a_atack_leg_r_c_wait", "KIRIN_FOOT_ATK_ST"));
+        Assert.NotNull(Effect("kirin_a_atack_leg_r_c", "KIRIN_FOOT_ATK_ST")); // the chain's own hit stays
+
+        var step = Effect("kirin_a_walk", "KIRIN_FOOT")!;
+        Assert.Equal("kirin_walk_dmg", (string?)step["spawns"]![0]);
+
+        var spawned = root["spawned"]!.AsObject();
+        var core = spawned["kirin_atk_dmg"]!["damage"]!.AsArray()
+            .Single(d => (string?)d!["name"] == "GROUNDDEST_IMPACT_CORE")!;
+        Assert.Equal(60, (int)core["def"]!["amount"]!); // KIRIN_DAMAGE_JIWARE 0x198e5e0
+        Assert.Equal(30, (int)spawned["kirin_walk_dmg"]!["damage"]!.AsArray()
+            .Single(d => (string?)d!["name"] == "GROUNDDEST_IMPACT2_CORE")!["def"]!["amount"]!);
+    }
+
+    [Fact]
     public void Quadratus_sidecar_row_is_the_mirrored_entity_box()
     {
         var json = EventsSidecar.Build(TestAssets.Root, "boss_a", ["boss_a_attack_r"], null);
