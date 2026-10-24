@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BpConvert.Core.Anim;
 
 namespace BpConvert.Core.Pipeline;
 
@@ -29,6 +30,13 @@ public sealed record BatchOptions
     /// <see cref="ClipSet.Resolve"/>; empty = no animations (the M0 output shape).
     /// </summary>
     public IReadOnlyList<string> Clips { get; init; } = [];
+
+    /// <summary>
+    /// Directory of curated objanim maps (<c>*_map.json</c>, see <see cref="ObjAnimMap"/>) used when a
+    /// <c>--clips</c> conversion writes its <c>.events.json</c> sidecar; <c>null</c> = no map
+    /// (the sidecar then has no <c>spawned</c> block, <c>spawns</c> or damage <c>def</c>).
+    /// </summary>
+    public string? ObjAnimMapDirectory { get; init; }
 
     /// <summary>Conversion parallelism; must be ≥ 1.</summary>
     public int Jobs { get; init; } = Environment.ProcessorCount;
@@ -147,7 +155,8 @@ public static class BatchRunner
             CatalogEntry entry;
             try
             {
-                var result = ModelConverter.Convert(root, source, outLib, clips: clips);
+                var result = ModelConverter.Convert(root, source, outLib, clips: clips,
+                    objAnimMapDirectory: options.ObjAnimMapDirectory);
                 entry = CatalogEntry.Ok(RelativeTo(outLib, result.GlbPath),
                     result.PngPaths.Select(png => RelativeTo(outLib, png)).ToList(),
                     result.MeshCount, result.TotalVertices);

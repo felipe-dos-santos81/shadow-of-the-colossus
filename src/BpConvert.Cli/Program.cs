@@ -32,12 +32,15 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage:");
     Console.Error.WriteLine("  bp-convert inspect <file>    print size, first 32 header bytes and a library parse summary");
-    Console.Error.WriteLine("  bp-convert convert --root <game> --out <lib> [--under <dir|file>]... [--ext cmsh] [--clips <name,...>] [--jobs N] [--force]");
+    Console.Error.WriteLine("  bp-convert convert --root <game> --out <lib> [--under <dir|file>]... [--ext cmsh] [--clips <name,...>] [--objanim-maps <dir>] [--jobs N] [--force]");
     Console.Error.WriteLine("                               convert every matching source; outcomes recorded in <lib>/catalog.json");
     Console.Error.WriteLine("                               --clips bakes <game>/cp3shadow/anim/<name>.anb into each glb;");
     Console.Error.WriteLine("                               scope it to one model with --under <file>: every baked track must");
     Console.Error.WriteLine("                               map into that model's skeleton, so a directory-scope run fails on");
     Console.Error.WriteLine("                               non-matching sources. Recorded-ok sources need --force to rebake.");
+    Console.Error.WriteLine("                               a clip with an objanim_<clip>.anb also gets <glb stem>.events.json;");
+    Console.Error.WriteLine("                               --objanim-maps <dir> (default tools/re/objanim when present) supplies the");
+    Console.Error.WriteLine("                               curated <colossus>_map.json (spawns, damage defs).");
     Console.Error.WriteLine("  bp-convert texture --in <texture> --out <png>");
     Console.Error.WriteLine("                               decode one .ctxr/.cptx container to an RGBA8 PNG (parent directories");
     Console.Error.WriteLine("                               are created); prints <width>x<height> and the container variant");
@@ -88,7 +91,7 @@ static int InspectCommand(string[] args)
 /// </summary>
 static int ConvertCommand(string[] args)
 {
-    string? root = null, outLib = null, ext = null, jobsText = null, clipsText = null;
+    string? root = null, outLib = null, ext = null, jobsText = null, clipsText = null, objAnimMaps = null;
     var under = new List<string>();
     var force = false;
 
@@ -111,6 +114,9 @@ static int ConvertCommand(string[] args)
                 break;
             case "--clips":
                 if (!TryValue(args, ref i, out clipsText)) return MissingValue("--clips");
+                break;
+            case "--objanim-maps":
+                if (!TryValue(args, ref i, out objAnimMaps)) return MissingValue("--objanim-maps");
                 break;
             case "--jobs":
                 if (!TryValue(args, ref i, out jobsText)) return MissingValue("--jobs");
@@ -152,6 +158,7 @@ static int ConvertCommand(string[] args)
         Under = under,
         Jobs = jobs,
         Force = force,
+        ObjAnimMapDirectory = objAnimMaps ?? (Directory.Exists("tools/re/objanim") ? "tools/re/objanim" : null),
     };
     if (ext is not null)
     {

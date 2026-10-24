@@ -802,3 +802,39 @@ only when both cover every vertex; otherwise the model is left unskinned with a 
   are not converted. Worth a look if the bounding volumes are ever needed.
 * Unsupported CSKL versions (neither `0x9` nor a complete `0x19`) leave the model unskinned with a
   note rather than guessing identity bind matrices.
+
+## 12. Objanim event tracks and the `<glb stem>.events.json` sidecar (S12 Task 3)
+
+Not an `AquaModelLibrary` surface: `objanim_*.anb` are the flag-set `.anb` variant (version-word bit 16
+set, a 12-byte `{type, name, blob}` record array), which `AnbReader` still refuses. They carry the
+per-clip volumes and events the fights run on. Decoders: `src/BpConvert.Core/Anim/ObjAnimReader.cs`
+(`ObjAnimReader.Read(ReadOnlySpan<byte>)`, a port of the recon's `objanim/py/objanim.py` over
+`tools/re/anb/records.py`), sidecar writer `EventsSidecar.cs`, curated link `tools/re/objanim/<colossus>_map.json`.
+
+* **Tracks kept:** 3 (sphere), 10 (cylinder), 13 (box) damage; 29 effect triggers (event windows
+  `[start, start + len]`, the engine's start-crossing); 44 (cylinder/ellipsoid sector, kind `w0 >> 20`)
+  and 46 (box) AI judge volumes. Type 11 (armour-debris emitters, 612 in Gaius's clips) and every other
+  type are skipped. `ObjAnimReader` returns the game frame; `Parent` is the raw aux word (≥ 0 skb record,
+  `0x10000|k` OptBone k, −1 entity, −2 entity root, −3 skelton).
+* **Refusals:** a non-xff input (e.g. `objanim_minotaur_a_death_front.anb`, a JSON text file) and the
+  flag-clear variant throw `InvalidDataException` (`ObjAnimReader.IsRefusal`); the sidecar writer skips
+  those with a note. Malformed flag-set input throws the same type without the refusal flag.
+* **Shared decode:** the packed quaternion math (types/formats 3–6, 0xC, 0xD, 0xE) lives in
+  `AnbKeyMath` (internal) and is used by both readers; `AnbReader`'s public contract is unchanged.
+* **Sidecar:** `{"format": "sotc-objanim-events/1", "skeleton", "frame": "glb", "judgeDefaults": [...],
+  "clips": {"<clip>": {"fps", "frames", "judge", "damage", "effects"}}, "spawned": {"<objanim>": {"frames",
+  "fps", "damage"}}}`, row shapes as the recon `objanim/schema.json` `$defs` (the schema's top-level
+  array/`version` form became this keyed form). Glb frame: positions x → −x, quaternions
+  `(−x, y, z, w)`; sizes untouched; times are the objanim's own frames at its own fps. Static rows
+  collapse to `static`; damage rows keep keys only inside their windows; effects keep one key per window
+  start. Each row keeps its parent kind and joint name (R4: bone = glb joint of that name, offset (−x, y, z);
+  entity (−x, y, z); skelton (x, hipY + y, −z)); posing is the app's.
+* **Written:** by `convert --clips` beside the glb, only when a baked clip has an `objanim_<clip>.anb`
+  (or the bank has `objanim_<bank>_skelton.anb`, the default judge volumes); a conversion that bakes
+  nothing removes a stale one. `--objanim-maps <dir>` (default `tools/re/objanim` when present) picks the
+  map whose `skeleton` matches. Measured: knight_a, 26 clips + 15 default judge volumes + 2 spawned
+  objanims, 41.8 KB compact. Derived game data: never committed.
+* **The map** (`knight_map.json`): `spawns` (effect name → spawned objanim stems; the spawned files are
+  not `knight_a_*` clips, so the writer reads them by name) and `damage` (volume name → `amount`
+  = `damage_def+0x1c`, `reaction` = `+0x18`; raw, meanings a guess). The link is in the eboot's effect
+  tables, which the reader cannot see.
