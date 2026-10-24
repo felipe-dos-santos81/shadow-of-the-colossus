@@ -25,17 +25,24 @@ outputs are unchanged on the new library code; and a per-boss coverage report sa
 - **G1 · The exporter, for all 16.** `tools/re/scr/graph_export.py` gains the recon's two fixes (motion-orient tables
   by the boss's motion-def object; typed raw argument keys), exports every boss, and adds the attackdata rows, the
   slowstatus fields it drops today (`+04/+08` route reference/tracking, `+78` judge, `+60…+74`, `+98`, `+9c`, root
-  `+00`), and per motion-graph edge the additive reference clip (motion-def `+0x98`), the speed flag (`+0x60` bit 1)
+  `+00`), the **control-def records** of every control-def a control-assign row names (today S12 hand-built a
+  32-key table in the app; R2's 0x68-byte records: opcode, min/max, handle, mask, value, expect), the `scr_dprelate` tables
+  (terrain mask/value, object, condition → route id) that `route_by_dprelate` reads, and per
+  motion-graph edge the additive reference clip (motion-def `+0x98`), the speed flag (`+0x60` bit 1)
   and the blend-out (`+0x218`). KNIGHT's export stays byte-identical except for the added keys (a golden pins it).
 - **G2 · The control-def evaluator.** A general evaluator of all 37 control-def opcodes (`FUN_0062bfd0`, decoded in
-  R2 + the census) replaces S12's 32-key control-def table. Pad opcodes are false in play.
+  R2 + the census) over the exported records replaces S12's 32-key control-def table. Pad opcodes are false in play;
+  its inputs are the requested control bits, mortality (HP ≤ 0), his ground contact, the failure bit, his
+  control-mode, this frame's hit (flag, kind, region), the rider's region, his own ground attribute and which clips
+  his layers play; the AI's stick X is 0 (S12's reading: the Turn rows fire on their bits).
 - **G3 · The shared library.** The interpreter's predicates and actions split into a **shared library** (`0x82…/0x83…`
   functions, any boss) and **per-boss locals** (`0x6c…–0x79…`). S13 implements Phaedra's 29 items and the census's
   cheap shared batch (§7 D5), each unit-tested from exported data rows. Gaius moves onto the shared library and his
   attackdata comes from the export (`kAttack` is deleted).
 - **G4 · The additive layer.** The game's layer pool (`FUN_00639520`, compose `FUN_00622470`): requests from the add
   control-assign rows, Continue/Shift/Always/Always-Cancel, the p30/p34 gates, blend-in ramps, cut on stop, the
-  reference pose, `boss_motion_in_layers`. Opt-in per encounter; Phaedra uses it.
+  reference pose, `boss_motion_in_layers` (the base motion or any layer; with no layers, the base only — Gaius
+  unchanged). Opt-in per encounter; Phaedra uses it.
 - **G5 · Routes.** `.path` (`qath`) export to `sotc-route/0` and an app follower: the route tree (routes → GPs → AP/PP
   points), kinds 2/5/6/8/9 (and 3/4/7, cheap twins), the nav graph walk over open links, link flags, and the route
   predicates and actions (`route_by_dprelate`, `move_done`, `move_done_ap`, `player_gp_changed`, link set/clear).
@@ -74,7 +81,8 @@ As S12 (§5 there): C++20/SDL3/SDL_GPU Metal, windowed, cursor free; bash 3.2; s
 GPU runs serial; frozen `scripts/s3…s12-acceptance.sh` never modified; a branch bakes into a library view, promoted at
 merge (A16); personal use (Oodle, ImageSharp); the converter's parsing stays behind its adapter. **Parallel lanes**:
 each lane works in its own git worktree with its own `app/build` and its own `out/verify/<worktree>/`; only one lane
-runs the GPU at a time.
+runs the GPU at a time (the controller hands out the GPU; a lane waits for it before any viewer run or `make verify`
+that runs GPU steps). All lanes export and bake into the one view `out/libviews/s13`, each into its own files.
 
 ## 6 · What the recon found (`.superpowers/sdd/2026-10-23-s13-recon/`)
 
@@ -114,7 +122,8 @@ runs the GPU at a time.
 - **D2 · Schema.** The graph file keeps its `sotc-scr-graph/0` label and gains **additive** keys: `attackdata`, the
   slowstatus fields, edge `ref`/`speed`/`blendOut`, and root `kind` (ruling 1, §13). `make behaviour` exports all 16
   (the app loads the two it runs). Routes: `<SOTC_LIB>/behaviour/<stem>.route.json`; terrain:
-  `<SOTC_LIB>/stage/<arena>.terrain.json` (stage-wide classes/owners + the boss ground layer as its own list). All
+  `<SOTC_LIB>/stage/<arena>.terrain.json` (stage-wide classes/owners + the boss ground layer as its own list, with
+  heights — §13.2). All
   derived, never committed; exporters are stdlib under `tools/re/{scr,path,clb}/` with tests and `make` targets
   (`behaviour`, `routes`, `terrain`; all in `make bake`).
 - **D3 · Gaius is the regression.** The generic evaluator, the shared library and the exported attackdata must leave
@@ -135,17 +144,23 @@ runs the GPU at a time.
 - **D7 · Routes.** Positions are exported in the glb frame (cell formula; per-stage residual recorded). The follower is
   the decoded kinds over the route tree; goals are reached by a nav-graph walk: Dijkstra over open, class-allowed links
   (walker class 0, guess) from the nearest node with a clear ray to the boss, then straight to the goal; segments are
-  walked by S12's slowleg; node heights are snapped to the ground. Kind 8's AP→GP collision sweep runs against the
+  walked by S12's slowleg; node heights are snapped to the ground. The library's locomotion step handles kinds −1/0/1/10
+  and hands kinds 2–9 to a registry hook the route module installs (an unhandled kind is a load error). Kind 8's AP→GP collision sweep runs against the
   layered heightmap's walls (fallback: stop at the GP, labelled). Link tags toggle bit 0x4 as decoded.
 - **D8 · Terrain.** Exported triangles in the glb frame; the app answers "class and owner under point p" by a
-  2D-bucketed point-in-triangle test picking the highest triangle at or below p + 0.5 m. `player_surface` reads the
+  2D-bucketed point-in-triangle test picking the highest classified triangle whose surface lies within [p.y − 1.0, p.y + 0.5] m, else class 0 (unclassified ground is not exported, so the corridor under the ruin roof must not answer for a player on the roof). `player_surface` reads the
   player's class/owner; the boss's owner comes from the boss ground layer under his root (ruins → 0x400000 → mode 12).
-  The one-bit rule is encoded in the exporter with the recon's evidence cited; the app sees game-mask values.
+  The one-bit rule is encoded in the exporter with the recon's evidence cited; the app sees game-mask values: the
+  player's and the boss's ground attribute are each one 64-bit word `class << 48 | owner` in the `ScrWorld`, which
+  `player_surface` (when not attached), `boss_attr_bits` and op 0x04 mask as the game does. Gaius's glue keeps his
+  S12 stand-in (owner 0x800000 on the arena ground) through the same word.
 - **D9 · The arena.** `STAGES["arena_04"]` in `probe.py` (`make arena04-manifest`): the four ground glbs; the ruins
   glbs (`ruins_entrance`, `ruins_skirts`, `ruins_corridors`) fed **floors-only** through a new per-line flag (opt-in, so
   frozen heightmaps cannot move), which makes the stair tunnels and ring corridor walkable and removes the dirt-prim
   phantom floor; the north-road guard; the other kept glbs and water as `backdrop`; the 7 occluder/shadow meshes
-  excluded. Phaedra spawns at (1122, 147) on the platform (`kirin_standby_col`, data-supported) facing the ruins; the
+  excluded. **The north road stays** (it is terrain class 5, the graph's "tracking abandoned" ground: standing there
+  makes her give up); the arena04 recon's `floor y ≤ 56.5` guard is not used. If the layered map's north edge does not
+  hold the player at the road's end, an authored backstop box there (as S12's y 34) returns them to the start. Phaedra spawns at (1122, 147) on the platform (`kirin_standby_col`, data-supported) facing the ruins; the
   player at the arena start. No authored root clamp: her walks are the nav graph's.
 - **D10 · The climb.** Data: grip regions from `kirin_a_coli.clb` (legs carry none). Bands (measured in the kirin recon
   §3, regions from the coli): tail (hang, 0x1e0) → hips/back (walk, 0x1a0–0x1d0) → withers (walk, shoulders 0x60/0x80)
@@ -153,7 +168,10 @@ runs the GPU at a time.
   tail band, which is in reach only while she crouches to peep (`watch_*`: tail tip ≈ 1.7 m above ground; an S12-style
   band enable window on her playing clip). The game's own entry is not decoded; the selftest records which is used.
   Striking the neck (region 0x20) feeds the graph's neck-down chain (stage 1 raises the head, stage 2 lowers it: head
-  sigil at 9.05 m facing forward), which is how the head is reached; the head sigil (0x10, 160) ends the fight.
+  sigil at 9.05 m facing forward), which is how the head is reached; the head sigil (0x10, 160) ends the fight. The
+  neck **trigger** is a strike target on the `trigger_01` mesh (the nape, KUBI/KUBI_B, data `+14` = 10): a strike there
+  is a hit of region 0x20, kind 0 (sword) fed to the graph, with no HP damage. Bands are posed from her final pose,
+  the additive layers included, so the neck band moves with the neck-down.
 - **D11 · Hazards and shake-offs from data.** Footstep and stomp damage from the sidecar plus a curated
   `tools/re/objanim/kirin_map.json` for the spawned `kirin_walk_dmg`/`kirin_atk_dmg` (the `_wait` re-fires deduped,
   one hit per stomp chain); the rear-kick boxes; the threat cylinder; S12's "never hit a rider" filter. Shake-offs are
@@ -168,7 +186,8 @@ runs the GPU at a time.
 ## 8 · The design (sketch; the plan carries the tasks)
 
 1. **Contracts** (one task, serial): schemas (the `/0` additions, `sotc-route/0`, `sotc-terrain/0`), headers with stubs that compile, the registry split, `ScrWorld` fields
-   (terrain class/owner of player and boss, route state, anger, max HP, additive-playing query), unit-test fixtures
+   (the player's and the boss's ground attribute words, the route graph, anger, max HP, the layer-playing query), the
+   exported control-def records and attackdata parsed by the loader, unit-test fixtures
    generated from the library at test time.
 2. **Lanes** (parallel worktrees): L1 exporter (fixes, the `/0` additions, all 16, KNIGHT/KIRIN goldens, `coverage.py`); L2
    evaluator + shared library + Gaius on it (s12 goldens identical); L3 additive (pure + tests: a flinch returns to base
@@ -195,12 +214,16 @@ selftest or only reachable in play (it must at least run in a unit test from dat
 
 - **The tail entry** is authored; if the tail band cannot be reached in the `watch_*` window, fall back to a grab of the
   neck band from the ruin roof at the tunnel mouth (≈ 54.4 m roof vs her lowered neck), labelled; the selftest records it.
-- **The cell-formula frame** is fitted on 3 stages; the exporter checks the residual against the arena glbs and fails
-  above 3 m.
+- **The cell-formula frame** is fitted on 3 stages; one shared function serves the route and terrain exporters, and the
+  terrain test fails when the median distance from arena_04's stage-collision vertices to its ground glb vertices
+  exceeds 0.5 m (measured 0.149 m) — the routes' frame check too.
 - **Gaius on new code** (D3) is the largest regression risk; L2 runs `make verify --only s12` before merging.
 - **Floors-only ruins** may open other holes; the layered checks (out-of-bounds edges, drops) are re-run and recorded.
 - **Lane merges**: conflicts concentrate in `scr_predicates.*`, `Makefile`, `app/CMakeLists.txt`; the contracts step
   creates every new file and target up front so lanes mostly edit their own files.
+- **The generic evaluator vs S12's table**: S12's table carries readings (stick X false, pad false, the failure bit);
+  L2 first proves the evaluator equals the table on KNIGHT's base control-defs over a grid of world states, then
+  deletes the table.
 - **Additive fidelity**: the reference frame and the weighted compose are partly guesses; a still mid-neck-down is the
   visual check.
 
