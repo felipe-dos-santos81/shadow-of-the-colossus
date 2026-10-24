@@ -4,7 +4,32 @@ Personal-use, offline-first native rebuild of *Shadow of the Colossus* for Apple
 C++20 + SDL3 + SDL_GPU/Metal for the viewer, a .NET 10 converter for the game's assets.
 This file is workspace guidance and is tracked with the project.
 
-## Status (2026-10-23)
+## Status (2026-10-24)
+
+**Milestone S12 "Gaius" — implemented; scripted acceptance green, user walk PENDING.**
+The third colossus fights on his lake arena from **his own exported tables**: `out/re/stage/arena_03.manifest`
+(`probe.py compose --stage arena_03`, `make arena03-manifest`; the `encounter knight` directive selects him;
+`make gaius` plays it). His behaviour is his mode graph, exported from `eboot.elf` by
+`tools/re/scr/graph_export.py` into `<SOTC_LIB>/behaviour/KNIGHT.graph.json` (`make behaviour`; 13 modes,
+53 conditions, 40 transitions, 171 motion edges) and run by a generic, strict interpreter
+(`app/src/scr_graph.*`, `scr_predicates.*`: his 24 predicates; it refuses a graph using one it does not know);
+his damage, footstep stomps and judge volumes are the converter's objanim sidecar
+(`colossus_03_knight.events.json`, `sotc-objanim-events/1`; `app/src/objanim_events.*`). The glue is
+`app/src/knight_fight.*`; his values are `app/src/encounters/knight.h`. Dodge his slam (6–7 m off his line);
+grab the stuck blade at its low end (`E`, `atk1_3` f9–75); be on its upper half (bandT ≥ 0.5, ruling R-M)
+when he pulls it and you ride it up onto the forearm (R-J); climb arm → shoulder → neck → head, strike the
+head sigil, hold through the shake-off, take the shoulder's branch (`W`+`D`) down the belly band, strike the
+belly sigil; `knight_death` holds its last frame, no return to the shrine; `R` resets. The provenance table
+(graph / sidecar / R-decode / authored) is `docs/notes/s12-results.md` §7; the R1–R5 gates are
+`docs/notes/s12-recon.md`. The proof is `--s12-selftest --s12-stills out/s12/stills` and `--s12-e2e`
+(manifest arena_03); the acceptance script is `scripts/s12-acceptance.sh` (the frozen S11 chain first);
+`tools/verify/s12.sh` has blessed goldens. **His bake (62 `knight_a_*` clips + the sidecar) and the graph live
+in the view `out/libviews/s12-gaius` until the merge promotes them** (R-K; `make bake` now includes
+`bake-knight` and `behaviour`, R-C) — until then `test_knight` fails against the base library.
+Known gaps: no additive layer (no flinch, §13.7), no armour break, opaque water, silent (D10), the blade
+grab instead of a walk-on, a 0.05 ride margin, `KNIGHT_PLAYER_OUT` never fires, the y-34 backstop unproven,
+the belly route and the else-edge reading authored. **Audio needs a desktop (Aqua) session**: from a
+background `tmux` the e2e goldens gain an `audio: no output device` line and verify fails.
 
 **Milestone S11 "Quadratus" — implemented; scripted acceptance green, user walk PENDING.**
 The second colossus fights in his own arena: `out/re/stage/arena_02.manifest` (`probe.py compose --stage
@@ -142,10 +167,11 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 |---|---|
 | `app/` | the native viewer (`app/src/`: `app.cpp` is the shell, then `stage_ctx`/`stage_setup`, one `selftest_sN.cpp` per milestone, `interactive`, `encounter_rt`, `capture`, `audio_seam`, `gamepad_input`, `run_flags`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`, `s11`); `s3`…`s9` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
-| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`, `s11`), `libview.sh`, `golden/` (90 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`, `s11`, `s12`); `s3`…`s11` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
+| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`, `s11`, `s12`), `libview.sh`, `golden/` (97 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
+| `tools/re/scr/` | `graph_export.py` (a colossus's mode graph from `eboot.elf` → `sotc-scr-graph/0`) and its tests |
 | `tools/re/census/` | `census.py` and `census.json`: the 16 colossi (`make census`) |
-| `docs/notes/` | RE records and per-milestone results notes (`s11-results.md` is this milestone's, `s10-results.md` S10's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
+| `docs/notes/` | RE records and per-milestone results notes (`s12-results.md` is this milestone's, `s12-recon.md` its R1–R5 gates; `s11-results.md` S11's, `s10-results.md` S10's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
 | `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
@@ -180,7 +206,7 @@ runs sharing an `out/` directory; the runner parallelises within its own `out/ve
 change and before reporting it done. It runs only the steps whose inputs changed (`make verify
 ARGS="--quick"` skips the e2e runs for the inner loop, `ARGS="--only s7"` one milestone, `ARGS=--dry-run`
 lists the decisions). `make verify-long` (`scripts/verify --long`, the highest frozen
-`scripts/sN-acceptance.sh` — `s11`, ~15 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
+`scripts/sN-acceptance.sh` — `s12`, ~16 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
 (`ARGS=--bless`, clean tree, nothing else running) only for a deliberate output change; a new milestone
 adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git worktree needs
 `git submodule update --init --recursive` before dotnet or verify works in it.
@@ -188,9 +214,10 @@ adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git wor
 `make help` lists the shortcuts (`make app-test`, `make run`, `make shrine`, `make plain`, `make
 accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 49 clips (the 15 S2–S6 clips,
 the two S7 wake cuts, the 26 S8 ride clips, then the six S9 raise clips at 43…48), Agro's 20 (the S4.2
-kick at index 0, then the 19 riding clips), the sword's light atlases and Quadratus's 58 `boss_a_*` clips
-(byte-sorted; S11, `make bake-quadratus`) into `$SOTC_LIB` (the view, when
-exported) with `--force`; `make audio` decodes the S9 map (36 entries); `make run`/`make accept` compose
+kick at index 0, then the 19 riding clips), the sword's light atlases, Quadratus's 58 `boss_a_*` clips
+(byte-sorted; S11, `make bake-quadratus`), Gaius's 62 `knight_a_*` clips with his events sidecar (byte-sorted;
+S12, `make bake-knight`) and his exported graph (`make behaviour`, from `out/re/eboot.elf`) into `$SOTC_LIB`
+(the view, when exported) with `--force`; `make audio` decodes the S9 map (36 entries); `make run`/`make accept` compose
 the shrine, plain and road manifests first. The underlying commands:
 
 ```bash
@@ -306,14 +333,28 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --s11-e2e                                   # the same fight through the interactive loop
 ```
 
+Gaius fights on arena_03 (`make gaius`; the controls are the arena's; `E` at the stuck blade's low end grabs
+it; `W`+`D` at the shoulder's top takes the belly route; `R` resets; no return to the shrine). The S12 proof:
+
+```bash
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/arena_03.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s12-selftest --s12-stills out/s12/stills  # slam -> dodge -> blade -> ride -> head sigil -> shake -> belly sigil -> death -> R -> hit
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/arena_03.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s12-e2e                                   # the same fight through the interactive loop
+```
+
 ## Acceptance
 
 ```bash
 export SOTC_LIB=<repo>/out/library
-caffeinate -dimsu ./scripts/s11-acceptance.sh  # S11 + S9 (which runs S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
+caffeinate -dimsu ./scripts/s12-acceptance.sh  # S12 + S11 (which runs S9 → S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s3-acceptance.sh` … `scripts/s9-acceptance.sh` (s3, s4, s41, s42, s5, s6, s7, s8,
-s9) for an S11 change: they are S11's regression (s9 runs the other eight inside it).
+Never modify `scripts/s3-acceptance.sh` … `scripts/s11-acceptance.sh` (s3, s4, s41, s42, s5, s6, s7, s8,
+s9, s11) for an S12 change: they are S12's regression (s11 runs s9, which runs the other eight).
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
 measured values, not adjectives.

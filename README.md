@@ -1,4 +1,4 @@
-# Shadow of the Colossus (PS4, 2018) — Native Rebuild ~16%
+# Shadow of the Colossus (PS4, 2018) — Native Rebuild ~18%
 
 Native Apple-Silicon rebuild of **Shadow of the Colossus** (Bluepoint Games /
 SIE Japan Studio, PS4, 2018) from the game's own extracted data: a **C++20 /
@@ -21,7 +21,7 @@ git-ignored `out/` tree.
 
 ## Status
 
-Two colossi are playable end to end:
+Three colossi are playable end to end:
 - **Valus:** walk his arena, climb him, strike his weak points, hear the game's
   own audio, watch his death and the black tendrils, then wake in the Shrine of
   Worship.
@@ -30,14 +30,20 @@ Two colossi are playable end to end:
   sword's light pointing the way.
 - **Quadratus:** in his own arena, stab a lifted hoof to make him kneel, climb
   his fur, walk his back, and strike the back and head sigils.
+- **Gaius:** on his lake arena, dodge his sword slam, grab the stuck blade and
+  ride it up as he pulls it, climb his arm to the head sigil, then the belly
+  sigil. His behaviour runs from his own mode graph, exported from `eboot.elf`,
+  and his attacks from the game's per-clip event tracks.
 
-Milestones S1–S11 are implemented, each with its measured results in
+Milestones S1–S12 are implemented, each with its measured results in
 `docs/notes/s*-results.md`. Only S8 has been played and signed off by hand; the
 other play-throughs are pending. Two claims back the number:
 
-- **Rebuild — ~16% (estimate).** By content:
-  - colossi: 2 of 16 fightable, Valus and Quadratus, with 14 still to do;
-  - world: the shrine, the plain around it, the road to Valus and two arenas,
+- **Rebuild — ~18% (estimate).** Method: a hand-weighed share of the game's
+  content across the four areas below; S12 moved colossi from 2 to 3 of 16 and
+  arenas from two to three (~16% → ~18%). By content:
+  - colossi: 3 of 16 fightable, Valus, Quadratus and Gaius, with 13 still to do;
+  - world: the shrine, the plain around it, the road to Valus and three arenas,
     out of the 71 areas the world is built from;
   - Wander: walk, run, climb, strike, the sword's light and riding Agro; swimming,
     jumping, the bow and the moving mount are not done;
@@ -47,20 +53,23 @@ other play-throughs are pending. Two claims back the number:
   converts, with its known failure classes listed in `docs/notes/m0-results.md`,
   along with clips, audio and stage composition. The S10 census
   records all 16 colossi, and the S11 behaviour RE found each colossus's state
-  machine stored as **data tables inside `eboot.elf`**: 21 modes each, with
-  timers, angles, health and anger. Later colossi can read those tables instead
-  of having values authored by hand.
+  machine stored as **data tables inside `eboot.elf`** (21 modes for Valus and
+  Quadratus, 13 for Gaius), with
+  timers, angles, health and anger. S12 reads them: a graph exporter and a
+  generic interpreter run Gaius from his tables, and the converter exports each
+  clip's damage and event tracks, leaving a short labelled list of authored
+  values (`docs/notes/s12-results.md` §7).
 - **Verification — goldens plus a frozen chain.** `scripts/verify` re-runs each
   milestone's scripted selftest and compares it with blessed goldens
   (`tools/verify/golden/`; timing fields masked). Content-hash stamps skip
   unchanged steps:
-  - cold: about 5 min;
-  - warm: 1.4 s;
+  - cold: about 6.5 min (387 s with S12);
+  - warm: about 2 s;
   - one milestone after an app change: about 95 s.
 
   The milestone gate is the frozen acceptance chain
-  `scripts/s11-acceptance.sh`, which runs S9 → S8 → … → S3 first and then
-  Quadratus; it passes in 892 s. Behind both sit 528 app unit cases and the
+  `scripts/s12-acceptance.sh`, which runs S11 (and S9 → S8 → … → S3 inside it)
+  first and then Gaius; it passes in 949 s. Behind both sit 583 app unit cases and the
   converter's xUnit suite.
 
 The detailed, continuously-updated status — every milestone, its rulings, its
@@ -76,7 +85,7 @@ authored-vs-data values and its known gaps — is in
 | `src/`, `tests/` | The `bp-convert` converter and its xUnit suite (`BpConvert.sln`) |
 | `tools/re/` | Reverse-engineering probes, stage composer (`stage/probe.py`), census, generated-table scripts (stdlib Python) |
 | `tools/verify/` | The regression runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone, `golden/`, `libview.sh` |
-| `scripts/` | Milestone acceptance scripts `s3`…`s11`; the older ones are frozen as later milestones' regressions; `verify` |
+| `scripts/` | Milestone acceptance scripts `s3`…`s12`; the older ones are frozen as later milestones' regressions; `verify` |
 | `docs/superpowers/` | Milestone designs (`specs/`) and plans (`plans/`) |
 | `docs/notes/` | RE records and per-milestone results notes |
 | `third_party/PSO2-Aqua-Library` | Pinned GPL-3.0 submodule, used parse-only behind the converter's adapter |
@@ -100,11 +109,13 @@ authored-vs-data values and its known gaps — is in
 export SOTC_GAME_ROOT=$PWD/../SOTC-extract/extracted/game
 make help                           # every target
 make convert                        # the asset library into out/library (resumable, ~33 min)
-make bake                           # the clips: Mono, Wander's 49, Agro's 20, the sword's light, Quadratus's 58
+make bake                           # the clips: Mono, Wander's 49, Agro's 20, the sword's light, Quadratus's 58, Gaius's 62 + his graph
 make audio                          # the curated audio slice (36 cues)
 make run                            # play the Valus encounter
 make shrine                         # start in the Shrine of Worship
 make road                           # start on the plain: ride to Valus's arena, C raises the sword
+make quadratus                      # fight Quadratus in his arena
+make gaius                          # fight Gaius on his lake arena
 ```
 
 `make run`, `make shrine` and `make road` compose the stage manifests they
@@ -126,7 +137,7 @@ too; the full mapping is in [`app/README.md`](app/README.md).
 ```bash
 make verify                         # per-task gate: re-runs only what changed, against the goldens
 make verify-long                    # milestone gate: the frozen acceptance chain (~15 min)
-caffeinate -dimsu ./scripts/s11-acceptance.sh
+caffeinate -dimsu ./scripts/s12-acceptance.sh
 ```
 
 Every viewer and acceptance run is wrapped in `caffeinate -dimsu`, because
