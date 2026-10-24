@@ -1,0 +1,2 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/arena_03.manifest --model models/shadow/characters/wander/_cmn/wander.glb --stage shrine --s12-e2e
+sotc-viewer: --s12-e2e runs alone in the --manifest arena: no selftest, other e2e, capture, --entity-time or --stage

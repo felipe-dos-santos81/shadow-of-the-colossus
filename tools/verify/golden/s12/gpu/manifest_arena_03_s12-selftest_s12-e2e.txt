@@ -1,0 +1,2 @@
+# run: --library <LIB> --manifest <REPO>/out/re/stage/arena_03.manifest --model models/shadow/characters/wander/_cmn/wander.glb --s12-selftest --s12-e2e
+sotc-viewer: --s12-selftest cannot be combined with another selftest, e2e or capture
