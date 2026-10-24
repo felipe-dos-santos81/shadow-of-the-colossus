@@ -97,6 +97,11 @@ KnightThink knight_think(KnightCore& core, ScrWorld& world, float dt);
 // The clip's name, "" for -1.
 const char* knight_clip_name(const KnightCore& core, int clip);
 
+// Ruling R-N: the player's motion fields of the world. A whistle press this frame starts
+// kWhistleMotion (ALWAYS:C120, the finger whistle); a Dead player is in
+// kPlayerDeathControlMode (ALWAYS:C71). Otherwise no motion and no control-mode.
+void knight_world_player(ScrWorld& world, bool whistlePressed, bool dead);
+
 // --- The scene's side ---------------------------------------------------------
 
 struct KnightFight {
@@ -120,6 +125,7 @@ struct KnightFight {
     bool struck = false;
     int struckRegion = 0;
     bool throwOff = false;        // a throw-off row landed: the next frame's ShakeOff releases
+    bool whistleBefore = false;   // last frame's whistle key (R-N: a press is down now, up then)
     // The run's record (the selftest's lines).
     float maxBoundDistance = 0.0f;  // his root's farthest from the bound centre (s12-bound)
     float maxUnclampedDistance = 0.0f;  // ... before the clamp: where his travel would have taken him
@@ -146,12 +152,12 @@ bool knight_fight_load(KnightFight& fight, const Scene& scene, std::size_t entit
 void knight_fight_reset(KnightFight& fight, Encounter& encounter, Playback& entity);
 
 // One frame before the poses: the world (the player, the arena ground, last frame's
-// pose for the judge volumes, his ground), the think, his travel over the ground
-// clamped into the bound, the entity's clip and time. Defeated, the death sequence owns
+// pose for the judge volumes, his ground; `whistleHeld` the S8 whistle key, R-N), the
+// think, his travel over the ground clamped into the bound, the entity's clip and time. Defeated, the death sequence owns
 // the clip: the graph enters its death mode once and he travels the death clip's root.
 KnightThink knight_fight_step(KnightFight& fight, Encounter& encounter, Playback& entity,
                               const Heightmap& ground, const PlayerState& player,
-                              const PlayerCombat& combat, float dt);
+                              const PlayerCombat& combat, bool whistleHeld, float dt);
 
 // After update_all_poses: the entity's palette re-posed with the switch's blend (the
 // caller uploads it), and the joints' world matrices cached for the events and the

@@ -102,6 +102,12 @@ const char* knight_clip_name(const KnightCore& core, int clip) {
                : "";
 }
 
+void knight_world_player(ScrWorld& w, bool whistlePressed, bool dead) {
+    w.playerMotion = whistlePressed ? ka::kWhistleMotion : -1;
+    w.playerMotionStarted = whistlePressed;
+    w.playerControlMode = dead ? ka::kPlayerDeathControlMode : -1;
+}
+
 bool knight_core_load(KnightCore& core, const std::string& graphJson,
                       const std::vector<std::string>& clipNames, const std::vector<float>& seconds,
                       const std::vector<std::string>& judgeNames, const std::string& standClip,
@@ -425,7 +431,7 @@ void knight_fight_reset(KnightFight& f, Encounter& encounter, Playback& entity) 
 
 KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& entity,
                               const Heightmap& ground, const PlayerState& player,
-                              const PlayerCombat& combat, float dt) {
+                              const PlayerCombat& combat, bool whistleHeld, float dt) {
     KnightCore& c = f.core;
     KnightMotion& m = c.motion;
     if (!(dt >= 0.0f) || !std::isfinite(dt)) dt = 0.0f;
@@ -442,6 +448,9 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     // §13.3 stand-in (authored): the battle area is the arena's ground under a player on foot.
     w.playerOnArenaGround = !w.playerAttached && combat.mode != PlayerMode::Falling &&
                             heightmap_in_bounds(ground, player.position);
+    // R-N: the S8 whistle (a press, as ride_presses reads it) and the player's death.
+    knight_world_player(w, whistleHeld && !f.whistleBefore, combat.mode == PlayerMode::Dead);
+    f.whistleBefore = whistleHeld;
     w.hit = f.struck;
     w.hitRegion = f.struckRegion;
     f.struck = false;

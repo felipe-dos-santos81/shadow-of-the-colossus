@@ -246,7 +246,9 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
     ctx.knightHits.clear();
     ctx.knightBackstop = false;
     if (ctx.knight_wired) {
+        // R-N: the S8 whistle key (Q / gamepad north) feeds his graph's whistle rows.
         knight_fight_step(ctx.knight, encounter, playbacks[entityRig], heightmap, player, combat,
+                          rideKeys.whistle && !inputLocked,
                           std::clamp(dt, 0.0f, kMaxCombatStepSeconds));
         update_entity_transform(scene, encounter, entityRig);
     }

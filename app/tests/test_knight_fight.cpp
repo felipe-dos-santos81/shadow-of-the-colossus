@@ -124,3 +124,65 @@ TEST_CASE("a goal outside the 36 m bound is clamped") {
     CHECK(std::hypot(core.rt.goal.x - core.boundCentre.x, core.rt.goal.z - core.boundCentre.z) <=
           doctest::Approx(r));
 }
+
+TEST_CASE("R-N: the player's whistle from route_patrol requests the export's whistle transitions") {
+    // His real export: route_patrol's KNIGHT:C21 (whistle + sensed) -> lose_sight (4) and
+    // KNIGHT:C24 (whistle, not sensed) -> search (5); both read ALWAYS:C120 through
+    // knight_world_player's whistle press.
+    const auto run = [](float distance, int frames, bool onArena) {
+        KnightCore core = loaded_core();
+        knight_core_reset(core, 0.0f);
+        ScrWorld w;
+        w.bossPosition = core.boundCentre;
+        w.playerPosition = {core.boundCentre.x, 0.0f, core.boundCentre.z + distance};
+        w.playerGroundPosition = w.playerPosition;
+        w.playerOnArenaGround = onArena;
+        w.groundAt = [](float, float, float& h) {
+            h = 0.0f;
+            return true;
+        };
+        for (int i = 0; i < frames; ++i) {
+            knight_world_player(w, false, false);
+            knight_think(core, w, 1.0f / 60.0f);
+        }
+        REQUIRE(core.rt.current == 3);  // still Knight_route_patrol before the whistle
+        const bool sensed = core.rt.sensed;
+        knight_world_player(w, true, false);
+        CHECK(w.playerMotion == ka::kWhistleMotion);
+        CHECK(w.playerMotionStarted);
+        int mode = core.rt.current;
+        for (int i = 0; i < 3 && mode == 3; ++i) {  // the request, then the switch
+            knight_think(core, w, 1.0f / 60.0f);
+            knight_world_player(w, false, false);
+            mode = core.rt.pending >= 0 ? core.rt.pending : core.rt.current;
+        }
+        return std::pair<bool, int>{sensed, mode};
+    };
+    // Far behind his sight and beyond his near radius: never sensed -> C24 -> search.
+    const auto [farSensed, farMode] = run(-150.0f, 2, true);
+    CHECK_FALSE(farSensed);
+    CHECK(farMode == 5);
+    // 30 m ahead in his sight for 1 s (seen >= 0.5 s) but off the battle area (KNIGHT:C5
+    // false, so KNIGHT:C8/C11's attacks do not hold): sensed -> C21 -> lose_sight.
+    const auto [nearSensed, nearMode] = run(30.0f, 60, false);
+    CHECK(nearSensed);
+    CHECK(nearMode == 4);
+    // And without the whistle he stays on patrol.
+    KnightCore core = loaded_core();
+    knight_core_reset(core, 0.0f);
+    ScrWorld w;
+    w.bossPosition = core.boundCentre;
+    w.playerPosition = {core.boundCentre.x, 0.0f, core.boundCentre.z - 150.0f};
+    for (int i = 0; i < 10; ++i) knight_think(core, w, 1.0f / 60.0f);
+    CHECK(core.rt.current == 3);
+}
+
+TEST_CASE("R-N: a dead player is in the death control-mode (ALWAYS:C71)") {
+    ScrWorld w;
+    knight_world_player(w, false, true);
+    CHECK(w.playerControlMode == ka::kPlayerDeathControlMode);
+    CHECK(w.playerMotion == -1);
+    CHECK_FALSE(w.playerMotionStarted);
+    knight_world_player(w, false, false);
+    CHECK(w.playerControlMode == -1);
+}

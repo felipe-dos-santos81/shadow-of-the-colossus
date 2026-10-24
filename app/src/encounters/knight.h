@@ -207,6 +207,19 @@ inline constexpr const char* kHipJoint = "Bone_KOSI";
 // behaviour.md "blend 10"; the clips are 30 fps).
 inline constexpr float kBlendFps = 30.0f;
 
+// Ruling R-N: the player's predicates his graph reads (ScrWorld::playerMotion,
+// playerMotionStarted, playerControlMode).
+// - The whistle (D5): the S8 whistle press (`Q` / gamepad north) starts this
+//   PLAYER:ph_motion_def for one frame. authored (R-N): the first of ALWAYS:C120's
+//   twelve `player_motion_started` rows ("Resident;_player_blew_finger_whistle",
+//   ph_motion_def 604/606/608/611/613/614/619/620/605/612/615/616) — which of them is
+//   the on-foot finger whistle is not decoded; any one fires C120.
+// - Death: a Dead player is in this PLAYER_CONTROL_MODE (data: ALWAYS:C71
+//   "Resident;_player_death_control", its row PLAYER_CONTROL_MODE:control-mode[79];
+//   tools/re/scr/predsem.py 0x833500 "death 79").
+inline constexpr int kWhistleMotion = 604;
+inline constexpr int kPlayerDeathControlMode = 79;
+
 }  // namespace knight_detail
 
 inline constexpr EncounterDesc kKnight{
