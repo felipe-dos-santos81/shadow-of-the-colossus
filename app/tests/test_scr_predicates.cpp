@@ -29,6 +29,21 @@ namespace k = scr_knight;
 
 using namespace knight_fixture;
 
+// His sidecar from SOTC_LIB (the branch's view).
+const EventsFile& sidecar() {
+    static const EventsFile file = [] {
+        const char* lib = std::getenv("SOTC_LIB");
+        if (lib == nullptr || lib[0] == '\0') throw std::runtime_error("Set SOTC_LIB to the library view.");
+        EventsFile f;
+        std::string error;
+        const std::string path =
+            std::string(lib) + "/models/shadow/characters/colossus_03_knight/_cmn/colossus_03_knight.events.json";
+        if (!events_load(path, f, error)) throw std::runtime_error(error);
+        return f;
+    }();
+    return file;
+}
+
 struct Knight {
     ScrRegistry reg = scr_registry_knight();
     ScrGraph graph;
@@ -37,6 +52,7 @@ struct Knight {
         const bool ok = scr_graph_load(knight_json(), export_clips(knight_json()), reg, graph, error);
         INFO(error);
         REQUIRE(ok);
+        REQUIRE_MESSAGE(scr_attack_attain(graph, sidecar().judgeDefaults, error), error);  // as the glue does
     }
     int cond(const std::string& key) const {
         for (size_t i = 0; i < graph.conditions.size(); ++i) {
@@ -81,15 +97,8 @@ ScrWorld world_ahead(float ahead) {
 }
 
 std::vector<std::string> sidecar_judges() {
-    const char* lib = std::getenv("SOTC_LIB");
-    if (lib == nullptr || lib[0] == '\0') throw std::runtime_error("Set SOTC_LIB to the library view.");
-    EventsFile file;
-    std::string error;
-    const std::string path =
-        std::string(lib) + "/models/shadow/characters/colossus_03_knight/_cmn/colossus_03_knight.events.json";
-    if (!events_load(path, file, error)) throw std::runtime_error(error);
     std::vector<std::string> names;
-    for (const EventsVolume& v : file.judgeDefaults) names.push_back(v.name);
+    for (const EventsVolume& v : sidecar().judgeDefaults) names.push_back(v.name);
     return names;
 }
 
@@ -100,7 +109,8 @@ TEST_CASE("KNIGHT's graph loads with scr_registry_knight() and no unknown fn") {
     CHECK(kn.graph.modes.size() == 13);
     CHECK(kn.graph.conditions.size() == 53);
 
-    // Exactly his fns: the export's predicates minus `sub`, and his action kinds.
+    // Every fn he uses is registered: the export's predicates minus `sub`, and his action kinds
+    // (S13: the registry is the shared library plus his locals, so it carries more).
     std::set<uint32_t> preds, acts, regPreds, regActs;
     for (const ScrCondition& c : kn.graph.conditions) {
         for (const ScrClause& cl : c.clauses) {
@@ -113,9 +123,9 @@ TEST_CASE("KNIGHT's graph loads with scr_registry_knight() and no unknown fn") {
     for (const auto& [fn, f] : kn.reg.predicates) regPreds.insert(fn);
     for (const auto& [fn, f] : kn.reg.actions) regActs.insert(fn);
     CHECK(preds.size() == 23);
-    CHECK(regPreds == preds);
+    CHECK(std::includes(regPreds.begin(), regPreds.end(), preds.begin(), preds.end()));
     CHECK(acts.size() == 18);
-    CHECK(regActs == acts);
+    CHECK(std::includes(regActs.begin(), regActs.end(), acts.begin(), acts.end()));
     CHECK(kn.reg.predicates.count(kScrSubFn) == 0);
     CHECK(kn.reg.enterMode != nullptr);
 
@@ -211,9 +221,13 @@ TEST_CASE("every predicate, one row of KNIGHT's export, evaluated both ways") {
             CHECK(pred(c, ScrWorld{}, ScrRuntime{}) == (c.fn == 0x832600));
         }
     }
-    std::set<uint32_t> registered;
-    for (const auto& [fn, p] : kn.reg.predicates) registered.insert(fn);
-    CHECK(covered == registered);
+    std::set<uint32_t> used;  // every predicate his export uses (the library's others: test_scr_library)
+    for (const ScrCondition& cond : kn.graph.conditions) {
+        for (const ScrClause& cl : cond.clauses) {
+            if (cl.fn != kScrSubFn) used.insert(cl.fn);
+        }
+    }
+    CHECK(covered == used);
 
     // Without a player: sensed/dist_le/bearing false, not_sensed/dist_ge true (findings §2).
     ScrWorld none;
@@ -395,7 +409,7 @@ TEST_CASE("the slam/stab choice: all three rays clear -> slam control requested"
     CHECK(std::find(walled.modes.begin(), walled.modes.end(), 10) != walled.modes.end());
     CHECK(std::find(walled.modes.begin(), walled.modes.end(), 9) == walled.modes.end());
     CHECK(walled.attack == std::vector<int>{k::kCtrlStab});
-    CHECK(walled.rt.attackRow == 6);
+    CHECK(walled.rt.attackRow == 2);  // the stab: row 2 of mode 10's table [4] (S12's kAttack[6])
 }
 
 TEST_CASE("the attack runner: FIX first, then ATK, then the default row; the cooldown holds the issue") {
@@ -413,7 +427,7 @@ TEST_CASE("the attack runner: FIX first, then ATK, then the default row; the coo
     ScrCtx ctx{kn.graph, kn.reg, rt, w, sink};
     kn.reg.enterMode(9, ctx);
     rt.current = rt.pending = 9;
-    CHECK(rt.attackTable == 0);
+    CHECK(rt.attackTable == 9);  // armed by mode 9's slowstatus: KNIGHT_SWORD:scr_attackdata[0]
     CHECK(rt.locoKind == 10);
 
     // (a) the slam's FIX holds the player (row 2): its ATK holds too -> the slam.
