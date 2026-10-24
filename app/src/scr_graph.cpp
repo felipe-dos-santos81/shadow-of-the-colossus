@@ -161,6 +161,11 @@ struct Loader {
         if (v == nullptr) fail(where + ": missing \"" + key + "\"");
         return *v;
     }
+    // A key that must exist; nullptr when its value is null.
+    static const Json* present(const Json& obj, const char* key, const std::string& where) {
+        const Json& v = need(obj, key, where);
+        return v.kind == Json::Null ? nullptr : &v;
+    }
     static const Json* opt(const Json& obj, const char* key) {
         const Json* v = obj.kind == Json::Object ? obj.get(key) : nullptr;
         return v == nullptr || v->kind == Json::Null ? nullptr : v;
@@ -361,23 +366,22 @@ struct Loader {
                 l.perception = floats(opt(*loco, "perception"), where);
                 l.gaze = text(loco->get("gaze"));
             }
-            if (const Json* e = opt(m, "enter")) {
-                mode.enterActions = ref(e->get("actions"), actKeys, "action list", where + " enter");
-                mode.enterCtrl = ctrl(opt(*e, "ctrl"), where + " enter");
-                mode.enterWaitClip = clip_opt(opt(*e, "wait_motion"), where + " enter");
+            // Every block and slot key must be present (an explicit null is fine): a
+            // renamed key must not drop a control silently.
+            const Json& e = need(m, "enter", where);
+            mode.enterActions = ref(&need(e, "actions", where), actKeys, "action list", where + " enter");
+            mode.enterCtrl = ctrl(present(e, "ctrl", where), where + " enter");
+            mode.enterWaitClip = clip_opt(present(e, "wait_motion", where), where + " enter");
+            const Json& u = need(m, "update", where);
+            mode.updateActions = ref(&need(u, "actions", where), actKeys, "action list", where + " update");
+            mode.updateCtrl = ctrl(present(u, "ctrl", where), where + " update");
+            const Json& x = need(m, "exit", where);
+            mode.exitActions = ref(&need(x, "actions", where), actKeys, "action list", where + " exit");
+            if (const Json* c = present(x, "ctrl_or_demo", where)) {
+                if (c->kind == Json::String) mode.exitDemo = c->string;  // a scr_demo_def
+                else mode.exitCtrl = ctrl(c, where + " exit");
             }
-            if (const Json* u = opt(m, "update")) {
-                mode.updateActions = ref(u->get("actions"), actKeys, "action list", where + " update");
-                mode.updateCtrl = ctrl(opt(*u, "ctrl"), where + " update");
-            }
-            if (const Json* x = opt(m, "exit")) {
-                mode.exitActions = ref(x->get("actions"), actKeys, "action list", where + " exit");
-                if (const Json* c = opt(*x, "ctrl_or_demo")) {
-                    if (c->kind == Json::String) mode.exitDemo = c->string;  // a scr_demo_def
-                    else mode.exitCtrl = ctrl(c, where + " exit");
-                }
-                mode.exitWaitClip = clip_opt(opt(*x, "wait_motion"), where + " exit");
-            }
+            mode.exitWaitClip = clip_opt(present(x, "wait_motion", where), where + " exit");
             const Json& rows = need(m, "transitions", where);
             if (rows.kind != Json::Array) fail(where + ": transitions is not an array");
             for (const Json& r : rows.array) {
@@ -401,8 +405,8 @@ struct Loader {
         g.root.deathMode = mode_ref(opt(root, "death_mode"), "root death_mode");
         if (const Json* d = opt(root, "death_control_mode")) {
             // "KNIGHT:control-mode[10]" -> 10
-            const size_t open = d->string.rfind('[');
-            if (d->kind != Json::String || open == std::string::npos) {
+            const size_t open = d->kind == Json::String ? d->string.rfind('[') : std::string::npos;
+            if (open == std::string::npos) {
                 fail("root death_control_mode: expected \"T:control-mode[n]\"");
             }
             g.root.deathControlMode = std::atoi(d->string.c_str() + open + 1);
@@ -523,8 +527,8 @@ void scr_request(ScrStepOut& out, int bit) {
 }
 
 // FUN_0082c080 (§1). Steps 2-5 (perception, anger, locomotion, the move target, the
-// queued control) and 12 (the attack arm) belong to the boss's own code (Task 5),
-// which reads ScrStepOut::modeChanged for the new mode's slowstatus.
+// queued control) and 12 (the attack arm) belong to the boss's own code (Task 5); the
+// new mode's slowstatus goes through ScrRegistry::enterMode inside the switch.
 ScrStepOut scr_step(const ScrGraph& graph, const ScrRegistry& registry, ScrRuntime& rt, const ScrWorld& world,
                     float dt) {
     ScrStepOut out;
@@ -572,6 +576,9 @@ ScrStepOut scr_step(const ScrGraph& graph, const ScrRegistry& registry, ScrRunti
         if (!rt.exitDeferred) {
             const int next = rt.pending;
             const ScrMode& m = graph.modes[next];
+            // The new mode's slowstatus (w1.txt:347-383: locomotion kind, move params,
+            // relposparam, attack arm), after the exit actions and before the enter ones.
+            if (registry.enterMode != nullptr) registry.enterMode(next, ctx);
             scr_run(ctx, m.enterActions);
             if (m.enterCtrl >= 0) {
                 scr_request(out, m.enterCtrl);

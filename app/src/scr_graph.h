@@ -219,6 +219,10 @@ using ScrActionFn = void (*)(const ScrAction&, ScrCtx&);
 struct ScrRegistry {
     std::unordered_map<uint32_t, ScrPredicateFn> predicates;
     std::unordered_map<uint32_t, ScrActionFn> actions;
+    // Applies mode `mode`'s slowstatus at a switch (FUN_0082c080 after the exit
+    // actions, before the enter actions; never on a deferred switch). rt.current is
+    // still the old mode. Null: nothing to apply.
+    void (*enterMode)(int mode, ScrCtx& ctx) = nullptr;
 };
 
 // Parses `json` into `out`. Fails (false, `error` naming the culprit) on a wrong
@@ -242,6 +246,7 @@ void scr_run(ScrCtx& ctx, int actions);
 // Adds `bit` to the frame's requests (the actor+0xbd0 word); -1 is a no-op.
 void scr_request(ScrStepOut& out, int bit);
 
-// One frame of the walker (§1).
+// One frame of the walker (§1). `registry` must be the one the graph was loaded
+// with: the step looks every fn up unchecked (the load proved them present).
 ScrStepOut scr_step(const ScrGraph& graph, const ScrRegistry& registry, ScrRuntime& rt,
                     const ScrWorld& world, float dt);

@@ -417,3 +417,57 @@ TEST_CASE("the export's shape loads: hex fns, control_modes keyed by index, null
     CHECK(g.root.retryCtrl == 43);
     CHECK(g.modes[0].locomotion.perception.size() == 10);
 }
+
+namespace {
+
+std::vector<std::pair<int, int>> gEntered;  // (mode, rt.current) per enterMode call
+
+void enter_mode_hook(int mode, ScrCtx& ctx) {
+    gEntered.emplace_back(mode, ctx.runtime.current);
+    scr_request(ctx.out, 40);
+}
+
+}  // namespace
+
+TEST_CASE("the mode-entry hook runs after the exit actions, before the enter actions, never on a deferred switch") {
+    const std::string actions = R"({"T:F0": [{"act": "request", "fn": "0x900000", "args": {"h60": )" + ctrl(12) +
+                                R"(}}], "T:F1": [{"act": "request", "fn": "0x900000", "args": {"h60": )" + ctrl(15) +
+                                "}}]}";
+    const std::string exit = R"({"actions": "T:F1", "ctrl_or_demo": null, "wait_motion": )" + clip("knight_a_exit") +
+                             "}";
+    const std::string enter1 = R"({"actions": "T:F0", "ctrl": null, "wait_motion": null})";
+    Machine m(graph_json({mode(0, row(R"("T:C1")", 1), kNoEnter, kNoUpdate, exit), mode(1, "", enter1)}, kConditions,
+                         actions));
+    m.reg.enterMode = enter_mode_hook;
+    gEntered.clear();
+    m.world.bossMotion = kClipWait;
+    CHECK(m.step().controls == std::vector<int>{40});  // the start enters mode 0 through the hook too
+    REQUIRE(gEntered.size() == 1);
+    CHECK(gEntered[0] == std::pair{0, -1});
+
+    m.world.flags.set(1);
+    const ScrStepOut held = m.step();  // deferred: no hook
+    CHECK(m.rt.exitDeferred);
+    CHECK_FALSE(has(held, 40));
+    CHECK(gEntered.size() == 1);
+
+    m.world.bossMotion = kClipExit;
+    const ScrStepOut out = m.step();
+    CHECK(out.mode == 1);
+    CHECK(out.controls == std::vector<int>{15, 40, 12});  // exit actions, hook, enter actions
+    REQUIRE(gEntered.size() == 2);
+    CHECK(gEntered[1] == std::pair{1, 0});  // the old mode is still current
+}
+
+TEST_CASE("a mode block missing a key is a load error (an explicit null is fine)") {
+    const ScrRegistry reg = test_registry();
+    ScrGraph graph;
+    std::string error;
+    CHECK_FALSE(scr_graph_load(graph_json({mode(0, "", R"({"actions": null, "wait_motion": null})")}), kClips, reg,
+                               graph, error));
+    CHECK(error.find("\"ctrl\"") != std::string::npos);
+    error.clear();
+    const std::string noCtrl = R"({"actions": null, "wait_motion": null})";
+    CHECK_FALSE(scr_graph_load(graph_json({mode(0, "", kNoEnter, kNoUpdate, noCtrl)}), kClips, reg, graph, error));
+    CHECK(error.find("ctrl_or_demo") != std::string::npos);
+}
