@@ -229,8 +229,9 @@ struct StepEvents {
 // (`frame.entityClip`/`entityFrame`) is closed and enter a `grabEntryLowEnd`
 // band only at its low end; a chain hand-over stops at a closed band. When the
 // held band's window closes, the player at bandT >= 1 - carryFraction moves onto
-// `carryTo` at its nearest parameter; otherwise the grip breaks into Falling
-// with the catch window.
+// `carryTo` at its nearest parameter when that attach point is within
+// kCarryReachMeters of him; otherwise the grip breaks into Falling with the
+// catch window.
 //
 // Falling: integrates vertical velocity at 9.8 m/s² downward, keeps XZ, and
 // lands when `position.y` reaches the ground sample (the ground is only used

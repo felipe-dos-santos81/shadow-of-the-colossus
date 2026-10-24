@@ -338,18 +338,31 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             }
             // S12 (§13.4): the held band's window closed under the player. Its
             // upper `carryFraction` is carried onto `carryTo` at the nearest
-            // point ("he lifts you with the sword"); lower, the grip breaks.
+            // point ("he lifts you with the sword") when that point is within
+            // kCarryReachMeters (ruling R-I: never a snap); else the grip breaks.
             if (const ClimbBand& held = climb_band(frame.bands, combat.band);
                 !band_enabled(held, frame.entityClip, frame.entityFrame)) {
                 const ClimbBand& carry = climb_band(frame.bands, held.carryTo);
-                if (held.carryTo == ClimbBandId::None ||
-                    combat.bandT < 1.0f - held.carryFraction ||
-                    !band_enabled(carry, frame.entityClip, frame.entityFrame)) {
+                const float carryT = nearest_t(carry, frame.jointWorld, player.position, 0.5f);
+                Vec3 point{};
+                Vec3 normal{};
+                const auto within_reach = [&] {
+                    const Vec3 d{point.x - player.position.x, point.y - player.position.y,
+                                 point.z - player.position.z};
+                    return std::sqrt(vec3_dot(d, d)) <= kCarryReachMeters;
+                };
+                const bool carried =
+                    held.carryTo != ClimbBandId::None &&
+                    combat.bandT >= 1.0f - held.carryFraction &&
+                    band_enabled(carry, frame.entityClip, frame.entityFrame) &&
+                    climb_attach_point(carry, frame.jointWorld, carryT, 0.0f, player.position,
+                                       point, normal) &&
+                    within_reach();
+                if (!carried) {
                     detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
                     break;
                 }
-                select_band(combat, frame, held.carryTo,
-                            nearest_t(carry, frame.jointWorld, player.position, 0.5f));
+                select_band(combat, frame, held.carryTo, carryT);
             }
 
             if (strikePressed && (combat.mode == PlayerMode::Grabbing ||

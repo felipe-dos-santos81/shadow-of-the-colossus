@@ -70,8 +70,10 @@ struct ClimbBand {
     // S12 walk pace on a walked band (m/s; 0 = CombatTuning::surfaceWalkSpeed).
     float walkSpeed = 0.0f;
     // S12 disable hand-over (§13.4): when the window closes with the player at
-    // bandT >= 1 - carryFraction he is moved onto `carryTo` at its nearest
-    // point; lower (or with no carryTo) he falls.
+    // bandT >= 1 - carryFraction (bandT runs boneA -> boneB, so this is the
+    // boneB end) he is moved onto `carryTo` at its nearest point when that point
+    // is within grab.h's kCarryReachMeters; lower, out of reach, or with no
+    // carryTo he falls.
     float carryFraction = 0.0f;
     int carryTo = ClimbBandId::None;
     // S12 entry (D7): E grabs this band only within reach of its low end (the

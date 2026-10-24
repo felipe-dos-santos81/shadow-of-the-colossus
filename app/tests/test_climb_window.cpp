@@ -267,3 +267,29 @@ TEST_CASE("a horizontal band at 65 deg is hung, at 55 deg walked") {
         }
     }
 }
+
+TEST_CASE("disable at 70 % with the carry point beyond reach -> Falling, no band") {
+    // The forearm runs on from the hilt (the real rig: the fist at the hilt),
+    // so its nearest point to 70 % of the blade is ~3 m away: no snap, a fall.
+    Heightmap ground = flat_heightmap();
+    const Vec3 tip{0.0f, 2.0f, 0.0f};
+    const Vec3 hilt{0.0f, 2.0f, 10.0f};
+    const Vec3 elbow{0.0f, 2.4f, 16.0f};
+    PlayerState player{};
+    PlayerCombat combat{};
+    grab_blade(player, combat, blade_frame(ground, 20, tip, hilt, elbow));
+    combat.bandT = 0.7f;
+    PlayerInput input{};
+    input.grab = true;
+    player_step(player, combat, input, blade_frame(ground, 74, tip, hilt, elbow), CombatTuning{},
+                kStep);
+    REQUIRE(combat.band == 0);
+    const Vec3 before = player.position;
+
+    const StepEvents events = player_step(
+        player, combat, input, blade_frame(ground, 75, tip, hilt, elbow), CombatTuning{}, kStep);
+    CHECK(combat.mode == PlayerMode::Falling);
+    CHECK(combat.band == ClimbBandId::None);
+    CHECK(events.gripBroke);
+    CHECK(distance(player.position, before) < 0.5f);  // no snap either way
+}

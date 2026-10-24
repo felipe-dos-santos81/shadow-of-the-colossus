@@ -127,11 +127,18 @@ bool band_enabled(const ClimbBand& band, std::string_view playingClip, int frame
 // like any other band.
 inline constexpr float kWalkableBandMaxSlopeDeg = 60.0f;
 
+// The disable hand-over's reach (authored: Plan Review Focus 2's continuity
+// bound): the player is carried onto `carryTo` only when its attach point lies
+// within this of him; farther, he falls rather than snap.
+inline constexpr float kCarryReachMeters = 0.5f;
+
 // `horizontal` and its top (the up hint +Y made perpendicular to the posed
 // segment) passes the slope gate. False for a band whose segment cannot be
 // formed.
 bool band_walkable(const ClimbBand& band, const JointLookup& lookup);
 
-// The parameter of the band's low end: 1 when boneB sits lower than boneA, else
-// 0 (also for a band that cannot be resolved).
+// The parameter of the band's low end: 1 when boneB sits strictly lower than
+// boneA, else 0 — a tie, or a band that cannot be resolved, is boneA. A table
+// lists a low-end band low end -> high end (the blade: tip -> hilt), so its
+// `carryFraction` measures the upper part.
 float band_low_end_t(const ClimbBand& band, const JointLookup& lookup);
