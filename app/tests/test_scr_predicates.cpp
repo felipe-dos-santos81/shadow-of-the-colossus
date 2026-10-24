@@ -143,7 +143,7 @@ TEST_CASE("every predicate, one row of KNIGHT's export, evaluated both ways") {
     const auto f = [](const ScrClause& c, const char* slot) { return static_cast<float>(scr_arg(c.args, slot)->num); };
     const auto clip = [](const ScrClause& c) { return scr_arg(c.args, "h50")->clip; };
     const std::vector<Row> rows = {
-        {"KNIGHT:C5", 1, [](auto&, ScrWorld& w, auto&, bool want) { w.playerOnArenaGround = want; }},  // 0x800000
+        {"KNIGHT:C5", 1, [](auto&, ScrWorld& w, auto&, bool want) { w.playerGroundAttr = want ? 0x800000u : 0u; }},
         {"ALWAYS:C32", 0, [](auto&, ScrWorld& w, auto&, bool want) { w.playerAttached = want; }},
         {"KNIGHT:C33", 0, [&](auto& c, ScrWorld& w, auto&, bool want) { w.bossMotion = want ? clip(c) : clip(c) + 1; }},
         {"ALWAYS:C120", 0, [](auto&, ScrWorld& w, auto&, bool want) {
@@ -357,7 +357,7 @@ struct Fight {
     std::vector<int> modes;
 
     explicit Fight(bool wall) {
-        w.playerOnArenaGround = true;
+        w.playerGroundAttr = 0x800000u;  // the arena ground
         w.bossMotion = kn.clip("knight_a_stand");
         w.bossControlMode = 1;
         w.playerInJudge = [](std::string_view name) { return name.find("WEAPON") != std::string_view::npos; };
@@ -405,7 +405,7 @@ TEST_CASE("the attack runner: FIX first, then ATK, then the default row; the coo
     w.bossMotion = kn.clip("knight_a_stand");
     std::set<std::string> inside = {"KNIGHT_LEG_R_ATK", "KNIGHT_WEAPON_ATK_FIX", "KNIGHT_WEAPON_ATK"};
     w.playerInJudge = [&](std::string_view name) { return inside.count(std::string(name)) > 0; };
-    w.playerOnArenaGround = true;  // the battle area: mode 9's quit row stays false
+    w.playerGroundAttr = 0x800000u;  // the battle area: mode 9's quit row stays false
     scr_runtime_start(kn.graph, rt, true);
     rt.sensed = true;
     // Arm mode 9 the way the walker does (the mode-entry hook), and sit in it.

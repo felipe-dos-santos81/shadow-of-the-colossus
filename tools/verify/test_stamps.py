@@ -57,6 +57,9 @@ CASES = {
     "tools/re/objanim/knight_map.json": by("dotnet"),
     "tools/re/scr/graph_export.py": by("ctest"),
     "tools/re/scr/scrdb.py": by("ctest"),
+    "tools/re/path/route_export.py": by("ctest", "gpu"),
+    "tools/re/clb/terrain_export.py": by("ctest", "gpu"),
+    "tools/re/stage/cell_frame.py": by("ctest", "probes", "gpu"),
     "app/src/app.cpp": by("ctest", "gpu"),
     "app/shaders/mesh.metal": by("ctest", "gpu"),
     "app/CMakeLists.txt": by("ctest", "gpu"),
@@ -77,6 +80,7 @@ CASES = {
     "lib/models/a/a.clips.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     "lib/models/a/a.events.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     "lib/behaviour/KNIGHT.graph.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
+    "lib/stage/arena_04.terrain.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     # the probes read no audio: the runner's decode never makes them re-run
     "lib/audio/audio.manifest": by("ctest", "gpu", "audio"),
     "lib/audio/s5/valus_hurt.wav": by("ctest", "gpu"),

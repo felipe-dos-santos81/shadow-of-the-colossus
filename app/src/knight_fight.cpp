@@ -500,9 +500,12 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
         w.playerAttached && combat.band >= 0 && combat.band < static_cast<int>(ka::kBandRegion.size())
             ? ka::kBandRegion[static_cast<size_t>(static_cast<int>(combat.band))]
             : 0;
-    // §13.3 stand-in (authored): the battle area is the arena's ground under a player on foot.
-    w.playerOnArenaGround = !w.playerAttached && combat.mode != PlayerMode::Falling &&
-                            heightmap_in_bounds(ground, player.position);
+    // §13.3 stand-in (authored): the battle area (owner 0x800000) is the arena's ground under a
+    // player on foot.
+    w.playerGroundAttr = !w.playerAttached && combat.mode != PlayerMode::Falling &&
+                                 heightmap_in_bounds(ground, player.position)
+                             ? 0x800000u
+                             : 0u;
     // R-N: the S8 whistle (a press, as ride_presses reads it) and the player's death.
     knight_world_player(w, whistleHeld && !f.whistleBefore, combat.mode == PlayerMode::Dead);
     f.whistleBefore = whistleHeld;

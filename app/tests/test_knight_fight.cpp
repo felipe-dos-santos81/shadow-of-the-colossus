@@ -64,7 +64,7 @@ TEST_CASE("a scripted ScrWorld (player 30 m ahead, rays clear) drives the graph 
     w.bossPosition = core.boundCentre;
     w.playerPosition = {core.boundCentre.x, 0.0f, core.boundCentre.z + 30.0f};
     w.playerGroundPosition = w.playerPosition;
-    w.playerOnArenaGround = true;
+    w.playerGroundAttr = 0x800000u;  // the arena ground
     w.groundAt = [](float, float, float& h) {
         h = 0.0f;
         return true;
@@ -136,7 +136,7 @@ TEST_CASE("R-N: the player's whistle from route_patrol requests the export's whi
         w.bossPosition = core.boundCentre;
         w.playerPosition = {core.boundCentre.x, 0.0f, core.boundCentre.z + distance};
         w.playerGroundPosition = w.playerPosition;
-        w.playerOnArenaGround = onArena;
+        w.playerGroundAttr = onArena ? 0x800000u : 0u;
         w.groundAt = [](float, float, float& h) {
             h = 0.0f;
             return true;

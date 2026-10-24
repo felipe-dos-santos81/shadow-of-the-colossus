@@ -105,7 +105,8 @@ space := $(subst ,, )
 
 .PHONY: help build publish test convert audio inspect report app app-test \
         bake bake-quadratus bake-knight run shrine plain road quadratus gaius viewer shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest probe-check accept clean libview \
-        verify verify-long behaviour
+        verify verify-long behaviour \
+        routes terrain coverage bake-kirin arena04-manifest phaedra accept-s13
 
 help: ## List the targets
 	@grep -E '^[a-z0-9%-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -217,6 +218,28 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 behaviour: ## Export Gaius's mode graph from out/re/eboot.elf to LIB/behaviour/KNIGHT.graph.json (read-only; ~1 s)
 	@test -f out/re/eboot.elf || { echo "out/re/eboot.elf is missing: run scripts/re0-acceptance.sh first" >&2; exit 1; }
 	python3 -I tools/re/scr/graph_export.py export KNIGHT "$(LIB)/behaviour/KNIGHT.graph.json"
+
+# S13 (Phaedra): each target fails until the task that fills it lands (Task 1 contracts).
+routes: ## Export the .path route graphs to LIB/behaviour/<stem>.route.json (S13 Task 7)
+	@echo "not yet (S13 Task 7)" >&2; exit 1
+
+terrain: ## Export arena_04's terrain classes to LIB/stage/arena_04.terrain.json (S13 Task 9)
+	@echo "not yet (S13 Task 9)" >&2; exit 1
+
+coverage: ## Per-boss interpreter coverage into out/re/coverage.md (S13 Task 3)
+	@echo "not yet (S13 Task 3)" >&2; exit 1
+
+bake-kirin: ## Bake Phaedra (kirin_a) with her clips + the events sidecar (S13 Task 11)
+	@echo "not yet (S13 Task 11)" >&2; exit 1
+
+arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena) (S13 Task 12)
+	@echo "not yet (S13 Task 12)" >&2; exit 1
+
+phaedra: ## Fight Phaedra on arena_04 (S13 Task 15)
+	@echo "not yet (S13 Task 15)" >&2; exit 1
+
+accept-s13: ## Run the S13 acceptance (S13 Task 17)
+	@echo "not yet (S13 Task 17)" >&2; exit 1
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 

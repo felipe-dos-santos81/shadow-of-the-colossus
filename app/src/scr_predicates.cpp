@@ -73,11 +73,12 @@ float bearing_to(const ScrWorld& w, const Vec3& p) {
 
 // The player's contact attribute (FUN_00716270) as the app knows it: bit 0 parented
 // (ALWAYS:C32 tests mask 1 value 1), the boss region attr & 0x3f0 while attached, and
-// the owner kind attr & 0x3c00000. §13.3 stand-in (authored): the arena ground is owner
-// kind 0x800000, one of KNIGHT:C5's two battle-area kinds; EVENT1's 0x400000 is never set.
+// on foot the ground word under him (S13 D8: `class << 48 | owner`). Gaius's glue sets
+// owner 0x800000 on the arena ground (§13.3 stand-in, authored), one of KNIGHT:C5's two
+// battle-area kinds; EVENT1's 0x400000 is never set.
 uint64_t contact_attr(const ScrWorld& w) {
     if (w.playerAttached) return 0x1u | (static_cast<uint64_t>(w.playerAttachedRegion) & 0x3f0u);
-    return w.playerOnArenaGround ? 0x800000u : 0u;
+    return w.playerGroundAttr;
 }
 
 // FUN_006fb790: value -1 matches any bit of mask, else (attr & mask) == value.
@@ -487,6 +488,7 @@ ScrRegistry scr_registry_knight() {
         {kKnightSet4, a_knight_set4},
     };
     r.enterMode = enter_mode;
+    r.kinds = {-1, 0, 1, 10};  // locomotion(): the slowleg off, the point goal, root kind 1, the attack runner
     return r;
 }
 
