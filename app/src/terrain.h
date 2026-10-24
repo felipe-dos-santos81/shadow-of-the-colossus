@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "math3d.h"
 
@@ -9,7 +10,22 @@
 // `sotc-terrain/0` export (docs/notes/s13-schemas.md; glb frame, game-mask values). Pure.
 
 // A loaded `sotc-terrain/0` document (Task 10).
-struct TerrainMap {};
+struct TerrainMap {
+    struct Tri {
+        float v[3][3];
+        int cls;
+        uint32_t owner;
+    };
+    // A 2-D bucket grid (kCell m cells) over one triangle list: cell -> triangle indices.
+    struct Grid {
+        float minX = 0.0f, minZ = 0.0f;
+        int nx = 0, nz = 0;
+        std::vector<std::vector<uint32_t>> cells;
+    };
+    static constexpr float kCell = 4.0f;  // authored: the brief's bucket size
+    std::vector<Tri> stage, boss;
+    Grid stageGrid, bossGrid;
+};
 
 struct TerrainHit {
     bool found;
