@@ -251,6 +251,7 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
         // A loop's else edge onto itself: wrap.
         m.time -= len;
         m.instance += 1;
+        m.held = false;  // a held clip wrapping onto itself plays again (not t 0 forever)
         out.wrapped = true;
         out.travel = add(out.travel, rotate(root_at(name, m.time), c.yawDeg));
     } else if (to >= 0) {
