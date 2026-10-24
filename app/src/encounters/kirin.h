@@ -203,6 +203,38 @@ inline constexpr SoundCue kSilent{.clip = nullptr, .gain = 1.0f, .loop = false};
 
 // The exported graph the fight runs: <SOTC_LIB>/behaviour/<kGraphBoss>.graph.json.
 inline constexpr const char* kGraphBoss = "KIRIN";  // data: the eboot's boss name
+// Her route graph (`make routes`) and arena terrain (`make terrain`), under <SOTC_LIB>.
+inline constexpr const char* kRouteFile = "behaviour/kirin.route.json";  // data: kirin.path's stem
+inline constexpr const char* kTerrainFile = "stage/arena_04.terrain.json";
+
+// --- The runtime (S13 Task 15, kirin_fight) -----------------------------------
+
+// Her ground (ruling §13.2): the boss-ground layer under her root, else the layered
+// heightmap's floor within this step; a move whose ground rises or sinks more than it in
+// one frame is refused (authored, as Gaius's kGroundStep). Her nav graph's clear test
+// walks a segment over that ground every kWalkSample m with the same rule (authored).
+inline constexpr float kGroundStep = 2.0f;
+inline constexpr float kWalkSample = 1.0f;
+
+// A motion-graph edge's p34 is its blend in game frames at 30 fps (guess: Gaius's reading;
+// her clips are 15 fps but the game steps at 30).
+inline constexpr float kBlendFps = 30.0f;
+
+// The skelton parent's hip (the judge volumes' hipY): Bone_KOSI, a child of Bone_root
+// (data, the glb) — which of the root's two body children the game lifts by is a guess.
+inline constexpr const char* kHipJoint = "Bone_KOSI";
+
+// The sidecar's damage_def reactions (+0x18, raw): 4 = the IMPACT_CORE rows (60/30, the
+// heaviest; data) read as a heavy hurt (authored, as Gaius's reading of 4). Her sidecar
+// has no throw-off row (data: reactions 4, 5, 9, 10 only), so none releases a rider.
+inline constexpr float kHeavyReaction = 4.0f;
+inline constexpr float kNoThrowOffReaction = -1.0f;
+
+// The rockfall feed (binary FUN_006fde60 / FUN_006fdec0, graph findings "Rockfall feed"): a
+// stomp's ground-destruction spawn (a type-29 event that spawns an objanim) adds this to
+// her rockfall timer (W'+0x4c84, ScrRuntime::bossTimer[0]) while armed, capped.
+inline constexpr float kRockfallFeedSeconds = 0.5f;
+inline constexpr float kRockfallCapSeconds = 5.0f;
 
 }  // namespace kirin_detail
 

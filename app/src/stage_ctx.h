@@ -14,6 +14,7 @@
 #include "encounter_rt.h"
 #include "heightmap.h"
 #include "hud.h"
+#include "kirin_fight.h"
 #include "knight_fight.h"
 #include "manifest.h"
 #include "player.h"
@@ -274,6 +275,14 @@ struct StageCtx {
     KnightHit knightHit{};
     std::vector<DamageHit> knightHits;
     bool knightBackstop = false;  // the y backstop reset the player this frame
+    // S13 (Task 15): Phaedra's fight from her exported graph, routes and terrain (her arena's
+    // `encounter kirin`, wherever Valus's would run); this frame's results are kept for the
+    // --s13 scripts' lines (Task 16).
+    bool kirin_wired = false;
+    KirinFight kirin{};
+    KnightHit kirinHit{};
+    std::vector<DamageHit> kirinHits;
+    bool kirinBackstop = false;  // the road-end backstop box reset the player this frame
     bool s8_wired = false;
     bool plain_ride = false;
     PlainRide pr{};

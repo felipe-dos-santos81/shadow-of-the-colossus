@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,10 @@
 // additive_request for each orient, in order. The add rows are level-triggered (binary
 // FUN_006329b0 queues every firing row each frame through FUN_00634f80, no edge test); a
 // from-row tells two motion-defs of one clip apart by AddEdge::fromRef.
+
+// W'+0x4c88, the rockfall feed's arm byte (binary): bit 0 of ScrRuntime::bossBits here, not bossTimer[1]
+// (Gaius's +0x4c88 is a float; hers a byte). The timer W'+0x4c84 is bossTimer[0]; the glue feeds it.
+inline constexpr uint32_t kScrKirinRockfallArmed = 1u;
 
 // Her registry: scr_library_add + scr_route_add + her locals; enterMode is
 // scr_library_enter_mode then scr_route_enter. S13 Task 14.

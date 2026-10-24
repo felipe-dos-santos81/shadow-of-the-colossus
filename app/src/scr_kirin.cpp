@@ -18,9 +18,7 @@ enum : uint32_t {
     kRockfallCave = 0x6fccf0, kRockfallHill = 0x6fd5a0, kProxForce = 0x6fc8a0, kProxClear = 0x6fc8c0,
 };
 
-// W'+0x4c88, the rockfall feed's arm byte (binary): bit 0 of bossBits here, not bossTimer[1] (Gaius's
-// +0x4c88 is a float; hers a byte). The timer W'+0x4c84 is bossTimer[0].
-constexpr uint32_t kRockfallArmed = 1u;
+constexpr uint32_t kRockfallArmed = kScrKirinRockfallArmed;
 
 float argf(const std::vector<ScrArg>& args, const char* slot) {
     const ScrArg* a = scr_arg(args, slot);

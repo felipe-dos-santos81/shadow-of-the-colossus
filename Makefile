@@ -269,8 +269,8 @@ bake-kirin: publish ## Bake Phaedra (colossus_04_kirin) with her 75 clips + the 
 arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena; the ruins as floors-only lines)
 	@test -f out/re/stage/arena_04.manifest || python3 tools/re/stage/probe.py compose --stage arena_04 --library "$(LIB)" --out out/re/stage/arena_04.manifest
 
-phaedra: ## Fight Phaedra on arena_04 (S13 Task 15)
-	@echo "not yet (S13 Task 15)" >&2; exit 1
+phaedra: app arena04-manifest ## Fight Phaedra on arena_04 (hide in a tunnel, Q whistles; E grabs her tail while she peeps; R resets)
+	$(VIEWER) --manifest out/re/stage/arena_04.manifest
 
 accept-s13: ## Run the S13 acceptance (S13 Task 17)
 	@echo "not yet (S13 Task 17)" >&2; exit 1

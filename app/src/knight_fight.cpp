@@ -96,6 +96,10 @@ bool requested(const std::vector<int>& ctrls, int bit) {
 
 }  // namespace
 
+int knight_else_edge(const ScrGraph& graph, int clip, int& controlMode) {
+    return else_edge(graph, clip, controlMode);
+}
+
 const char* knight_clip_name(const KnightCore& core, int clip) {
     return clip >= 0 && clip < static_cast<int>(core.graph.clipNames.size())
                ? core.graph.clipNames[static_cast<size_t>(clip)].c_str()
@@ -162,6 +166,11 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     out.modeBefore = c.rt.current;
     out.clipBefore = m.clip;
     const std::string_view name = knight_clip_name(c, m.clip);
+    // The boss's root tables (S13: Phaedra's through the core's hooks).
+    const auto root_at = [&c](std::string_view n, float t) { return c.rootAt ? c.rootAt(n, t) : ::root_at(n, t); };
+    const auto turn_heading = [&c](std::string_view n, float t) {
+        return c.turnAt ? c.turnAt(n, t) : ::turn_heading(n, t);
+    };
 
     // The world's motion fields: this frame's clip, the last switch, the in-progress turn.
     w.bossMotion = m.clip;
@@ -192,10 +201,11 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     // them only past R1's 3° steer gate (or, arrived, while his facing is off by more), so
     // the turn has reached his goal's bearing. Every edge out of a turn is taken at its end
     // (p30 -1): without the cut one ~90° turn overshoots and he turns back (Task 5's note).
-    const knight_root::TurnHeading* turn = turn_series(name);
+    // A turn's last heading (its whole yaw; 0 for every other clip).
+    const float turnEnd = turn_heading(name, 1e6f);  // clamped to its last frame
     bool cut = false;
-    if (turn != nullptr && !atEnd) {
-        const bool left = turn->deg[turn->frames - 1] > 0.0f;
+    if (turnEnd != 0.0f && !atEnd) {
+        const bool left = turnEnd > 0.0f;
         const bool still = left ? requested(out.step.controls, scr_knight::kCtrlTurnLeft) ||
                                       requested(out.step.controls, scr_knight::kCtrlStopTurnLeft)
                                 : requested(out.step.controls, scr_knight::kCtrlTurnRight) ||
@@ -264,7 +274,7 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
         m.instance += 1;
         m.held = false;
         const float p34 = c.graph.motionGraph[static_cast<size_t>(edge)].p34;
-        m.blendSeconds = p34 > 0.0f ? p34 / ka::kBlendFps : 0.0f;
+        m.blendSeconds = p34 > 0.0f ? p34 / c.blendFps : 0.0f;
         m.blendElapsed = m.blendSeconds > 0.0f ? 0.0f : -1.0f;
         out.travel = add(out.travel, rotate(root_at(knight_clip_name(c, to), m.time), c.yawDeg));
     } else if (ended && !m.held) {
@@ -339,6 +349,12 @@ Vec3 grounded(const Heightmap& ground, Vec3 at) {
 }
 
 }  // namespace
+
+PoseView knight_pose_view(const KnightFight& f) { return pose_view(f); }
+
+PlayerView knight_player_view(const PlayerState& player, const PlayerCombat& combat) {
+    return player_view(player, combat);
+}
 
 bool knight_events_check(const EventsFile& ev, const std::vector<std::string>& joints,
                          const std::vector<std::string>& optBones, std::string& why) {
@@ -575,7 +591,14 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     f.maxBoundDistance = std::max(f.maxBoundDistance,
                                   std::hypot(encounter.entityPosition.x - c.boundCentre.x,
                                              encounter.entityPosition.z - c.boundCentre.z));
-    if (!encounter.defeated) {
+    knight_fight_sync(f, entity, encounter.defeated, t);
+    return t;
+}
+
+void knight_fight_sync(KnightFight& f, Playback& entity, bool defeated, const KnightThink& t) {
+    const KnightCore& c = f.core;
+    const KnightMotion& m = c.motion;
+    if (!defeated) {
         // The entity's clip at the motion's clock (clamped: the app samples, never wraps).
         entity.index = m.clip;
         entity.time = std::min(m.time, c.seconds[static_cast<size_t>(m.clip)]);
@@ -593,11 +616,11 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     }
     f.evNow.frame = m.time * (evClip >= 0 ? f.events.clips[static_cast<size_t>(evClip)].fps : 30.0f);
     f.think = t;
-    return t;
 }
 
 void knight_fight_pose(KnightFight& f, const Scene& scene, std::size_t entityRig,
-                       const Playback& entity, float dt, std::vector<Mat4>& palette) {
+                       const Playback& entity, float dt, std::vector<Mat4>& palette,
+                       const AddLayers* layers) {
     KnightMotion& m = f.core.motion;
     // The switch's blend (the edge's p34), on blended_palette's 0.25 s scale.
     const float from = m.blendElapsed >= 0.0f && m.blendSeconds > 0.0f
@@ -610,7 +633,7 @@ void knight_fight_pose(KnightFight& f, const Scene& scene, std::size_t entityRig
     if (entity.index >= 0 && static_cast<size_t>(entity.index) < entity.clips.size()) {
         const AnimationCpu& clip = entity.clips[static_cast<size_t>(entity.index)];
         std::vector<Mat4> blended = blended_palette(scene, entityRig, entity, f.blend, clip.name,
-                                                    playback_time(entity, clip.duration), from);
+                                                    playback_time(entity, clip.duration), from, layers);
         if (!blended.empty()) palette = std::move(blended);
     }
     // Every joint's world matrix: model · palette · bindWorld (rig_bone_world's product).
@@ -629,7 +652,8 @@ void knight_fight_pose(KnightFight& f, const Scene& scene, std::size_t entityRig
 }
 
 std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, PlayerCombat& combat,
-                                           const CombatTuning& tuning, float dt, StepEvents* events) {
+                                           const CombatTuning& tuning, float dt, StepEvents* events,
+                                           float heavyReaction, float throwOffReaction) {
     std::vector<DamageHit> landed;
     f.throwOff = false;  // last frame's throw-off was read by this frame's step
     f.overlaps.clear();
@@ -648,7 +672,7 @@ std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, 
         PoseView open = pose;
         open.entity = -1;
         for (const DamageHit& h : events_damage(f.events, f.evNow, f.evPrev, open, pv)) {
-            if (h.reaction == ka::kThrowOffReaction) {
+            if (h.reaction == throwOffReaction) {
                 f.evNow.hit |= uint64_t{1} << h.row;
                 f.throwOff = true;
                 landed.push_back(h);
@@ -661,7 +685,7 @@ std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, 
         if (best == nullptr || h.amount > best->amount) best = &h;
     }
     if (best != nullptr && best->amount > 0.0f &&
-        player_take_damage(combat, best->amount, best->reaction == ka::kHeavyReaction, tuning, events)) {
+        player_take_damage(combat, best->amount, best->reaction == heavyReaction, tuning, events)) {
         landed.push_back(*best);
     }
     return landed;
