@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "json_reader.h"
+#include "scr_cdef.h"
 
 namespace {
 
@@ -375,6 +376,11 @@ struct Loader {
                 for (const Json& r : recs.array) {
                     ScrCdefRecord rec;
                     rec.op = static_cast<int>(num(need(r, "op", key), key));
+                    if (!scr_cdef_known(rec.op)) {  // D4: strict, like predicates and actions
+                        char op[16];
+                        std::snprintf(op, sizeof op, "0x%02x", rec.op);
+                        fail(key + ": unknown control-def opcode " + op);
+                    }
                     rec.min = static_cast<float>(num(need(r, "min", key), key));
                     rec.max = static_cast<float>(num(need(r, "max", key), key));
                     rec.handle = arg("handle", need(r, "handle", key), key);

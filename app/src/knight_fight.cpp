@@ -437,6 +437,8 @@ bool knight_fight_load(KnightFight& f, const Scene& scene, std::size_t entityRig
     }
     // The graph's clip indices are the playback's: scr_graph_load keeps `names`' order.
     if (!knight_core_load(f.core, json, names, seconds, judges, standClip, why)) return false;
+    // His attack rows' ATTAIN cylinders (S12's kAttack attainX/Z/R) from the sidecar (S13 Task 5).
+    if (!scr_attack_attain(f.core.graph, f.events.judgeDefaults, why)) return false;
     f.core.boundCentre = {a.boundCentreX, 0.0f, a.boundCentreZ};
     f.core.boundRadius = a.boundRadius;
     f.eventsClip.clear();

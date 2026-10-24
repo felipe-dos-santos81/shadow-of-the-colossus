@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +47,15 @@ KnightCore loaded_core() {
     const bool ok = knight_core_load(core, knight_json(), names, lengths(names), judges, "knight_a_stand", why);
     INFO(why);
     REQUIRE(ok);
+    // The ATTAIN cylinders from his sidecar (SOTC_LIB), as the encounter loader binds them.
+    const char* lib = std::getenv("SOTC_LIB");
+    if (lib == nullptr || lib[0] == '\0') throw std::runtime_error("Set SOTC_LIB to the library view.");
+    EventsFile events;
+    REQUIRE_MESSAGE(events_load(std::string(lib) + "/models/shadow/characters/colossus_03_knight/_cmn/"
+                                                   "colossus_03_knight.events.json",
+                                events, why),
+                    why);
+    REQUIRE_MESSAGE(scr_attack_attain(core.graph, events.judgeDefaults, why), why);
     core.boundCentre = {ka::kArena.boundCentreX, 0.0f, ka::kArena.boundCentreZ};
     core.boundRadius = ka::kArena.boundRadius;
     return core;

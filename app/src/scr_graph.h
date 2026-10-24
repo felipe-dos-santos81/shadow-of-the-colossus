@@ -191,6 +191,9 @@ struct ScrAttackRow {
     float f0 = 0.0f;                // +f0
     float cooldownS = 0.0f;         // +f4
     bool issueArrived = false;      // +f8
+    // The `attain` volume's cylinder in his frame (glb x, z; radius), not exported: bound from the
+    // events sidecar at load (scr_attack_attain, S13 Task 5). 0 until bound.
+    float attainX = 0.0f, attainZ = 0.0f, attainR = 0.0f;
 };
 
 struct ScrGraph {
@@ -218,6 +221,7 @@ struct ScrWorld {
     Vec3 playerGroundPosition{0.0f, 0.0f, 0.0f};
     bool playerAttached = false;
     int playerAttachedRegion = 0;   // contact attr & 0x3f0
+    bool playerRiding = false;      // S13: on a horse (player_riding 832e30)
     int playerMotion = -1;          // PLAYER:ph_motion_def index
     bool playerMotionStarted = false;
     int playerControlMode = -1;     // PLAYER_CONTROL_MODE:control-mode index
@@ -278,6 +282,7 @@ struct ScrRuntime {
     // before the first switch) and the `sensed` latch W+0x4aec.
     std::vector<float> relpos;
     bool sensed = false;
+    bool seenNow = false, nearNow = false;  // S13: this frame's raw seen W+0x4af0 / near W+0x4af1
     float seenFor = 0.0f, nearFor = 0.0f, unsensedFor = 0.0f;
     Vec3 lastKnown{0.0f, 0.0f, 0.0f};  // W+0x4ac0
 
@@ -290,8 +295,9 @@ struct ScrRuntime {
     float steerDeg = 0.0f;     // this frame's turn toward the goal (+ = left), for the caller's walk
     bool aimAtPlayer = false;  // look_if_motion held this frame
 
-    // The attack runner (FUN_0085ab40): armed table W+0x4b78 (its first row; -1
-    // none), row W+0x4b80, time in row +0x4b8c, since attack +0x4b90, cooldown +0x4b94.
+    // The attack runner (FUN_0085ab40): armed table W+0x4b78 (S13: the mode whose slowstatus
+    // `attack` handle armed it, a graph.attackdata key; -1 none), row W+0x4b80 (an index into
+    // that table's rows), time in row +0x4b8c, since attack +0x4b90, cooldown +0x4b94.
     int attackTable = -1, attackRow = -1;
     float timeInRow = 0.0f, timeSinceAttack = 0.0f, cooldown = 0.0f;
 
@@ -344,8 +350,8 @@ struct ScrRegistry {
 };
 
 // Parses `json` into `out`. Fails (false, `error` naming the culprit) on a wrong
-// format tag, a malformed document, an unknown predicate fn or action kind, a mode
-// locomotion kind not in `registry.kinds`, a clip missing from `clipNames` (lower-case
+// format tag, a malformed document, an unknown predicate fn, action kind or control-def
+// opcode (kScrCdefOps), a mode locomotion kind not in `registry.kinds`, a clip missing from `clipNames` (lower-case
 // stems; edge refs and control-def handles included), or a dangling
 // mode/condition/action reference.
 bool scr_graph_load(const std::string& json, const std::vector<std::string>& clipNames,
