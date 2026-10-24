@@ -215,9 +215,11 @@ census: ## Census the sixteen colossi into tools/re/census/census.json (read-onl
 .PHONY: census
 
 # S12: the colossus mode graphs the app interprets (part of `bake`, ruling R-C).
-behaviour: ## Export Gaius's mode graph from out/re/eboot.elf to LIB/behaviour/KNIGHT.graph.json (read-only; ~1 s)
+# S13: all 16 colossi (the census16 boss list; `tools/re/scr/graph_export.py` names), one file each.
+BEHAVIOUR_BOSSES = MINOTOUR_A MAMMOTH KNIGHT KIRIN YAMORI_B BUDDHA MINOTOUR_B BIRD KAME EEL MINOTOUR_C LEO NARGA POSEIDON SNAKE CERBERUS_R
+behaviour: ## Export the 16 colossus mode graphs from out/re/eboot.elf to LIB/behaviour/<BOSS>.graph.json (read-only; ~10 s)
 	@test -f out/re/eboot.elf || { echo "out/re/eboot.elf is missing: run scripts/re0-acceptance.sh first" >&2; exit 1; }
-	python3 -I tools/re/scr/graph_export.py export KNIGHT "$(LIB)/behaviour/KNIGHT.graph.json"
+	@for b in $(BEHAVIOUR_BOSSES); do python3 -I tools/re/scr/graph_export.py export $$b "$(LIB)/behaviour/$$b.graph.json" || exit 1; done
 
 # S13 (Phaedra): each target fails until the task that fills it lands (Task 1 contracts).
 routes: ## Export the .path route graphs to LIB/behaviour/<stem>.route.json (S13 Task 7)
