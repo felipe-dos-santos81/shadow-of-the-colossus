@@ -98,6 +98,9 @@ ClimbBandId next_climbable_band(const PlayerFrame& frame, ClimbBandId band, bool
         Vec3 a{};
         Vec3 b{};
         const ClimbBand& record = climb_band(frame.bands, band);
+        if (!band_enabled(record, frame.entityClip, frame.entityFrame)) {
+            return ClimbBandId::None;  // S12: a closed band ends the chain, never skipped
+        }
         if (climb_band_segment(record, frame.jointWorld, a, b)) {
             return band;
         }
@@ -144,13 +147,13 @@ bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame&
     Vec3 normal{};
     const ClimbBand& band = climb_band(frame.bands, combat.band);
     // climb_attach_point is climb_surface_point, bit for bit, on every band but
-    // a horizontal one (S11's surface walk).
+    // a walkable one (S11's surface walk, through S12's slope gate).
     if (!climb_attach_point(band, frame.jointWorld, combat.bandT, combat.bandAcross,
                             player.position, point, normal)) {
         return false;
     }
     player.position = point;
-    if (band.horizontal) {
+    if (band_walkable(band, frame.jointWorld)) {
         Vec3 a{};
         Vec3 b{};
         if (climb_band_segment(band, frame.jointWorld, a, b)) {
@@ -168,9 +171,11 @@ bool write_surface(PlayerState& player, PlayerCombat& combat, const PlayerFrame&
 // it reports no event and opens no catch window.
 bool try_attach(PlayerState& player, PlayerCombat& combat, const PlayerFrame& frame,
                 ClimbBandId band, PlayerMode fallback) {
+    const ClimbBand& record = climb_band(frame.bands, band);
     attach_band(combat, frame, band,
-                nearest_t(climb_band(frame.bands, band), frame.jointWorld, player.position,
-                          0.5f));
+                record.grabEntryLowEnd
+                    ? band_low_end_t(record, frame.jointWorld)  // S12: entered at its low end
+                    : nearest_t(record, frame.jointWorld, player.position, 0.5f));
     if (!write_surface(player, combat, frame)) {
         combat.mode = fallback;
         combat.modeSeconds = 0.0f;
@@ -308,7 +313,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             if (grabPressed && combat.stamina > 0.0f) {
                 const ClimbBandId band =
                     nearest_climb_band(frame.bands, frame.jointWorld, player.position,
-                                       tuning.grabRange);
+                                       tuning.grabRange, frame.entityClip, frame.entityFrame);
                 if (band != ClimbBandId::None) {
                     if (try_attach(player, combat, frame, band, PlayerMode::Grounded)) {
                         events.grabbed = true;
@@ -330,6 +335,21 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             if (frame.shake.forceRelease) {
                 detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
                 break;
+            }
+            // S12 (§13.4): the held band's window closed under the player. Its
+            // upper `carryFraction` is carried onto `carryTo` at the nearest
+            // point ("he lifts you with the sword"); lower, the grip breaks.
+            if (const ClimbBand& held = climb_band(frame.bands, combat.band);
+                !band_enabled(held, frame.entityClip, frame.entityFrame)) {
+                const ClimbBand& carry = climb_band(frame.bands, held.carryTo);
+                if (held.carryTo == ClimbBandId::None ||
+                    combat.bandT < 1.0f - held.carryFraction ||
+                    !band_enabled(carry, frame.entityClip, frame.entityFrame)) {
+                    detach(combat, events, /*brokeGrip=*/true, tuning.catchSeconds);
+                    break;
+                }
+                select_band(combat, frame, held.carryTo,
+                            nearest_t(carry, frame.jointWorld, player.position, 0.5f));
             }
 
             if (strikePressed && (combat.mode == PlayerMode::Grabbing ||
@@ -354,12 +374,15 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                     combat.modeSeconds = 0.0f;
                 }
                 // S11: a horizontal band is walked on its top (surface_walk_step),
-                // handing over at its ends like a climb.
-                if (band.horizontal) {
+                // handing over at its ends like a climb; S12: only through the
+                // slope gate, at the band's own pace when it has one.
+                const bool walked = band_walkable(band, frame.jointWorld);
+                if (walked) {
                     float t = combat.bandT;
-                    if (moving && surface_walk_step(band, frame.jointWorld, axis, lateral,
-                                                    tuning.surfaceWalkSpeed, dt, t,
-                                                    combat.bandAcross)) {
+                    const float pace =
+                        band.walkSpeed > 0.0f ? band.walkSpeed : tuning.surfaceWalkSpeed;
+                    if (moving && surface_walk_step(band, frame.jointWorld, axis, lateral, pace,
+                                                    dt, t, combat.bandAcross)) {
                         ClimbBandId next = ClimbBandId::None;
                         if (axis > 0.0f && t >= 1.0f) {
                             next = next_climbable_band(frame, band.up, /*ascending=*/true);
@@ -381,7 +404,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
                 // idle hang leaves write_surface to resolve the band as before.
                 Vec3 a{};
                 Vec3 b{};
-                const bool resolved = moving && !band.horizontal &&
+                const bool resolved = moving && !walked &&
                                       climb_band_segment(band, frame.jointWorld, a, b);
                 if (lateral != 0.0f && resolved) {
                     orbit_about_segment(player, a, b, band.radius, lateral,
@@ -452,7 +475,8 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
 
             float rate = 0.0f;
             // S11: standing on a horizontal band is not gripping (authored).
-            const bool standing = climb_band(frame.bands, combat.band).horizontal &&
+            const bool standing = band_walkable(climb_band(frame.bands, combat.band),
+                                                frame.jointWorld) &&
                                   combat.mode != PlayerMode::Striking;
             if (standing) {
                 const float stamina = std::isfinite(combat.stamina) ? combat.stamina : 0.0f;
@@ -489,7 +513,7 @@ StepEvents player_step(PlayerState& player, PlayerCombat& combat, const PlayerIn
             if (grabPressed && combat.catchSecondsLeft > 0.0f && combat.stamina > 0.0f) {
                 const ClimbBandId band =
                     nearest_climb_band(frame.bands, frame.jointWorld, player.position,
-                                       tuning.catchRange);
+                                       tuning.catchRange, frame.entityClip, frame.entityFrame);
                 if (band != ClimbBandId::None) {
                     if (try_attach(player, combat, frame, band, PlayerMode::Falling)) {
                         events.grabbed = true;

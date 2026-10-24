@@ -51,6 +51,7 @@ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/te
   tests/test_quadratus_motion.cpp
   tests/test_quadratus_fight.cpp
   tests/test_scr_graph.cpp
+  tests/test_climb_window.cpp
   src/encounter_rt.cpp src/renderer.cpp src/audio_seam.cpp
   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp

@@ -64,8 +64,15 @@ bool climb_surface_point(const ClimbBand& band, const JointLookup& lookup, float
 // ClimbBandId::None when no band is within reach, when the lookup is empty,
 // or when the input is invalid — never an out-of-range index. Ties keep the
 // earlier band in table order.
+//
+// S12: a band `band_enabled` rejects for (`playingClip`, `frame`) — the
+// entity's playing clip and frame — is skipped, and a `grabEntryLowEnd` band is
+// measured to its low end only (a ball of the band's radius there), so it is
+// reached at that end and nowhere else. The defaults (no clip) skip only
+// window bands; no S4/S11 band has one.
 ClimbBandId nearest_climb_band(std::span<const ClimbBand> bands, const JointLookup& lookup,
-                               Vec3 playerPos, float maxSurfaceDistance);
+                               Vec3 playerPos, float maxSurfaceDistance,
+                               std::string_view playingClip = {}, int frame = 0);
 ClimbBandId nearest_climb_band(const JointLookup& lookup, Vec3 playerPos,
                                float maxSurfaceDistance);
 
@@ -98,13 +105,33 @@ bool surface_walk_point(const ClimbBand& band, const JointLookup& lookup, float 
 // (clamped as above). A non-finite or non-positive dt, or a non-finite input,
 // moves nothing. Returns false, changing nothing, when the band's segment
 // cannot be formed (the caller's grip break) or the radius is not positive and
-// finite. The caller gates surface walk on the top normal's y: a near-vertical
-// band's "top" is a wall, so only a band whose top faces up is walked.
+// finite. Whether a band is walked at all is band_walkable's slope gate.
 bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float along,
                        float lateral, float speed, float dt, float& t, float& across);
 
-// The attach point for any band: a horizontal band's surface_walk_point (up is
+// The attach point for any band: a walkable band's surface_walk_point (up is
 // world +Y; `hint` unused), every other band's climb_surface_point (`across`
 // unused) — the existing climb, bit for bit.
 bool climb_attach_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,
                         Vec3 hint, Vec3& point, Vec3& normal);
+
+// --- S12 band windows, the slope gate, the low end (design D7/D8, §13.4) ------
+
+// Whether `band` exists while the entity plays `playingClip` at `frame`: always
+// for a band with no `enableClip`; else only for that clip at a frame in
+// [enableFrom, enableTo) (enableTo < 0: no end). See ClimbBand.
+bool band_enabled(const ClimbBand& band, std::string_view playingClip, int frame);
+
+// D8 (authored, the heightmap's kWallSteepness): a `horizontal` band is walked
+// only while its top normal's y >= cos of this; steeper, it is hung and climbed
+// like any other band.
+inline constexpr float kWalkableBandMaxSlopeDeg = 60.0f;
+
+// `horizontal` and its top (the up hint +Y made perpendicular to the posed
+// segment) passes the slope gate. False for a band whose segment cannot be
+// formed.
+bool band_walkable(const ClimbBand& band, const JointLookup& lookup);
+
+// The parameter of the band's low end: 1 when boneB sits lower than boneA, else
+// 0 (also for a band that cannot be resolved).
+float band_low_end_t(const ClimbBand& band, const JointLookup& lookup);

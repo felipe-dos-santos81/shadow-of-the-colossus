@@ -176,7 +176,8 @@ bool climb_surface_point(const ClimbBand& band, const JointLookup& lookup, float
 }
 
 ClimbBandId nearest_climb_band(std::span<const ClimbBand> bands, const JointLookup& lookup,
-                               Vec3 playerPos, float maxSurfaceDistance) {
+                               Vec3 playerPos, float maxSurfaceDistance,
+                               std::string_view playingClip, int frame) {
     if (!lookup || !is_finite(playerPos) || !std::isfinite(maxSurfaceDistance) ||
         maxSurfaceDistance < 0.0f) {
         return ClimbBandId::None;
@@ -193,11 +194,17 @@ ClimbBandId nearest_climb_band(std::span<const ClimbBand> bands, const JointLook
         const ClimbBand& band = bands[static_cast<std::size_t>(i)];
         Vec3 a{};
         Vec3 b{};
-        if (!climb_band_segment(band, lookup, a, b)) {
+        if (!band_enabled(band, playingClip, frame) || !climb_band_segment(band, lookup, a, b)) {
             continue;
         }
         float bandT = 0.0f;
-        const float axis_distance = segment_segment_distance(playerPos, playerTop, a, b, &bandT);
+        float axis_distance = 0.0f;
+        if (band.grabEntryLowEnd) {
+            bandT = b.y < a.y ? 1.0f : 0.0f;  // band_low_end_t on the resolved segment
+            axis_distance = player_capsule_distance(playerPos, bandT > 0.0f ? b : a);
+        } else {
+            axis_distance = segment_segment_distance(playerPos, playerTop, a, b, &bandT);
+        }
         // Surface-to-surface: pull both capsule radii out of the centreline
         // distance (a tapered band's radius at the closest point). Keeping it
         // unclamped makes an overlapping band rank by how close its axis is,
@@ -297,8 +304,39 @@ bool surface_walk_step(const ClimbBand& band, const JointLookup& lookup, float a
 
 bool climb_attach_point(const ClimbBand& band, const JointLookup& lookup, float t, float across,
                         Vec3 hint, Vec3& point, Vec3& normal) {
-    if (band.horizontal) {
+    if (band_walkable(band, lookup)) {
         return surface_walk_point(band, lookup, t, across, Vec3{0.0f, 1.0f, 0.0f}, point, normal);
     }
     return climb_surface_point(band, lookup, t, hint, point, normal);
+}
+
+bool band_enabled(const ClimbBand& band, std::string_view playingClip, int frame) {
+    if (band.enableClip == nullptr) {
+        return true;
+    }
+    return playingClip == band.enableClip && frame >= band.enableFrom &&
+           (band.enableTo < 0 || frame < band.enableTo);
+}
+
+bool band_walkable(const ClimbBand& band, const JointLookup& lookup) {
+    Vec3 a{};
+    Vec3 b{};
+    if (!band.horizontal || !climb_band_segment(band, lookup, a, b)) {
+        return false;
+    }
+    // The top is +Y less its along-axis part, so its y is 1 - f.y^2 over its
+    // length sqrt(1 - f.y^2): top.y = sqrt(1 - f.y^2), the cosine of the pitch.
+    const Vec3 ab = sub(b, a);
+    const float fy = ab.y / length(ab);
+    return std::sqrt(std::max(0.0f, 1.0f - fy * fy)) >=
+           std::cos(kWalkableBandMaxSlopeDeg * kDegToRad);
+}
+
+float band_low_end_t(const ClimbBand& band, const JointLookup& lookup) {
+    Vec3 a{};
+    Vec3 b{};
+    if (!climb_band_segment(band, lookup, a, b)) {
+        return 0.0f;
+    }
+    return b.y < a.y ? 1.0f : 0.0f;
 }

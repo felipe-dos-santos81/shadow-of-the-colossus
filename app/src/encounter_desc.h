@@ -59,6 +59,24 @@ struct ClimbBand {
     // S11 taper: the radius at boneB, linear from `radius` at boneA (< 0 = no
     // taper: `radius` throughout). grab.h's band_radius_at reads it.
     float radiusB = -1.0f;
+    // S12 enable window (design D7): with `enableClip` set the band exists only
+    // while the entity plays that clip at a frame in the half-open [enableFrom,
+    // enableTo) — a frame time f is in it iff floor(f) is, so Gaius's blade
+    // [9, 75) is the R3 decode's "frame time in [9.0, 75.0)" — and enableTo < 0
+    // is open to the clip's end. Null (the default) = always there.
+    const char* enableClip = nullptr;
+    int enableFrom = 0;
+    int enableTo = -1;
+    // S12 walk pace on a walked band (m/s; 0 = CombatTuning::surfaceWalkSpeed).
+    float walkSpeed = 0.0f;
+    // S12 disable hand-over (§13.4): when the window closes with the player at
+    // bandT >= 1 - carryFraction he is moved onto `carryTo` at its nearest
+    // point; lower (or with no carryTo) he falls.
+    float carryFraction = 0.0f;
+    int carryTo = ClimbBandId::None;
+    // S12 entry (D7): E grabs this band only within reach of its low end (the
+    // lower posed end), never mid-band; the grab attaches there.
+    bool grabEntryLowEnd = false;
 };
 
 // --- The rest of the description ----------------------------------------------
