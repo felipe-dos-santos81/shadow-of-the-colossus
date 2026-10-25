@@ -46,25 +46,14 @@ constexpr float kNoFacing = 1e-3f;           // authored: a face point this clos
 constexpr float kAngerMax = 100.0f;          // binary DAT_0128dd90 (FUN_0082aef0's clamp)
 constexpr float kPercent = 100.0f;           // binary DAT_0128e02c (hp_pct_*)
 
-float argf(const std::vector<ScrArg>& args, const char* slot) {
-    const ScrArg* a = scr_arg(args, slot);
-    return a == nullptr ? 0.0f : static_cast<float>(a->num);
-}
-
 // A q-slot (u64 from "0x..."); 0xffffffffffffffff (-1) stays all ones.
 uint64_t argu(const std::vector<ScrArg>& args, const char* slot) {
     const double v = scr_arg(args, slot)->num;
     return v >= 9.2e18 ? ~uint64_t{0} : static_cast<uint64_t>(v);
 }
 
-// "PLAYER:ph_motion_def[604]" -> 604; -1 without an index.
-int bracket(const std::string& text) {
-    const size_t open = text.rfind('[');
-    return open == std::string::npos ? -1 : std::atoi(text.c_str() + open + 1);
-}
-
 int arg_clip(const std::vector<ScrArg>& args, const char* slot) { return scr_arg(args, slot)->clip; }
-int arg_index(const std::vector<ScrArg>& args, const char* slot) { return bracket(scr_arg(args, slot)->text); }
+int arg_index(const std::vector<ScrArg>& args, const char* slot) { return scr_handle_index(scr_arg(args, slot)->text); }
 
 Vec3 forward_of(const ScrWorld& w) {
     const float r = w.bossYawDeg * kDegToRad;
@@ -141,21 +130,21 @@ bool p_not_sensed(const ScrClause&, const ScrWorld& w, const ScrRuntime& rt) {
     return !(w.playerPresent && rt.sensed);
 }
 bool p_player_dist_ge(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
-    return !w.playerPresent || w.distanceHorizontal >= argf(c.args, "f1c");
+    return !w.playerPresent || w.distanceHorizontal >= scr_argf(c.args, "f1c");
 }
 bool p_player_dist_le(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
-    return w.playerPresent && w.distanceHorizontal <= argf(c.args, "f1c");
+    return w.playerPresent && w.distanceHorizontal <= scr_argf(c.args, "f1c");
 }
 // R5 decode: the game's bearing is + toward his RIGHT, the app's + toward his left.
 bool p_player_bearing_in(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
     const float game = -w.bearingDeg;
-    return w.playerPresent && argf(c.args, "f1c") <= game && game <= argf(c.args, "f20");
+    return w.playerPresent && scr_argf(c.args, "f1c") <= game && game <= scr_argf(c.args, "f20");
 }
 bool p_time_in_mode_ge(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) {
-    return rt.timer1 >= argf(c.args, "f1c");
+    return rt.timer1 >= scr_argf(c.args, "f1c");
 }
 bool p_game_flag(const ScrClause& c, const ScrWorld& w, const ScrRuntime& rt) {
-    const size_t i = static_cast<size_t>(argf(c.args, "i10"));
+    const size_t i = static_cast<size_t>(scr_argf(c.args, "i10"));
     return w.flags.test(i) || rt.flags.test(i);
 }
 bool p_signal_arrow_present(const ScrClause&, const ScrWorld&, const ScrRuntime&) {
@@ -165,14 +154,14 @@ bool p_mode_just_entered(const ScrClause& c, const ScrWorld&, const ScrRuntime& 
     return rt.transitioned && rt.current == scr_arg(c.args, "h50")->mode;
 }
 bool p_swing_space_clear(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
-    return scr_swing_space_clear(w, argf(c.args, "f1c"), argf(c.args, "f20"), argf(c.args, "f24"));
+    return scr_swing_space_clear(w, scr_argf(c.args, "f1c"), scr_argf(c.args, "f20"), scr_argf(c.args, "f24"));
 }
 
 // D5 (binary, predsem.py; S13 graph findings §2).
 // Hit this frame with kind rec[0x15]: 0 -> {0, 2, 4, 5}, 1 -> {1, 3}, else kind == i10.
 bool p_hit_kind(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
     if (!w.hit) return false;
-    const int sel = static_cast<int>(argf(c.args, "i10")), k = w.hitKind;
+    const int sel = static_cast<int>(scr_argf(c.args, "i10")), k = w.hitKind;
     if (sel == 0) return k == 0 || k == 2 || k == 4 || k == 5;
     if (sel == 1) return k == 1 || k == 3;
     return k == sel;
@@ -180,16 +169,16 @@ bool p_hit_kind(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
 bool p_hit_region(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
     return w.hit && attr_matches(static_cast<uint64_t>(w.hitRegion), argu(c.args, "q28"), argu(c.args, "q30"));
 }
-bool p_hp_pct_ge(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) { return hp_pct(w) >= argf(c.args, "f1c"); }
-bool p_hp_pct_le(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) { return hp_pct(w) <= argf(c.args, "f1c"); }
+bool p_hp_pct_ge(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) { return hp_pct(w) >= scr_argf(c.args, "f1c"); }
+bool p_hp_pct_le(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) { return hp_pct(w) <= scr_argf(c.args, "f1c"); }
 bool p_time_since_transition_ge(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) {
-    return rt.timer2 >= argf(c.args, "f1c");
+    return rt.timer2 >= scr_argf(c.args, "f1c");
 }
 bool p_time_since_attack_ge(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) {
-    return rt.timeSinceAttack >= argf(c.args, "f1c");
+    return rt.timeSinceAttack >= scr_argf(c.args, "f1c");
 }
-bool p_anger_ge(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) { return rt.anger >= argf(c.args, "f1c"); }
-bool p_anger_le(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) { return rt.anger <= argf(c.args, "f1c"); }
+bool p_anger_ge(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) { return rt.anger >= scr_argf(c.args, "f1c"); }
+bool p_anger_le(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) { return rt.anger <= scr_argf(c.args, "f1c"); }
 bool p_mode_is(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) {
     return rt.current == scr_arg(c.args, "h50")->mode;
 }
@@ -199,11 +188,11 @@ bool p_boss_control_mode_is(const ScrClause& c, const ScrWorld& w, const ScrRunt
 bool p_perceived_now(const ScrClause&, const ScrWorld&, const ScrRuntime& rt) { return rt.seenNow || rt.nearNow; }
 // |the perception bearing| (W+0x4af4; measured from his root, as scr_perceive) <= f1c.
 bool p_perceived_bearing_le(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
-    return w.playerPresent && std::fabs(w.bearingDeg) <= argf(c.args, "f1c");
+    return w.playerPresent && std::fabs(w.bearingDeg) <= scr_argf(c.args, "f1c");
 }
 // False without a player, as player_dist_le (guess: predsem does not say).
 bool p_player_dist3d_le(const ScrClause& c, const ScrWorld& w, const ScrRuntime&) {
-    return w.playerPresent && w.distance3d <= argf(c.args, "f1c");
+    return w.playerPresent && w.distance3d <= scr_argf(c.args, "f1c");
 }
 bool p_player_riding(const ScrClause&, const ScrWorld& w, const ScrRuntime&) { return w.playerPresent && w.playerRiding; }
 // The boss's own attribute word (+0x8c0) as his ground under his root (S13 D8); the binary's
@@ -243,30 +232,30 @@ void set_goal(ScrRuntime& rt, const Vec3& p) {  // FUN_0081cfc0: a fixed point
 }
 void a_goal_player(const ScrAction& a, ScrCtx& ctx) {  // a snapshot, not the live player (R1)
     const Vec3 p = ctx.world.playerPosition;
-    set_goal(ctx.runtime, {p.x, p.y + argf(a.args, "f10"), p.z});
+    set_goal(ctx.runtime, {p.x, p.y + scr_argf(a.args, "f10"), p.z});
 }
 void a_goal_player_ground(const ScrAction& a, ScrCtx& ctx) {
     const Vec3 p = ctx.world.playerGroundPosition;
-    set_goal(ctx.runtime, {p.x, p.y + argf(a.args, "f10"), p.z});
+    set_goal(ctx.runtime, {p.x, p.y + scr_argf(a.args, "f10"), p.z});
 }
 void a_goal_lastseen_y(const ScrAction& a, ScrCtx& ctx) {
     const Vec3 p = ctx.runtime.lastKnown;
-    set_goal(ctx.runtime, {p.x, argf(a.args, "f10"), p.z});
+    set_goal(ctx.runtime, {p.x, scr_argf(a.args, "f10"), p.z});
 }
 void a_goal_lastseen(const ScrAction& a, ScrCtx& ctx) {  // D5: the last-known point + (0, f10, 0)
     const Vec3 p = ctx.runtime.lastKnown;
-    set_goal(ctx.runtime, {p.x, p.y + argf(a.args, "f10"), p.z});
+    set_goal(ctx.runtime, {p.x, p.y + scr_argf(a.args, "f10"), p.z});
 }
-void a_move_param(const ScrAction& a, ScrCtx& ctx) { ctx.runtime.moveParam = static_cast<int>(argf(a.args, "i08")); }
+void a_move_param(const ScrAction& a, ScrCtx& ctx) { ctx.runtime.moveParam = static_cast<int>(scr_argf(a.args, "i08")); }
 void a_set_flag(const ScrAction& a, ScrCtx& ctx) {
-    ctx.runtime.flags.set(static_cast<size_t>(argf(a.args, "i08")));
+    ctx.runtime.flags.set(static_cast<size_t>(scr_argf(a.args, "i08")));
 }
-void a_anger_set(const ScrAction& a, ScrCtx& ctx) { ctx.runtime.anger = argf(a.args, "f10"); }
-void a_anger_add(const ScrAction& a, ScrCtx& ctx) { ctx.runtime.anger += argf(a.args, "f10"); }
+void a_anger_set(const ScrAction& a, ScrCtx& ctx) { ctx.runtime.anger = scr_argf(a.args, "f10"); }
+void a_anger_add(const ScrAction& a, ScrCtx& ctx) { ctx.runtime.anger += scr_argf(a.args, "f10"); }
 // The game's bearing (R5: minus the app's) past +f10 -> Stop_right_turn (426), past -f10 ->
 // Stop_turn_left (427).
 void a_turn_to_player(const ScrAction& a, ScrCtx& ctx) {
-    const float game = -ctx.world.bearingDeg, limit = argf(a.args, "f10");
+    const float game = -ctx.world.bearingDeg, limit = scr_argf(a.args, "f10");
     if (game > limit) scr_request(ctx.out, kScrCtrlStopTurnRight);
     else if (game < -limit) scr_request(ctx.out, kScrCtrlStopTurnLeft);
 }
@@ -383,7 +372,8 @@ void locomotion(ScrCtx& ctx, float dt) {
     switch (rt.locoKind) {
         case -1:  // the slowleg is off (data: slowstatus +60 = 0 on every kind -1 row)
         case 1:   // no waypoint, so no request — Gaius's mode 3 (R1 binary + data) and mode 12
-                  // (authored: no goal; the shake-off comes from its actions)
+                  // (authored: no goal; the shake-off comes from its actions). Runs as no-steer:
+                  // the binary's kind-1 walk (follower +378 = 1) is undecoded, a gap (R-AL).
             return;
         case 0:  // the point goal (a player snapshot) until arrived
             if (!rt.hasGoal) return;
@@ -430,6 +420,21 @@ void anger_model(const ScrGraph& g, ScrRuntime& rt, const ScrWorld& w, float dt)
 
 }  // namespace
 
+float scr_argf(const std::vector<ScrArg>& args, const char* slot) {
+    const ScrArg* a = scr_arg(args, slot);
+    return a == nullptr ? 0.0f : static_cast<float>(a->num);
+}
+
+int scr_handle_index(const std::string& text) {
+    const size_t open = text.rfind('[');
+    return open == std::string::npos ? -1 : std::atoi(text.c_str() + open + 1);
+}
+
+std::string scr_handle_name(const std::string& handle) {
+    const size_t open = handle.find('\'');
+    return open == std::string::npos ? handle : handle.substr(open + 1, handle.size() - open - 2);
+}
+
 void scr_library_add(ScrRegistry& r) {
     const std::pair<uint32_t, ScrPredicateFn> preds[] = {
         {kTrue, p_true}, {kHit, p_hit}, {kPlayerSurface, p_player_surface}, {kBossMotionIs, p_boss_motion_is},
@@ -462,6 +467,9 @@ void scr_library_add(ScrRegistry& r) {
     // D4: labelled no-ops (state the app does not model).
     for (const uint32_t fn : {kCloakEquipped, kDemoCameraActive, kSignalArrowPresent, kRayCtrl}) r.gaps.insert(fn);
     for (const int kind : {-1, 0, 1, 10}) r.kinds.insert(kind);
+    // R-AL: kind 1 runs as no-steer (S12 R1's reading); the binary's kind-1 walk (the follower's
+    // +378 = 1, the nav-loop patrol) is undecoded, so it is counted as a gap.
+    r.kindGaps.insert(1);
 }
 
 void scr_library_enter_mode(int mode, ScrCtx& ctx) {
@@ -529,10 +537,7 @@ bool scr_move_back_bind(ScrGraph& graph, const std::vector<EventsVolume>& judgeD
     for (ScrMode& m : graph.modes) {
         ScrLocomotion& l = m.locomotion;
         if (l.judge.empty()) continue;
-        // "KIRIN:scr_judge_volume_def[10] 'KIRIN_BACK'" -> KIRIN_BACK
-        const size_t open = l.judge.find('\'');
-        const std::string name =
-            open == std::string::npos ? l.judge : l.judge.substr(open + 1, l.judge.size() - open - 2);
+        const std::string name = scr_handle_name(l.judge);
         const auto it = std::find_if(judgeDefaults.begin(), judgeDefaults.end(),
                                      [&](const EventsVolume& v) { return v.name == name; });
         // The sector is read as a skelton cylinder yawed 180° (behind him), as KNIGHT_MOVE_BACK and KIRIN_BACK.
@@ -551,7 +556,7 @@ bool scr_move_back_bind(ScrGraph& graph, const std::vector<EventsVolume>& judgeD
 std::string scr_library_missing_args(uint32_t fn, const std::vector<ScrArg>& a) {
     const auto has = [&](const char* s) { return scr_arg(a, s) != nullptr; };
     const auto clip = [&](const char* s) { return has(s) && scr_arg(a, s)->clip >= 0; };
-    const auto index = [&](const char* s) { return has(s) && bracket(scr_arg(a, s)->text) >= 0; };
+    const auto index = [&](const char* s) { return has(s) && scr_handle_index(scr_arg(a, s)->text) >= 0; };
     const auto mode = [&](const char* s) { return has(s) && scr_arg(a, s)->mode >= 0; };
     const auto flag = [&](const char* s) {
         return has(s) && scr_arg(a, s)->num >= 0.0 && scr_arg(a, s)->num < static_cast<double>(kScrFlags);
@@ -725,11 +730,14 @@ std::string scr_registry_dump(const ScrRegistry& registry) {
         out += line;
     }
     for (const int kind : std::set<int>(registry.kinds.begin(), registry.kinds.end())) {
-        out += "kind " + std::to_string(kind) + "\n";
+        out += "kind " + std::to_string(kind) + (registry.kindGaps.count(kind) != 0 ? " gap" : "") + "\n";
     }
     for (const ScrCdefOp& op : kScrCdefOps) {
         std::snprintf(line, sizeof line, "op 0x%02x %s\n", op.op, op.gap ? "gap" : "implemented");
         out += line;
     }
+    // §13 ruling 4: the stomp foot-IK aim (attackdata +d0/+e0) is exported but never read; the
+    // stomps play as authored clips.
+    out += "feature aim gap\n";
     return out;
 }

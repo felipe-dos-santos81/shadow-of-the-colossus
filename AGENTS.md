@@ -18,7 +18,8 @@ attackdata from the export, `kAttack` deleted); the **additive layer** (`app/src
 encounter — Phaedra only); **routes** (`make routes` → `<SOTC_LIB>/behaviour/kirin.route.json`, `sotc-route/0`; the
 follower kinds 2–9, `app/src/route.*`); **terrain** (`make terrain` → `<SOTC_LIB>/stage/arena_04.terrain.json`,
 `sotc-terrain/0`; `app/src/terrain.*`); and **`make coverage`** (`out/re/coverage.md`: per boss, which graph items the
-app implements; KNIGHT and KIRIN 0 missing, Gaius's 2 gaps are S12's labelled no-ops). Her values are
+app implements; KNIGHT and KIRIN 0 missing; kind 1 (R-AL) and the foot-IK aim count as gaps, Gaius's other
+2 are S12's labelled no-ops). Her values are
 `app/src/encounters/kirin.h`, her glue `app/src/kirin_fight.*` (Gaius's core shared, not copied). The fight: dodge her
 stomp; hide in a stair tunnel and whistle (`Q`) — she routes to its GP and peeps (deep on the ruins' boss ground); leave
 by another tunnel and grab her tail (`E`) while she crouches (`watch_*`); climb tail → back → withers → neck; strike the
@@ -27,13 +28,12 @@ root 9.86 → 2.44 m and holds `death_loop`; no return to the shrine; `R` resets
 terrain / sidecar / decode / authored / guess), the 16-boss coverage and every ruling R-A…R-AL are
 `docs/notes/s13-results.md`. The proof is `--s13-selftest --s13-stills out/s13/stills` and `--s13-e2e` (manifest
 arena_04); the acceptance script is `scripts/s13-acceptance.sh` (the frozen S12 chain first); `tools/verify/s13.sh`
-has blessed goldens; s3…s12 goldens byte-identical (no §13.3 ruling). **Everything S13 exports and bakes lives in
-the view `out/libviews/s13` until the merge promotes it** (`make bake` now includes `bake-kirin`, `behaviour` for all
-16, `routes` and `terrain`): Gaius now needs `control_defs` in his graph, so against the base library (whose
-`KNIGHT.graph.json` lacks them) his load, `test_knight` and s12 verify fail until the promotion. Known gaps: the
+has blessed goldens; s3…s12 goldens byte-identical (no §13.3 ruling). Everything S13 exports and bakes (her bake,
+the 16 graphs with `control_defs`, the route, the terrain) was promoted to the base `out/library` at S13's merge
+(`make bake` includes `bake-kirin`, `behaviour` for all 16, `routes` and `terrain`); the `s13` view is deleted. Known gaps: the
 rockfall spawners and the proximity latch (labelled no-ops), the stomp foot-IK aim, the hashigo ladders, Hard mode,
 silent (D10), **her nav-loop patrol** (locomotion kind 1 stays no-steer, R-AL), her heading constant through the
-climb (uninvestigated), the head shake survived trivially (drain 22.9/s vs regen 25/s), the neck's additive swing not
+climb (mode 14's kind 1 is that no-steer), the head shake survived trivially (drain 22.9/s vs regen 25/s), the neck's additive swing not
 met on the scripted route, the rockfall feed a guess (R-AJ), Valus and Quadratus still on their S4/S11 code.
 
 **Milestone S12 "Gaius" — implemented; scripted acceptance green, user walk PENDING.**
@@ -398,7 +398,7 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 ## Acceptance
 
 ```bash
-export SOTC_LIB=<repo>/out/libviews/s13     # <repo>/out/library after S13's merge promotion
+export SOTC_LIB=<repo>/out/library
 caffeinate -dimsu ./scripts/s13-acceptance.sh  # S13 + S12 (which runs S11 → S9 → S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 

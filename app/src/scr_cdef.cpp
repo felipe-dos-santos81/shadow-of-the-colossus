@@ -2,19 +2,14 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
+
+#include "scr_library.h"
 
 namespace {
 
 // FUN_0062bfd0's word test: a negative value matches any bit of mask, else (attr & mask) == value.
 bool masked(uint64_t attr, uint64_t mask, uint64_t value) {
     return static_cast<int64_t>(value) < 0 ? (attr & mask) != 0 : (attr & mask) == value;
-}
-
-// "KNIGHT:control-mode[7]" -> 7; -1 without an index.
-int bracket(const std::string& text) {
-    const size_t open = text.rfind('[');
-    return open == std::string::npos ? -1 : std::atoi(text.c_str() + open + 1);
 }
 
 // One record's result before the expect compare (binary FUN_0062bfd0 unless noted; R2 and
@@ -31,7 +26,7 @@ bool result(const ScrCdefRecord& r, const std::vector<int>& requested, const Scr
         case 0x64: return !w.bossOnGround;     // no ground under him (guess)
         case 0x3a: return true;                // ground probe valid; every export's mask is -1 (guess)
         case 0x45: return true;                // false only for a ridden boss without input (guess)
-        case 0x36: return w.bossControlMode == bracket(r.handle.text);  // sub+0x9c8: his own table
+        case 0x36: return w.bossControlMode == scr_handle_index(r.handle.text);  // sub+0x9c8: his own table
         case 0x38: return std::find(requested.begin(), requested.end(), r.handle.ctrl) != requested.end();
         case 0x54: return w.bossMotion == r.handle.clip;
         case 0x56:  // any layer (FUN_006357f0; by clip, not motion-def: a labelled deviation); without layers the base

@@ -20,17 +20,12 @@ enum : uint32_t {
 
 constexpr uint32_t kRockfallArmed = kScrKirinRockfallArmed;
 
-float argf(const std::vector<ScrArg>& args, const char* slot) {
-    const ScrArg* a = scr_arg(args, slot);
-    return a == nullptr ? 0.0f : static_cast<float>(a->num);
-}
-
 // FUN_006fdf70: the rockfall timer runs (stomps feed it while armed; graph findings §2).
 bool p_rockfall_running(const ScrClause&, const ScrWorld&, const ScrRuntime& rt) { return rt.bossTimer[0] > 0.0f; }
 
 // FUN_006fdfd0: (int)timer1 % i10 < i14 (KIRIN {30, 5}: 5 s of every 30 s). i10 > 0: scr_kirin_check.
 bool p_mode_cycle(const ScrClause& c, const ScrWorld&, const ScrRuntime& rt) {
-    return static_cast<int>(rt.timer1) % static_cast<int>(argf(c.args, "i10")) < static_cast<int>(argf(c.args, "i14"));
+    return static_cast<int>(rt.timer1) % static_cast<int>(scr_argf(c.args, "i10")) < static_cast<int>(scr_argf(c.args, "i14"));
 }
 
 void a_rockfall_tick(const ScrAction&, ScrCtx& ctx) {  // FUN_006fdf20: −dt, floored at 0
@@ -55,12 +50,6 @@ std::string missing_args(uint32_t fn, const std::vector<ScrArg>& a) {
         return period != nullptr && period->num >= 1.0 && scr_arg(a, "i14") != nullptr ? "" : "i10 (> 0)/i14";
     }
     return scr_library_missing_args(fn, a);
-}
-
-// "KIRIN:scr_judge_volume_def[10] 'KIRIN_BACK'" -> "KIRIN_BACK"; a bare name stays.
-std::string judge_name(const std::string& handle) {
-    const size_t open = handle.find('\'');
-    return open == std::string::npos ? handle : handle.substr(open + 1, handle.size() - open - 2);
 }
 
 }  // namespace
@@ -98,12 +87,12 @@ bool scr_kirin_check(const ScrGraph& graph, const RouteGraph* routes, const std:
             return false;
         }
         if (l.judge.empty()) continue;
-        if (std::find(judgeNames.begin(), judgeNames.end(), judge_name(l.judge)) == judgeNames.end()) {
-            error = at + "judge volume not in the sidecar: " + judge_name(l.judge);
+        if (std::find(judgeNames.begin(), judgeNames.end(), scr_handle_name(l.judge)) == judgeNames.end()) {
+            error = at + "judge volume not in the sidecar: " + scr_handle_name(l.judge);
             return false;
         }
         if (!(l.backRadius > 0.0f)) {
-            error = at + "the MOVE_BACK sector of " + judge_name(l.judge) + " is unbound (scr_move_back_bind)";
+            error = at + "the MOVE_BACK sector of " + scr_handle_name(l.judge) + " is unbound (scr_move_back_bind)";
             return false;
         }
     }

@@ -27,6 +27,14 @@ inline constexpr int kScrCtrlStopTurnRight = 55;  // move code 2 Stop_right_turn
 inline constexpr int kScrCtrlStopTurnLeft = 56;   // Stop_turn_left (427)
 inline constexpr int kScrCtrlBrake = 57;          // move code 3 'Sudden_braking'
 
+// The argument helpers every handler file shares (S13 review: one copy each).
+// A numeric slot as a float; 0 when `args` lacks it.
+float scr_argf(const std::vector<ScrArg>& args, const char* slot);
+// "KNIGHT:control-mode[7]" -> 7; -1 without an index.
+int scr_handle_index(const std::string& text);
+// "KIRIN:scr_judge_volume_def[10] 'KIRIN_BACK'" -> "KIRIN_BACK"; a bare name stays.
+std::string scr_handle_name(const std::string& handle);
+
 // Registers the shared handlers (gaps included, in `registry.gaps`) and the kinds −1/0/1/10.
 // Leaves enterMode and locomotion to the caller.
 void scr_library_add(ScrRegistry& registry);
@@ -92,5 +100,6 @@ bool scr_swing_space_clear(const ScrWorld& world, float forward, float side, flo
 
 // What `registry` can run, one line each (S13 design D13, the coverage report's input): every
 // fn `<hex> implemented|gap` (sorted; the evaluator's own `sub` 832610 always), every locomotion
-// kind `kind <n>` (sorted), every evaluator opcode `op 0x<hh> implemented|gap` (kScrCdefOps).
+// kind `kind <n>` (sorted; `kind <n> gap` for registry.kindGaps), every evaluator opcode
+// `op 0x<hh> implemented|gap` (kScrCdefOps), then `feature aim gap` (§13 ruling 4: the foot-IK aim).
 std::string scr_registry_dump(const ScrRegistry& registry);

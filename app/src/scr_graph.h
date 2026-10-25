@@ -355,6 +355,9 @@ struct ScrRegistry {
     std::unordered_set<uint32_t> gaps;
     // The locomotion kinds this registry runs; the loader refuses a mode of any other kind.
     std::unordered_set<int> kinds;
+    // Kinds in `kinds` run as a labelled stand-in for an undecoded binary reading; the coverage
+    // report counts them as gaps.
+    std::unordered_set<int> kindGaps;
     // The step for kinds the library does not run itself (Task 8 installs it for 2-9). Null: none.
     void (*locomotion)(int kind, ScrCtx& ctx, float dt) = nullptr;
 };

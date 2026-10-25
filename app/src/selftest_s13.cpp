@@ -197,7 +197,7 @@ std::string shaking(StageCtx& ctx) {
     const KnightCore& c = core(ctx);
     for (const kd::KirinShake& k : kd::kShakes) {
         const int clip = scr_clip(c.graph, k.clip);
-        if (clip >= 0 && (clip == c.motion.clip || additive_playing(fight(ctx).k.layers, clip))) return k.clip;
+        if (clip >= 0 && (clip == c.motion.clip || additive_playing(fight(ctx).state.layers, clip))) return k.clip;
     }
     return "";
 }
@@ -205,7 +205,7 @@ std::string shaking(StageCtx& ctx) {
 // The additive clips playing, comma-separated.
 std::string layers_playing(StageCtx& ctx) {
     std::string out;
-    for (const AddLayer& l : fight(ctx).k.layers.slot) {
+    for (const AddLayer& l : fight(ctx).state.layers.slot) {
         if (l.state == AddLayer::Free) continue;
         out += (out.empty() ? "" : ",") + std::string(knight_clip_name(core(ctx), l.clip));
     }
@@ -322,7 +322,8 @@ void strike_routine(S13Script& sc, StageCtx& ctx, PlayerInput& in, int target, i
 }
 
 // Her coverage against her own registry (the coverage report's categories, D13): predicates and
-// actions by fn (the evaluator's `sub` counts as implemented), control-def opcodes, locomotion kinds.
+// actions by fn (the evaluator's `sub` counts as implemented), control-def opcodes, locomotion kinds
+// (registry.kindGaps as gaps), and the foot-IK aim (a gap when a row names an aim bone, §13 ruling 4).
 struct Cover {
     int implemented = 0, gap = 0, missing = 0;
 };
@@ -367,11 +368,19 @@ std::string coverage_line(const KnightCore& c, Cover& total) {
         }
         bump(o, s);
     }
-    for (int kind : kinds) bump(k, r.kinds.count(kind) != 0 ? 0 : 2);
+    for (int kind : kinds) bump(k, r.kindGaps.count(kind) != 0 ? 1 : r.kinds.count(kind) != 0 ? 0 : 2);
+    Cover f;
+    for (const auto& [handle, rows] : c.graph.attackdata) {
+        if (std::any_of(rows.begin(), rows.end(), [](const ScrAttackRow& row) { return !row.aimBone.empty(); })) {
+            bump(f, 1);  // scr_registry_dump's `feature aim gap`
+            break;
+        }
+    }
     add("preds", p);
     add("acts", a);
     add("ops", o);
     add("kinds", k);
+    add("feats", f);
     return out;
 }
 
@@ -383,7 +392,7 @@ bool s13_start(S13Script& sc, StageCtx& ctx, double loadMs) {
         return false;
     }
     const KnightCore& c = core(ctx);
-    const KirinState& k = fight(ctx).k;
+    const KirinState& k = fight(ctx).state;
     std::printf("%s-load stage=arena encounter=%s meshes=%zu ground=%dx%d layers=%d entity=%.2f,%.2f,%.2f "
                 "yaw=%.2f spawn=%.2f,%.2f,%.2f return=%d graph=%s modes=%zu edges=%zu add_edges=%zu routes=%zu "
                 "gps=%zu nodes=%zu terrain=%zu boss_ground=%zu start=%s clip=%s ms=%.1f\n",
@@ -513,8 +522,8 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
                      me.x, me.y, me.z, std::hypot(me.x - her.x, me.z - her.z), tip.x, tip.y, tip.z,
                      player_mode_name(combat.mode), band_name(ctx), combat.bandT, combat.stamina, encounter.health,
                      combat.health, layers_playing(ctx).c_str(),
-                     static_cast<unsigned long long>(kirin_attr_word(terrain_boss_ground(f.k.terrain, her))),
-                     kirin_attr_word(terrain_at(f.k.terrain, me)) >> 48 ? "tunnel" : "-", bl.x, bl.z, br.x, br.z);
+                     static_cast<unsigned long long>(kirin_attr_word(terrain_boss_ground(f.state.terrain, her))),
+                     kirin_attr_word(terrain_at(f.state.terrain, me)) >> 48 ? "tunnel" : "-", bl.x, bl.z, br.x, br.z);
     }
     if (sc.phase != kReset && sc.phaseSeconds > kBudget[sc.phase]) {
         char where[240];
@@ -545,7 +554,7 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
         sc.arrivedGp = false;
     }
     if (c.rt.route.gp >= 0 && !sc.arrivedGp) {
-        const Vec3 gp = f.k.routes.gps[static_cast<size_t>(c.rt.route.gp)].pos;
+        const Vec3 gp = f.state.routes.gps[static_cast<size_t>(c.rt.route.gp)].pos;
         if (std::hypot(gp.x - her.x, gp.z - her.z) <= c.rt.arriveRadius) {
             sc.arrivedGp = true;
             if (sc.arrivedAt < 0.0f) sc.arrivedAt = sc.seconds;
@@ -621,7 +630,7 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
     // Ruling R-AL: her modes 3 and 14 are locomotion kind 1, which the shared slowleg does not steer
     // (S12 R1: no waypoint, no request), so this walk is the else-edge walk loop on her heading, not
     // a chosen exit.
-    const uint64_t ground = kirin_attr_word(terrain_boss_ground(f.k.terrain, her));
+    const uint64_t ground = kirin_attr_word(terrain_boss_ground(f.state.terrain, her));
     if (sc.peeped && !sc.leftRuins && ground != sc.peepGround && !encounter.defeated) {
         sc.leftRuins = true;
         std::printf("%s-ground_handoff from=0x%llx to=0x%llx her=%.1f,%.1f,%.1f yaw=%.1f mode=%s clip=%s rider=%s "
@@ -661,7 +670,7 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
         }
         case kToTunnel:
             if (sc.waypoint >= static_cast<int>(std::size(kTunnelPath))) {
-                const TerrainHit t = terrain_at(f.k.terrain, me);
+                const TerrainHit t = terrain_at(f.state.terrain, me);
                 std::printf("%s-hide class=%d at=%.1f,%.1f,%.1f mode=%s her_dist=%.1f t=%.1f\n", p, t.found ? t.cls : -1,
                             me.x, me.y, me.z, mode_name(ctx, c.rt.current), std::hypot(me.x - her.x, me.z - her.z),
                             sc.seconds);
@@ -670,7 +679,7 @@ std::optional<int> s13_after(S13Script& sc, StageCtx& ctx) {
             break;
         case kPeep: {
             if ((c.rt.current == 11 || c.rt.current == 12) && clip_starts(ctx, "kirin_a_watch")) {
-                const uint64_t owner = kirin_attr_word(terrain_boss_ground(f.k.terrain, her));
+                const uint64_t owner = kirin_attr_word(terrain_boss_ground(f.state.terrain, her));
                 std::printf("%s-peep mode=%s route=%d gp=%d ground=0x%llx arrived=%.1f clip=%s her=%.1f,%.1f,%.1f "
                             "yaw=%.1f at=%.1f\n",
                             p, mode_name(ctx, c.rt.current), c.rt.route.route, c.rt.route.gp,

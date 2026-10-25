@@ -284,10 +284,11 @@ public static class EventsSidecar
 
     private static JsonObject? EffectRow(ObjAnimTrack track, List<string> bones, ObjAnimMap? map, string clip)
     {
-        if (track.Events is not { Count: > 0 } events) return null;
-        if (map is not null && map.DropEvents.Any(d => clip.EndsWith(d.Key, StringComparison.Ordinal)
-                && d.Value.Contains(track.Name)))
-            if ((events = events.Where(e => e.Start != 0).ToList()).Count == 0) return null;
+        if (track.Events is not { Count: > 0 } all) return null;
+        var drop = map is not null && map.DropEvents.Any(d => clip.EndsWith(d.Key, StringComparison.Ordinal)
+                && d.Value.Contains(track.Name));
+        var events = drop ? all.Where(e => e.Start != 0).ToList() : all;
+        if (events.Count == 0) return null;
         var row = new JsonObject
         {
             ["name"] = track.Name,

@@ -89,13 +89,13 @@ bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJs
         why = "one length per clip name";
         return false;
     }
-    // Her graph names one clip she does not carry: the 8 SWORD_ONLY control-defs every boss shares
-    // (COMMON_BOSS_CONTROL:control-def[10], [14], [18], [28], [35], [86], [102], [109]) test "boss
-    // motion is knight[23] knight_a_atk1_start" (expect 0) — binary: an identity compare against
-    // KNIGHT's motion-def never holds for her. Only such a handle (under control_defs, a motion row
-    // that is not hers) is admitted, after her clips (never a playback index), 0 s and rootless: the
-    // clause reads "not playing". Any other unknown clip — a kirin_a_* one a stale bake lacks — is
-    // still refused by the loader.
+    // Her graph names clips she does not carry: today one, from the 8 SWORD_ONLY control-defs every
+    // boss shares (COMMON_BOSS_CONTROL:control-def[10], [14], [18], [28], [35], [86], [102], [109]),
+    // which test "boss motion is knight[23] knight_a_atk1_start" (expect 0) — binary: an identity
+    // compare against KNIGHT's motion-def never holds for her. Any control-def handle naming another
+    // boss's motion row (under control_defs, a motion row that is not kirin[…]) is admitted, after
+    // her clips (never a playback index), 0 s and rootless: the clause reads "not playing". Any other
+    // unknown clip — a kirin_a_* one a stale bake lacks — is still refused by the loader.
     std::vector<std::string> clipNames = glbClips;
     std::vector<float> seconds = glbSeconds;
     std::vector<char> foreign(clipNames.size(), 0);
@@ -227,7 +227,7 @@ bool kirin_fight_load(KirinFight& f, const Scene& scene, std::size_t entityRig, 
     std::vector<std::string> names, judges;
     std::vector<float> seconds;
     if (!knight_scene_sidecar(b, entity, libraryDir, entityGlb, names, seconds, judges, why) ||
-        !kirin_core_load(b.core, f.k, text[0], text[1], text[2], names, seconds, b.events.judgeDefaults, judges,
+        !kirin_core_load(b.core, f.state, text[0], text[1], text[2], names, seconds, b.events.judgeDefaults, judges,
                          standClip, ground, why) ||
         !knight_scene_bind(b, scene, entityRig, encounters::kKirin.death.clip, kd::kHipJoint, why)) {
         return false;
@@ -242,8 +242,8 @@ bool kirin_fight_load(KirinFight& f, const Scene& scene, std::size_t entityRig, 
 
 void kirin_fight_reset(KirinFight& f, Encounter& encounter, Playback& entity) {
     knight_fight_reset(f.base, encounter, entity);  // the core from the retry start, the stand
-    f.k.layers = AddLayers{};
-    f.k.orients.clear();
+    f.state.layers = AddLayers{};
+    f.state.orients.clear();
     f.spent = {};
     f.struckKind = 0;
     f.rockfallFed = 0.0f;
@@ -272,18 +272,18 @@ KnightThink kirin_fight_step(KirinFight& f, Encounter& encounter, Playback& enti
     w.hitKind = struck ? f.struckKind : -1;
     w.hpMax = encounters::kKirin.maxHealth;
     w.playerGroundAttr = !w.playerAttached && combat.mode != PlayerMode::Falling
-                             ? kirin_attr_word(terrain_at(f.k.terrain, player.position))
+                             ? kirin_attr_word(terrain_at(f.state.terrain, player.position))
                              : 0u;
 
     Vec3 root = encounter.entityPosition;
     KnightThink t;
     if (encounter.defeated) {
         if (b.deathMode < 0) {
-            t = knight_enter_death(b, [&] { return kirin_death_think(c, f.k, w, ground, root, b.deathClip); });
+            t = knight_enter_death(b, [&] { return kirin_death_think(c, f.state, w, ground, root, b.deathClip); });
             // authored: the death clip is her whole pose — the layers are cut (no think steps them
             // after the defeat, so a layer left playing would freeze on her corpse).
-            f.k.layers = AddLayers{};
-            f.k.orients.clear();
+            f.state.layers = AddLayers{};
+            f.state.orients.clear();
         }
         // The death clip has no root series: no travel. Her root drops kDeathRootY while it plays,
         // then death_loop (its held pose) holds the drop's end.
@@ -296,7 +296,7 @@ KnightThink kirin_fight_step(KirinFight& f, Encounter& encounter, Playback& enti
         encounter.entityLift = f.baseLift + kirin_death_lift(looping, entity.time, len);
         m.time = looping ? len : std::min(entity.time, len);
     } else {
-        t = kirin_think(c, f.k, w, ground, root, dt);
+        t = kirin_think(c, f.state, w, ground, root, dt);
     }
     encounter.entityPosition = root;
     encounter.entityYawDeg = c.yawDeg;
@@ -306,7 +306,7 @@ KnightThink kirin_fight_step(KirinFight& f, Encounter& encounter, Playback& enti
 
 void kirin_fight_pose(KirinFight& f, const Scene& scene, std::size_t entityRig, const Playback& entity, float dt,
                       std::vector<Mat4>& palette) {
-    knight_fight_pose(f.base, scene, entityRig, entity, dt, palette, &f.k.layers);
+    knight_fight_pose(f.base, scene, entityRig, entity, dt, palette, &f.state.layers);
 }
 
 std::vector<DamageHit> kirin_fight_events(KirinFight& f, PlayerState& player, PlayerCombat& combat,
@@ -374,7 +374,7 @@ ShakeOff kirin_fight_shake(const KirinFight& f) {
         }
     };
     take(knight_clip_name(c, c.motion.clip), c.motion.time);
-    for (const AddLayer& l : f.k.layers.slot) {
+    for (const AddLayer& l : f.state.layers.slot) {
         // A layer's clock is its frame at 30 per s (additive.cpp kLayerFps, data DAT_0126dac4).
         if (l.state != AddLayer::Free) take(knight_clip_name(c, l.clip), l.frame / 30.0f);
     }

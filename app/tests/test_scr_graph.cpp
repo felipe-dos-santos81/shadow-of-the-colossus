@@ -617,8 +617,9 @@ TEST_CASE("an edge ref, a control-def clip and a mode kind outside the registry 
 
 TEST_CASE("scr_registry_dump lists fns, kinds and opcodes") {
     const std::string knight = scr_registry_dump(scr_registry_knight());
-    for (const char* line : {"kind -1\n", "kind 0\n", "kind 1\n", "kind 10\n", "832600 implemented\n",
-                             "832610 implemented\n", "6fe5e0 implemented\n"}) {
+    // R-AL: kind 1 runs as no-steer, a gap; §13 ruling 4: the foot-IK aim is a gap.
+    for (const char* line : {"kind -1\n", "kind 0\n", "kind 1 gap\n", "kind 10\n", "832600 implemented\n",
+                             "832610 implemented\n", "6fe5e0 implemented\n", "feature aim gap\n"}) {
         CHECK_MESSAGE(knight.find(line) != std::string::npos, line);
     }
     ScrRegistry reg = test_registry();

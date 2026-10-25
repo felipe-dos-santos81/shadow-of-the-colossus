@@ -39,8 +39,9 @@ struct KirinState {
 // scr_move_back_bind on `judgeDefaults`, then scr_kirin_check against `judgeNames`), her
 // routes and terrain, `glbSeconds` per glb clip, her rootless clips (kirin_root's kNoRoot and
 // kUnusable: never played raw) and the stand, and snaps every route height to her ground on
-// `ground`. The one foreign clip the shared SWORD_ONLY control-defs name (KNIGHT's motion row) is
-// appended after hers, 0 s and rootless (it never plays); any other clip her glb lacks is refused.
+// `ground`. Every clip a control-def handle names from another boss's motion row (today KNIGHT's,
+// through the shared SWORD_ONLY defs) is appended after hers, 0 s and rootless (it never plays);
+// any other clip her glb lacks is refused.
 // False with `why` naming the culprit.
 bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJson,
                      const std::string& routeJson, const std::string& terrainJson,
@@ -84,7 +85,7 @@ KnightThink kirin_death_think(KnightCore& core, KirinState& k, ScrWorld& world, 
 
 struct KirinFight {
     KnightFight base;   // the shared scene side: core, sidecar, rig, pose, events (S12)
-    KirinState k;
+    KirinState state;   // hers: routes, terrain, the additive pool and its edges
     std::array<float, encounters::kirin_detail::W::Count> spent{};  // damage per strike target
     int struckKind = 0;     // the landed strike's hit kind (next frame's world.hitKind)
     float baseLift = 0.0f;  // the entity's grounding lift (the death's root drop adds to it)
