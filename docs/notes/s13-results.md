@@ -375,6 +375,10 @@ backstop; the camera.
 4. **Full run**: `make verify ARGS=--force` on the blessed tree (`588cf7a` + these docs): rc 0, 521 s wall —
    dotnet 63 s, ctest 23 s (664 app cases), audio 1 s, s3 8 s, s4 19 s, s41 21 s, s42 10 s, s5 8 s, s6 19 s, s7 30 s,
    s8 52 s, s9 102 s, s11 59 s, s12 68 s, s13 94 s: **all twelve milestones PASS** against their goldens.
+5. **Re-blessed (code review, 2026-10-24)**: `scripts/verify --bless --only s13` with the base `SOTC_LIB=out/library`
+   on `3867963` (the new `PIN`), twice from a clean tree, `diff -r` of the two trees empty. The only golden change is
+   the two coverage lines (`s13-coverage`/`s13e2e-coverage`: `kinds=7/1/0 feats=0/1/0 total=84/8/0`, was
+   `kinds=8/0/0 total=85/6/0`); the pre-bless `make verify` showed s3…s12 PASS and no other s13 line moved.
 
 ## 10 · The user's walk — PENDING
 
