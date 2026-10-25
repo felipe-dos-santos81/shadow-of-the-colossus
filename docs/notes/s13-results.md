@@ -132,7 +132,7 @@ hit row), and once through `Kirin_lose_sight_mode` at the hung-neck shake (126.8
 | `s13-death` | `Motion/Collapse/Done` in `Giraffe_death`, lift `9.86 → 2.44 → 2.44` | 0.000 / 7.333 / 8.000 s |
 | `s13-corpse` | `clip=kirin_a_death_loop held=1 lift=2.44 … return=Idle` | moved 0.00 m; no shrine |
 | `s13-reset` | exact | — |
-| `s13-coverage` | `boss=KIRIN … total=N/M/0` | 85 implemented / 6 gap / 0 missing (equals `make coverage`) |
+| `s13-coverage` | `boss=KIRIN … total=N/M/0` | 85 implemented / 6 gap / 0 missing (equals `make coverage`); since the code review 84 / 8 / 0 (`kinds=7/1/0 feats=0/1/0`: kind 1 and the foot-IK aim counted as gaps, §6) |
 | `s13-perf` | 240 frames, `0 < frame_ms <= 16.7` | **8.345 ms** this run (§5) (drawn 63, culled 9) |
 | `s13-status` | `phases_done=12` | 9,598 frames, 160.0 s simulated |
 | `s1-status` | `windowed=1 relative_mouse=0 mouse_auto_capture=0` | as gated |
@@ -171,38 +171,49 @@ string-pulling and the sight ray) costs 0.008–0.012 ms mean, 0.04–0.10 ms ma
 ## 6 · Coverage — the 16 colossi (`make coverage`, `out/re/coverage.md`)
 
 `make coverage` builds `scr_registry_dump` (the app's registries: knight and kirin, one line per fn VA with
-`implemented`/`gap`, the kinds, the 37 opcodes) and runs `tools/re/scr/coverage.py` over the 16 exports in
-`<SOTC_LIB>/behaviour/`. Cells are implemented / gap / missing, counted over the items each boss's exported graph
-uses. The acceptance's own run (step 3) wrote the same table:
+`implemented`/`gap`, the kinds — `kind 1 gap`, R-AL —, the 37 opcodes, `feature aim gap`) and runs
+`tools/re/scr/coverage.py` over the 16 exports in `<SOTC_LIB>/behaviour/`. Cells are implemented / gap / missing,
+counted over the items each boss's exported graph uses; `features` holds one item, the foot-IK aim, for a boss whose
+attackdata names an aim bone (+d0). The table is the code review's `make coverage` (2026-10-24, the base library);
+the acceptance's own run (step 3, before the review) counted kind 1 as implemented and had no features column (KIRIN
+`8/0/0` kinds, total 85/6/0):
 
-| boss | predicates | actions | opcodes | kinds | missing |
-|---|---|---|---|---|---|
-| MINOTOUR_A (Valus) | 25/2/3 | 12/0/3 | 26/0/0 | 4/0/0 | 6 |
-| MAMMOTH (Quadratus) | 26/1/1 | 12/0/1 | 21/0/0 | 5/0/0 | 2 |
-| KNIGHT (Gaius) | 23/1/0 | 17/1/0 | 28/0/0 | 4/0/0 | 0 |
-| **KIRIN (Phaedra)** | 29/2/0 | 19/4/0 | 29/0/0 | 8/0/0 | **0** |
-| BIRD | 17/2/4 | 10/0/12 | 12/0/0 | 3/0/0 | 16 |
-| MINOTOUR_B | 24/3/5 | 14/0/5 | 25/0/0 | 4/0/0 | 10 |
-| EEL | 13/1/14 | 7/0/16 | 12/0/0 | 3/0/0 | 30 |
-| YAMORI_B | 20/1/13 | 12/0/25 | 24/2/0 | 5/0/0 | 38 |
-| KAME | 25/2/13 | 15/0/18 | 27/0/0 | 5/0/0 | 31 |
-| NARGA | 16/2/14 | 8/0/19 | 9/0/0 | 4/0/0 | 33 |
-| LEO | 24/2/10 | 14/0/5 | 27/2/0 | 9/0/0 | 15 |
-| POSEIDON | 24/3/13 | 14/0/21 | 25/0/0 | 5/0/0 | 34 |
-| SNAKE | 9/0/5 | 6/0/8 | 11/0/0 | 2/0/0 | 13 |
-| CERBERUS_R | 21/1/13 | 14/0/8 | 23/2/0 | 10/0/0 | 21 |
-| MINOTOUR_C | 26/2/12 | 14/0/9 | 28/0/0 | 5/0/0 | 21 |
-| BUDDHA | 15/2/4 | 8/0/6 | 20/0/0 | 1/0/0 | 10 |
-| total (boss rows summed) | 337/27/124 | 196/5/156 | 347/6/0 | 77/0/0 | 280 |
+| boss | predicates | actions | opcodes | kinds | features | missing |
+|---|---|---|---|---|---|---|
+| MINOTOUR_A (Valus) | 25/2/3 | 12/0/3 | 26/0/0 | 3/1/0 | 0/0/0 | 6 |
+| MAMMOTH (Quadratus) | 26/1/1 | 12/0/1 | 21/0/0 | 4/1/0 | 0/1/0 | 2 |
+| KNIGHT (Gaius) | 23/1/0 | 17/1/0 | 28/0/0 | 3/1/0 | 0/0/0 | 0 |
+| **KIRIN (Phaedra)** | 29/2/0 | 19/4/0 | 29/0/0 | 7/1/0 | 0/1/0 | **0** |
+| BIRD | 17/2/4 | 10/0/12 | 12/0/0 | 2/1/0 | 0/0/0 | 16 |
+| MINOTOUR_B | 24/3/5 | 14/0/5 | 25/0/0 | 3/1/0 | 0/0/0 | 10 |
+| EEL | 13/1/14 | 7/0/16 | 12/0/0 | 2/1/0 | 0/0/0 | 30 |
+| YAMORI_B | 20/1/13 | 12/0/25 | 24/2/0 | 4/1/0 | 0/0/0 | 38 |
+| KAME | 25/2/13 | 15/0/18 | 27/0/0 | 4/1/0 | 0/0/0 | 31 |
+| NARGA | 16/2/14 | 8/0/19 | 9/0/0 | 3/1/0 | 0/0/0 | 33 |
+| LEO | 24/2/10 | 14/0/5 | 27/2/0 | 8/1/0 | 0/0/0 | 15 |
+| POSEIDON | 24/3/13 | 14/0/21 | 25/0/0 | 4/1/0 | 0/0/0 | 34 |
+| SNAKE | 9/0/5 | 6/0/8 | 11/0/0 | 1/1/0 | 0/0/0 | 13 |
+| CERBERUS_R | 21/1/13 | 14/0/8 | 23/2/0 | 9/1/0 | 0/0/0 | 21 |
+| MINOTOUR_C | 26/2/12 | 14/0/9 | 28/0/0 | 4/1/0 | 0/0/0 | 21 |
+| BUDDHA | 15/2/4 | 8/0/6 | 20/0/0 | 1/0/0 | 0/0/0 | 10 |
+| total (boss rows summed) | 337/27/124 | 196/5/156 | 347/6/0 | 62/15/0 | 0/2/0 | 280 |
 
 - **Every opcode and every locomotion kind any of the 16 uses is known** (missing 0 in both columns): the generic
-  evaluator covers the 37 opcodes the exports use (gaps 0x02, 0x4a, 0x4b, 0x4d: false in play), and kinds −1…10
-  all run (2–9 through the route hook).
-- **Gaius's 2 gaps** are S12's own labelled no-ops, now registered as gaps under D4: `signal_arrow_present`
-  (`0x8350c0`, always false) and `ray_ctrl` (`0x82ef20`, never reports class 0xc00). Gaius is fully covered.
+  evaluator covers the 37 opcodes the exports use (gaps 0x02, 0x4a, 0x4b, 0x4d: false in play), and kinds −1, 0, 10
+  and 2–9 (through the route hook) run; **kind 1 runs as no-steer and is counted as a gap** (R-AL: S12 R1's reading,
+  no waypoint and no request; the binary's kind-1 walk — the follower's `+378 = 1`, the nav-loop patrol — is
+  undecoded). Every boss but BUDDHA uses kind 1.
+- **The foot-IK aim is counted as a gap** (§13 ruling 4): KIRIN and MAMMOTH name aim bones (`OptBone_IKFootFL/FR`);
+  the app plays the stomps as authored clips and never reads `+d0/+e0`.
+- **Gaius's 2 fn gaps** are S12's own labelled no-ops, now registered as gaps under D4: `signal_arrow_present`
+  (`0x8350c0`, always false) and `ray_ctrl` (`0x82ef20`, never reports class 0xc00); with kind 1 (R-AL) he has 3
+  gaps and 0 missing items.
 - **Phaedra's gaps**: `cloak_equipped` (`0x835290`, false) and `demo_camera_active` (`0x834fb0`, false) among the
   predicates; the rockfall spawners (`0x6fccf0`, `0x6fd5a0`) and the proximity latch (`0x6fc8a0`, `0x6fc8c0`) among
-  the actions (§3 non-goals).
+  the actions (§3 non-goals); kind 1 (R-AL) and the foot-IK aim (§13 ruling 4).
+- **Deviation from D5: `demo_camera_active` is registered as a gap.** D5 lists "demo_camera false" in the
+  implemented batch; the library returns the same constant false but registers it under `gaps` (D4's labelled
+  no-op), since the app has no demo camera state to read. The coverage counts it as a gap, deliberately.
 - **Valus and Quadratus** still run on their S4/S11 code; the report lists what their graphs need: Valus 6 items
   (`route_point_event`, `path_to_player`, `waypoint_bearing_le`, `goal_wall`, `profile_reset`,
   `profile_by_surface`), Quadratus 2 (`dprelate_changed`, `stage_anim`) — the census estimate was ~6 each.
@@ -272,7 +283,7 @@ source.
 | HP 160, the head sigil pool 160 (region 0x10) | data (`kirin_first` 0x16c08a0) |
 | Shake-off triggers, the brake window (first 5 s of each 30 s, `KIRIN:C110`) | graph |
 | Shake strength (stamina drain, window) | **authored** rule (S11/S12: the region bone's p90 angular speed / 10), measured on her bake (`tools/re/s13/kirin_shake.py`, R-AH) |
-| KNIGHT's 8 SWORD_ONLY control-defs naming `knight_a_*` in her graph admitted as rootless, "not playing" | data + **authored** reading (identity compare never holds for her) |
+| Any control-def handle naming another boss's motion row admitted as a rootless, "not playing" clip (today KNIGHT's 8 SWORD_ONLY defs, `knight_a_atk1_start`) | data + **authored** reading (identity compare never holds for her) |
 | Game flags widened to 1024 (her neck flags 587/588) | **guess** (size) |
 | Her spawn (1122, 147) on the platform, ground 53.76 | data-supported (`kirin_standby_col`) + measured |
 | The player start (984, 52.5, 142) | data (the arena start) |
@@ -316,8 +327,15 @@ backstop; the camera.
 - **The entry is the tail** (D10, authored): the §13.2 roof-neck fallback was not needed. Her tail tip hangs between
   her hind feet, inside every hind footstep's 4.35 m `GROUNDDEST_SHOCK2` sphere, so the script waits 7 m back until
   `watch_loop` has run 0.5 s and gives up 0.9 s into `watch_end`.
-- **She keeps one heading** (−67.6°) from the peep to her death while she walks with the rider (uninvestigated:
-  the graph's turn rows or kind 1's no-steer).
+- **She keeps one heading** (−67.6°) from the peep to her death while she walks with the rider. Investigated in the
+  code review (a temporary per-frame probe in `kirin_fight_step` over `--s13-selftest`, 83–152 s, not committed):
+  the peep (mode 12) is kind −1 and the ridden mode 14 is kind 1, neither of which steers (steer 0, no turn bit
+  48/49/55/56 on any ridden frame of kind 1's own); the rider's bearing stays within ±10° (on the neck/head) or near
+  ±180° (on the tail). Kind 10 (mode 6) runs only in 1–2-frame flickers when a strike breaks the grip (131.3, 136.0,
+  145.5, 149.1, 150.1, 151.0 s); those frames do request a turn or the backward step (steer −156°, 88°, −73°: the
+  ATTAIN target, not the rider's bearing), but the next frame is mode 14 again, no turn clip is entered and the yaw
+  stays −67.63° to the hundredth. So it is not "kind 10 sees the rider at bearing ≈ 0": it is **R-AL** — mode 14's
+  kind 1 runs as no-steer; the game's kind-1 walk is undecoded (a counted gap, §6).
 - **The climb ping-pongs** (`tail,back,withers,neck_low,withers,…`): each neck strike's grip break is caught on the
   withers and the climber rests there to 95 before the next run up.
 - **`refuse_tail` keeps draining a rider already on the back or neck**: the S11/S12 shake rule is not band-aware.
@@ -325,7 +343,9 @@ backstop; the camera.
   trigger input is not decoded.
 - **KIRIN's graph names `knight_a_atk1_start`** through the shared `COMMON_BOSS_CONTROL` SWORD_ONLY control-defs
   (the 8: [10], [14], [18], [28], [35], [86], [102], [109]); the exporter is faithful (an identity compare with
-  KNIGHT's motion row never holds for her), and the loader admits only these as rootless, "not playing" clips.
+  KNIGHT's motion row never holds for her). The loader admits any control-def handle naming another boss's motion
+  row (a row that is not `kirin[…]`; today only these 8) as a rootless, "not playing" clip; any other unknown clip
+  is refused.
 - **Op 0x56 / `additive_playing` match by clip, not motion-def** (labelled): `GIRAFFE_NECK_DOWN_QUIT_CONDITIONS`
   reads "no `refuse_start` layer" instead of "not the neck dummy".
 - **MOVE_BACK**: Phaedra's `KIRIN_BACK` sector (20 m, 80°) is bound from her sidecar; Gaius keeps the authored
@@ -356,7 +376,7 @@ backstop; the camera.
 ## 10 · The user's walk — PENDING
 
 ```bash
-export SOTC_LIB=<repo>/out/libviews/s13   # <repo>/out/library after the merge promotion
+export SOTC_LIB=<repo>/out/library   # S13 was promoted at its merge
 make phaedra      # app/build/sotc-viewer … --manifest out/re/stage/arena_04.manifest
 ```
 
@@ -366,7 +386,7 @@ make phaedra      # app/build/sotc-viewer … --manifest out/re/stage/arena_04.m
 | 2 | she notices you and stomps | walk toward her on the platform | she turns to you and stomps (`atack_leg_*`); stepping off her line clears it; a stomp hurts; no hit while you ride her | ☐ |
 | 3 | you hide in a tunnel | go down a stair tunnel (west stair = class 7) | the stairs and the ring corridor are walkable; no fall through the ruins | ☐ |
 | 4 | she walks to it and peeps | press `Q` (whistle) inside the tunnel | she routes to the tunnel's GP and crouches to peep: light (owner 0x3c00000) or deep (on the ruins, 0x400000) | ☐ |
-| 5 | you leave by another tunnel and reach her tail | run out through another tunnel, round behind her while she crouches; hold `E` at the tail | the grab works in `watch_*` (the tail tip ≈ 1.7 m up); her hind footsteps hurt (stay ~7 m back until the loop) | ☐ |
+| 5 | you leave by another tunnel and reach her tail | run out through another tunnel, round behind her while she crouches; hold `E` at the tail | the grab works in `watch_*` (the tail ≤ 3.73 m above her ground, measured); her hind footsteps hurt (stay ~7 m back until the loop) | ☐ |
 | 6 | the climb | climb | tail (hang) → back (walk) → withers (walk) → neck (hang) → neck high → head (walk); her shakes drain the grip | ☐ |
 | 7 | the neck strikes lower her neck | strike (`J`) the nape (the neck trigger) twice | the first raises the head (neck down 1), the second lowers it (neck down 2); no HP lost; the additive layer reads as a neck motion | ☐ |
 | 8 | the head sigil | from the lowered neck, onto the head; strike | the sigil spends her 160 HP; the last blow kills | ☐ |
@@ -376,7 +396,7 @@ make phaedra      # app/build/sotc-viewer … --manifest out/re/stage/arena_04.m
 | 12 | the tunnels and the rim | walk every tunnel, the ring corridor, the ruin roof; walk off the north road | the tunnels hold; the road's end returns you to the start | ☐ |
 | 13 | window, cursor, fps | move the mouse; watch the title | a 1280×720 window, the cursor free, the fps in the ≥ 60 class | ☐ |
 
-Known rough edges to expect (§8): no patrol; she keeps one heading through the climb (uninvestigated); the climb
+Known rough edges to expect (§8): no patrol; she keeps one heading through the climb (kind 1's no-steer, R-AL); the climb
 ping-pongs between withers and neck; the head shake is easy, the hung neck hard; silence; no rocks fall.
 
 **Verdict: PENDING.** S13's done-line closes only when the user has filled this table.
@@ -438,6 +458,15 @@ No §13.3 ruling was needed: Gaius's S12 goldens are byte-identical on the new l
   tables (6 missing; the "Fix later" backlog; both need a deliberate re-bless), then the cheapest of the rest
   (BUDDHA 10, MINOTOUR_B 10, SNAKE 13 — under-counted, R-U).
 - **The exporter's per-mode walk for the non-slowstatus status types** (R-U), the rockfall spawners, the foot-IK aim.
+
+**Backlog (code review, 2026-10-24)** — recorded, not fixed in S13:
+- The shared core still carries Gaius's names: `KnightCore`/`KnightFight`/`knight_*` (and `scr_knight_step`) run
+  Phaedra too; rename to `Boss*`/`boss_*` when a third boss joins.
+- The core's root and turn tables are null-function-pointer seams (`KnightCore::rootAt`/`turnAt`) that default to
+  Gaius's `knight_root.h` tables when unset; a boss that forgets them silently gets his.
+- The per-colossus `stage_ctx`/`interactive` boilerplate: each fight adds its own `*_wired` branches.
+- The verify adapter `tools/verify/s13.sh` duplicates the parsing and gates of `scripts/s13-acceptance.sh`.
+- The selftest helpers are copied per milestone (`selftest_s12.cpp` → `selftest_s13.cpp`).
 
 ## 13 · Evidence files (all gitignored)
 

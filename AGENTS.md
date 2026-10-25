@@ -18,7 +18,8 @@ attackdata from the export, `kAttack` deleted); the **additive layer** (`app/src
 encounter — Phaedra only); **routes** (`make routes` → `<SOTC_LIB>/behaviour/kirin.route.json`, `sotc-route/0`; the
 follower kinds 2–9, `app/src/route.*`); **terrain** (`make terrain` → `<SOTC_LIB>/stage/arena_04.terrain.json`,
 `sotc-terrain/0`; `app/src/terrain.*`); and **`make coverage`** (`out/re/coverage.md`: per boss, which graph items the
-app implements; KNIGHT and KIRIN 0 missing, Gaius's 2 gaps are S12's labelled no-ops). Her values are
+app implements; KNIGHT and KIRIN 0 missing; kind 1 (R-AL) and the foot-IK aim count as gaps, Gaius's other
+2 are S12's labelled no-ops). Her values are
 `app/src/encounters/kirin.h`, her glue `app/src/kirin_fight.*` (Gaius's core shared, not copied). The fight: dodge her
 stomp; hide in a stair tunnel and whistle (`Q`) — she routes to its GP and peeps (deep on the ruins' boss ground); leave
 by another tunnel and grab her tail (`E`) while she crouches (`watch_*`); climb tail → back → withers → neck; strike the
@@ -32,7 +33,7 @@ the 16 graphs with `control_defs`, the route, the terrain) was promoted to the b
 (`make bake` includes `bake-kirin`, `behaviour` for all 16, `routes` and `terrain`); the `s13` view is deleted. Known gaps: the
 rockfall spawners and the proximity latch (labelled no-ops), the stomp foot-IK aim, the hashigo ladders, Hard mode,
 silent (D10), **her nav-loop patrol** (locomotion kind 1 stays no-steer, R-AL), her heading constant through the
-climb (uninvestigated), the head shake survived trivially (drain 22.9/s vs regen 25/s), the neck's additive swing not
+climb (mode 14's kind 1 is that no-steer), the head shake survived trivially (drain 22.9/s vs regen 25/s), the neck's additive swing not
 met on the scripted route, the rockfall feed a guess (R-AJ), Valus and Quadratus still on their S4/S11 code.
 
 **Milestone S12 "Gaius" — implemented; scripted acceptance green, user walk PENDING.**

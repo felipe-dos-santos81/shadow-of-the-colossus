@@ -89,13 +89,13 @@ bool kirin_core_load(KnightCore& core, KirinState& k, const std::string& graphJs
         why = "one length per clip name";
         return false;
     }
-    // Her graph names one clip she does not carry: the 8 SWORD_ONLY control-defs every boss shares
-    // (COMMON_BOSS_CONTROL:control-def[10], [14], [18], [28], [35], [86], [102], [109]) test "boss
-    // motion is knight[23] knight_a_atk1_start" (expect 0) — binary: an identity compare against
-    // KNIGHT's motion-def never holds for her. Only such a handle (under control_defs, a motion row
-    // that is not hers) is admitted, after her clips (never a playback index), 0 s and rootless: the
-    // clause reads "not playing". Any other unknown clip — a kirin_a_* one a stale bake lacks — is
-    // still refused by the loader.
+    // Her graph names clips she does not carry: today one, from the 8 SWORD_ONLY control-defs every
+    // boss shares (COMMON_BOSS_CONTROL:control-def[10], [14], [18], [28], [35], [86], [102], [109]),
+    // which test "boss motion is knight[23] knight_a_atk1_start" (expect 0) — binary: an identity
+    // compare against KNIGHT's motion-def never holds for her. Any control-def handle naming another
+    // boss's motion row (under control_defs, a motion row that is not kirin[…]) is admitted, after
+    // her clips (never a playback index), 0 s and rootless: the clause reads "not playing". Any other
+    // unknown clip — a kirin_a_* one a stale bake lacks — is still refused by the loader.
     std::vector<std::string> clipNames = glbClips;
     std::vector<float> seconds = glbSeconds;
     std::vector<char> foreign(clipNames.size(), 0);
