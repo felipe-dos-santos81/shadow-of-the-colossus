@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "scr_cdef.h"
+#include "scr_library.h"
 
 namespace {
 
@@ -13,11 +14,6 @@ enum : uint32_t {
     kKnightFlag0 = 0x6feae0,
     kKnightSet1 = 0x6fe580, kKnightSet2 = 0x6fe5a0, kKnightSet4 = 0x6fe5c0, kKnightShake = 0x6fe5e0,
 };
-
-float argf(const std::vector<ScrArg>& args, const char* slot) {
-    const ScrArg* a = scr_arg(args, slot);
-    return a == nullptr ? 0.0f : static_cast<float>(a->num);
-}
 
 // The player's contact attribute & 0x3f0 (scr_library's contact_attr: the boss region while
 // attached, else the ground word under him).
@@ -44,7 +40,7 @@ void a_knight_set4(const ScrAction&, ScrCtx& ctx) {  // FUN_006fe5c0
 // f10 s, double rate on the head/neck, with no swing; otherwise the region picks a swing.
 void a_knight_shake(const ScrAction& a, ScrCtx& ctx) {
     ScrRuntime& rt = ctx.runtime;
-    const float cooldown = argf(a.args, "f10"), hold = argf(a.args, "f14"), limit = argf(a.args, "f18");
+    const float cooldown = scr_argf(a.args, "f10"), hold = scr_argf(a.args, "f14"), limit = scr_argf(a.args, "f18");
     float& walk = rt.bossTimer[0];  // W'+0x4c84
     float& cool = rt.bossTimer[1];  // W'+0x4c88
     const uint32_t r = region(ctx.world);
