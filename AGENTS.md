@@ -6,6 +6,36 @@ This file is workspace guidance and is tracked with the project.
 
 ## Status (2026-10-24)
 
+**Milestone S13 "Phaedra" (the shared systems) — implemented; scripted acceptance green, user walk PENDING.**
+A systems milestone built in six parallel lanes, proven on the fourth colossus on `arena_04`
+(`out/re/stage/arena_04.manifest`, `probe.py compose --stage arena_04`, `make arena04-manifest`: the ruins fed as
+**floors-only** `floor` lines so the stair tunnels and the ring corridor are walkable; `encounter kirin`; `make phaedra`
+plays it). The systems, all from the game's own data: **all 16 graphs** exported (`make behaviour`, `sotc-scr-graph/0`
+with additive keys: `control_defs`, `dprelate`, `attackdata`, the slowstatus fields, edge `ref`/`from_ref`/`speed`/
+`blend_out`; KNIGHT 13/53/40/171, KIRIN 15/84/97/314); a **generic control-def evaluator** over the 37 opcodes
+(`app/src/scr_cdef.*`, S12's 30-key table deleted); a **shared predicate library** (`app/src/scr_library.*`, Gaius's
+attackdata from the export, `kAttack` deleted); the **additive layer** (`app/src/additive.*`, pool of 4, opt-in per
+encounter — Phaedra only); **routes** (`make routes` → `<SOTC_LIB>/behaviour/kirin.route.json`, `sotc-route/0`; the
+follower kinds 2–9, `app/src/route.*`); **terrain** (`make terrain` → `<SOTC_LIB>/stage/arena_04.terrain.json`,
+`sotc-terrain/0`; `app/src/terrain.*`); and **`make coverage`** (`out/re/coverage.md`: per boss, which graph items the
+app implements; KNIGHT and KIRIN 0 missing, Gaius's 2 gaps are S12's labelled no-ops). Her values are
+`app/src/encounters/kirin.h`, her glue `app/src/kirin_fight.*` (Gaius's core shared, not copied). The fight: dodge her
+stomp; hide in a stair tunnel and whistle (`Q`) — she routes to its GP and peeps (deep on the ruins' boss ground); leave
+by another tunnel and grab her tail (`E`) while she crouches (`watch_*`); climb tail → back → withers → neck; strike the
+neck trigger twice (neck down 1, then 2, additive); climb to the head and strike the sigil (160); her death drops her
+root 9.86 → 2.44 m and holds `death_loop`; no return to the shrine; `R` resets. The provenance table (graph / route /
+terrain / sidecar / decode / authored / guess), the 16-boss coverage and every ruling R-A…R-AL are
+`docs/notes/s13-results.md`. The proof is `--s13-selftest --s13-stills out/s13/stills` and `--s13-e2e` (manifest
+arena_04); the acceptance script is `scripts/s13-acceptance.sh` (the frozen S12 chain first); `tools/verify/s13.sh`
+has blessed goldens; s3…s12 goldens byte-identical (no §13.3 ruling). **Everything S13 exports and bakes lives in
+the view `out/libviews/s13` until the merge promotes it** (`make bake` now includes `bake-kirin`, `behaviour` for all
+16, `routes` and `terrain`): Gaius now needs `control_defs` in his graph, so against the base library (whose
+`KNIGHT.graph.json` lacks them) his load, `test_knight` and s12 verify fail until the promotion. Known gaps: the
+rockfall spawners and the proximity latch (labelled no-ops), the stomp foot-IK aim, the hashigo ladders, Hard mode,
+silent (D10), **her nav-loop patrol** (locomotion kind 1 stays no-steer, R-AL), her heading constant through the
+climb (uninvestigated), the head shake survived trivially (drain 22.9/s vs regen 25/s), the neck's additive swing not
+met on the scripted route, the rockfall feed a guess (R-AJ), Valus and Quadratus still on their S4/S11 code.
+
 **Milestone S12 "Gaius" — implemented; scripted acceptance green, user walk PENDING.**
 The third colossus fights on his lake arena from **his own exported tables**: `out/re/stage/arena_03.manifest`
 (`probe.py compose --stage arena_03`, `make arena03-manifest`; the `encounter knight` directive selects him;
@@ -25,7 +55,7 @@ belly sigil; `knight_death` holds its last frame, no return to the shrine; `R` r
 (manifest arena_03); the acceptance script is `scripts/s12-acceptance.sh` (the frozen S11 chain first);
 `tools/verify/s12.sh` has blessed goldens. His bake (62 `knight_a_*` clips + the sidecar) and the graph
 were promoted to the base `out/library` at S12's merge (R-K; `make bake` includes `bake-knight` and `behaviour`,
-R-C); the `s12-gaius` view is deleted. **Next: S13** — `docs/superpowers/specs/2026-10-24-s13-phaedra-systems-design.md`.
+R-C); the `s12-gaius` view is deleted. S13 moved him onto the shared library (his outputs unchanged).
 Known gaps: no additive layer (no flinch, §13.7), no armour break, opaque water, silent (D10), the blade
 grab instead of a walk-on, a 0.05 ride margin, `KNIGHT_PLAYER_OUT` never fires, the y-34 backstop unproven,
 the belly route and the else-edge reading authored. **Audio needs a desktop (Aqua) session**: from a
@@ -167,11 +197,12 @@ are in `docs/notes/s42-results.md`; S4.1/S4/S3 regressions are green.
 |---|---|
 | `app/` | the native viewer (`app/src/`: `app.cpp` is the shell, then `stage_ctx`/`stage_setup`, one `selftest_sN.cpp` per milestone, `interactive`, `encounter_rt`, `capture`, `audio_seam`, `gamepad_input`, `run_flags`), shaders, headless tests, `app/README.md` (controls/options) |
 | `src/` + `tests/` | the .NET asset converter and its xUnit suite (`BpConvert.sln`) |
-| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`, `s11`, `s12`); `s3`…`s11` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
-| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`, `s11`, `s12`), `libview.sh`, `golden/` (97 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
-| `tools/re/scr/` | `graph_export.py` (a colossus's mode graph from `eboot.elf` → `sotc-scr-graph/0`) and its tests |
+| `scripts/` | milestone acceptance scripts (`s3`, `s4`, `s41`, `s42`, `s5`, `s6`, `s7`, `s8`, `s9`, `s11`, `s12`, `s13`); `s3`…`s12` are invoked unchanged as later milestones' regressions; `scripts/verify` is the runner |
+| `tools/verify/` | the runner: `run.py`, `stamps.py`, `masks.py`, one adapter `sN.sh` per milestone (`s3`…`s9`, `s11`, `s12`, `s13`), `libview.sh`, `golden/` (104 goldens + `PIN`), its unit tests (`python3 -I tools/verify/test_*.py`) |
+| `tools/re/scr/` | `graph_export.py` (the 16 colossi's mode graphs from `eboot.elf` → `sotc-scr-graph/0`), `coverage.py` (`make coverage`) and their tests |
+| `tools/re/path/`, `tools/re/clb/` | the `.path` route exporter (`route_export.py` → `sotc-route/0`) and the `.clb` terrain exporter (`terrain_export.py` → `sotc-terrain/0`, `boss_regions.py`), with tests (S13) |
 | `tools/re/census/` | `census.py` and `census.json`: the 16 colossi (`make census`) |
-| `docs/notes/` | RE records and per-milestone results notes (`s12-results.md` is this milestone's, `s12-recon.md` its R1–R5 gates; `s11-results.md` S11's, `s10-results.md` S10's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
+| `docs/notes/` | RE records and per-milestone results notes (`s13-results.md` is this milestone's, `s13-schemas.md` its file formats; `s12-results.md` S12's, `s12-recon.md` its R1–R5 gates; `s11-results.md` S11's, `s10-results.md` S10's; `colossi-census.md` the census; `s9-results.md`/`s9-recon.md` are S9's) |
 | `Makefile` | shortcuts for every command below (`make help`); it exports the environment and wraps runs in `caffeinate` |
 | `docs/superpowers/specs/` | milestone designs; `docs/superpowers/plans/` the plans |
 | `.superpowers/sdd/` | per-task briefs and reports (durable hand-off records) |
@@ -206,7 +237,7 @@ runs sharing an `out/` directory; the runner parallelises within its own `out/ve
 change and before reporting it done. It runs only the steps whose inputs changed (`make verify
 ARGS="--quick"` skips the e2e runs for the inner loop, `ARGS="--only s7"` one milestone, `ARGS=--dry-run`
 lists the decisions). `make verify-long` (`scripts/verify --long`, the highest frozen
-`scripts/sN-acceptance.sh` — `s12`, ~16 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
+`scripts/sN-acceptance.sh` — `s13`, ~20 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
 (`ARGS=--bless`, clean tree, nothing else running) only for a deliberate output change; a new milestone
 adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git worktree needs
 `git submodule update --init --recursive` before dotnet or verify works in it.
@@ -216,7 +247,9 @@ accept`, `make accept-s7`, …). `make bake` rebakes Mono's pose, Wander's 49 cl
 the two S7 wake cuts, the 26 S8 ride clips, then the six S9 raise clips at 43…48), Agro's 20 (the S4.2
 kick at index 0, then the 19 riding clips), the sword's light atlases, Quadratus's 58 `boss_a_*` clips
 (byte-sorted; S11, `make bake-quadratus`), Gaius's 62 `knight_a_*` clips with his events sidecar (byte-sorted;
-S12, `make bake-knight`) and his exported graph (`make behaviour`, from `out/re/eboot.elf`) into `$SOTC_LIB`
+S12, `make bake-knight`), Phaedra's 75 `kirin_a_*` clips with her sidecar (S13, `make bake-kirin`), the 16 exported
+graphs (`make behaviour`, from `out/re/eboot.elf`), the route graphs (`make routes`) and arena_04's terrain
+(`make terrain`) into `$SOTC_LIB`
 (the view, when exported) with `--force`; `make audio` decodes the S9 map (36 entries); `make run`/`make accept` compose
 the shrine, plain and road manifests first. The underlying commands:
 
@@ -347,14 +380,29 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
   --s12-e2e                                   # the same fight through the interactive loop
 ```
 
+Phaedra fights on arena_04 (`make phaedra`; the controls are the arena's; `Q` whistles her to your tunnel; `E` at her
+tail while she peeps grabs it; `J` on the nape (the neck trigger) lowers her neck; `R` resets; no return to the
+shrine). `make coverage` writes `out/re/coverage.md`. The S13 proof:
+
+```bash
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/arena_04.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s13-selftest --s13-stills out/s13/stills  # stomp -> tunnel -> peep -> tail -> neck x2 -> head -> shake -> sigil -> death -> R
+caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
+  --manifest out/re/stage/arena_04.manifest \
+  --model models/shadow/characters/wander/_cmn/wander.glb \
+  --s13-e2e                                   # the same fight through the interactive loop
+```
+
 ## Acceptance
 
 ```bash
-export SOTC_LIB=<repo>/out/library
-caffeinate -dimsu ./scripts/s12-acceptance.sh  # S12 + S11 (which runs S9 → S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
+export SOTC_LIB=<repo>/out/libviews/s13     # <repo>/out/library after S13's merge promotion
+caffeinate -dimsu ./scripts/s13-acceptance.sh  # S13 + S12 (which runs S11 → S9 → S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
 ```
 
-Never modify `scripts/s3-acceptance.sh` … `scripts/s11-acceptance.sh` (s3, s4, s41, s42, s5, s6, s7, s8,
-s9, s11) for an S12 change: they are S12's regression (s11 runs s9, which runs the other eight).
+Never modify `scripts/s3-acceptance.sh` … `scripts/s12-acceptance.sh` (s3, s4, s41, s42, s5, s6, s7, s8,
+s9, s11, s12) for an S13 change: they are S13's regression (s12 runs s11, which runs s9 and the other eight).
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
 measured values, not adjectives.

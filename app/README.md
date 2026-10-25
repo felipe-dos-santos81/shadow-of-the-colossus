@@ -5,11 +5,11 @@ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
 original containers.
 
-**Status (milestone S9): the road to Valus — in interactive play the plain runs on up the arena's
-entrance stairs and corridor; the corridor's dead end is a door into Valus's arena and the arena's rim
-has one back; Agro waits where she was left; `C` (left shoulder) raises the sword and its light points
-to Valus (user walk pending). S8 (Agro), S7 (the return to the shrine) and S6 (the fall) are below it,
-unchanged.**
+**Status (milestone S13): Phaedra on arena_04 (`make phaedra`) — the shared colossus systems (the generic
+control-def evaluator, the shared predicate library, the additive layer, the route follower, the terrain classes)
+run her from her exported graph, routes, terrain and events; `--s13-selftest`/`--s13-e2e` below are parsed by
+`scripts/s13-acceptance.sh` (user walk pending). Gaius (S12, `make gaius`), Quadratus (S11), the road to Valus (S9),
+Agro (S8), the return to the shrine (S7) and the fall (S6) are unchanged.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
