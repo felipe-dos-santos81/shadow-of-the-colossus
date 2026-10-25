@@ -357,7 +357,7 @@ TEST_CASE("the whistle: in a tunnel (class 6) within 70 m -> mode 10, move_done 
     }
 }
 
-TEST_CASE("the hill lure: the player on class 3 -> 7 (AP) -> 8 (GP) -> 9 (PP)") {
+TEST_CASE("the hill lure: the player on class 3 -> 7 (AP) -> 8 (GP) -> 9 (PP); a hit there -> 13 (threat)") {
     Run r(kirin());
     to_attack(r);
     r.w.playerGroundAttr = 3ull << 48;
@@ -379,6 +379,29 @@ TEST_CASE("the hill lure: the player on class 3 -> 7 (AP) -> 8 (GP) -> 9 (PP)") 
     r.frame();
     CHECK(r.rt.route.kind == 9);
     CHECK(r.rt.route.pp >= 0);
+
+    // Spec §9 (graph findings §3): a hit on the hill route -> 13, whose entry runs
+    // route_link_flag_clear(1) (KIRIN:F67) and reopens the links mode 3's entry closed.
+    const auto closed_tag1 = [&r] {
+        int n = 0;
+        for (size_t i = 0; i < r.k.routes.links.size(); ++i) {
+            const RouteGraph::Link& l = r.k.routes.links[i];
+            if ((l.tags[0] == 1 || l.tags[1] == 1) && (r.rt.route.linkFlags[i] & 4) != 0) ++n;
+        }
+        return n;
+    };
+    REQUIRE(r.rt.route.linkFlags.size() == r.k.routes.links.size());
+    CHECK(closed_tag1() > 0);  // mode 3's entry closed them (route_link_flag_set(1))
+    const ScrMode& threat = r.k.graph.modes[13];
+    CHECK(threat.name == "Kirin_slope_intimidation_attack_mode");
+    const ScrAction& clear = r.k.action("KIRIN:F67", 0x82e2c0);
+    CHECK(scr_arg(clear.args, "i08")->num == 1.0);
+    CHECK(r.k.graph.actions[static_cast<size_t>(threat.enterActions)].key == "KIRIN:F67");
+    r.w.hit = true;
+    r.frame();
+    REQUIRE(r.rt.current == 13);
+    CHECK(r.rt.locoKind == 10);
+    CHECK(closed_tag1() == 0);
 }
 
 TEST_CASE("neck down: a hit on 0x20 requests Neck_down_1 (additive), a second Neck_down_2") {
