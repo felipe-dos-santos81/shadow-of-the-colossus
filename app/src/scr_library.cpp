@@ -372,7 +372,8 @@ void locomotion(ScrCtx& ctx, float dt) {
     switch (rt.locoKind) {
         case -1:  // the slowleg is off (data: slowstatus +60 = 0 on every kind -1 row)
         case 1:   // no waypoint, so no request — Gaius's mode 3 (R1 binary + data) and mode 12
-                  // (authored: no goal; the shake-off comes from its actions)
+                  // (authored: no goal; the shake-off comes from its actions). Runs as no-steer:
+                  // the binary's kind-1 walk (follower +378 = 1) is undecoded, a gap (R-AL).
             return;
         case 0:  // the point goal (a player snapshot) until arrived
             if (!rt.hasGoal) return;
@@ -466,6 +467,9 @@ void scr_library_add(ScrRegistry& r) {
     // D4: labelled no-ops (state the app does not model).
     for (const uint32_t fn : {kCloakEquipped, kDemoCameraActive, kSignalArrowPresent, kRayCtrl}) r.gaps.insert(fn);
     for (const int kind : {-1, 0, 1, 10}) r.kinds.insert(kind);
+    // R-AL: kind 1 runs as no-steer (S12 R1's reading); the binary's kind-1 walk (the follower's
+    // +378 = 1, the nav-loop patrol) is undecoded, so it is counted as a gap.
+    r.kindGaps.insert(1);
 }
 
 void scr_library_enter_mode(int mode, ScrCtx& ctx) {
@@ -726,11 +730,14 @@ std::string scr_registry_dump(const ScrRegistry& registry) {
         out += line;
     }
     for (const int kind : std::set<int>(registry.kinds.begin(), registry.kinds.end())) {
-        out += "kind " + std::to_string(kind) + "\n";
+        out += "kind " + std::to_string(kind) + (registry.kindGaps.count(kind) != 0 ? " gap" : "") + "\n";
     }
     for (const ScrCdefOp& op : kScrCdefOps) {
         std::snprintf(line, sizeof line, "op 0x%02x %s\n", op.op, op.gap ? "gap" : "implemented");
         out += line;
     }
+    // §13 ruling 4: the stomp foot-IK aim (attackdata +d0/+e0) is exported but never read; the
+    // stomps play as authored clips.
+    out += "feature aim gap\n";
     return out;
 }

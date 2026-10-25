@@ -30,6 +30,7 @@ def synthetic_dump(graphs):
     lines += ["%x implemented" % fn for fn in sorted(set(k["preds"]) | set(k["acts"]))]
     lines += ["kind %d" % n for n in sorted(k["kinds"])]
     lines += ["op 0x%02x implemented" % n for n in sorted(k["ops"])]
+    lines += ["feature aim gap"]
     return "\n".join(lines) + "\n"
 
 
@@ -46,8 +47,9 @@ class Coverage(unittest.TestCase):
     def test_knight_and_kirin(self):
         dump = cov.parse_dump(synthetic_dump(self.graphs))
         rep = {b: cov.classify(g, dump) for b, g in self.graphs.items()}
-        for cat in ("preds", "acts", "ops", "kinds"):
+        for cat in ("preds", "acts", "ops", "kinds", "feats"):
             self.assertEqual(rep["KNIGHT"][cat]["missing"], {}, cat)
+        self.assertEqual(self.graphs["KNIGHT"]["feats"], {})   # none of his rows names an aim bone
         self.assertEqual(len(self.graphs["KNIGHT"]["preds"]), 24)
         self.assertEqual(len(self.graphs["KNIGHT"]["acts"]), 18)
         k = rep["KIRIN"]
@@ -56,6 +58,8 @@ class Coverage(unittest.TestCase):
         self.assertEqual(set(k["kinds"]["missing"]), {2, 6, 8, 9})
         self.assertEqual(set(k["ops"]["missing"]), {0x04, 0x4c})
         self.assertNotIn(0x832610, k["preds"]["missing"])   # `sub` is the evaluator's own
+        self.assertEqual(k["feats"]["gap"], {"aim": "aim"})   # her stomps name OptBone_IKFootFL/FR (§13 ruling 4)
+        self.assertEqual(rep["MAMMOTH"]["feats"]["gap"], {"aim": "aim"})
 
     def test_report(self):
         dump = cov.parse_dump(synthetic_dump(self.graphs))
@@ -72,10 +76,16 @@ class Coverage(unittest.TestCase):
         self.assertIn("under", text)   # ruling R-U footer
 
     def test_gap_and_precedence(self):
-        d = cov.parse_dump("registry a\n10 gap\n20 implemented\nkind 1\nop 0x04 gap\nregistry b\n10 implemented\n")
+        d = cov.parse_dump("registry a\n10 gap\n20 implemented\nkind 1 gap\nkind 0\nop 0x04 gap\n"
+                           "registry b\n10 implemented\nkind 1 gap\nfeature aim gap\n")
         self.assertEqual(d["fns"], {0x10: "implemented", 0x20: "implemented"})
         self.assertEqual(d["ops"], {4: "gap"})
-        self.assertEqual(d["kinds"], {1})
+        self.assertEqual(d["kinds"], {1: "gap", 0: "implemented"})
+        self.assertEqual(d["feats"], {"aim": "gap"})
+
+    def test_aim_missing_without_the_line(self):
+        dump = cov.parse_dump("registry a\nkind 1\n")
+        self.assertEqual(cov.classify(self.graphs["KIRIN"], dump)["feats"]["missing"], {"aim": "aim"})
 
 
 if __name__ == "__main__":

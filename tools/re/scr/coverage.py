@@ -1,5 +1,6 @@
 """Per-boss interpreter coverage (S13 design D13): what each colossus's exported mode graph uses (predicates, actions,
-control-def opcodes, locomotion kinds) against what the app's registries run (the `scr_registry_dump` output).
+control-def opcodes, locomotion kinds, features: the foot-IK aim) against what the app's registries run (the
+`scr_registry_dump` output).
 
 usage: python3 -I coverage.py GRAPHS_DIR DUMP_FILE OUT.md
   GRAPHS_DIR  <SOTC_LIB>/behaviour (the *.graph.json of `make behaviour`)
@@ -13,12 +14,13 @@ import sys
 
 BOSSES = ["MINOTOUR_A", "MAMMOTH", "KNIGHT", "KIRIN", "BIRD", "MINOTOUR_B", "EEL", "YAMORI_B", "KAME", "NARGA", "LEO",
           "POSEIDON", "SNAKE", "CERBERUS_R", "MINOTOUR_C", "BUDDHA"]   # census16 order
-CATS = (("preds", "predicates"), ("acts", "actions"), ("ops", "opcodes"), ("kinds", "kinds"))
+CATS = (("preds", "predicates"), ("acts", "actions"), ("ops", "opcodes"), ("kinds", "kinds"), ("feats", "features"))
 RANK = {"implemented": 2, "gap": 1}
 
 
 def load_graphs(directory):
-    """{boss: {preds: {fn: name}, acts: {fn: name}, ops: {op: '0x..'}, kinds: {n: 'n'}}} from the *.graph.json"""
+    """{boss: {preds: {fn: name}, acts: {fn: name}, ops: {op: '0x..'}, kinds: {n: 'n'}, feats: {'aim': 'aim'}}} from
+    the *.graph.json; `aim` when an attackdata row names an aim bone (+d0, §13 ruling 4)"""
     out = {}
     for path in glob.glob(os.path.join(directory, "*.graph.json")):
         g = json.load(open(path))
@@ -27,13 +29,16 @@ def load_graphs(directory):
             "acts": {int(a["fn"], 16): a["act"] for lst in g["actions"].values() for a in lst},
             "ops": {r["op"]: "0x%02x" % r["op"] for recs in (g.get("control_defs") or {}).values() for r in recs},
             "kinds": {m["locomotion"]["kind"]: str(m["locomotion"]["kind"]) for m in g["modes"] if m["locomotion"]},
+            "feats": {"aim": "aim"} if any(r.get("aim_bone") for rows in (g.get("attackdata") or {}).values()
+                                           for r in rows) else {},
         }
     return out
 
 
 def parse_dump(text):
-    """{fns: {fn: status}, ops: {op: status}, kinds: {n}} merged over every registry block"""
-    d = {"fns": {}, "ops": {}, "kinds": set()}
+    """{fns: {fn: status}, ops: {op: status}, kinds: {n: status}, feats: {name: status}} merged over every registry
+    block (`kind <n>` is implemented, `kind <n> gap` a gap)"""
+    d = {"fns": {}, "ops": {}, "kinds": {}, "feats": {}}
 
     def put(table, key, status):
         if RANK[status] > RANK.get(table.get(key), 0):
@@ -44,7 +49,9 @@ def parse_dump(text):
         if not w or w[0] == "registry":
             continue
         if w[0] == "kind":
-            d["kinds"].add(int(w[1]))
+            put(d["kinds"], int(w[1]), w[2] if len(w) > 2 else "implemented")
+        elif w[0] == "feature":
+            put(d["feats"], w[1], w[2])
         elif w[0] == "op":
             put(d["ops"], int(w[1], 16), w[2])
         else:
@@ -54,8 +61,8 @@ def parse_dump(text):
 
 def classify(graph, dump):
     """{cat: {implemented|gap|missing: {key: name}}} for one boss"""
-    status = {"preds": dump["fns"].get, "acts": dump["fns"].get, "ops": dump["ops"].get,
-              "kinds": lambda n: "implemented" if n in dump["kinds"] else None}
+    status = {"preds": dump["fns"].get, "acts": dump["fns"].get, "ops": dump["ops"].get, "kinds": dump["kinds"].get,
+              "feats": dump["feats"].get}
     out = {}
     for cat, _ in CATS:
         out[cat] = {"implemented": {}, "gap": {}, "missing": {}}

@@ -100,5 +100,6 @@ bool scr_swing_space_clear(const ScrWorld& world, float forward, float side, flo
 
 // What `registry` can run, one line each (S13 design D13, the coverage report's input): every
 // fn `<hex> implemented|gap` (sorted; the evaluator's own `sub` 832610 always), every locomotion
-// kind `kind <n>` (sorted), every evaluator opcode `op 0x<hh> implemented|gap` (kScrCdefOps).
+// kind `kind <n>` (sorted; `kind <n> gap` for registry.kindGaps), every evaluator opcode
+// `op 0x<hh> implemented|gap` (kScrCdefOps), then `feature aim gap` (§13 ruling 4: the foot-IK aim).
 std::string scr_registry_dump(const ScrRegistry& registry);

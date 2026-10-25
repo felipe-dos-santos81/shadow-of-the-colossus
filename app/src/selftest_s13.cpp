@@ -322,7 +322,8 @@ void strike_routine(S13Script& sc, StageCtx& ctx, PlayerInput& in, int target, i
 }
 
 // Her coverage against her own registry (the coverage report's categories, D13): predicates and
-// actions by fn (the evaluator's `sub` counts as implemented), control-def opcodes, locomotion kinds.
+// actions by fn (the evaluator's `sub` counts as implemented), control-def opcodes, locomotion kinds
+// (registry.kindGaps as gaps), and the foot-IK aim (a gap when a row names an aim bone, §13 ruling 4).
 struct Cover {
     int implemented = 0, gap = 0, missing = 0;
 };
@@ -367,11 +368,19 @@ std::string coverage_line(const KnightCore& c, Cover& total) {
         }
         bump(o, s);
     }
-    for (int kind : kinds) bump(k, r.kinds.count(kind) != 0 ? 0 : 2);
+    for (int kind : kinds) bump(k, r.kindGaps.count(kind) != 0 ? 1 : r.kinds.count(kind) != 0 ? 0 : 2);
+    Cover f;
+    for (const auto& [handle, rows] : c.graph.attackdata) {
+        if (std::any_of(rows.begin(), rows.end(), [](const ScrAttackRow& row) { return !row.aimBone.empty(); })) {
+            bump(f, 1);  // scr_registry_dump's `feature aim gap`
+            break;
+        }
+    }
     add("preds", p);
     add("acts", a);
     add("ops", o);
     add("kinds", k);
+    add("feats", f);
     return out;
 }
 
