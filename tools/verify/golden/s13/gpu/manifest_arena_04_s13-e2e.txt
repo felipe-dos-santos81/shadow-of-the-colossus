@@ -132,6 +132,6 @@ s13e2e-corpse live_body=1 clip=kirin_a_death_loop held=1 lift=2.44 moved=0.00 pl
 s13e2e-mode from=Giraffe_death to=none clip=kirin_a_stand at=160.0
 s13e2e-route event=pick route=-1 gp=-1 kind=-1 mode=none at=160.0
 s13e2e-reset health=160 defeated=0 mode=Kirin_withdrawal_return_mode clip=kirin_a_stand at_base=1 layers=none player_hp=100 pmode=grounded death=Idle
-s13e2e-coverage boss=KIRIN preds=29/2/0 acts=19/4/0 ops=29/0/0 kinds=8/0/0 total=85/6/0
+s13e2e-coverage boss=KIRIN preds=29/2/0 acts=19/4/0 ops=29/0/0 kinds=7/1/0 feats=0/1/0 total=84/8/0
 s13e2e-done frames=9598 seconds=160.0
 s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0 frames=3
