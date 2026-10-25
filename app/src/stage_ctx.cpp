@@ -333,6 +333,11 @@ void StageCtx::soft_reset_encounter(DeathState& deathState, bool& cueFired, bool
         // S12: Gaius back to his placement, the graph from its retry start, sigils whole.
         knight_fight_reset(knight, encounter, playbacks[entityRig]);
     }
+    if (kirin_wired && entityRig < playbacks.size()) {
+        // S13: Phaedra back to her placement, the graph from its retry start (the route links
+        // reopen), no layers, the sigil whole.
+        kirin_fight_reset(kirin, encounter, playbacks[entityRig]);
+    }
     audio.reset();  // R stops every voice, music too
     deathState = reset_death();
     cueFired = false;

@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(SDL3_ttf CONFIG REQUIRED)
 
+# The S13 modules: the interpreter's (pure C++: the evaluator, the shared library, routes, terrain,
+# Phaedra's registry; the dump tool links these), then the additive layer and Phaedra's glue (the
+# viewer and the tests).
+set(S13_SCR_SOURCES src/scr_cdef.cpp src/scr_library.cpp src/route.cpp src/terrain.cpp src/scr_kirin.cpp)
+set(S13_SOURCES ${S13_SCR_SOURCES} src/additive.cpp src/kirin_fight.cpp)
+
 add_executable(sotc-viewer
   src/main.cpp src/app.cpp src/encounter_rt.cpp src/capture.cpp src/audio_seam.cpp
   src/gamepad_input.cpp src/stage_ctx.cpp src/stage_setup.cpp
@@ -16,7 +22,7 @@ add_executable(sotc-viewer
   src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
   src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp
   src/quadratus_fight.cpp src/scr_graph.cpp src/scr_predicates.cpp src/objanim_events.cpp
-  src/knight_fight.cpp src/selftest_s12.cpp)
+  src/knight_fight.cpp src/selftest_s12.cpp src/selftest_s13.cpp ${S13_SOURCES})
 target_link_libraries(sotc-viewer PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 target_include_directories(sotc-viewer PRIVATE third_party)
 
@@ -57,13 +63,21 @@ add_executable(sotc-app-tests tests/test_main.cpp tests/test_camera.cpp tests/te
   tests/test_objanim_events.cpp
   tests/test_scr_predicates.cpp
   tests/test_knight_fight.cpp
+  tests/test_scr_cdef.cpp
+  tests/test_scr_library.cpp
+  tests/test_additive.cpp
+  tests/test_route.cpp
+  tests/test_terrain.cpp
+  tests/test_kirin.cpp
+  tests/test_scr_kirin.cpp
+  tests/test_kirin_fight.cpp
   src/encounter_rt.cpp src/renderer.cpp src/audio_seam.cpp
   src/asset_io.cpp src/camera.cpp src/anim.cpp src/manifest.cpp src/heightmap.cpp src/player.cpp
   src/collision.cpp src/grab.cpp src/player_state.cpp src/hud.cpp src/valus.cpp
   src/audio.cpp src/wav_io.cpp src/death.cpp src/transition.cpp src/door.cpp src/ride.cpp src/sword.cpp src/effect.cpp src/sword_fx.cpp src/gamepad_map.h
   src/behaviour.cpp src/locomotion.cpp src/run_flags.cpp src/quadratus_motion.cpp
   src/quadratus_fight.cpp src/scr_graph.cpp src/objanim_events.cpp src/scr_predicates.cpp
-  src/knight_fight.cpp)
+  src/knight_fight.cpp ${S13_SOURCES})
 target_link_libraries(sotc-app-tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 target_include_directories(sotc-app-tests PRIVATE third_party src)
 # test_scr_predicates.cpp generates its fixture (the KNIGHT graph export) here at test time.
@@ -72,3 +86,14 @@ add_test(NAME unit_tests COMMAND sotc-app-tests)
 add_test(NAME windowed_selftest COMMAND sotc-viewer --selftest)
 set_tests_properties(windowed_selftest PROPERTIES
   PASS_REGULAR_EXPRESSION "s1-status windowed=1 relative_mouse=0 mouse_auto_capture=0")
+
+# S13 D13: what each registry runs, for `make coverage` (tools/re/scr/coverage.py). No SDL.
+add_executable(scr_registry_dump tools/scr_registry_dump.cpp src/scr_graph.cpp src/scr_predicates.cpp
+  ${S13_SCR_SOURCES})
+target_include_directories(scr_registry_dump PRIVATE src)
+
+# S13 Task 12: the layered ground of a stage manifest, flooded (probe.py check-manifest --stage
+# arena_04 reads it). No SDL.
+add_executable(stage_flood tools/stage_flood.cpp src/asset_io.cpp src/anim.cpp src/manifest.cpp
+  src/heightmap.cpp src/player.cpp)
+target_include_directories(stage_flood PRIVATE src third_party)

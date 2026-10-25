@@ -838,3 +838,11 @@ per-clip volumes and events the fights run on. Decoders: `src/BpConvert.Core/Ani
   not `knight_a_*` clips, so the writer reads them by name) and `damage` (volume name → `amount`
   = `damage_def+0x1c`, `reaction` = `+0x18`; raw, meanings a guess). The link is in the eboot's effect
   tables, which the reader cannot see.
+* **`dropEvents`** (optional, S13 Task 11; `kirin_map.json`): clip-name suffix → effect track names. For a
+  baked clip whose name ends with the suffix (ordinal), `EventsSidecar.EffectRow` drops that track's events
+  that **start at frame 0**; a row with no event left is omitted (its `spawns` with it). Absent = nothing
+  dropped (knight_map has none, so his sidecar is unchanged). Phaedra's `{"_wait": ["KIRIN_FOOT_ATK",
+  "KIRIN_FOOT_ATK_ST"]}`: the 2-frame `atack_leg_*_wait` holds re-fire the stomp's effect at frame 0 on the
+  already-planted hoof, so without the drop a stomp chain would hit (and spawn `kirin_atk_dmg`) twice.
+  Measured: kirin_a, 37 clips, 54,000 B. A filter on the writer, not the reader: `ObjAnimReader` still
+  returns every event.

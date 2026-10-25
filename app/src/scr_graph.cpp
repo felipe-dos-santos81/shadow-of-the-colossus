@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "json_reader.h"
+#include "scr_cdef.h"
 
 namespace {
 
@@ -46,6 +47,23 @@ struct Loader {
         if (v->kind != Json::Array) fail(where + ": expected an array of numbers");
         for (const Json& f : v->array) out.push_back(static_cast<float>(num(f, where)));
         return out;
+    }
+
+    // A number or a bool as 0/1.
+    static double flag(const Json& v, const std::string& where) {
+        return v.kind == Json::Bool ? (v.boolean ? 1.0 : 0.0) : num(v, where);
+    }
+    static float num_or(const Json* v, const std::string& where) {
+        return v == nullptr ? 0.0f : static_cast<float>(num(*v, where));
+    }
+    // A mask word: "0x..." (u64), or -1 (all ones, the exporter's q form).
+    static uint64_t word(const Json& v, const std::string& where) {
+        if (v.kind == Json::Number && v.number == -1.0) return ~uint64_t{0};
+        if (v.kind != Json::String || v.string.rfind("0x", 0) != 0) fail(where + ": expected a \"0x...\" word");
+        char* end = nullptr;
+        const unsigned long long n = std::strtoull(v.string.c_str() + 2, &end, 16);
+        if (*end != '\0' || v.string.size() < 3) fail(where + ": bad word \"" + v.string + "\"");
+        return static_cast<uint64_t>(n);
     }
 
     static uint32_t hex(const Json& v, const std::string& where) {
@@ -107,8 +125,8 @@ struct Loader {
             case Json::Number: a.num = v.number; break;
             case Json::String: {
                 const std::string& s = v.string;
-                if (s.rfind("0x", 0) == 0) {
-                    a.num = static_cast<double>(hex(v, at));
+                if (s.rfind("0x", 0) == 0) {  // a q-slot word: 64 bits (the terrain class masks are 0x7f << 48)
+                    a.num = static_cast<double>(word(v, at));
                 } else if ((a.cond = index_of(condKeys, s)) >= 0 || (a.actions = index_of(actKeys, s)) >= 0) {
                     a.text = s;
                 } else {
@@ -230,6 +248,18 @@ struct Loader {
                 l.attain = floats(opt(*loco, "attain"), where);
                 l.perception = floats(opt(*loco, "perception"), where);
                 l.gaze = text(loco->get("gaze"));
+                if (const Json* r = opt(*loco, "ref_player")) l.refPlayer = flag(*r, where) != 0.0;
+                if (const Json* t = opt(*loco, "track")) l.track = flag(*t, where) != 0.0;
+                l.judge = text(loco->get("judge"));
+                for (auto [key, slot] : {std::pair{"p60", &l.p60}, std::pair{"p64", &l.p64}, std::pair{"p68", &l.p68},
+                                         std::pair{"p6c", &l.p6c}, std::pair{"p70", &l.p70}, std::pair{"p74", &l.p74},
+                                         std::pair{"p98", &l.p98}, std::pair{"p9c", &l.p9c}}) {
+                    *slot = num_or(opt(*loco, key), where);
+                }
+            }
+            if (registry.kinds.find(mode.locomotion.kind) == registry.kinds.end()) {
+                fail(where + ": locomotion kind " + std::to_string(mode.locomotion.kind) +
+                     " is not one the registry runs");
             }
             // Every block and slot key must be present (an explicit null is fine): a
             // renamed key must not drop a control silently.
@@ -282,6 +312,7 @@ struct Loader {
         g.root.callbackActions = ref(root.get("callback_actions"), actKeys, "action list", "root callbacks");
         g.root.everyFrameActions = ref(root.get("every_frame_actions"), actKeys, "action list", "root every frame");
         g.root.anger = floats(opt(root, "anger"), "root anger");
+        if (const Json* k = opt(root, "kind")) g.root.kind = static_cast<int>(num(*k, "root kind"));
 
         const Json& cms = need(doc, "control_modes", "graph");
         if (cms.kind != Json::Object) fail("graph: control_modes is not an object keyed by index");
@@ -326,7 +357,94 @@ struct Loader {
             }
             if (const Json* p = opt(e, "p30")) edge.p30 = static_cast<float>(num(*p, "motion_graph"));
             if (const Json* p = opt(e, "p34")) edge.p34 = static_cast<float>(num(*p, "motion_graph"));
+            if (const Json* r = opt(e, "ref")) {
+                edge.ref = index_of(clipNames, r->string);
+                if (edge.ref < 0) fail("motion_graph: ref clip " + r->string + " is not in the clip names");
+            }
+            if (const Json* fr = e.get("from_ref")) {  // S13 Task 14: null -> -1; absent -> -2 (any)
+                edge.fromRef = fr->kind == Json::Null ? -1 : index_of(clipNames, text(fr));
+                if (edge.fromRef < 0 && fr->kind != Json::Null) {
+                    fail("motion_graph: from_ref clip " + text(fr) + " is not in the clip names");
+                }
+            }
+            if (const Json* sp = opt(e, "speed")) edge.speed = flag(*sp, "motion_graph") != 0.0;
+            edge.blendOut = num_or(opt(e, "blend_out"), "motion_graph");
             g.motionGraph.push_back(std::move(edge));
+        }
+
+        // S13 (docs/notes/s13-schemas.md): optional; absent -> empty. Every key of a record or
+        // row must be present (null is fine), as in the mode blocks.
+        if (const Json* defs = opt(doc, "control_defs")) {
+            if (defs->kind != Json::Object) fail("graph: control_defs is not an object");
+            for (const auto& [key, recs] : defs->object) {
+                if (recs.kind != Json::Array) fail(key + ": control-def records are not an array");
+                std::vector<ScrCdefRecord>& out = g.controlDefs[key];
+                for (const Json& r : recs.array) {
+                    ScrCdefRecord rec;
+                    rec.op = static_cast<int>(num(need(r, "op", key), key));
+                    if (!scr_cdef_known(rec.op)) {  // D4: strict, like predicates and actions
+                        char op[16];
+                        std::snprintf(op, sizeof op, "0x%02x", rec.op);
+                        fail(key + ": unknown control-def opcode " + op);
+                    }
+                    rec.min = static_cast<float>(num(need(r, "min", key), key));
+                    rec.max = static_cast<float>(num(need(r, "max", key), key));
+                    rec.handle = arg("handle", need(r, "handle", key), key);
+                    rec.mask = word(need(r, "mask", key), key + " mask");
+                    rec.value = word(need(r, "value", key), key + " value");
+                    rec.expect = static_cast<int>(flag(need(r, "expect", key), key));
+                    out.push_back(std::move(rec));
+                }
+            }
+        }
+        if (const Json* tables = opt(doc, "dprelate")) {
+            if (tables->kind != Json::Object) fail("graph: dprelate is not an object");
+            for (const auto& [key, rows] : tables->object) {
+                if (rows.kind != Json::Array) fail(key + ": dprelate rows are not an array");
+                std::vector<ScrDprelateRow>& out = g.dprelate[key];
+                for (const Json& r : rows.array) {
+                    ScrDprelateRow row;
+                    row.mask = word(need(r, "mask", key), key + " mask");
+                    row.value = word(need(r, "value", key), key + " value");
+                    row.object = text(present(r, "object", key));
+                    row.cond = ref(present(r, "cond", key), condKeys, "condition", key);
+                    row.route = static_cast<int>(num(need(r, "route", key), key));
+                    out.push_back(std::move(row));
+                }
+            }
+        }
+        if (const Json* tables = opt(doc, "attackdata")) {
+            if (tables->kind != Json::Object) fail("graph: attackdata is not an object");
+            for (const auto& [key, rows] : tables->object) {
+                if (rows.kind != Json::Array) fail(key + ": attackdata rows are not an array");
+                std::vector<ScrAttackRow>& out = g.attackdata[key];
+                for (const Json& r : rows.array) {
+                    const auto has = [&](const char* k) { return present(r, k, key); };
+                    ScrAttackRow row;
+                    row.label = text(has("label"));
+                    row.chain = text(has("chain"));
+                    row.chainPct = num_or(has("chain_pct"), key);
+                    row.ctrlModes = text(has("ctrl_modes"));
+                    row.isDefault = has("default") != nullptr && flag(*has("default"), key) != 0.0;
+                    row.reselectS = num_or(has("reselect_s"), key);
+                    row.sensing = static_cast<int>(num_or(has("sensing"), key));
+                    row.cond = ref(has("cond"), condKeys, "condition", key);
+                    row.fix = text(has("fix"));
+                    row.atk = text(has("atk"));
+                    row.altAtk = text(has("alt_atk"));
+                    row.attain = text(has("attain"));
+                    row.altCond = ref(has("alt_cond"), condKeys, "condition", key);
+                    row.issue = ctrl(has("issue"), key + " issue");
+                    row.issue2 = ctrl(has("issue2"), key + " issue2");
+                    row.motion = clip_opt(has("motion"), key + " motion");
+                    row.aimBone = text(has("aim_bone"));
+                    row.aimVolume = text(has("aim_volume"));
+                    row.f0 = num_or(has("f0"), key);
+                    row.cooldownS = num_or(has("cooldown_s"), key);
+                    row.issueArrived = has("issue_arrived") != nullptr && flag(*has("issue_arrived"), key) != 0.0;
+                    out.push_back(std::move(row));
+                }
+            }
         }
     }
 };

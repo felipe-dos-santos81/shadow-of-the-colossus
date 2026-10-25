@@ -6,9 +6,11 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "math3d.h"
+#include "route.h"
 
 // A colossus's own behaviour, run from the game's mode graph (S12 Task 4, design
 // §13). The exporter (tools/re/scr/graph_export.py) writes the eboot's
@@ -22,6 +24,10 @@
 // predicates and action kinds are not here: a ScrRegistry (filled per boss, Task 5)
 // supplies them, and loading fails on any fn it does not know (never a silent skip).
 
+// The game flags game_flag/set_flag index (S13 Task 14: KIRIN's 587/588, POSEIDON's 619). Guess: the
+// game's flag array is not decoded; 1024 holds every index the 16 exports use.
+inline constexpr size_t kScrFlags = 1024;
+
 // The `sub` predicate (data 0x832610): the evaluator itself evaluates the
 // condition its h50 slot names, so no registry needs to carry it.
 inline constexpr uint32_t kScrSubFn = 0x832610;
@@ -31,7 +37,7 @@ inline constexpr uint32_t kScrSubFn = 0x832610;
 struct ScrArg {
     std::string slot;
     bool null = false;   // a null handle
-    double num = 0.0;    // a number, a bool, or a "0x..." hex string
+    double num = 0.0;    // a number, a bool, or a "0x..." hex word (64-bit; exact while it spans <= 53 bits)
     std::string text;    // an unresolved handle ("PLAYER:ph_motion_def[604]") or a ref's name
     int clip = -1;       // {motion, name, clip} -> index in the loader's clipNames
     int mode = -1;       // {mode, name} -> mode id
@@ -88,6 +94,14 @@ struct ScrLocomotion {
     std::vector<float> attain;
     std::vector<float> perception;  // scr_relposparam, the 10 floats (§2)
     std::string gaze;
+    // S13 (docs/notes/s13-schemas.md; optional keys, absent -> these defaults).
+    bool refPlayer = false;  // +04: the route GP nearest the player (else the boss)
+    bool track = false;      // +08: tracking
+    std::string judge;       // +78 handle, "" when null
+    float p60 = 0.0f, p64 = 0.0f, p68 = 0.0f, p6c = 0.0f, p70 = 0.0f, p74 = 0.0f, p98 = 0.0f, p9c = 0.0f;
+    // The `judge` volume's MOVE_BACK sector (radius, half width in degrees), not exported: bound from the
+    // events sidecar (scr_move_back_bind, S13 Task 14). 0: unbound, the library's Gaius sector.
+    float backRadius = 0.0f, backHalfDeg = 0.0f;
 };
 
 struct ScrMode {
@@ -115,6 +129,7 @@ struct ScrRoot {
     int callbackActions = -1;
     int everyFrameActions = -1;
     std::vector<float> anger;   // scr_angry_status {decay, a, b, flag}; empty when null
+    int kind = -1;              // S13: the root kind (+0x00, guess: census16 Open); -1 when absent
 };
 
 struct ScrAssign {
@@ -138,6 +153,55 @@ struct ScrMotionEdge {
     int to = -1;
     float p30 = 0.0f;
     float p34 = 0.0f;
+    // S13 (optional): the reference clip (motion-def +0x98; an additive edge's frame-0 reference),
+    // the speed flag (+0x60 bit 1) and the blend-out frames (+0x218).
+    int ref = -1;  // clip index, -1 when null or absent
+    bool speed = false;
+    float blendOut = 0.0f;
+    int fromRef = -2;  // the `from` motion-def's +0x98 clip (S13 Task 14): -1 null, -2 absent (any)
+};
+
+// One control-def record (R2: the 0x68-byte records up to opcode 1, docs/notes/s12-recon.md).
+struct ScrCdefRecord {
+    int op = 0;                     // +00
+    float min = 0.0f, max = 0.0f;   // +04 / +10
+    ScrArg handle;                  // +38, resolved as an argument (slot "handle"): ctrl bit, clip, mode or text
+    uint64_t mask = 0, value = 0;   // +48 / +50
+    int expect = 1;                 // +58: the record holds when (result == expect)
+};
+
+// One scr_dprelate row (data 0x22d37e0 for KIRIN): the player's ground word masked equals
+// `value` and `cond` holds -> `route`.
+struct ScrDprelateRow {
+    uint64_t mask = 0, value = 0;
+    std::string object;  // "" when null
+    int cond = -1;       // index in ScrGraph::conditions, -1 null
+    int route = -1;
+};
+
+// One scr_attackdata row (0x100 B; census16 findings "Attackdata export"). Handles that name
+// nothing the app resolves stay text ("" when null).
+struct ScrAttackRow {
+    std::string label;
+    std::string chain;              // +08
+    float chainPct = 0.0f;          // +18
+    std::string ctrlModes;          // +20
+    bool isDefault = false;         // +30
+    float reselectS = 0.0f;         // +34
+    int sensing = 0;                // +38
+    int cond = -1;                  // +40 condition index
+    std::string fix, atk, altAtk;   // +50 / +60 / +70 judge names
+    int altCond = -1;               // +80 condition index
+    std::string attain;             // +90 judge name
+    int issue = -1, issue2 = -1;    // +a0 / +b0 request bits
+    int motion = -1;                // +c0 clip index
+    std::string aimBone, aimVolume; // +d0 / +e0 (the foot-IK aim: a gap, spec §13.4)
+    float f0 = 0.0f;                // +f0
+    float cooldownS = 0.0f;         // +f4
+    bool issueArrived = false;      // +f8
+    // The `attain` volume's cylinder in his frame (glb x, z; radius), not exported: bound from the
+    // events sidecar at load (scr_attack_attain, S13 Task 5). 0 until bound.
+    float attainX = 0.0f, attainZ = 0.0f, attainR = 0.0f;
 };
 
 struct ScrGraph {
@@ -149,6 +213,11 @@ struct ScrGraph {
     std::vector<ScrControlMode> controlModes;  // indexed by control-mode number
     std::vector<ScrMotionEdge> motionGraph;
     std::vector<std::string> clipNames;  // the loader's clipNames: ScrArg::clip etc. index these
+    // S13 (optional keys, absent -> empty): keyed by the handle text exactly as exported (a
+    // control-assign row's `when`, an action's dprelate handle, a slowstatus `attack`).
+    std::unordered_map<std::string, std::vector<ScrCdefRecord>> controlDefs;
+    std::unordered_map<std::string, std::vector<ScrDprelateRow>> dprelate;
+    std::unordered_map<std::string, std::vector<ScrAttackRow>> attackdata;
 };
 
 // Everything the predicates read this frame. App conventions (metres, degrees, a
@@ -160,6 +229,7 @@ struct ScrWorld {
     Vec3 playerGroundPosition{0.0f, 0.0f, 0.0f};
     bool playerAttached = false;
     int playerAttachedRegion = 0;   // contact attr & 0x3f0
+    bool playerRiding = false;      // S13: on a horse (player_riding 832e30)
     int playerMotion = -1;          // PLAYER:ph_motion_def index
     bool playerMotionStarted = false;
     int playerControlMode = -1;     // PLAYER_CONTROL_MODE:control-mode index
@@ -177,8 +247,9 @@ struct ScrWorld {
     float distance3d = 0.0f;          // W+0x4b24
     float bearingDeg = 0.0f;          // to the player, + = his left
     float hp = 1.0f;
+    float hpMax = 1.0f;             // S13: hp_pct_* read 100·hp/hpMax
 
-    std::bitset<512> flags;
+    std::bitset<kScrFlags> flags;
 
     // Gaius (S12 Task 5, scr_predicates.h). His root on his ground and his facing in
     // the app convention (forward = (sin yaw, 0, cos yaw); scr_world_relate derives
@@ -186,7 +257,17 @@ struct ScrWorld {
     Vec3 bossPosition{0.0f, 0.0f, 0.0f};
     float bossYawDeg = 0.0f;
     bool bossOnGround = true;          // R2: PLAYER_LANDING / NO_PLAYER_SCAFFOLDING control-defs
-    bool playerOnArenaGround = false;  // §13.3 stand-in (authored): the arena ground is the battle area
+    // S13 D8: the ground attribute under the player (on foot) and under the boss's root, as the
+    // game's mask words `class << 48 | owner` (clb findings §3). Gaius's glue sets the player's to
+    // owner 0x800000 on the arena ground (the S12 §13.3 stand-in, authored).
+    uint64_t playerGroundAttr = 0;
+    uint64_t bossGroundAttr = 0;
+    const RouteGraph* routes = nullptr;  // S13: the boss's route graph; null without one
+    // S13: true when clip `clip` plays in any of the boss's layers (op 0x56 / boss_motion_in_layers);
+    // null: the base motion only.
+    // Deviation (labelled, S13 Task 14): by clip, where the game tests motion-def identity (FUN_006357f0); two defs
+    // of one clip (KIRIN's neck dummy kirin[65] and swing start kirin[66]) read alike.
+    std::function<bool(int clip)> bossLayerPlaying;
     // True when the player's point is inside the judge volume `name` (ruling R-B: the
     // app binds events_player_in_judge). Null: never inside.
     std::function<bool(std::string_view name)> playerInJudge;
@@ -211,6 +292,7 @@ struct ScrRuntime {
     // before the first switch) and the `sensed` latch W+0x4aec.
     std::vector<float> relpos;
     bool sensed = false;
+    bool seenNow = false, nearNow = false;  // S13: this frame's raw seen W+0x4af0 / near W+0x4af1
     float seenFor = 0.0f, nearFor = 0.0f, unsensedFor = 0.0f;
     Vec3 lastKnown{0.0f, 0.0f, 0.0f};  // W+0x4ac0
 
@@ -223,16 +305,19 @@ struct ScrRuntime {
     float steerDeg = 0.0f;     // this frame's turn toward the goal (+ = left), for the caller's walk
     bool aimAtPlayer = false;  // look_if_motion held this frame
 
-    // The attack runner (FUN_0085ab40): armed table W+0x4b78 (its first row; -1
-    // none), row W+0x4b80, time in row +0x4b8c, since attack +0x4b90, cooldown +0x4b94.
+    // The attack runner (FUN_0085ab40): armed table W+0x4b78 (S13: the mode whose slowstatus
+    // `attack` handle armed it, a graph.attackdata key; -1 none), row W+0x4b80 (an index into
+    // that table's rows), time in row +0x4b8c, since attack +0x4b90, cooldown +0x4b94.
     int attackTable = -1, attackRow = -1;
     float timeInRow = 0.0f, timeSinceAttack = 0.0f, cooldown = 0.0f;
 
     uint32_t bossBits = 0;                // the boss-local work word (Gaius: W'+0x4c80)
-    float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88
-    std::bitset<512> flags;               // flags the graph sets (set_flag)
+    float bossTimer[2] = {0.0f, 0.0f};    // W'+0x4c84, +0x4c88 (Gaius's floats; Phaedra's +0x4c88 is a byte: bossBits)
+    std::bitset<kScrFlags> flags;         // flags the graph sets (set_flag)
     int controlMode = -1;                 // the control-mode scr_control_clip moved to
     int controlEdge = -1;                 // the motionGraph edge it took (p30/p34: its blend data)
+    float anger = 0.0f;                   // S13: the anger model's value (root.anger; FUN_0082aef0)
+    RouteState route;                     // S13: the route follower (route.h)
 };
 
 struct ScrStepOut {
@@ -265,12 +350,20 @@ struct ScrRegistry {
     // actions, before the enter actions; never on a deferred switch). rt.current is
     // still the old mode. Null: nothing to apply.
     void (*enterMode)(int mode, ScrCtx& ctx) = nullptr;
+    // S13 D4: fns registered as labelled no-ops (also in predicates/actions); the coverage
+    // report counts them apart from the implemented ones.
+    std::unordered_set<uint32_t> gaps;
+    // The locomotion kinds this registry runs; the loader refuses a mode of any other kind.
+    std::unordered_set<int> kinds;
+    // The step for kinds the library does not run itself (Task 8 installs it for 2-9). Null: none.
+    void (*locomotion)(int kind, ScrCtx& ctx, float dt) = nullptr;
 };
 
 // Parses `json` into `out`. Fails (false, `error` naming the culprit) on a wrong
-// format tag, a malformed document, an unknown predicate fn or action kind, a clip
-// missing from `clipNames` (lower-case stems), or a dangling mode/condition/action
-// reference.
+// format tag, a malformed document, an unknown predicate fn, action kind or control-def
+// opcode (kScrCdefOps), a mode locomotion kind not in `registry.kinds`, a clip missing from `clipNames` (lower-case
+// stems; edge refs and control-def handles included), or a dangling
+// mode/condition/action reference.
 bool scr_graph_load(const std::string& json, const std::vector<std::string>& clipNames,
                     const ScrRegistry& registry, ScrGraph& out, std::string& error);
 

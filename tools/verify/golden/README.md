@@ -24,6 +24,12 @@ three masks Task 9 added (`s12-load`/`s12e2e-load` `ms`, `s12-perf` `frame_ms`).
 (Aqua) session: from a background session CoreAudio refuses output and every e2e golden gains an
 `audio: no output device` line. Evidence: `.superpowers/sdd/2026-10-23-s12-gaius/task-10-report.md`.
 
+**S13** (`s13/`) was blessed the same way (`scripts/verify --bless --only s13`, `SOTC_LIB` = the branch's view
+`out/libviews/s13`) on the commit that added `scripts/s13-acceptance.sh`, the new `PIN`; the s3–s12 goldens are
+byte-identical (no §13.3 ruling). Two blesses (four fresh runs) agreed byte for byte with the three masks Task 16
+added (`s13-load`/`s13e2e-load` `ms`, `s13-perf` `frame_ms`), from a desktop (Aqua) session. Evidence:
+`.superpowers/sdd/2026-10-24-s13-phaedra/task-17-report.md`.
+
 ## How to bless (on a clean pinned commit; nothing else running on the machine)
 
 1. Check out the pinned commit clean (`git status` empty; `scripts/` must equal `HEAD`).

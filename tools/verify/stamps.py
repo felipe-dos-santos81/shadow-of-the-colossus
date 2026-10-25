@@ -12,8 +12,8 @@ import subprocess
 from masks import _SOURCE   # the `# source:` worktree prefix, normalised as in the goldens
 
 GITLINK = "@gitlink"    # the PSO2-Aqua-Library submodule SHA recorded in the index
-LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, *.events.json, behaviour/, audio/,
-                        # textures/vfx/ PNGs
+LIB = "@lib"            # the library: its realpath, glbs, *.clips.json, *.events.json, behaviour/, stage/,
+                        # audio/, textures/vfx/ PNGs
 LIBPATH = "@libpath"    # the library's realpath only (where the audio decode writes)
 LIBAUDIO = "@libaudio"  # the library's audio/audio.manifest content (8/10/34 entries: who decoded last)
 LIBGEO = "@libgeo"      # @lib without audio/: what the probes and the preflight read (the decode
@@ -23,15 +23,19 @@ LIBGEO = "@libgeo"      # @lib without audio/: what the probes and the preflight
 # frozen script, its goldens and the runner's own code (VERIFY).
 CLASSES = {
     # tools/re/objanim/*.json: ObjAnimTests read the curated maps; tools/re/scr/**: the ctest
-    # suite runs graph_export.py for its KNIGHT fixture.
+    # suite runs graph_export.py for its KNIGHT fixture; S13: tools/re/{path,clb}/** and
+    # tools/re/stage/cell_frame.py export the route and terrain fixtures the ctest suite and the
+    # viewer read.
     "dotnet": ["src/**", "tests/**", "*.sln", "Directory.Build.*", "tools/re/audio/*.json",
                "tools/re/objanim/*.json", "tools/native/**", GITLINK],
-    "ctest": ["app/**", "tools/re/audio/*.json", "tools/re/scr/**", LIB],
+    "ctest": ["app/**", "tools/re/audio/*.json", "tools/re/scr/**", "tools/re/path/**", "tools/re/clb/**",
+              "tools/re/stage/cell_frame.py", LIB],
     "audio": ["tools/re/audio/**", "src/**", LIBPATH, LIBAUDIO],
     "probes": ["tools/re/stage/**", "tools/re/anb/**", "tools/re/s6/**",
                "tools/re/s7/shrine_placements.json", "tools/re/s8/placements.json", "tools/re/s9/**",
                "out/re/stage/arena_paths.txt", LIBGEO],
-    "gpu": ["app/**", "tools/re/stage/**", "tools/re/s7/**", "tools/re/s8/**", "tools/re/s9/**", LIB],
+    "gpu": ["app/**", "tools/re/stage/**", "tools/re/s7/**", "tools/re/s8/**", "tools/re/s9/**",
+            "tools/re/path/**", "tools/re/clb/**", "tools/re/stage/cell_frame.py", LIB],
 }
 # An audio *section* also runs s9's preflight (Wander's clips, the sword PNGs, the placements, the
 # manifests); the runner's decode step does not.
@@ -54,6 +58,7 @@ MANIFESTS = {
     "s9": {s: "encounter shrine plain road" for s in ("probes", "audio", "gpu")},   # via preflight()
     "s11": {"gpu": "arena_02"},
     "s12": {"gpu": "arena_03"},
+    "s13": {"gpu": "arena_04"},
 }
 NAMED = "@named:"   # a pattern naming one file that must exist: absent hashes as "absent"
 VERIFY = ["tools/verify/common.sh", "tools/verify/masks.py", "tools/verify/run.py",
@@ -145,6 +150,7 @@ class Stamper:
                     h.update(("%s %d %d\n" % (rel, st.st_size, st.st_mtime_ns)).encode())
                 elif (name.endswith(".clips.json") or name.endswith(".events.json")
                         or rel.startswith(os.path.join("behaviour", ""))  # S12: the graph exports
+                        or rel.startswith(os.path.join("stage", ""))      # S13: the terrain exports
                         or rel == os.path.join("audio", "audio.manifest")
                         or (name.endswith(".wav") and rel.startswith("audio" + os.sep))):
                     h.update(("%s %s\n" % (rel, _file_sha(path))).encode())

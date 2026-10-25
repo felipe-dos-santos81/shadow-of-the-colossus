@@ -21,6 +21,12 @@ public sealed class ObjAnimMap
     /// <summary>Damage volume name → (amount, reaction).</summary>
     public required IReadOnlyDictionary<string, (double Amount, double Reaction)> Damage { get; init; }
 
+    /// <summary>
+    /// Clip-name suffix → effect names whose events starting at frame 0 are dropped from clips with
+    /// that suffix (a hold clip that re-fires the previous clip's effect, e.g. Phaedra's <c>_wait</c>).
+    /// </summary>
+    public IReadOnlyDictionary<string, string[]> DropEvents { get; init; } = new Dictionary<string, string[]>();
+
     /// <summary>Every spawned objanim the map names, sorted.</summary>
     public IReadOnlyList<string> SpawnedNames =>
         Spawns.Values.SelectMany(names => names).Distinct(StringComparer.Ordinal)
@@ -38,6 +44,8 @@ public sealed class ObjAnimMap
         {
             Skeleton = skeleton,
             Spawns = (root["spawns"]?.AsObject() ?? []).ToDictionary(
+                p => p.Key, p => p.Value!.AsArray().Select(n => (string)n!).ToArray(), StringComparer.Ordinal),
+            DropEvents = (root["dropEvents"]?.AsObject() ?? []).ToDictionary(
                 p => p.Key, p => p.Value!.AsArray().Select(n => (string)n!).ToArray(), StringComparer.Ordinal),
             Damage = (root["damage"]?.AsObject() ?? []).ToDictionary(
                 p => p.Key, p => ((double)p.Value!["amount"]!, (double)p.Value["reaction"]!), StringComparer.Ordinal),
@@ -139,7 +147,7 @@ public static class EventsSidecar
                         if (DamageRow(track, ParentOf(track.Parent, bones), map) is { } row) damage.Add(row);
                         break;
                     case 29:
-                        if (EffectRow(track, bones, map) is { } effect) effects.Add(effect);
+                        if (EffectRow(track, bones, map, name) is { } effect) effects.Add(effect);
                         break;
                 }
             }
@@ -274,9 +282,12 @@ public static class EventsSidecar
         return row;
     }
 
-    private static JsonObject? EffectRow(ObjAnimTrack track, List<string> bones, ObjAnimMap? map)
+    private static JsonObject? EffectRow(ObjAnimTrack track, List<string> bones, ObjAnimMap? map, string clip)
     {
         if (track.Events is not { Count: > 0 } events) return null;
+        if (map is not null && map.DropEvents.Any(d => clip.EndsWith(d.Key, StringComparison.Ordinal)
+                && d.Value.Contains(track.Name)))
+            if ((events = events.Where(e => e.Start != 0).ToList()).Count == 0) return null;
         var row = new JsonObject
         {
             ["name"] = track.Name,

@@ -1,10 +1,16 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <functional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "additive.h"
 #include "anim.h"
 #include "app.h"
 #include "encounter_rt.h"
@@ -53,6 +59,11 @@ struct KnightCore {
     float yawDeg = 0.0f;         // his facing (the entity yaw), without a playing turn's heading
     Vec3 boundCentre{};          // the clamp on his root and his goal (D9)
     float boundRadius = 0.0f;
+    // S13: the boss's root tables, so Phaedra's glue (kirin_fight) runs this motion layer on
+    // hers. Null: knight_root.h's. `turnAt` is a turn clip's heading at t (0 for any other clip).
+    Vec3 (*rootAt)(std::string_view clip, float t) = nullptr;
+    float (*turnAt)(std::string_view clip, float t) = nullptr;
+    float blendFps = encounters::knight_detail::kBlendFps;  // an edge's p34 frames per second
 };
 
 // What one think did (the selftest's lines read it).
@@ -97,10 +108,25 @@ KnightThink knight_think(KnightCore& core, ScrWorld& world, float dt);
 // The clip's name, "" for -1.
 const char* knight_clip_name(const KnightCore& core, int clip);
 
+// The else edge out of `clip` (its first; -1 none) and the control-mode it returns to (S13:
+// Phaedra's load finds her stand's control-mode with it).
+int knight_else_edge(const ScrGraph& graph, int clip, int& controlMode);
+
 // Ruling R-N: the player's motion fields of the world. A whistle press this frame starts
 // kWhistleMotion (ALWAYS:C120, the finger whistle); a Dead player is in
 // kPlayerDeathControlMode (ALWAYS:C71). Otherwise no motion and no control-mode.
 void knight_world_player(ScrWorld& world, bool whistlePressed, bool dead);
+
+// A per-frame table at clip time `t` (frame = t · fps), linear between frames, clamped (the
+// root tables' sampling; S13: Phaedra's tables too).
+template <typename F>
+auto knight_sample(int frames, float fps, float t, F at) {
+    const float f = std::clamp(std::isfinite(t) ? t * fps : 0.0f, 0.0f, static_cast<float>(frames - 1));
+    const int i = std::min(static_cast<int>(f), frames - 1);
+    const int j = std::min(i + 1, frames - 1);
+    const float u = f - static_cast<float>(i);
+    return at(i) * (1.0f - u) + at(j) * u;
+}
 
 // --- The scene's side ---------------------------------------------------------
 
@@ -148,6 +174,40 @@ struct KnightFight {
 bool knight_events_check(const EventsFile& events, const std::vector<std::string>& joints,
                          const std::vector<std::string>& optBones, std::string& why);
 
+// --- The scene side both colossi share (S13: Gaius's and Phaedra's loads and steps) ---
+
+// The file at `path`; "" when it is missing.
+std::string knight_read_text(const std::string& path);
+
+// The manifest's placement (x, ground y, z) and player start (x, z) against the encounter
+// table's (`spawn` is x, ground y, z). False with `why` naming `stage` and `table` to fix.
+bool knight_check_arena(Vec3 placement, Vec3 playerStart, Vec3 spawn, float playerStartX, float playerStartZ,
+                        const char* stage, const char* table, std::string& why);
+
+// Before the core loads: the entity glb's sidecar into `fight.events`, the playback's clip
+// names and lengths (the graph's clip indices are the playback's) and every judge name the
+// sidecar carries. False with `why`.
+bool knight_scene_sidecar(KnightFight& fight, const Playback& entity, const std::string& libraryDir,
+                          const std::string& entityGlb, std::vector<std::string>& names,
+                          std::vector<float>& seconds, std::vector<std::string>& judges, std::string& why);
+
+// After the core loads: the events clip of each graph clip, `deathClip`, the rig's joints and
+// OptBones, the sidecar checked against them (knight_events_check) and `hipJoint`. False with `why`.
+bool knight_scene_bind(KnightFight& fight, const Scene& scene, std::size_t entityRig, const char* deathClip,
+                       const char* hipJoint, std::string& why);
+
+// The player's side of a step's world: the position, the layered floor under it within
+// `groundStep`, the attachment and its band's region (`bandRegion`), the S8 whistle press and
+// the death (R-N), last frame's strike (consumed), the HP, and the judge volumes on last frame's
+// pose (`fight.judgeFired` cleared first). The ground attribute is the caller's.
+void knight_world_player_side(KnightFight& fight, ScrWorld& world, const Encounter& encounter,
+                              const Heightmap& ground, float groundStep, std::span<const int> bandRegion,
+                              const PlayerState& player, const PlayerCombat& combat, bool whistleHeld);
+
+// D12, once at the defeat: the graph's death (`thinkAtZero` until the root's death mode, at most
+// 3 thinks) and the motion onto the death clip at t 0. Returns the last think.
+KnightThink knight_enter_death(KnightFight& fight, const std::function<KnightThink()>& thinkAtZero);
+
 // Loads <libraryDir>/behaviour/KNIGHT.graph.json and the entity glb's sidecar, maps the
 // graph's clips onto the entity playback, resolves the rig's joints, and checks the
 // manifest's placement and player start against kArena (x/z, his ground). False with `why`.
@@ -168,20 +228,36 @@ KnightThink knight_fight_step(KnightFight& fight, Encounter& encounter, Playback
                               const Heightmap& ground, const PlayerState& player,
                               const PlayerCombat& combat, bool whistleHeld, float dt);
 
+// The end of a step (S13: shared with Phaedra's): the entity's clip at the motion's clock
+// (not while `defeated`: the death sequence owns it), the events' clip state (a new instance
+// on every start or wrap), and `think` kept as the frame's.
+void knight_fight_sync(KnightFight& fight, Playback& entity, bool defeated, const KnightThink& think);
+
 // After update_all_poses: the entity's palette re-posed with the switch's blend (the
 // caller uploads it), and the joints' world matrices cached for the events and the
-// next frame's judge volumes.
+// next frame's judge volumes. S13: `layers` (Phaedra's additive layers) composes onto it;
+// null (Gaius) is the path as it was.
 void knight_fight_pose(KnightFight& fight, const Scene& scene, std::size_t entityRig,
-                       const Playback& entity, float dt, std::vector<Mat4>& palette);
+                       const Playback& entity, float dt, std::vector<Mat4>& palette,
+                       const AddLayers* layers = nullptr);
+
+// The events' views of this frame (the posed colossus, last frame's as `prev`; the player,
+// attached or not) — S13: Phaedra's glue reads the judge volumes through them too.
+PoseView knight_pose_view(const KnightFight& fight);
+PlayerView knight_player_view(const PlayerState& player, const PlayerCombat& combat);
 
 // After the player's step: the clip's events (fired effects start their spawned
 // damage), his damage rows and the spawned rows against the player (the highest
 // amount lands: player_take_damage, heavy on kHeavyReaction; §13.5 holds back every row
 // from an attached player but the throw-off, which releases him next frame). Returns
 // the rows that landed this frame.
+// S13: the two reaction readings are parameters (Phaedra passes hers; a value no row
+// carries disables the throw-off).
 std::vector<DamageHit> knight_fight_events(KnightFight& fight, PlayerState& player,
                                            PlayerCombat& combat, const CombatTuning& tuning,
-                                           float dt, StepEvents* events);
+                                           float dt, StepEvents* events,
+                                           float heavyReaction = encounters::knight_detail::kHeavyReaction,
+                                           float throwOffReaction = encounters::knight_detail::kThrowOffReaction);
 
 // A strike's damage on weakpoint `weakpoint` (the band's shell): at most what is left of
 // its pool (kWeakpointPool); HP 0 defeats him (the death clip starts, the graph's death

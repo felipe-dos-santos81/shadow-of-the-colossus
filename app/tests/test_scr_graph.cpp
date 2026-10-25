@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "scr_graph.h"
+#include "scr_library.h"
+#include "scr_predicates.h"
 
 namespace {
 
@@ -33,6 +35,7 @@ ScrRegistry test_registry() {
     reg.predicates[kTrueFn] = pred_true;
     reg.predicates[kFlagFn] = pred_flag;
     reg.actions[kRequestFn] = act_request;
+    reg.kinds = {-1};  // the synthetic modes' locomotion kind
     return reg;
 }
 
@@ -470,4 +473,158 @@ TEST_CASE("a mode block missing a key is a load error (an explicit null is fine)
     const std::string noCtrl = R"({"actions": null, "wait_motion": null})";
     CHECK_FALSE(scr_graph_load(graph_json({mode(0, "", kNoEnter, kNoUpdate, noCtrl)}), kClips, reg, graph, error));
     CHECK(error.find("ctrl_or_demo") != std::string::npos);
+}
+
+// --- S13 contracts: the optional `/0` additions (docs/notes/s13-schemas.md) ----------
+
+namespace {
+
+// `json` with `extra` (", "-joined keys) added at the document's top level.
+std::string with_keys(std::string json, const std::string& extra) {
+    json.insert(json.rfind('}'), ", " + extra);
+    return json;
+}
+
+// `s` with its one `from` replaced by `to`.
+std::string replace_once(std::string s, const std::string& from, const std::string& to) {
+    const size_t at = s.find(from);
+    REQUIRE(at != std::string::npos);
+    return s.replace(at, from.size(), to);
+}
+
+std::string load_error(const std::string& json, const ScrRegistry& reg) {
+    ScrGraph graph;
+    std::string error;
+    CHECK_FALSE(scr_graph_load(json, kClips, reg, graph, error));
+    return error;
+}
+
+}  // namespace
+
+TEST_CASE("the S13 optional keys parse into the new fields") {
+    const std::string loco = R"("gaze": "T:scr_gazestatus[0]", "ref_player": 1, "track": false,
+        "judge": "T:judge[2]", "p60": 1.5, "p64": 2, "p68": 3, "p6c": 4, "p70": 5, "p74": 6, "p98": 7, "p9c": 8)";
+    const std::string m0 = replace_once(mode(0, ""), R"("gaze": "T:scr_gazestatus[0]")", loco);
+    const std::string edges =
+        R"([{"table": "T_ADD", "from": null, "orient": "o", "to": "knight_a_search", "p30": 5, "p34": 10,
+             "ref": "knight_a_wait", "speed": true, "blend_out": 0},
+            {"table": "T", "from": "knight_a_wait", "orient": "o", "to": "knight_a_exit", "p30": 0, "p34": 0,
+             "ref": null}])";
+    const std::string rootJson = replace_once(root(), R"("anger": null)", R"("anger": null, "kind": 1)");
+    const std::string json = with_keys(graph_json({m0}, kConditions, "{}", rootJson, "{}", edges), R"(
+      "control_defs": {"T:control-def[3] 'X'": [
+         {"op": 84, "min": -1, "max": -1, "handle": )" + clip("knight_a_exit") + R"(, "mask": "0x0", "value": "0x0", "expect": 1},
+         {"op": 56, "min": 0, "max": 0, "handle": )" + ctrl(6) + R"(, "mask": "0xffffffffffffffff", "value": "0x3f0", "expect": false},
+         {"op": 54, "min": 0, "max": 0, "handle": "T:control-mode[7] 'Y'", "mask": "0x0", "value": "0x0", "expect": 1},
+         {"op": 118, "min": 0.5, "max": 60, "handle": null, "mask": "0x0", "value": "0x0", "expect": 0}]},
+      "dprelate": {"T:scr_dprelate[0] 'Z'": [
+         {"mask": "0x7f000000000000", "value": "0x3000000000000", "object": null, "cond": "T:C1", "route": 2}]},
+      "attackdata": {"T_SWORD:scr_attackdata[0]": [
+         {"label": "L", "chain": null, "chain_pct": 100, "ctrl_modes": null, "default": 1, "reselect_s": 15,
+          "sensing": 0, "cond": "T:C2", "fix": "T_FIX", "atk": "T_ATK", "alt_atk": null, "attain": "T_ATTAIN",
+          "alt_cond": null, "issue": )" + ctrl(4) + R"(, "issue2": null, "motion": )" + clip("knight_a_search") + R"(,
+          "aim_bone": null, "aim_volume": null, "f0": 0, "cooldown_s": 10, "issue_arrived": true}]})");
+    const ScrGraph g = load(json, test_registry());
+
+    CHECK(g.root.kind == 1);
+    const ScrLocomotion& l = g.modes[0].locomotion;
+    CHECK(l.refPlayer);
+    CHECK_FALSE(l.track);
+    CHECK(l.judge == "T:judge[2]");
+    CHECK(l.p60 == 1.5f);
+    CHECK(l.p74 == 6.0f);
+    CHECK(l.p98 == 7.0f);
+    CHECK(l.p9c == 8.0f);
+
+    REQUIRE(g.motionGraph.size() == 2);
+    CHECK(g.motionGraph[0].ref == kClipWait);
+    CHECK(g.motionGraph[0].speed);
+    CHECK(g.motionGraph[0].blendOut == 0.0f);
+    CHECK(g.motionGraph[1].ref == -1);
+
+    REQUIRE(g.controlDefs.count("T:control-def[3] 'X'") == 1);
+    const std::vector<ScrCdefRecord>& cd = g.controlDefs.at("T:control-def[3] 'X'");
+    REQUIRE(cd.size() == 4);
+    CHECK(cd[0].op == 0x54);
+    CHECK(cd[0].handle.clip == kClipExit);
+    CHECK(cd[0].expect == 1);
+    CHECK(cd[1].op == 0x38);
+    CHECK(cd[1].handle.ctrl == 6);
+    CHECK(cd[1].mask == ~uint64_t{0});
+    CHECK(cd[1].value == 0x3f0u);
+    CHECK(cd[1].expect == 0);
+    CHECK(cd[2].handle.text == "T:control-mode[7] 'Y'");
+    CHECK(cd[3].handle.null);
+    CHECK(cd[3].min == 0.5f);
+    CHECK(cd[3].max == 60.0f);
+
+    REQUIRE(g.dprelate.count("T:scr_dprelate[0] 'Z'") == 1);
+    const ScrDprelateRow& d = g.dprelate.at("T:scr_dprelate[0] 'Z'").at(0);
+    CHECK(d.mask == 0x7f000000000000u);
+    CHECK(d.value == 0x3000000000000u);
+    CHECK(d.object.empty());
+    CHECK(d.cond == cond_index(g, "T:C1"));
+    CHECK(d.route == 2);
+
+    REQUIRE(g.attackdata.count("T_SWORD:scr_attackdata[0]") == 1);
+    const ScrAttackRow& a = g.attackdata.at("T_SWORD:scr_attackdata[0]").at(0);
+    CHECK(a.label == "L");
+    CHECK(a.chainPct == 100.0f);
+    CHECK(a.isDefault);
+    CHECK(a.reselectS == 15.0f);
+    CHECK(a.cond == cond_index(g, "T:C2"));
+    CHECK(a.altCond == -1);
+    CHECK(a.fix == "T_FIX");
+    CHECK(a.atk == "T_ATK");
+    CHECK(a.altAtk.empty());
+    CHECK(a.attain == "T_ATTAIN");
+    CHECK(a.issue == 4);
+    CHECK(a.issue2 == -1);
+    CHECK(a.motion == kClipSearch);
+    CHECK(a.cooldownS == 10.0f);
+    CHECK(a.issueArrived);
+}
+
+TEST_CASE("a document without the S13 keys loads exactly as before") {
+    const ScrGraph g = load(graph_json({mode(0, "")}), test_registry());
+    CHECK(g.controlDefs.empty());
+    CHECK(g.dprelate.empty());
+    CHECK(g.attackdata.empty());
+    CHECK(g.root.kind == -1);
+    CHECK_FALSE(g.modes[0].locomotion.refPlayer);
+    CHECK_FALSE(g.modes[0].locomotion.track);
+    CHECK(g.modes[0].locomotion.judge.empty());
+    CHECK(g.modes[0].locomotion.p60 == 0.0f);
+}
+
+TEST_CASE("an edge ref, a control-def clip and a mode kind outside the registry are load errors naming them") {
+    const ScrRegistry reg = test_registry();
+    const std::string edges =
+        R"([{"table": "T_ADD", "from": null, "orient": "o", "to": "knight_a_wait", "p30": 0, "p34": 0,
+             "ref": "knight_a_noref"}])";
+    CHECK(load_error(graph_json({mode(0, "")}, kConditions, "{}", root(), "{}", edges), reg).find("knight_a_noref") !=
+          std::string::npos);
+
+    const std::string cdefs = R"("control_defs": {"T:control-def[1]": [{"op": 84, "min": 0, "max": 0, "handle": )" +
+                              clip("knight_a_nocdef") + R"(, "mask": "0x0", "value": "0x0", "expect": 1}]})";
+    CHECK(load_error(with_keys(graph_json({mode(0, "")}), cdefs), reg).find("knight_a_nocdef") != std::string::npos);
+
+    const std::string kind9 = replace_once(mode(0, ""), R"("kind": -1)", R"("kind": 9)");
+    const std::string error = load_error(graph_json({kind9}), reg);
+    CHECK(error.find("mode 0") != std::string::npos);
+    CHECK(error.find("kind 9") != std::string::npos);
+}
+
+TEST_CASE("scr_registry_dump lists fns, kinds and opcodes") {
+    const std::string knight = scr_registry_dump(scr_registry_knight());
+    for (const char* line : {"kind -1\n", "kind 0\n", "kind 1\n", "kind 10\n", "832600 implemented\n",
+                             "832610 implemented\n", "6fe5e0 implemented\n"}) {
+        CHECK_MESSAGE(knight.find(line) != std::string::npos, line);
+    }
+    ScrRegistry reg = test_registry();
+    reg.gaps.insert(kTrueFn);
+    const std::string dump = scr_registry_dump(reg);
+    CHECK(dump.find("832600 gap\n") != std::string::npos);
+    CHECK(dump.find("8346e0 implemented\n") != std::string::npos);
+    CHECK(dump.find("900000 implemented\n") != std::string::npos);
 }

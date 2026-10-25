@@ -46,6 +46,11 @@ struct MeshCpu {
     // False for a manifest `backdrop` mesh: drawn, but build_heightmap never
     // rasterizes it into the ground. Every other mesh is ground (if static).
     bool ground = true;
+    // True for a manifest `floor` mesh (S13, arena_04's ruins): ground that
+    // contributes only its up-facing triangles (|normal.y| >= kWallSteepness,
+    // normal.y > 0) and never a wall flag. Every other mesh is false, so a
+    // manifest without `floor` lines builds exactly the map it did before.
+    bool floorsOnly = false;
 };
 
 // One decoded PNG, RGBA8, top-down (glTF image origin).

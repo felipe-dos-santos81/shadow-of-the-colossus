@@ -6,6 +6,7 @@
 #include "gamepad_input.h"
 #include "s11_script.h"
 #include "s12_script.h"
+#include "s13_script.h"
 #include "ride_points.h"
 #include "road_points.h"
 #include "shrine_points.h"
@@ -252,6 +253,15 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
                           std::clamp(dt, 0.0f, kMaxCombatStepSeconds));
         update_entity_transform(scene, encounter, entityRig);
     }
+    // S13 (Task 15): Phaedra's fight — the world, her graph, routes and layers, her travel.
+    ctx.kirinHit = KnightHit{};
+    ctx.kirinHits.clear();
+    ctx.kirinBackstop = false;
+    if (ctx.kirin_wired) {
+        kirin_fight_step(ctx.kirin, encounter, playbacks[entityRig], heightmap, player, combat,
+                         rideKeys.whistle && !inputLocked, std::clamp(dt, 0.0f, kMaxCombatStepSeconds));
+        update_entity_transform(scene, encounter, entityRig);
+    }
     // S7: while waking the wake clips own the player's clip.
     const bool wakeFrame = ctx.waking();
     if (wakeFrame) {
@@ -284,6 +294,13 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         // S12: his palette with the switch's blend; the joints for the events.
         knight_fight_pose(ctx.knight, scene, entityRig, playbacks[entityRig],
                           std::clamp(dt, 0.0f, kMaxCombatStepSeconds), palettes[entityRig]);
+        renderer.upload_pose(entityRig, palettes[entityRig]);
+    }
+    if (ctx.kirin_wired && entityRig < palettes.size()) {
+        // S13: her palette with the switch's blend and her additive layers (the bands and the
+        // targets below are posed from it).
+        kirin_fight_pose(ctx.kirin, scene, entityRig, playbacks[entityRig],
+                         std::clamp(dt, 0.0f, kMaxCombatStepSeconds), palettes[entityRig]);
         renderer.upload_pose(entityRig, palettes[entityRig]);
     }
     if (plain_ride) {
@@ -339,6 +356,14 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
         frame.entityClip = knight_clip_name(ctx.knight.core, ctx.knight.core.motion.clip);
         frame.entityFrame = static_cast<int>(std::floor(ctx.knight.core.motion.time * 30.0f));
     }
+    if (ctx.kirin_wired) {
+        // S13: the tail's enable windows read her playing clip and frame (floor of clip seconds
+        // x 30, ruling R-AD).
+        const KnightCore& kc = ctx.kirin.base.core;
+        frame.shake = kirin_fight_shake(ctx.kirin);
+        frame.entityClip = knight_clip_name(kc, kc.motion.clip);
+        frame.entityFrame = static_cast<int>(std::floor(kc.motion.time * 30.0f));
+    }
     const int weakpoint = combat.weakpoint;  // detach() clears it
     const Vec3 positionBefore = player.position;
     // S8 (D8): no player_step while mounted — the ride places him.
@@ -366,6 +391,11 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
             ctx.knightHit = knight_fight_hit(ctx.knight, encounter, playbacks[entityRig],
                                              entityClips, weakpoint,
                                              static_cast<float>(events.damageDealt));
+        } else if (ctx.kirin_wired) {
+            // S13: the head sigil's pool (HP 0 her death) or the neck trigger (no HP); either
+            // is the graph's hit next frame; silent.
+            ctx.kirinHit = kirin_fight_hit(ctx.kirin, encounter, playbacks[entityRig], entityClips,
+                                           weakpoint, static_cast<float>(events.damageDealt));
         } else {
             apply_combat_events(encounter, playbacks[entityRig], entityClips, events,
                                 weakpoint, audio_on ? &frameSfx : nullptr);
@@ -401,6 +431,21 @@ FrameResult frame_step(StageCtx& ctx, const FrameInput& in) {
             reset_player_combat(player, combat, stage_spawn, stage_spawn_yaw, tuning);
             combat.health = health;
             ctx.knightBackstop = true;
+        }
+    }
+    if (ctx.kirin_wired) {
+        // S13: her sidecar's damage after the player's step (none on a rider), then the
+        // road-end backstop box (D9, kArena).
+        ctx.kirinHits = kirin_fight_events(ctx.kirin, player, combat, tuning,
+                                           std::clamp(dt, 0.0f, kMaxCombatStepSeconds),
+                                           audio_on ? &events : nullptr);
+        if (combat.mode != PlayerMode::Dead &&
+            encounters::kirin_detail::in_backstop(player.position.x, player.position.y,
+                                                  player.position.z)) {
+            const float health = combat.health;
+            reset_player_combat(player, combat, stage_spawn, stage_spawn_yaw, tuning);
+            combat.health = health;
+            ctx.kirinBackstop = true;
         }
     }
     if (in.lethalHit && !encounter.defeated) {
@@ -766,6 +811,16 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
     if (opts.s12E2e && !s12_start(s12s, ctx, ctx.loadMs)) {
         std::fprintf(stderr, "sotc-viewer: --s12-e2e: the --manifest arena is not Gaius's "
                              "(encounter knight, his bake and graph) or his fight is unwired\n");
+        return 1;
+    }
+    // --s13-e2e (Task 16): the shared S13 script (s13_script.h), the same way; its whistle
+    // goes in as the S8 whistle key.
+    S13Script s13s;
+    s13s.prefix = "s13e2e";
+    if (opts.s13E2e && !s13_start(s13s, ctx, ctx.loadMs)) {
+        std::fprintf(stderr, "sotc-viewer: --s13-e2e: the --manifest arena is not Phaedra's "
+                             "(encounter kirin, her bake, graph, routes and terrain) or her fight "
+                             "is unwired\n");
         return 1;
     }
     // S8 (D14): a stage entered through a door completes the door's Load
@@ -1554,6 +1609,9 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                 in.input = s11_input(s11s, ctx);
             } else if (opts.s12E2e) {
                 in.input = s12_input(s12s, ctx);
+            } else if (opts.s13E2e) {
+                in.input = s13_input(s13s, ctx);
+                in.rideKeys.whistle = s13s.whistle;
             } else if (!opts.s7E2e) {
                 const bool* keys = SDL_GetKeyboardState(nullptr);
                 // S8 (G4): W kicks, S reins, A/D steer, E mounts and
@@ -1696,6 +1754,22 @@ SelftestResult run_interactive(StageCtx& ctx, RunState& run) {
                         return *code;
                     }
                     std::printf("s12e2e-done frames=%d seconds=%.1f\n", s12s.frames, s12s.seconds);
+                    print_status_line(opts, shell.win);
+                    return 0;
+                }
+            }
+            if (opts.s13E2e) {
+                std::optional<int> code = s13_after(s13s, ctx);
+                if (!code && s13s.wantR) {
+                    press_r_key();  // the R key's own handler
+                    s13s.wantR = false;
+                    code = s13_after(s13s, ctx);
+                }
+                if (code) {
+                    if (*code != 0) {
+                        return *code;
+                    }
+                    std::printf("s13e2e-done frames=%d seconds=%.1f\n", s13s.frames, s13s.seconds);
                     print_status_line(opts, shell.win);
                     return 0;
                 }

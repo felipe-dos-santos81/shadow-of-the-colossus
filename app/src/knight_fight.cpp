@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string_view>
 
@@ -32,22 +33,12 @@ const knight_root::TurnHeading* turn_series(std::string_view clip) {
     return nullptr;
 }
 
-// A per-frame table at clip time `t` (frame = t · fps), linear between frames, clamped.
-template <typename F>
-auto sample(int frames, float fps, float t, F at) {
-    const float f = std::clamp(std::isfinite(t) ? t * fps : 0.0f, 0.0f, static_cast<float>(frames - 1));
-    const int i = std::min(static_cast<int>(f), frames - 1);
-    const int j = std::min(i + 1, frames - 1);
-    const float u = f - static_cast<float>(i);
-    return at(i) * (1.0f - u) + at(j) * u;
-}
-
 // The clip's root (x, z) in its clip-start frame at time t (knight_root.h); 0 without a series.
 Vec3 root_at(std::string_view clip, float t) {
     const knight_root::RootSeries* r = root_series(clip);
     if (r == nullptr || r->frames < 1) return {};
-    const float x = sample(r->frames, r->fps, t, [r](int k) { return r->xz[k][0]; });
-    const float z = sample(r->frames, r->fps, t, [r](int k) { return r->xz[k][1]; });
+    const float x = knight_sample(r->frames, r->fps, t, [r](int k) { return r->xz[k][0]; });
+    const float z = knight_sample(r->frames, r->fps, t, [r](int k) { return r->xz[k][1]; });
     return {x, 0.0f, z};
 }
 
@@ -55,7 +46,7 @@ Vec3 root_at(std::string_view clip, float t) {
 float turn_heading(std::string_view clip, float t) {
     const knight_root::TurnHeading* h = turn_series(clip);
     if (h == nullptr) return 0.0f;
-    return sample(h->frames, h->fps, t, [h](int k) { return h->deg[k]; });
+    return knight_sample(h->frames, h->fps, t, [h](int k) { return h->deg[k]; });
 }
 
 // `local` (+z his front, +x his left) in the world at yaw `yawDeg` (quadratus_fight's).
@@ -95,6 +86,10 @@ bool requested(const std::vector<int>& ctrls, int bit) {
 }
 
 }  // namespace
+
+int knight_else_edge(const ScrGraph& graph, int clip, int& controlMode) {
+    return else_edge(graph, clip, controlMode);
+}
 
 const char* knight_clip_name(const KnightCore& core, int clip) {
     return clip >= 0 && clip < static_cast<int>(core.graph.clipNames.size())
@@ -162,6 +157,11 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     out.modeBefore = c.rt.current;
     out.clipBefore = m.clip;
     const std::string_view name = knight_clip_name(c, m.clip);
+    // The boss's root tables (S13: Phaedra's through the core's hooks).
+    const auto root_at = [&c](std::string_view n, float t) { return c.rootAt ? c.rootAt(n, t) : ::root_at(n, t); };
+    const auto turn_heading = [&c](std::string_view n, float t) {
+        return c.turnAt ? c.turnAt(n, t) : ::turn_heading(n, t);
+    };
 
     // The world's motion fields: this frame's clip, the last switch, the in-progress turn.
     w.bossMotion = m.clip;
@@ -192,10 +192,11 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
     // them only past R1's 3° steer gate (or, arrived, while his facing is off by more), so
     // the turn has reached his goal's bearing. Every edge out of a turn is taken at its end
     // (p30 -1): without the cut one ~90° turn overshoots and he turns back (Task 5's note).
-    const knight_root::TurnHeading* turn = turn_series(name);
+    // A turn's last heading (its whole yaw; 0 for every other clip).
+    const float turnEnd = turn_heading(name, 1e6f);  // clamped to its last frame
     bool cut = false;
-    if (turn != nullptr && !atEnd) {
-        const bool left = turn->deg[turn->frames - 1] > 0.0f;
+    if (turnEnd != 0.0f && !atEnd) {
+        const bool left = turnEnd > 0.0f;
         const bool still = left ? requested(out.step.controls, scr_knight::kCtrlTurnLeft) ||
                                       requested(out.step.controls, scr_knight::kCtrlStopTurnLeft)
                                 : requested(out.step.controls, scr_knight::kCtrlTurnRight) ||
@@ -264,7 +265,7 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
         m.instance += 1;
         m.held = false;
         const float p34 = c.graph.motionGraph[static_cast<size_t>(edge)].p34;
-        m.blendSeconds = p34 > 0.0f ? p34 / ka::kBlendFps : 0.0f;
+        m.blendSeconds = p34 > 0.0f ? p34 / c.blendFps : 0.0f;
         m.blendElapsed = m.blendSeconds > 0.0f ? 0.0f : -1.0f;
         out.travel = add(out.travel, rotate(root_at(knight_clip_name(c, to), m.time), c.yawDeg));
     } else if (ended && !m.held) {
@@ -278,15 +279,15 @@ KnightThink knight_think(KnightCore& c, ScrWorld& w, float dt) {
 
 // --- The scene's side ----------------------------------------------------------
 
-namespace {
-
-std::string read_text(const std::string& path) {
+std::string knight_read_text(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return {};
     std::stringstream s;
     s << in.rdbuf();
     return s.str();
 }
+
+namespace {
 
 int joint_of(const KnightFight& f, std::string_view name) {
     for (size_t i = 0; i < f.jointNames.size(); ++i) {
@@ -339,6 +340,12 @@ Vec3 grounded(const Heightmap& ground, Vec3 at) {
 }
 
 }  // namespace
+
+PoseView knight_pose_view(const KnightFight& f) { return pose_view(f); }
+
+PlayerView knight_player_view(const PlayerState& player, const PlayerCombat& combat) {
+    return player_view(player, combat);
+}
 
 bool knight_events_check(const EventsFile& ev, const std::vector<std::string>& joints,
                          const std::vector<std::string>& optBones, std::string& why) {
@@ -399,51 +406,48 @@ const char* knight_mode_name(const KnightFight& f, int mode) {
                : "none";
 }
 
-bool knight_fight_load(KnightFight& f, const Scene& scene, std::size_t entityRig,
-                       const Playback& entity, const std::string& libraryDir,
-                       const std::string& entityGlb, const std::string& standClip, Vec3 placement,
-                       Vec3 playerStart, std::string& why) {
-    // kArena vs the composed manifest (the same values live in probe.py STAGES["arena_03"];
-    // nothing else checks they agree).
-    const ka::KnightArena& a = ka::kArena;
-    if (std::fabs(placement.x - a.spawnX) > 1e-3f || std::fabs(placement.z - a.spawnZ) > 1e-3f ||
-        std::fabs(placement.y - a.spawnGroundY) > 1e-3f) {
-        why = "the manifest places him off kArena's spawn (re-compose arena_03 or fix knight.h)";
+bool knight_check_arena(Vec3 placement, Vec3 playerStart, Vec3 spawn, float playerStartX, float playerStartZ,
+                        const char* stage, const char* table, std::string& why) {
+    const std::string fix = std::string(" (re-compose ") + stage + " or fix " + table + ")";
+    if (std::fabs(placement.x - spawn.x) > 1e-3f || std::fabs(placement.z - spawn.z) > 1e-3f ||
+        std::fabs(placement.y - spawn.y) > 1e-3f) {
+        why = "the manifest places the colossus off kArena's spawn" + fix;
         return false;
     }
-    if (std::fabs(playerStart.x - a.playerStartX) > 1e-3f || std::fabs(playerStart.z - a.playerStartZ) > 1e-3f) {
-        why = "the manifest's player start is off kArena's (re-compose arena_03 or fix knight.h)";
+    if (std::fabs(playerStart.x - playerStartX) > 1e-3f || std::fabs(playerStart.z - playerStartZ) > 1e-3f) {
+        why = "the manifest's player start is off kArena's" + fix;
         return false;
     }
-    const std::string graphPath = libraryDir + "/behaviour/" + ka::kGraphBoss + ".graph.json";
-    const std::string json = read_text(graphPath);
-    if (json.empty()) {
-        why = graphPath + " is missing or empty (`make behaviour` into SOTC_LIB)";
-        return false;
-    }
+    return true;
+}
+
+bool knight_scene_sidecar(KnightFight& f, const Playback& entity, const std::string& libraryDir,
+                          const std::string& entityGlb, std::vector<std::string>& names,
+                          std::vector<float>& seconds, std::vector<std::string>& judges, std::string& why) {
     std::filesystem::path sidecar = std::filesystem::path(libraryDir) / entityGlb;
     sidecar.replace_extension(".events.json");
     if (!events_load(sidecar.string(), f.events, why)) return false;
-    std::vector<std::string> names;
-    std::vector<float> seconds;
+    names.clear();
+    seconds.clear();
+    judges.clear();
     for (const AnimationCpu& clip : entity.clips) {
         names.push_back(clip.name);
         seconds.push_back(clip.duration);
     }
-    std::vector<std::string> judges;
     for (const EventsVolume& v : f.events.judgeDefaults) judges.push_back(v.name);
     for (const EventsClip& c : f.events.clips) {
         for (const EventsVolume& v : c.judge) judges.push_back(v.name);
     }
-    // The graph's clip indices are the playback's: scr_graph_load keeps `names`' order.
-    if (!knight_core_load(f.core, json, names, seconds, judges, standClip, why)) return false;
-    f.core.boundCentre = {a.boundCentreX, 0.0f, a.boundCentreZ};
-    f.core.boundRadius = a.boundRadius;
+    return true;
+}
+
+bool knight_scene_bind(KnightFight& f, const Scene& scene, std::size_t entityRig, const char* deathClip,
+                       const char* hipJoint, std::string& why) {
     f.eventsClip.clear();
-    for (const std::string& n : names) f.eventsClip.push_back(events_clip(f.events, n));
-    f.deathClip = scr_clip(f.core.graph, encounters::kKnight.death.clip);
+    for (const std::string& n : f.core.graph.clipNames) f.eventsClip.push_back(events_clip(f.events, n));
+    f.deathClip = scr_clip(f.core.graph, deathClip);
     if (f.deathClip < 0) {
-        why = std::string("his glb carries no ") + encounters::kKnight.death.clip;
+        why = std::string("the colossus's glb carries no ") + deathClip;
         return false;
     }
     const RigCpu& rig = rig_at(scene, entityRig);
@@ -454,12 +458,41 @@ bool knight_fight_load(KnightFight& f, const Scene& scene, std::size_t entityRig
         if (j.name.rfind("OptBone_", 0) == 0) f.optBones.push_back(j.name);
     }
     if (!knight_events_check(f.events, f.jointNames, f.optBones, why)) return false;
-    f.hipJoint = joint_of(f, ka::kHipJoint);
+    f.hipJoint = joint_of(f, hipJoint);
     if (f.hipJoint < 0) {
-        why = std::string("his rig has no ") + ka::kHipJoint;
+        why = std::string("the colossus's rig has no ") + hipJoint;
         return false;
     }
     return true;
+}
+
+bool knight_fight_load(KnightFight& f, const Scene& scene, std::size_t entityRig,
+                       const Playback& entity, const std::string& libraryDir,
+                       const std::string& entityGlb, const std::string& standClip, Vec3 placement,
+                       Vec3 playerStart, std::string& why) {
+    // kArena vs the composed manifest (the same values live in probe.py STAGES["arena_03"];
+    // nothing else checks they agree).
+    const ka::KnightArena& a = ka::kArena;
+    if (!knight_check_arena(placement, playerStart, Vec3{a.spawnX, a.spawnGroundY, a.spawnZ}, a.playerStartX,
+                            a.playerStartZ, "arena_03", "knight.h", why)) {
+        return false;
+    }
+    const std::string graphPath = libraryDir + "/behaviour/" + ka::kGraphBoss + ".graph.json";
+    const std::string json = knight_read_text(graphPath);
+    if (json.empty()) {
+        why = graphPath + " is missing or empty (`make behaviour` into SOTC_LIB)";
+        return false;
+    }
+    std::vector<std::string> names, judges;
+    std::vector<float> seconds;
+    if (!knight_scene_sidecar(f, entity, libraryDir, entityGlb, names, seconds, judges, why)) return false;
+    // The graph's clip indices are the playback's: scr_graph_load keeps `names`' order.
+    if (!knight_core_load(f.core, json, names, seconds, judges, standClip, why)) return false;
+    // His attack rows' ATTAIN cylinders (S12's kAttack attainX/Z/R) from the sidecar (S13 Task 5).
+    if (!scr_attack_attain(f.core.graph, f.events.judgeDefaults, why)) return false;
+    f.core.boundCentre = {a.boundCentreX, 0.0f, a.boundCentreZ};
+    f.core.boundRadius = a.boundRadius;
+    return knight_scene_bind(f, scene, entityRig, encounters::kKnight.death.clip, ka::kHipJoint, why);
 }
 
 void knight_fight_reset(KnightFight& f, Encounter& encounter, Playback& entity) {
@@ -484,25 +517,19 @@ void knight_fight_reset(KnightFight& f, Encounter& encounter, Playback& entity) 
     entity.playing = false;
 }
 
-KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& entity,
-                              const Heightmap& ground, const PlayerState& player,
-                              const PlayerCombat& combat, bool whistleHeld, float dt) {
-    KnightCore& c = f.core;
-    KnightMotion& m = c.motion;
-    if (!(dt >= 0.0f) || !std::isfinite(dt)) dt = 0.0f;
+void knight_world_player_side(KnightFight& f, ScrWorld& w, const Encounter& encounter, const Heightmap& ground,
+                              float groundStep, std::span<const int> bandRegion, const PlayerState& player,
+                              const PlayerCombat& combat, bool whistleHeld) {
     f.judgeFired.clear();
-
-    ScrWorld w;
     w.playerPosition = player.position;
-    w.playerGroundPosition = grounded(ground, player.position);
+    w.playerGroundPosition = player.position;  // the layered floor under the feet, kept when none
+    const float floor = heightmap_floor(ground, player.position, groundStep);
+    if (std::isfinite(floor)) w.playerGroundPosition.y = floor;
     w.playerAttached = mode_is_attached(combat.mode);
     w.playerAttachedRegion =
-        w.playerAttached && combat.band >= 0 && combat.band < static_cast<int>(ka::kBandRegion.size())
-            ? ka::kBandRegion[static_cast<size_t>(static_cast<int>(combat.band))]
+        w.playerAttached && combat.band >= 0 && combat.band < static_cast<int>(bandRegion.size())
+            ? bandRegion[static_cast<size_t>(static_cast<int>(combat.band))]
             : 0;
-    // §13.3 stand-in (authored): the battle area is the arena's ground under a player on foot.
-    w.playerOnArenaGround = !w.playerAttached && combat.mode != PlayerMode::Falling &&
-                            heightmap_in_bounds(ground, player.position);
     // R-N: the S8 whistle (a press, as ride_presses reads it) and the player's death.
     knight_world_player(w, whistleHeld && !f.whistleBefore, combat.mode == PlayerMode::Dead);
     f.whistleBefore = whistleHeld;
@@ -510,6 +537,52 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     w.hitRegion = f.struckRegion;
     f.struck = false;
     w.hp = encounter.defeated ? 0.0f : encounter.health;
+    // Ruling R-B: the attack runner's judge volumes, on last frame's pose.
+    const PlayerView pv = player_view(player, combat);
+    w.playerInJudge = [&f, pv](std::string_view name) {
+        if (!f.havePose) return false;
+        const bool in = events_player_in_judge(f.events, name, f.evNow, pose_view(f), pv);
+        if (in) f.judgeFired.emplace_back(name);
+        return in;
+    };
+}
+
+KnightThink knight_enter_death(KnightFight& f, const std::function<KnightThink()>& thinkAtZero) {
+    KnightCore& c = f.core;
+    KnightMotion& m = c.motion;
+    // D12: the graph's death once (forced death -> its root death mode; the mortality row ->
+    // the death clip), then the death sequence owns the clip. The mortality row (HP <= 0)
+    // takes the death clip into the root's death control-mode; in it the walker forces the
+    // root death mode (§1 step 6): two thinks, at no time. The cap (authored: 3 = those two +
+    // one spare) ends the loop for a graph that never gets there; the death line then shows
+    // its mode.
+    KnightThink t;
+    for (int i = 0; i < 3 && c.rt.current != c.graph.root.deathMode; ++i) t = thinkAtZero();
+    f.deathMode = c.rt.current;
+    f.deathGraphClip = m.clip;
+    m.previous = m.clip;
+    m.clip = f.deathClip;
+    m.time = 0.0f;
+    m.held = false;
+    m.blendElapsed = -1.0f;
+    m.instance += 1;
+    return t;
+}
+
+KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& entity,
+                              const Heightmap& ground, const PlayerState& player,
+                              const PlayerCombat& combat, bool whistleHeld, float dt) {
+    KnightCore& c = f.core;
+    KnightMotion& m = c.motion;
+    if (!(dt >= 0.0f) || !std::isfinite(dt)) dt = 0.0f;
+    ScrWorld w;
+    knight_world_player_side(f, w, encounter, ground, ka::kGroundStep, ka::kBandRegion, player, combat, whistleHeld);
+    // §13.3 stand-in (authored): the battle area (owner 0x800000) is the arena's ground under a
+    // player on foot.
+    w.playerGroundAttr = !w.playerAttached && combat.mode != PlayerMode::Falling &&
+                                 heightmap_in_bounds(ground, player.position)
+                             ? 0x800000u
+                             : 0u;
     w.bossPosition = encounter.entityPosition;
     w.bossOnGround = true;  // authored: his root follows the ground every frame
     // §13.3: the layered ground's raw node (its top) for swing_space_clear; none = a drop.
@@ -520,36 +593,10 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     // Perception's sight ray (authored): arena_03 has no sight-blocking geometry — its
     // ground is the disc he stands on (never a wall) and the rest are backdrops.
     w.ray = nullptr;
-    // Ruling R-B: the attack runner's judge volumes, on last frame's pose.
-    const PlayerView pv = player_view(player, combat);
-    w.playerInJudge = [&f, pv](std::string_view name) {
-        if (!f.havePose) return false;
-        const bool in = events_player_in_judge(f.events, name, f.evNow, pose_view(f), pv);
-        if (in) f.judgeFired.emplace_back(name);
-        return in;
-    };
 
     KnightThink t;
     if (encounter.defeated) {
-        if (f.deathMode < 0) {
-            // D12: the graph's death once (forced death -> its root death mode; the
-            // mortality row -> the death clip), then the death sequence owns the clip.
-            // The mortality row (HP <= 0) takes the death clip into the root's death
-            // control-mode; in it the walker forces the root death mode (§1 step 6): two
-            // thinks, at no time. The cap (authored: 3 = those two + one spare) ends the loop
-            // for a graph that never gets there; the s12-death line then shows its mode.
-            for (int i = 0; i < 3 && c.rt.current != c.graph.root.deathMode; ++i) {
-                t = knight_think(c, w, 0.0f);
-            }
-            f.deathMode = c.rt.current;
-            f.deathGraphClip = m.clip;
-            m.previous = m.clip;
-            m.clip = f.deathClip;
-            m.time = 0.0f;
-            m.held = false;
-            m.blendElapsed = -1.0f;
-            m.instance += 1;
-        }
+        if (f.deathMode < 0) t = knight_enter_death(f, [&c, &w] { return knight_think(c, w, 0.0f); });
         // He travels the death clip's root at the death machine's clock and holds.
         const std::string_view name = knight_clip_name(c, f.deathClip);
         const float now = entity.time;
@@ -570,7 +617,14 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     f.maxBoundDistance = std::max(f.maxBoundDistance,
                                   std::hypot(encounter.entityPosition.x - c.boundCentre.x,
                                              encounter.entityPosition.z - c.boundCentre.z));
-    if (!encounter.defeated) {
+    knight_fight_sync(f, entity, encounter.defeated, t);
+    return t;
+}
+
+void knight_fight_sync(KnightFight& f, Playback& entity, bool defeated, const KnightThink& t) {
+    const KnightCore& c = f.core;
+    const KnightMotion& m = c.motion;
+    if (!defeated) {
         // The entity's clip at the motion's clock (clamped: the app samples, never wraps).
         entity.index = m.clip;
         entity.time = std::min(m.time, c.seconds[static_cast<size_t>(m.clip)]);
@@ -588,11 +642,11 @@ KnightThink knight_fight_step(KnightFight& f, Encounter& encounter, Playback& en
     }
     f.evNow.frame = m.time * (evClip >= 0 ? f.events.clips[static_cast<size_t>(evClip)].fps : 30.0f);
     f.think = t;
-    return t;
 }
 
 void knight_fight_pose(KnightFight& f, const Scene& scene, std::size_t entityRig,
-                       const Playback& entity, float dt, std::vector<Mat4>& palette) {
+                       const Playback& entity, float dt, std::vector<Mat4>& palette,
+                       const AddLayers* layers) {
     KnightMotion& m = f.core.motion;
     // The switch's blend (the edge's p34), on blended_palette's 0.25 s scale.
     const float from = m.blendElapsed >= 0.0f && m.blendSeconds > 0.0f
@@ -605,7 +659,7 @@ void knight_fight_pose(KnightFight& f, const Scene& scene, std::size_t entityRig
     if (entity.index >= 0 && static_cast<size_t>(entity.index) < entity.clips.size()) {
         const AnimationCpu& clip = entity.clips[static_cast<size_t>(entity.index)];
         std::vector<Mat4> blended = blended_palette(scene, entityRig, entity, f.blend, clip.name,
-                                                    playback_time(entity, clip.duration), from);
+                                                    playback_time(entity, clip.duration), from, layers);
         if (!blended.empty()) palette = std::move(blended);
     }
     // Every joint's world matrix: model · palette · bindWorld (rig_bone_world's product).
@@ -624,7 +678,8 @@ void knight_fight_pose(KnightFight& f, const Scene& scene, std::size_t entityRig
 }
 
 std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, PlayerCombat& combat,
-                                           const CombatTuning& tuning, float dt, StepEvents* events) {
+                                           const CombatTuning& tuning, float dt, StepEvents* events,
+                                           float heavyReaction, float throwOffReaction) {
     std::vector<DamageHit> landed;
     f.throwOff = false;  // last frame's throw-off was read by this frame's step
     f.overlaps.clear();
@@ -643,7 +698,7 @@ std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, 
         PoseView open = pose;
         open.entity = -1;
         for (const DamageHit& h : events_damage(f.events, f.evNow, f.evPrev, open, pv)) {
-            if (h.reaction == ka::kThrowOffReaction) {
+            if (h.reaction == throwOffReaction) {
                 f.evNow.hit |= uint64_t{1} << h.row;
                 f.throwOff = true;
                 landed.push_back(h);
@@ -656,7 +711,7 @@ std::vector<DamageHit> knight_fight_events(KnightFight& f, PlayerState& player, 
         if (best == nullptr || h.amount > best->amount) best = &h;
     }
     if (best != nullptr && best->amount > 0.0f &&
-        player_take_damage(combat, best->amount, best->reaction == ka::kHeavyReaction, tuning, events)) {
+        player_take_damage(combat, best->amount, best->reaction == heavyReaction, tuning, events)) {
         landed.push_back(*best);
     }
     return landed;

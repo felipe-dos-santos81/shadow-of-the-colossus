@@ -12,7 +12,8 @@ import stamps  # noqa: E402
 
 MILESTONES = {"s3": ["gpu"], "s4": ["probes", "gpu"], "s41": ["gpu"], "s42": ["gpu"], "s5": ["audio", "gpu"],
               "s6": ["probes", "audio", "gpu"], "s7": ["probes", "gpu"], "s8": ["probes", "audio", "gpu"],
-              "s9": ["probes", "audio", "gpu"], "s11": ["gpu"], "s12": ["gpu"]}
+              "s9": ["probes", "audio", "gpu"], "s11": ["gpu"], "s12": ["gpu"],
+              "s13": ["gpu"]}
 STEPS = ["dotnet", "ctest", "audio"]
 ALL = STEPS + ["%s.%s" % (m, s) for m, ss in MILESTONES.items() for s in ss]
 
@@ -34,12 +35,13 @@ def of(*milestones, **only):
 
 MANIFEST_READERS = {
     "valus": {"s3.gpu", "s4.probes"},
-    "encounter": of(*[m for m in MILESTONES if m not in ("s3", "s11", "s12")]) - {"s7.audio"},
+    "encounter": of(*[m for m in MILESTONES if m not in ("s3", "s11", "s12", "s13")]) - {"s7.audio"},
     "shrine": of("s7", "s8", "s9"),
     "plain": of("s8", "s9"),
     "road": of("s9"),
     "arena_02": of("s11"),
     "arena_03": of("s12"),
+    "arena_04": of("s13"),
 }
 
 
@@ -57,6 +59,9 @@ CASES = {
     "tools/re/objanim/knight_map.json": by("dotnet"),
     "tools/re/scr/graph_export.py": by("ctest"),
     "tools/re/scr/scrdb.py": by("ctest"),
+    "tools/re/path/route_export.py": by("ctest", "gpu"),
+    "tools/re/clb/terrain_export.py": by("ctest", "gpu"),
+    "tools/re/stage/cell_frame.py": by("ctest", "probes", "gpu"),
     "app/src/app.cpp": by("ctest", "gpu"),
     "app/shaders/mesh.metal": by("ctest", "gpu"),
     "app/CMakeLists.txt": by("ctest", "gpu"),
@@ -77,6 +82,7 @@ CASES = {
     "lib/models/a/a.clips.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     "lib/models/a/a.events.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     "lib/behaviour/KNIGHT.graph.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
+    "lib/stage/arena_04.terrain.json": by("ctest", "probes", "gpu") | AUDIO_SECTIONS,
     # the probes read no audio: the runner's decode never makes them re-run
     "lib/audio/audio.manifest": by("ctest", "gpu", "audio"),
     "lib/audio/s5/valus_hurt.wav": by("ctest", "gpu"),

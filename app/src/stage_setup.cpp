@@ -449,7 +449,8 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
             // weakpoints', then the body's), the death, the attacks.
             std::vector<const char*> required{manifest.entities[0].clip.c_str()};
             for (const WeakpointDesc& weakpoint : desc.weakpoints) {
-                required.push_back(weakpoint.reactionClip);
+                // S13: a target with no hurt clip of its own (Phaedra's neck trigger) needs none.
+                if (weakpoint.reactionClip != nullptr) required.push_back(weakpoint.reactionClip);
             }
             required.push_back(desc.bodyReactionClip);
             required.push_back(desc.death.clip);
@@ -641,6 +642,25 @@ std::optional<int> stage_setup(RunState& run, StageCtx& ctx) {
         ctx.knight.basePosition = encounter.entityPosition;
         ctx.knight.baseYawDeg = encounter.entityBaseYawDeg;
         knight_fight_reset(ctx.knight, encounter, playbacks[entityRig]);
+        update_entity_transform(scene, encounter, entityRig);
+    }
+    // S13 (Task 15): Phaedra's fight — her graph, routes, terrain, sidecar and clips must load.
+    ctx.kirin_wired = valus_behavior && &ctx.enc() == &encounters::kKirin &&
+                      encounter.entityTransformSet;
+    if (ctx.kirin_wired) {
+        valus_behavior = false;
+        std::string why;
+        if (!kirin_fight_load(ctx.kirin, scene, entityRig, playbacks[entityRig], heightmap,
+                              opts.libraryDir, manifest.entities[0].placement.glbRelPath,
+                              manifest.entities[0].clip, encounter.entityPosition,
+                              spawn_position(manifest, scene), why)) {
+            std::fprintf(stderr, "sotc-viewer: Phaedra's fight: %s\n", why.c_str());
+            return 2;
+        }
+        ctx.kirin.base.basePosition = encounter.entityPosition;
+        ctx.kirin.base.baseYawDeg = encounter.entityBaseYawDeg;
+        ctx.kirin.baseLift = encounter.entityLift;
+        kirin_fight_reset(ctx.kirin, encounter, playbacks[entityRig]);
         update_entity_transform(scene, encounter, entityRig);
     }
 

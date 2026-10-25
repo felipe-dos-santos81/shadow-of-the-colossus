@@ -248,6 +248,12 @@ struct AppOptions {
     bool s12Selftest = false;
     std::string s12StillsPath;
     bool s12E2e = false;
+    // --s13-selftest / --s13-stills DIR / --s13-e2e (S13 Task 16): Phaedra in the --manifest
+    // arena (arena_04), from her exported graph, routes and terrain, scripted from the spawn to
+    // her death and R; s13-* / s13e2e-* lines (+ four stills). Rules in main.cpp.
+    bool s13Selftest = false;
+    std::string s13StillsPath;
+    bool s13E2e = false;
 };
 
 // Whether the interactive `T` key may toggle entity target framing. The mode

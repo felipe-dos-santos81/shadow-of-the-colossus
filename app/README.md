@@ -5,11 +5,11 @@ C++20, CMake, SDL3, SDL_GPU on Metal. It consumes only converted assets
 (`out/library`: `.glb`, `.png`, and the audio WAVs + manifest) — never the game tree or
 original containers.
 
-**Status (milestone S9): the road to Valus — in interactive play the plain runs on up the arena's
-entrance stairs and corridor; the corridor's dead end is a door into Valus's arena and the arena's rim
-has one back; Agro waits where she was left; `C` (left shoulder) raises the sword and its light points
-to Valus (user walk pending). S8 (Agro), S7 (the return to the shrine) and S6 (the fall) are below it,
-unchanged.**
+**Status (milestone S13): Phaedra on arena_04 (`make phaedra`) — the shared colossus systems (the generic
+control-def evaluator, the shared predicate library, the additive layer, the route follower, the terrain classes)
+run her from her exported graph, routes, terrain and events; `--s13-selftest`/`--s13-e2e` below are parsed by
+`scripts/s13-acceptance.sh` (user walk pending). Gaius (S12, `make gaius`), Quadratus (S11), the road to Valus (S9),
+Agro (S8), the return to the shrine (S7) and the fall (S6) are unchanged.**
 The app opens a resizable window, loads a converted model with its PNGs, draws
 it (offscreen target → swapchain → present) at vsync, and frames the scene
 bounds on load. A model with a skeleton is skinned on the GPU: the joint palette
@@ -223,6 +223,9 @@ is required. Escape or the close button quits.
 | `--s12-selftest` | in Gaius's arena (`--manifest out/re/stage/arena_03.manifest`, `make arena03-manifest`; his bake, sidecar and `<SOTC_LIB>/behaviour/KNIGHT.graph.json` from `make bake-knight` and `make behaviour`), fixed 1/60 s steps: his exported graph from its retry start (route_patrol) drives him; the scripted player dodges his slam, grabs the stuck blade's low end in its window and walks it, rides it up onto the forearm, climbs the upper arm, shoulder and neck to the head, strikes the head sigil, holds through a shake, climbs down the belly band (the shoulder's top, `W` + `D`) and strikes the belly sigil to his death (held, no return), then `R`; prints the `s12-*` lines (`load`, `mode`, `judge`, `slam`, `hit`, `dodge`, `climb`, `blade`, `route`, `strike`, `sigil`, `shake`, `death`, `corpse`, `bound`, `reset`, `perf`, `status`) and `s1-status`, exits 1 on a failed step; not in the usage text (frozen in the goldens) |
 | `--s12-stills DIR` | with `--s12-selftest`, write `blade.png`, `head.png`, `belly.png` and `death.png` into `DIR` |
 | `--s12-e2e` | the same script through the **interactive** loop (its `R` is the key's handler); prints `s12e2e-*` (the selftest's lines) and `s12e2e-done`; refused (exit 2) with a selftest, another e2e, a capture, `--entity-time` or `--stage` |
+| `--s13-selftest` | in Phaedra's arena (`--manifest out/re/stage/arena_04.manifest`, `make arena04-manifest`; her bake and sidecar from `make bake-kirin`, `<SOTC_LIB>/behaviour/KIRIN.graph.json`, `kirin.route.json` and `stage/arena_04.terrain.json` from `make behaviour routes terrain`), fixed 1/60 s steps: her exported graph from its retry start drives her on her routes and terrain; the scripted player walks out until she stomps and runs off her line, hides in the west stair tunnel (terrain class 7) whistling until she routes to tunnel 4's inner GP and peeps (depth, mode 12), leaves by the north-west tunnel, grabs her tail in a `watch_*` window, climbs tail → back → withers → neck, strikes the neck trigger twice (neck down 1, then 2), climbs to the head, holds through a shake and strikes the head sigil to her death (held, no return), then `R`; prints the `s13-*` lines (`load`, `mode`, `route`, `stomp`, `dodge`, `hide`, `peep`, `entry`, `climb`, `neck`, `shake_hung`, `route_climb`, `ground_handoff`, `shake`, `strike`, `sigil`, `death`, `corpse`, `reset`, `coverage`, `perf`, `status`) and `s1-status`, exits 1 on a failed step; `SOTC_S13_TRACE=1` traces every 15th frame to stderr; not in the usage text (frozen in the goldens) |
+| `--s13-stills DIR` | with `--s13-selftest`, write `peeping.png`, `climb.png`, `neck_down_2.png` (from her side) and `death.png` into `DIR` |
+| `--s13-e2e` | the same script through the **interactive** loop (its whistle is the `Q` key's, its `R` the key's handler); prints `s13e2e-*` (the selftest's lines) and `s13e2e-done`; refused (exit 2) with a selftest, another e2e, a capture, `--entity-time` or `--stage` |
 
 ## Manifests
 

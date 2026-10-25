@@ -1,0 +1,28 @@
+{
+  "skeleton": "kirin_a",
+  "note": "Curated from eboot.elf (S13 recon kirin/findings.md section 4): the effect-name -> spawned-damage-objanim link (KIRIN_EFFECT eff_segment_def 0x1aee770 -> STAGE19 objtype_script_animation 0x1ae2940: KIRIN_FOOT, _FOOT_B, _WAIT_FOOT, _FOOT_NO_SE start [38] objanim_kirin_walk_dmg; KIRIN_FOOT_ATK, _ATK_ST start [39] objanim_kirin_atk_dmg) and the damage_def rows (amount = +1c, reaction = +18, both raw: KIRIN_DAMAGE 0x198c6e8, KIRIN_DAMAGE_JIWARE 0x198c698). dropEvents: the 2-frame *_wait holds of the stomp chain re-fire KIRIN_FOOT_ATK (a, b) / KIRIN_FOOT_ATK_ST (c) at frame 0 on the already-planted hoof; a clip-name suffix -> effect names whose frame-0 events are dropped, so a chain hits once. KIRIN_IMPACT (death boxes) has no damage_def row and is left without a def.",
+  "spawns": {
+    "KIRIN_FOOT": ["kirin_walk_dmg"],
+    "KIRIN_FOOT_B": ["kirin_walk_dmg"],
+    "KIRIN_WAIT_FOOT": ["kirin_walk_dmg"],
+    "KIRIN_FOOT_NO_SE": ["kirin_walk_dmg"],
+    "KIRIN_FOOT_ATK": ["kirin_atk_dmg"],
+    "KIRIN_FOOT_ATK_ST": ["kirin_atk_dmg"]
+  },
+  "dropEvents": {
+    "_wait": ["KIRIN_FOOT_ATK", "KIRIN_FOOT_ATK_ST"]
+  },
+  "damage": {
+    "KIRIN_FOOT_CORE": { "amount": 40, "reaction": 4 },
+    "KIRIN_FOOT": { "amount": 30, "reaction": 5 },
+    "KIRIN_STAGGER": { "amount": 0, "reaction": 10 },
+    "GROUNDDEST_IMPACT_CORE": { "amount": 60, "reaction": 4 },
+    "GROUNDDEST_IMPACT": { "amount": 40, "reaction": 5 },
+    "GROUNDDEST_SHOCK": { "amount": 5, "reaction": 9 },
+    "GROUNDDEST_STAGGER": { "amount": 0, "reaction": 10 },
+    "GROUNDDEST_IMPACT2_CORE": { "amount": 30, "reaction": 4 },
+    "GROUNDDEST_IMPACT2": { "amount": 10, "reaction": 5 },
+    "GROUNDDEST_SHOCK2": { "amount": 5, "reaction": 9 },
+    "GROUNDDEST_STAGGER2": { "amount": 0, "reaction": 10 }
+  }
+}

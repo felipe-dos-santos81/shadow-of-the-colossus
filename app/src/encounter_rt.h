@@ -5,6 +5,7 @@
 // Valus's attacks and the combat events, the player/entity transforms, the
 // collision capsules, the sword grip, and the plain's ride maths.
 
+#include "additive.h"
 #include "anim.h"
 #include "app.h"
 #include "asset_io.h"
@@ -54,9 +55,11 @@ void select_clip(Playback& playback, const Scene& scene, std::size_t rigIndex, i
 // once per frame per rig, before the draw; a no-op when the rig has no clip
 // (and the upload itself is a no-op for a rig with no skin). The palette is
 // returned so a per-frame consumer that needs the pose (the collision pass)
-// reads this frame's matrices instead of re-evaluating the clip.
+// reads this frame's matrices instead of re-evaluating the clip. S13: a non-null
+// `layers` composes the rig's additive layers onto the local pose (additive.h);
+// null is the path as it was.
 std::vector<Mat4> update_pose(Renderer& renderer, const Scene& scene, std::size_t rigIndex,
-                              Playback& playback, float dt);
+                              Playback& playback, float dt, const AddLayers* layers = nullptr);
 
 // S4.2: Valus's club is a separate, unskinned glb authored in the bind frame of
 // the entity rig's OptBone_sword. It is appended as static geometry (rig = -1)
@@ -533,9 +536,12 @@ struct RigBlend {
 // The palette of rig `rigIndex` playing `clipName` at `time` (wrapped into the
 // clip), blended from the outgoing pose while `blendFrom` (seconds into the
 // 0.25 s blend, -1 = none) runs. Empty when the rig does not carry the clip.
+// S13: a non-null `layers` composes the additive layers onto the blended pose
+// (`blend.shown` keeps the pose without them); null is the path as it was.
 std::vector<Mat4> blended_palette(const Scene& scene, std::size_t rigIndex,
                                   const Playback& playback, RigBlend& blend,
-                                  const std::string& clipName, float time, float blendFrom);
+                                  const std::string& clipName, float time, float blendFrom,
+                                  const AddLayers* layers = nullptr);
 
 // Heading `yawDeg` (0 faces +Z, 90 faces +X — player.h) as a unit XZ vector,
 // and its right hand (+X of that frame).

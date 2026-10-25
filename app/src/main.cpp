@@ -206,6 +206,14 @@ int main(int argc, char** argv) {
             opts.s12E2e = true;
             continue;
         }
+        if (arg == "--s13-selftest") {
+            opts.s13Selftest = true;
+            continue;
+        }
+        if (arg == "--s13-e2e") {
+            opts.s13E2e = true;
+            continue;
+        }
         if (arg == "--no-return") {
             opts.noReturn = true;
             continue;
@@ -221,7 +229,7 @@ int main(int argc, char** argv) {
                                  arg == "--s7-stills" || arg == "--plain-manifest" ||
                                  arg == "--s8-stills" || arg == "--road-manifest" ||
                                  arg == "--s9-stills" || arg == "--s11-stills" ||
-                                 arg == "--s12-stills";
+                                 arg == "--s12-stills" || arg == "--s13-stills";
         if (!wants_value) {
             std::fprintf(stderr, "sotc-viewer: unknown argument: %s\n", arg.c_str());
             print_usage(stderr);
@@ -306,6 +314,8 @@ int main(int argc, char** argv) {
             opts.s11StillsPath = value;
         } else if (arg == "--s12-stills") {
             opts.s12StillsPath = value;
+        } else if (arg == "--s13-stills") {
+            opts.s13StillsPath = value;
         } else {
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed < 1) {
@@ -607,6 +617,30 @@ int main(int argc, char** argv) {
     }
     if (!opts.s12StillsPath.empty() && !opts.s12Selftest) {
         std::fprintf(stderr, "sotc-viewer: --s12-stills needs --s12-selftest\n");
+        return 2;
+    }
+
+    // S13 (Task 16): Phaedra's selftest and e2e run alone in the --manifest arena (arena_04);
+    // last, so every earlier refusal's output is unchanged.
+    if ((opts.s13Selftest || opts.s13E2e) &&
+        (opts.manifestPath.empty() || opts.modelRelPath.empty())) {
+        std::fprintf(stderr, "sotc-viewer: --s13-selftest/--s13-e2e need --manifest and --model\n");
+        return 2;
+    }
+    if ((opts.s13Selftest || opts.s13E2e) &&
+        (opts.selftest || opts.s3Selftest || opts.s4Selftest || opts.s41Selftest ||
+         opts.s42Selftest || opts.s5Selftest || opts.s6Selftest || opts.s7Selftest ||
+         opts.s7E2e || opts.s8Selftest || opts.s8E2e || opts.s9Selftest || opts.s9E2e ||
+         opts.s11Selftest || opts.s11E2e || opts.s12Selftest || opts.s12E2e ||
+         (opts.s13Selftest && opts.s13E2e) || opts.stage != StageId::Arena ||
+         !opts.screenshotPath.empty() || opts.entityTimeSet)) {
+        std::fprintf(stderr,
+                     "sotc-viewer: --s13-selftest/--s13-e2e run alone in the --manifest arena: no "
+                     "other selftest, e2e, capture, --entity-time or --stage\n");
+        return 2;
+    }
+    if (!opts.s13StillsPath.empty() && !opts.s13Selftest) {
+        std::fprintf(stderr, "sotc-viewer: --s13-stills needs --s13-selftest\n");
         return 2;
     }
 
