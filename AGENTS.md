@@ -27,7 +27,7 @@ neck trigger twice (neck down 1, then 2, additive); climb to the head and strike
 root 9.86 → 2.44 m and holds `death_loop`; no return to the shrine; `R` resets. The provenance table (graph / route /
 terrain / sidecar / decode / authored / guess), the 16-boss coverage and every ruling R-A…R-AL are
 `docs/notes/s13-results.md`. The proof is `--s13-selftest --s13-stills out/s13/stills` and `--s13-e2e` (manifest
-arena_04); the acceptance script is `scripts/s13-acceptance.sh` (the frozen S12 chain first); `tools/verify/s13.sh`
+arena_04); the acceptance script is `scripts/s13-acceptance.sh` (a cold `scripts/verify --force` over S3…S12 first); `tools/verify/s13.sh`
 has blessed goldens; s3…s12 goldens byte-identical (no §13.3 ruling). Everything S13 exports and bakes (her bake,
 the 16 graphs with `control_defs`, the route, the terrain) was promoted to the base `out/library` at S13's merge
 (`make bake` includes `bake-kirin`, `behaviour` for all 16, `routes` and `terrain`); the `s13` view is deleted. Known gaps: the
@@ -236,8 +236,11 @@ runs sharing an `out/` directory; the runner parallelises within its own `out/ve
 **The gate rule.** `make verify` (`scripts/verify`) is the **per-task gate**: run it after every task's
 change and before reporting it done. It runs only the steps whose inputs changed (`make verify
 ARGS="--quick"` skips the e2e runs for the inner loop, `ARGS="--only s7"` one milestone, `ARGS=--dry-run`
-lists the decisions). `make verify-long` (`scripts/verify --long`, the highest frozen
-`scripts/sN-acceptance.sh` — `s13`, ~20 min) is the **milestone gate**, run before a merge. Goldens are re-blessed
+lists the decisions). The **milestone gate**, run before a merge, is `make verify ARGS=--force` (the cold runner,
+every milestone) plus `make accept-s13` (whose regression step is itself a cold runner pass over S3…S12).
+`make verify-long` (`scripts/verify --long`: the highest `scripts/sN-acceptance.sh` with
+`SOTC_REGRESSION=chain`, i.e. s13 on the frozen S12 → … → S3 chain, ~20 min) stays available as the deep
+frozen chain. Goldens are re-blessed
 (`ARGS=--bless`, clean tree, nothing else running) only for a deliberate output change; a new milestone
 adds its `tools/verify/sN.sh` adapter. GPU runs stay serial (width 1). A git worktree needs
 `git submodule update --init --recursive` before dotnet or verify works in it.
@@ -399,10 +402,13 @@ caffeinate -dimsu app/build/sotc-viewer --library "$SOTC_LIB" \
 
 ```bash
 export SOTC_LIB=<repo>/out/library
-caffeinate -dimsu ./scripts/s13-acceptance.sh  # S13 + S12 (which runs S11 → S9 → S8 → S7 → S6 → S5 → S4.2 → S4.1 → S4 → S3)
+caffeinate -dimsu ./scripts/s13-acceptance.sh  # a cold scripts/verify over S3 … S12 (+ dotnet, ctest, audio), then S13
+SOTC_REGRESSION=chain caffeinate -dimsu ./scripts/s13-acceptance.sh  # the deep frozen chain (= make verify-long)
 ```
 
 Never modify `scripts/s3-acceptance.sh` … `scripts/s12-acceptance.sh` (s3, s4, s41, s42, s5, s6, s7, s8,
-s9, s11, s12) for an S13 change: they are S13's regression (s12 runs s11, which runs s9 and the other eight).
+s9, s11, s12) for an S13 change: they are the deep chain (s12 runs s11, which runs s9 and the other eight)
+and the runner's adapters copy their gates. A change to `scripts/s13-acceptance.sh` moves `tools/verify/golden/PIN`
+(the runner refuses a frozen script that differs from the pin).
 Assets, derived glbs and the decoded audio are gitignored and never committed; results notes quote
 measured values, not adjectives.

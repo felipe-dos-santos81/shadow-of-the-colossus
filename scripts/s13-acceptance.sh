@@ -14,9 +14,12 @@
 #      15/84/97/314 and KNIGHT's unchanged 13/53/40/171 (with control_defs, which Gaius now
 #      needs); kirin.route.json (sotc-route/0, 5 routes, 11 GPs) and arena_04.terrain.json
 #      (sotc-terrain/0) valid (make routes terrain);
-#   2. the **frozen S12 acceptance first** (`scripts/s12-acceptance.sh`, never edited — the S11
-#      chain inside it: both builds, both suites, S9 → S8 → … → S3, S11, then S12). Its outputs are
-#      not re-asserted here beyond its PASS line;
+#   2. the regression: the runner, cold — `scripts/verify --force` over dotnet (build, publish, test),
+#      ctest (the app build + its suite), the audio decode and S3 … S12 against their blessed goldens
+#      (~6 min); it fails closed on its exit code, any FAIL line or a missing PASS line. With
+#      SOTC_REGRESSION=chain (what `scripts/verify --long` sets) it is the deep frozen chain instead:
+#      `scripts/s12-acceptance.sh` (never edited — the S11 chain inside it: both builds, both suites,
+#      S9 → S8 → … → S3, S11, then S12; ~16 min). Neither is re-asserted here beyond its PASS lines;
 #   3. the coverage report (`make coverage`'s two commands, into out/re/coverage.md): one row per
 #      colossus (16), KIRIN with 0 missing items;
 #   4. the flag refusals (exit 2): --s13-stills without --s13-selftest, --s13-selftest with
@@ -42,12 +45,14 @@
 #
 # tools/verify/s13.sh is the runner's second copy of steps 1 and 3–7 (test_coverage.py proves
 # every gate below is in it). Every viewer and acceptance run is wrapped in `caffeinate -dimsu`.
-# Never run two acceptances concurrently. The S12 chain takes ~16 min. CoreAudio refuses output
-# to a background (non-Aqua) session: run from a desktop terminal, or the frozen e2e runs print an
+# Never run two acceptances concurrently, nor this beside `scripts/verify` (the runner's pass writes
+# out/verify/<worktree>/). CoreAudio refuses output
+# to a background (non-Aqua) session: run from a desktop terminal, or the e2e runs print an
 # `audio: no output device` line.
 #
 # Environment:
 #   SOTC_GAME_ROOT  the extracted game tree (required — never silently skipped)
+#   SOTC_REGRESSION chain = step 2 runs the frozen S12 chain instead of the runner (scripts/verify --long)
 #   SOTC_LIB        the converted asset library (default: <repo>/out/library; the branch ran it on
 #                   its view out/libviews/s13 — the base gets the 16 graphs, her bake, routes and
 #                   terrain at the merge promotion, and Gaius now needs control_defs in his graph)
@@ -81,6 +86,7 @@ selftest_txt="$out_dir/s13-selftest.txt"
 e2e_txt="$out_dir/s13-e2e.txt"
 run_log="$repo_root/out/s13-acceptance-run.log"
 s12_log="$repo_root/out/s13-s12-regression.log"
+regression_log="$repo_root/out/s13-regression.log"
 
 stamp() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { echo "s13-acceptance: FAIL — $*" >&2; exit 1; }
@@ -96,7 +102,7 @@ for c in dotnet cmake ctest caffeinate shasum awk grep sed sort tee tr wc python
   need "$c"
 done
 
-# --- Step 1: the inputs (before the ~16 min S12 chain) ------------------------
+# --- Step 1: the inputs (before the regression) --------------------------------
 
 [[ -n "$game_root" ]] || fail "SOTC_GAME_ROOT is not set"
 [[ -d "$game_root" ]] || fail "SOTC_GAME_ROOT not found: $game_root"
@@ -153,18 +159,39 @@ export SOTC_GAME_ROOT="$game_root"
 export SOTC_LIB="$lib"
 started=$SECONDS
 
-# --- Step 2: the frozen S12 acceptance (the S11 chain, then S12) ---------------
+# --- Step 2: the regression (the runner, cold; or the frozen S12 chain) --------
 
-stamp "s12 regression: scripts/s12-acceptance.sh (the S11 chain: builds, both suites, S9 … S3, S11; then S12)"
-if ! caffeinate -dimsu "$repo_root/scripts/s12-acceptance.sh" > "$s12_log" 2>&1; then
-  tail -40 "$s12_log" >&2
-  fail "the frozen S12 acceptance regression failed (log: $s12_log)"
+if [[ "${SOTC_REGRESSION:-}" == chain ]]; then
+  stamp "s12 regression: scripts/s12-acceptance.sh (the S11 chain: builds, both suites, S9 … S3, S11; then S12)"
+  if ! caffeinate -dimsu "$repo_root/scripts/s12-acceptance.sh" > "$s12_log" 2>&1; then
+    tail -40 "$s12_log" >&2
+    fail "the frozen S12 acceptance regression failed (log: $s12_log)"
+  fi
+  s12_pass_line="$(grep -m1 -E '^s12-acceptance: PASS — ' "$s12_log" || true)"
+  [[ -n "$s12_pass_line" ]] || fail "the S12 regression did not print its final PASS — line"
+  printf '%s\n' "$s12_pass_line" | cut -c1-200
+  regression_what="the frozen S12 acceptance green (the S11 chain — builds, both suites, S9 → … → S3, S11 — then S12 inside it)"
+else
+  # Every step and milestone the S12 chain covered; s10 has no acceptance (tooling only).
+  regression_steps="dotnet ctest audio s3 s4 s41 s42 s5 s6 s7 s8 s9 s11 s12"
+  verify_args=(--force)
+  for m in $regression_steps; do verify_args+=(--only "$m"); done
+  stamp "regression: scripts/verify --force (cold: $regression_steps)"
+  if ! "$repo_root/scripts/verify" "${verify_args[@]}" > "$regression_log" 2>&1; then
+    tail -40 "$regression_log" >&2
+    fail "the regression runner failed (log: $regression_log)"
+  fi
+  ! grep -E '^verify: [^ ]+ FAIL ' "$regression_log" ||
+    fail "the regression runner printed a FAIL line (log: $regression_log)"
+  for m in $regression_steps; do
+    grep -qE "^verify: $m PASS " "$regression_log" ||
+      fail "the regression runner printed no PASS line for $m (log: $regression_log)"
+  done
+  grep -E '^verify: [^ ]+ PASS ' "$regression_log" | cut -c1-200
+  regression_what="the runner green (scripts/verify --force: $regression_steps PASS against the goldens)"
 fi
-s12_pass_line="$(grep -m1 -E '^s12-acceptance: PASS — ' "$s12_log" || true)"
-[[ -n "$s12_pass_line" ]] || fail "the S12 regression did not print its final PASS — line"
-printf '%s\n' "$s12_pass_line" | cut -c1-200
-s12_seconds=$((SECONDS - started))
-[[ -x "$viewer" ]] || fail "the S12 chain did not build $viewer"
+regression_seconds=$((SECONDS - started))
+[[ -x "$viewer" ]] || fail "the regression did not build $viewer"
 
 # --- Step 3: the coverage report (make coverage) --------------------------------
 
@@ -425,12 +452,12 @@ e2e_load_ms="$(field "$e2e_load_line" ms)"
 total_seconds=$((SECONDS - started))
 printf 's13-acceptance: library      %s\n' "$lib"
 printf 's13-acceptance: manifest     %s\n' "$arena04_manifest"
-printf 's13-acceptance: s12 chain    %s s\n' "$s12_seconds"
+printf 's13-acceptance: regression   %s s\n' "$regression_seconds"
 printf 's13-acceptance: coverage     %s\n' "$kirin_row"
 printf 's13-acceptance: %s\n' "$load_line" "$dodge_line" "$peep_line" "$entry_line" "$route_line" "$hung_line" \
   "$shake_line" "$perf_line" "$status_line" "$e2e_done"
 printf 's13-acceptance: stills       %s\n' "$stills"
-printf 's13-acceptance: PASS — the frozen S12 acceptance green (%s s: the S11 chain — builds, both suites, S9 → … → S3, S11 — then S12 inside it); the 16 colossus graphs exported, KIRIN 15/84/97/314, KNIGHT 13/53/40/171 with control_defs, her routes and terrain valid; coverage: 16 rows, KIRIN 0 missing (%s); five flag refusals exit 2; arena_04 load %s ms (%s meshes, layered ground %s, %s terrain tris, no return); the stomp dodged clear (off_line %s); hidden in the class-7 stair, she routed to tunnel 4 GP 0 and peeped deep (arrived %s s); the tail grabbed (%s f%s); both neck stages; the climb tail → head; a hung-neck shake (drain %s) and a head shake survived (drain %s, low %s); the head sigil took 160; the death in Giraffe_death (9.86 → 2.44 m) and her held death_loop, no shrine; R exact; frame %s ms (drawn %s, culled %s); %s frames / %s s; the e2e loop (%s; load %s ms) equal to the selftest, one arena load; four stills 2560x1440; windowed, cursor free; %s s in all\n' \
-  "$s12_seconds" "$kirin_row" "$load_ms" "$load_meshes" "$load_ground" "$load_terrain" "$dodge_off" "$peep_arrived" \
+printf 's13-acceptance: PASS — %s (%s s); the 16 colossus graphs exported, KIRIN 15/84/97/314, KNIGHT 13/53/40/171 with control_defs, her routes and terrain valid; coverage: 16 rows, KIRIN 0 missing (%s); five flag refusals exit 2; arena_04 load %s ms (%s meshes, layered ground %s, %s terrain tris, no return); the stomp dodged clear (off_line %s); hidden in the class-7 stair, she routed to tunnel 4 GP 0 and peeped deep (arrived %s s); the tail grabbed (%s f%s); both neck stages; the climb tail → head; a hung-neck shake (drain %s) and a head shake survived (drain %s, low %s); the head sigil took 160; the death in Giraffe_death (9.86 → 2.44 m) and her held death_loop, no shrine; R exact; frame %s ms (drawn %s, culled %s); %s frames / %s s; the e2e loop (%s; load %s ms) equal to the selftest, one arena load; four stills 2560x1440; windowed, cursor free; %s s in all\n' \
+  "$regression_what" "$regression_seconds" "$kirin_row" "$load_ms" "$load_meshes" "$load_ground" "$load_terrain" "$dodge_off" "$peep_arrived" \
   "$entry_clip" "$entry_frame" "$hung_drain" "$shake_drain" "$shake_low" "$perf_frame" "$perf_drawn" "$perf_culled" \
   "$status_frames" "$status_seconds" "${e2e_done#s13e2e-done }" "$e2e_load_ms" "$total_seconds"

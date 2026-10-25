@@ -7,7 +7,7 @@
 #   scripts/verify               every milestone whose stamp changed (+ dotnet test, ctest)
 #   scripts/verify --quick       the inner loop: skip the e2e runs
 #   scripts/verify --dry-run     list every run/check with its stamp decision and the gate coverage
-#   scripts/verify --long        the highest scripts/sN-acceptance.sh (the milestone gate)
+#   scripts/verify --long        the highest scripts/sN-acceptance.sh as the deep frozen chain
 #
 # The machine suspends idle work: the whole run is kept awake.
 

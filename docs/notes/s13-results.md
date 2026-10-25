@@ -38,6 +38,7 @@ The script does not judge whether the fight feels like the game's. That is the u
 | Acceptance script | **`scripts/s13-acceptance.sh`** (bash 3.2); `make accept` / `make accept-s13` |
 | Run log (gitignored) | `out/s13-acceptance-run.log`, which ends `s13-acceptance: PASS —` |
 | S12 regression log (gitignored) | `out/s13-s12-regression.log`, which ends `s12-acceptance: PASS —` |
+| Fast acceptance (branch `fast-accept`, `87d530b`, PIN moved there) | Step 2 is now a cold `scripts/verify --force` over dotnet, ctest, audio and S3…S12 (log `out/s13-regression.log`); `SOTC_REGRESSION=chain` (set by `make verify-long`) keeps the S12 chain. Measured 2026-10-25: wall **543 s** (was 1,165 s), the runner pass 448 s (was the 1,066 s chain), the S13 part ~95 s; then `make verify`: s3…s12 stamps fresh from that pass, s13 gpu 94 s, all PASS. |
 
 ## 1 · The acceptance run
 

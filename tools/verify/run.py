@@ -17,7 +17,8 @@ with the GPU runs. The runner refuses to run when a frozen script differs from t
   --dry-run     list every step, run and check with its stamp decision, and the gate coverage
   --bless       run every selected section twice, refuse on any unstable line, write the goldens
                 and the pin (only on the pinned commit, after S9 merges — §13.3)
-  --long        run the highest scripts/sN-acceptance.sh (the milestone gate) instead
+  --long        run the highest scripts/sN-acceptance.sh with SOTC_REGRESSION=chain instead: the deep
+                frozen chain (s13's regression step runs scripts/s12-acceptance.sh, not this runner)
 
 Output: out/verify/<worktree>-<hash8 of its path>/ (logs/, stamps/, candidates/, <sN>/<section>/, bin/, run/).
 """
@@ -561,7 +562,9 @@ class Runner:
         name = max((os.path.basename(p).split("-")[0] for p in scripts), key=milestone_key)
         log = self.p("logs", "long-%s.log" % name)
         t = time.time()
-        rc = self.sh(["bash", os.path.join(ROOT, "scripts", "%s-acceptance.sh" % name)], log, mode="w")
+        # chain: the script's regression is the frozen chain, never this runner nested in itself
+        rc = self.sh(["bash", os.path.join(ROOT, "scripts", "%s-acceptance.sh" % name)], log, mode="w",
+                     env=self.env(SOTC_REGRESSION="chain"))
         ok = rc == 0 and re.search(r"^%s-acceptance: PASS" % name, read(log), re.M) is not None
         self.record("long " + name, ok, time.time() - t, "scripts/%s-acceptance.sh (log %s)" % (name, os.path.relpath(log, ROOT)))
         return 0 if ok else 1

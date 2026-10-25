@@ -274,12 +274,12 @@ arena04-manifest: ## Compose out/re/stage/arena_04.manifest (Phaedra's arena; th
 phaedra: app arena04-manifest ## Fight Phaedra on arena_04 (hide in a tunnel, Q whistles; E grabs her tail while she peeps; R resets)
 	$(VIEWER) --manifest out/re/stage/arena_04.manifest
 
-accept-s13: arena04-manifest ## Run the S13 acceptance (S13 → S12 → S11 → S9 → … → S3; SOTC_LIB = a library with the S13 exports)
+accept-s13: arena04-manifest ## Run the S13 acceptance (a cold scripts/verify over S3 … S12, then S13; SOTC_LIB = a library with the S13 exports)
 	$(AWAKE) ./scripts/s13-acceptance.sh
 
 # ── Acceptance ───────────────────────────────────────────────────────────────
 
-accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest accept-s13 ## Run the current milestone's acceptance (S13 → S12 → S11 → S9 → S8 → … → S3)
+accept: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest accept-s13 ## Run the current milestone's acceptance (a cold scripts/verify over S3 … S12, then S13)
 
 accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11, -s12, -s13 (one at a time)
 	$(AWAKE) ./scripts/$*-acceptance.sh
@@ -287,7 +287,7 @@ accept-%: ## Run one acceptance script: accept-m0, -re0, -s1, -s3 … -s9, -s11,
 verify: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest ## The regression runner: every frozen assertion, re-run when its inputs changed (ARGS="--quick", "--only s7", "--dry-run")
 	./scripts/verify $(ARGS)
 
-verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest ## The milestone gate through the runner: the highest scripts/sN-acceptance.sh
+verify-long: shrine-manifest plain-manifest road-manifest arena02-manifest arena03-manifest arena04-manifest ## The deep frozen chain: the highest scripts/sN-acceptance.sh with SOTC_REGRESSION=chain (S13 → S12 → … → S3)
 	./scripts/verify --long
 
 libview: ## Clone the library into out/libviews/<BRANCH>/ (APFS, free); prints the SOTC_LIB to export
