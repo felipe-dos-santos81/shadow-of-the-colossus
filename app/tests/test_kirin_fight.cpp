@@ -330,9 +330,9 @@ TEST_CASE("the shake-off drain (R-AH): a base refuse clip inside its window, an 
     CHECK(drain() == 0.0f);  // before its window
     c.motion.clip = scr_clip(c.graph, "kirin_a_stand");
     CHECK(drain() == 0.0f);
-    f.k.layers.slot[1].clip = scr_clip(c.graph, "kirin_a_add_head_refuse");
-    f.k.layers.slot[1].state = AddLayer::Playing;
-    f.k.layers.slot[1].frame = 30.0f;  // 1 s on the layer clock
+    f.state.layers.slot[1].clip = scr_clip(c.graph, "kirin_a_add_head_refuse");
+    f.state.layers.slot[1].state = AddLayer::Playing;
+    f.state.layers.slot[1].frame = 30.0f;  // 1 s on the layer clock
     CHECK(drain() == doctest::Approx(23.5f));
     CHECK_FALSE(kirin_fight_shake(f).forceRelease);
 }

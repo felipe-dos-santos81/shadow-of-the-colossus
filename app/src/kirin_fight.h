@@ -84,7 +84,7 @@ KnightThink kirin_death_think(KnightCore& core, KirinState& k, ScrWorld& world, 
 
 struct KirinFight {
     KnightFight base;   // the shared scene side: core, sidecar, rig, pose, events (S12)
-    KirinState k;
+    KirinState state;   // hers: routes, terrain, the additive pool and its edges
     std::array<float, encounters::kirin_detail::W::Count> spent{};  // damage per strike target
     int struckKind = 0;     // the landed strike's hit kind (next frame's world.hitKind)
     float baseLift = 0.0f;  // the entity's grounding lift (the death's root drop adds to it)
