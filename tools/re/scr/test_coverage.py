@@ -74,6 +74,10 @@ class Coverage(unittest.TestCase):
         self.assertIn("anger_ge", text)
         self.assertIn("0x4c", text)
         self.assertIn("under", text)   # ruling R-U footer
+        self.assertIn("- aim — ", text)
+        self.assertIn("KIRIN gap", text)
+        # The frozen s13 gate's row shape (it reads KIRIN's): four category cells and the missing count.
+        self.assertRegex(text, r"(?m)^\| KNIGHT \| ([0-9]+/[0-9]+/0 \| ){4}0 \|$")
 
     def test_gap_and_precedence(self):
         d = cov.parse_dump("registry a\n10 gap\n20 implemented\nkind 1 gap\nkind 0\nop 0x04 gap\n"

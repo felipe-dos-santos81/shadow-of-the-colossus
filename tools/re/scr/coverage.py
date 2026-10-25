@@ -14,7 +14,10 @@ import sys
 
 BOSSES = ["MINOTOUR_A", "MAMMOTH", "KNIGHT", "KIRIN", "BIRD", "MINOTOUR_B", "EEL", "YAMORI_B", "KAME", "NARGA", "LEO",
           "POSEIDON", "SNAKE", "CERBERUS_R", "MINOTOUR_C", "BUDDHA"]   # census16 order
-CATS = (("preds", "predicates"), ("acts", "actions"), ("ops", "opcodes"), ("kinds", "kinds"), ("feats", "features"))
+CATS = (("preds", "predicates"), ("acts", "actions"), ("ops", "opcodes"), ("kinds", "kinds"))
+# Features are counted per boss but listed under the table, not as a column: the frozen s13 gate reads the KIRIN row
+# as exactly four category cells and the missing count. A missing feature counts in the boss's missing column.
+FEATS = (("aim", "the stomp foot-IK aim, attackdata +d0/+e0 (spec §13 ruling 4)"),)
 RANK = {"implemented": 2, "gap": 1}
 
 
@@ -64,7 +67,7 @@ def classify(graph, dump):
     status = {"preds": dump["fns"].get, "acts": dump["fns"].get, "ops": dump["ops"].get, "kinds": dump["kinds"].get,
               "feats": dump["feats"].get}
     out = {}
-    for cat, _ in CATS:
+    for cat in [c for c, _ in CATS] + ["feats"]:
         out[cat] = {"implemented": {}, "gap": {}, "missing": {}}
         for key, name in graph[cat].items():
             out[cat][status[cat](key) or "missing"][key] = name
@@ -88,13 +91,22 @@ def render(graphs, dump):
             n = [len(rep[b][cat][s]) for s in ("implemented", "gap", "missing")]
             tot[cat] = [x + y for x, y in zip(tot[cat], n)]
             cells.append("%d/%d/%d" % tuple(n))
-        lines.append("| %s | %s | %d |" % (b, " | ".join(cells), sum(len(rep[b][c]["missing"]) for c, _ in CATS)))
+        feats_missing = len(rep[b]["feats"]["missing"])
+        lines.append("| %s | %s | %d |" % (b, " | ".join(cells),
+                                           sum(len(rep[b][c]["missing"]) for c, _ in CATS) + feats_missing))
     lines.append("| **total** | %s | %d |" % (" | ".join("%d/%d/%d" % tuple(tot[c]) for c, _ in CATS),
-                                              sum(t[2] for t in tot.values())))
-    lines += ["", "The total row sums the boss rows: an item two bosses share counts twice.", "", "## Missing items", ""]
+                                              sum(t[2] for t in tot.values()) +
+                                              sum(len(rep[b]["feats"]["missing"]) for b in bosses)))
+    lines += ["", "The total row sums the boss rows: an item two bosses share counts twice.", "", "## Features", ""]
+    for key, what in FEATS:
+        users = [b for b in bosses if key in graphs[b]["feats"]]
+        lines.append("- %s — %s: %s" % (key, what, ", ".join(
+            "%s %s" % (b, next(st for st in ("implemented", "gap", "missing") if key in rep[b]["feats"][st]))
+            for b in users) or "no boss"))
+    lines += ["", "## Missing items", ""]
     for b in bosses:
         parts = ["- %s: %s" % (t, ", ".join(item(c, k, n) for k, n in sorted(rep[b][c]["missing"].items())))
-                 for c, t in CATS if rep[b][c]["missing"]]
+                 for c, t in CATS + (("feats", "features"),) if rep[b][c]["missing"]]
         lines += ["### " + b, ""] + (parts or ["- nothing missing"]) + [""]
     lines += ["---", "",
               "Footer (ruling R-U): BUDDHA, EEL, NARGA, SNAKE, BIRD, LEO and CERBERUS_R use non-`scr_slowstatus` status types "

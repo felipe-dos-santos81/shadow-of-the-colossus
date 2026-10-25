@@ -173,30 +173,33 @@ string-pulling and the sight ray) costs 0.008–0.012 ms mean, 0.04–0.10 ms ma
 `make coverage` builds `scr_registry_dump` (the app's registries: knight and kirin, one line per fn VA with
 `implemented`/`gap`, the kinds — `kind 1 gap`, R-AL —, the 37 opcodes, `feature aim gap`) and runs
 `tools/re/scr/coverage.py` over the 16 exports in `<SOTC_LIB>/behaviour/`. Cells are implemented / gap / missing,
-counted over the items each boss's exported graph uses; `features` holds one item, the foot-IK aim, for a boss whose
-attackdata names an aim bone (+d0). The table is the code review's `make coverage` (2026-10-24, the base library);
-the acceptance's own run (step 3, before the review) counted kind 1 as implemented and had no features column (KIRIN
-`8/0/0` kinds, total 85/6/0):
+counted over the items each boss's exported graph uses. The features — one item, the foot-IK aim, for a boss whose
+attackdata names an aim bone (+d0) — are listed under the table (a missing one counts in the boss's missing column;
+the frozen s13 gate reads the KIRIN row as four category cells). The table is the code review's `make coverage`
+(2026-10-24, the base library); the acceptance's own run (step 3, before the review) counted kind 1 as implemented
+(KIRIN kinds `8/0/0`, total 85/6/0) and had no aim item:
 
-| boss | predicates | actions | opcodes | kinds | features | missing |
-|---|---|---|---|---|---|---|
-| MINOTOUR_A (Valus) | 25/2/3 | 12/0/3 | 26/0/0 | 3/1/0 | 0/0/0 | 6 |
-| MAMMOTH (Quadratus) | 26/1/1 | 12/0/1 | 21/0/0 | 4/1/0 | 0/1/0 | 2 |
-| KNIGHT (Gaius) | 23/1/0 | 17/1/0 | 28/0/0 | 3/1/0 | 0/0/0 | 0 |
-| **KIRIN (Phaedra)** | 29/2/0 | 19/4/0 | 29/0/0 | 7/1/0 | 0/1/0 | **0** |
-| BIRD | 17/2/4 | 10/0/12 | 12/0/0 | 2/1/0 | 0/0/0 | 16 |
-| MINOTOUR_B | 24/3/5 | 14/0/5 | 25/0/0 | 3/1/0 | 0/0/0 | 10 |
-| EEL | 13/1/14 | 7/0/16 | 12/0/0 | 2/1/0 | 0/0/0 | 30 |
-| YAMORI_B | 20/1/13 | 12/0/25 | 24/2/0 | 4/1/0 | 0/0/0 | 38 |
-| KAME | 25/2/13 | 15/0/18 | 27/0/0 | 4/1/0 | 0/0/0 | 31 |
-| NARGA | 16/2/14 | 8/0/19 | 9/0/0 | 3/1/0 | 0/0/0 | 33 |
-| LEO | 24/2/10 | 14/0/5 | 27/2/0 | 8/1/0 | 0/0/0 | 15 |
-| POSEIDON | 24/3/13 | 14/0/21 | 25/0/0 | 4/1/0 | 0/0/0 | 34 |
-| SNAKE | 9/0/5 | 6/0/8 | 11/0/0 | 1/1/0 | 0/0/0 | 13 |
-| CERBERUS_R | 21/1/13 | 14/0/8 | 23/2/0 | 9/1/0 | 0/0/0 | 21 |
-| MINOTOUR_C | 26/2/12 | 14/0/9 | 28/0/0 | 4/1/0 | 0/0/0 | 21 |
-| BUDDHA | 15/2/4 | 8/0/6 | 20/0/0 | 1/0/0 | 0/0/0 | 10 |
-| total (boss rows summed) | 337/27/124 | 196/5/156 | 347/6/0 | 62/15/0 | 0/2/0 | 280 |
+| boss | predicates | actions | opcodes | kinds | missing |
+|---|---|---|---|---|---|
+| MINOTOUR_A (Valus) | 25/2/3 | 12/0/3 | 26/0/0 | 3/1/0 | 6 |
+| MAMMOTH (Quadratus) | 26/1/1 | 12/0/1 | 21/0/0 | 4/1/0 | 2 |
+| KNIGHT (Gaius) | 23/1/0 | 17/1/0 | 28/0/0 | 3/1/0 | 0 |
+| **KIRIN (Phaedra)** | 29/2/0 | 19/4/0 | 29/0/0 | 7/1/0 | **0** |
+| BIRD | 17/2/4 | 10/0/12 | 12/0/0 | 2/1/0 | 16 |
+| MINOTOUR_B | 24/3/5 | 14/0/5 | 25/0/0 | 3/1/0 | 10 |
+| EEL | 13/1/14 | 7/0/16 | 12/0/0 | 2/1/0 | 30 |
+| YAMORI_B | 20/1/13 | 12/0/25 | 24/2/0 | 4/1/0 | 38 |
+| KAME | 25/2/13 | 15/0/18 | 27/0/0 | 4/1/0 | 31 |
+| NARGA | 16/2/14 | 8/0/19 | 9/0/0 | 3/1/0 | 33 |
+| LEO | 24/2/10 | 14/0/5 | 27/2/0 | 8/1/0 | 15 |
+| POSEIDON | 24/3/13 | 14/0/21 | 25/0/0 | 4/1/0 | 34 |
+| SNAKE | 9/0/5 | 6/0/8 | 11/0/0 | 1/1/0 | 13 |
+| CERBERUS_R | 21/1/13 | 14/0/8 | 23/2/0 | 9/1/0 | 21 |
+| MINOTOUR_C | 26/2/12 | 14/0/9 | 28/0/0 | 4/1/0 | 21 |
+| BUDDHA | 15/2/4 | 8/0/6 | 20/0/0 | 1/0/0 | 10 |
+| total (boss rows summed) | 337/27/124 | 196/5/156 | 347/6/0 | 62/15/0 | 280 |
+
+Features: aim — MAMMOTH gap, KIRIN gap (no other boss names an aim bone).
 
 - **Every opcode and every locomotion kind any of the 16 uses is known** (missing 0 in both columns): the generic
   evaluator covers the 37 opcodes the exports use (gaps 0x02, 0x4a, 0x4b, 0x4d: false in play), and kinds −1, 0, 10
